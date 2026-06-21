@@ -26,16 +26,19 @@ The gateway's `/v1` contract is **frozen** (plan §A1). Phase 1 frames, byte-exa
 **MessageView** (the `msg` payload, and the shape REST history returns):
 ```
 { "msg_id": str(ULID), "channel_id": str,
-  "sender": {"user_id": str|null, "kind": "human"|"actor"|"llm"|"robot", "label": str},
+  "sender": {"user_id": str|null, "kind": "human"|"actor"|"llm"|"robot", "label": str|null},
   "body": str, "created_at": iso8601, "reply_to": str|null }
 ```
 
-**REST:**
+**REST** (all shapes re-verified against `main.py` + `rest/auth.py`, 2026-06-21):
 - `POST /v1/auth/register|login` → `{access_token, refresh_token, user: UserView}`
 - `POST /v1/auth/refresh` → `{access_token}`  *(refresh NOT rotated — same refresh token stays valid)*
-- `GET /v1/me` → `UserView`
+- `GET /v1/me` → `UserView`  *(auth'd — `CurrentUser` dep)*
 - `UserView` = `{user_id, username, display_name, aiko_username}`
-- `GET /v1/channels/{id}/messages?before=<cursor>` → list[MessageView] (ULID-cursor pagination)
+- `GET /v1/channels` → `{"channels": [{id, name, kind, aiko_channel}]}`  (main.py:120; inline `@app.get`, **NOT** a router)
+- `GET /v1/channels/{channel_id}/messages?before=<cursor>&limit=<=200` → `{"channel_id", "messages": [MessageView], "next_before": str|null}`  (main.py:130). Cursor is **`next_before`** (oldest id in batch); pass it as the next `before`. `limit` default 50, max 200.
+
+> ⚠️ **Gateway gap (NOT a Phase-1 app blocker, captured as a task):** `GET /v1/channels` and the history endpoint have **no auth dependency** — they're currently *unauthenticated* (I1 not enforced on REST reads; only the WS handshake + `/v1/me` are guarded). The app SHOULD still send the bearer token (forward-proof for when the guard lands), but must not assume a 401 today. Channels-list shape omits `is_private` (gateway model has it; wire doesn't send it) — so the app can't show a privacy indicator until the wire carries it.
 
 ## Domain models (Phase 1 subset of plan §B3)
 
@@ -50,7 +53,7 @@ Flagged for veto. Phase 1 generates only the types below.
 | `clientTempId` | `String` | **durable cache PK, survives forever.** Generated client-side (uuid v4) at compose time. Never null. |
 | `id` | `String?` | server ULID. **null until `ack` arrives.** This nullability is load/write-symmetry's whole point (see Invariants). |
 | `channelId` | `String` | |
-| `sender` | `MessageSender` | `{userId: String?, kind: SenderKind, label: String}` — mirrors wire `sender`. userId null for external actors. |
+| `sender` | `MessageSender` | `{userId: String?, kind: SenderKind, label: String?}` — mirrors wire `sender`. **`label` is nullable** (gateway `_msg_view` main.py:105 passes `m.sender_label` through, which is `nullable=True`; an inbound `"label": null` MUST NOT throw — review finding #4). userId null for external actors. UI falls back to `username`/`kind` when label null. |
 | `kind` | `MessageKind` | Phase 1: only `text`. enum reserves `image/video/voice/system` for later. |
 | `body` | `String` | |
 | `replyToId` | `String?` | server ULID of replied-to msg (Phase 1 carries it but UI ignores) |
@@ -89,8 +92,8 @@ Thin parse/build layer; **all wire knowledge isolated here** so a contract chang
 4. **`send` frame has no sender field.** If a future refactor is tempted to add one "for convenience," that's an I5 violation — the server ignores/​rejects it anyway.
 
 ## Edge cases the reviewer should attack
-- **E1:** `ack` for a `clientTempId` we have no row for (app restarted, outbox row lost but server still acked). Decide: drop, or materialize a row from the ack? (Proposal: drop + log; the message will arrive via the `message` frame / history resync anyway.)
-- **E2:** inbound `message` frame for a message WE sent (the server echo) — `MessageView` has `msg_id` but **no `client_msg_id`**. How do we dedupe it against our optimistic row? The wire `message` frame carries no temp id. → Proposal: the `ack` is what reconciles ours; the echoed `message` frame must be deduped by `id` (if a row with that `id` already exists from the ack, drop). Confirm the ack always precedes or follows deterministically — **this is the highest-risk question for this layer.**
+- **E1 (RESOLVED):** `ack` for a `clientTempId` we have no row for (app restarted, outbox row lost but server still acked). **Drop + log is the only option** — the ack carries no `body`/`channel_id`/`sender` (envelopes.py:14-16), so a row can't be materialized from it. Recovery is real: the **history endpoint exists** (main.py:130), so on reconnect `GET .../messages` re-fetches the message. Also: on an idempotent *resend* (same `client_msg_id`), the gateway returns the existing row, **sends the ack but skips fanout** (ws.py:84, `created=False`) — so reconcile on the ack alone; do NOT expect a second echo on retry.
+- **E2 (RESOLVED — guaranteed by gateway ordering):** inbound `message` frame for a message WE sent (the server echo) — `MessageView` has `msg_id` but **no `client_msg_id`**. Dedup: the `ack` reconciles our optimistic row (sets `id`); the echoed `message` frame is deduped by `id` (row with that `id` exists → drop). **Ordering is deterministic, NOT racy:** `ws.py:_handle_send` sends the `ack` (line 82) *before* `hub.fanout` (line 89), both on the single asyncio loop — so the ack always reaches the sender before its echo. **The cache need NOT buffer the sender's own echo.** Caveat: the sender only receives the echo if subscribed to the channel (fanout targets = subscribed conns); if it sent without subscribing it gets the ack only (still reconciles). (Review-confirmed against ws.py:82/89, hub.py:44.)
 - **E3:** `created_at` provisional clock skew — optimistic row sorts wrong until ack replaces it. Acceptable (sub-second flicker)?
 - **E4:** body with only whitespace — gateway rejects (`body.strip()`); client should pre-validate to avoid a round-trip error.
 - **E5:** very long body / unicode / emoji — any truncation or encoding assumption?
@@ -102,7 +105,9 @@ Thin parse/build layer; **all wire knowledge isolated here** so a contract chang
 - `Message(id: null)` → cache encode/decode round-trip equal (symmetry).
 - ack reconcile: optimistic row + ack(sameTempId) → one row, id set, state=sent.
 
-## Open questions for review
-1. E2 dedup: is `ack`-before-echo guaranteed by the gateway, or must the cache tolerate either order? (drives whether we buffer.)
-2. Should `Message` carry `aikoOrigin`/`seq` in Phase 1, or defer? (gateway has `seq` per §A1 "gap detection" — but envelopes.py above shows no `seq` yet. Confirm whether Phase 1 ships seq.)
-3. Freezed vs hand-written for the Phase-1 5-type subset — accept the plan's Freezed, or hand-write now and adopt Freezed when the layer grows?
+## Resolved by adversarial review (2026-06-21)
+1. ✅ **E2 ack-before-echo: GUARANTEED** by gateway ordering (ws.py:82 before :89, single loop). No buffering of the sender's own echo. See E2 above.
+2. ✅ **`seq`: DEFER, confirmed.** Gateway emits no `seq` on any frame (envelopes.py:14-25; ids.py:6 comment "no separate sequence needed"). Plan §A1 is aspirational; the doc tracks the code. No `seq`/`aikoOrigin` field in the Phase-1 `Message`.
+3. **Freezed vs hand-written** — decision REVISED after pinning versions: `flutter pub add` resolved Freezed to `3.2.6-dev.1` (a dev prerelease). Given (a) Phase-1 layer is only ~6 types, (b) global pref = hand-write unless large, (c) dev-version codegen risk, (d) the lenient-decode/two-id/symmetry invariants are clearer hand-written — **hand-write Phase-1 models**; adopt Freezed when the layer grows (later phase). build_runner retained for drift + riverpod codegen.
+4. ✅ **`label` nullable** (finding #4) — fixed to `String?` above; real crash bug averted.
+5. ✅ **REST history/channels exist** (finding #3 refuted by direct read of main.py:120/130) — shapes corrected above. Both currently unauthed (captured as a gateway task).
