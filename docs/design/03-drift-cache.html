@@ -125,19 +125,31 @@ channels
   name        TEXT NOT NULL
   kind        TEXT NOT NULL                     -- ChannelKind.wire; lenient decode
   aikoChannel TEXT NULL                          -- the mapped aiko channel (gateway sends it)</code></pre>
-<p><strong>Ordering key: <code>(createdAt ASC, serverUlid ASC)</code>.</strong> A ULID sorts
-lexicographically by time, so once acked it gives authoritative order; an un-acked row sorts by its
-provisional client clock and settles into place when the ack replaces <code>createdAt</code>. Tiebreak
-on <code>clientTempId</code> for total order.</p>
+<p><strong>Ordering key: <code>ORDER BY createdAt ASC, COALESCE(serverUlid, clientTempId) ASC</code></strong>
+over an index on <code>(channelId, createdAt, serverUlid)</code>. The <code>COALESCE</code> is load-bearing:
+a bare <code>serverUlid ASC</code> sorts <code>NULL</code>s engine-dependently (cage-match catch), so un-acked
+rows would order unpredictably; coalescing to <code>clientTempId</code> gives every row a non-null sort
+value. A ULID sorts lexicographically by time, so once acked it gives authoritative order.</p>
+<blockquote>
+<strong>Provisional clock is clamped, not trusted.</strong> An un-acked row's <code>createdAt</code> is the
+client clock, which can be grossly wrong (cage-match: "a device set to 2049" teleports the message pages
+away, then snaps back on ack). Mitigation: clamp the optimistic <code>createdAt</code> to
+<code>min(clientNow, lastKnownServerTime + ε)</code> so a skewed clock can't fling the row out of the live
+view; the ack replaces it with server truth. The alternative — render un-acked rows in a <em>pending lane</em>
+outside the authoritative timeline until placed by a server timestamp — is a B4/UI policy call, flagged below.
+</blockquote>
 
-<h2>The three writer paths</h2>
-<p class="note">Audit EVERY writer — a schema is a contract only if all writers obey it.</p>
+<h2>The four writer paths</h2>
+<p class="note">Audit EVERY writer — a schema is a contract only if all writers obey it. (Cage-match
+2026-06-22 caught that the original draft listed three writers while its own thesis demanded all of
+them: the <code>ErrorFrame</code> path was un-audited. It is now <strong>W4</strong>.)</p>
 <table>
 <thead><tr><th></th><th>writer</th><th>operation</th><th>invariant it must uphold</th></tr></thead>
 <tbody>
-<tr><td><strong>W1</strong></td><td>composer (optimistic send)</td><td><code>INSERT (clientTempId=uuid, serverUlid=null, state=sending, createdAt=now)</code></td><td>U trivially (serverUlid null); O</td></tr>
-<tr><td><strong>W2</strong></td><td>ack handler</td><td>reconcile the optimistic row → set <code>serverUlid</code>, <code>createdAt</code>, <code>state=sent</code></td><td><strong>U: collapse-on-collision</strong></td></tr>
-<tr><td><strong>W3</strong></td><td>inbound (fanout echo + history)</td><td>dedup-upsert keyed on <code>serverUlid</code></td><td><strong>U: drop-if-present</strong></td></tr>
+<tr><td><strong>W1</strong></td><td>composer (optimistic send)</td><td><code>INSERT (clientTempId=uuid, serverUlid=null, state=sending, createdAt=now)</code> — <strong>committed BEFORE the wire send</strong> (so a drop-after-create reconnect always finds a row to drain)</td><td>U trivially (serverUlid null); O</td></tr>
+<tr><td><strong>W2</strong></td><td>ack handler</td><td>reconcile the optimistic row → adopt <strong>server-authoritative</strong> <code>serverUlid</code>, <code>createdAt</code>, <code>sender</code>; set <code>state=sent</code></td><td><strong>U: collapse-on-collision (merge server truth IN)</strong></td></tr>
+<tr><td><strong>W3</strong></td><td>inbound (fanout echo + history)</td><td>dedup-upsert keyed on <code>serverUlid</code> — on conflict <strong>UPDATE with server fields</strong>, never blind-drop</td><td><strong>U: upsert-on-conflict</strong></td></tr>
+<tr><td><strong>W4</strong></td><td>error handler (<code>ErrorFrame</code>)</td><td>match <code>clientTempId == ref_client_msg_id</code> → <code>state=failed</code>; <strong><code>refClientMsgId</code> is nullable</strong> (<code>envelopes.dart:89</code>) → null ref ⇒ drop + log (cannot target a row)</td><td>O (a <code>failed</code> row leaves the outbox query)</td></tr>
 </tbody>
 </table>
 
@@ -149,10 +161,16 @@ on <code>clientTempId</code> for total order.</p>
 holds <code>serverUlid == u</code>: <code>UPDATE R_c SET serverUlid=u, createdAt=t, state=sent</code>.
 (The happy path.)</li>
 <li>If a row <code>R_u</code> <strong>already holds</strong> <code>serverUlid == u</code> (history fetched it
-first — the race): <strong>collapse.</strong> In one transaction: copy any UI-relevant continuity from
-<code>R_c</code>, delete <code>R_u</code>, then set <code>R_c.serverUlid=u</code> — <em>keeping the
-optimistic row's <code>clientTempId</code></em> so a UI list keyed on <code>clientTempId</code> doesn't see
-the row swap identities and flicker. Net: one row, server truth, stable key.</li>
+first — the race): <strong>collapse, merging server truth INTO the optimistic row.</strong> In one
+transaction: <code>UPDATE R_c SET serverUlid=u, createdAt=R_u.createdAt, sender=R_u.sender, body=R_u.body,
+state=sent</code>, then <code>DELETE R_u</code>. <strong>The merge direction is server-wins-on-fields,
+optimistic-wins-on-PK</strong>: we keep <code>R_c.clientTempId</code> (UI continuity — a list keyed on it
+doesn't see the row swap identities and flicker) but every <em>value</em> comes from the
+server-authoritative <code>R_u</code>. <span class="note">(Cage-match flagged the original "keep
+<code>R_c</code>'s fields" as an inverted merge that would canonize a stale optimistic body. Phase-1 bodies
+are immutable and the gateway is idempotent on <code>client_msg_id</code> — it stored <em>our</em> body — so
+<code>R_c.body == R_u.body</code> today and the distinction is moot; but the edit-safe merge direction is
+specified now so Phase 2 edits don't reintroduce the bug.)</span></li>
 <li>If <strong>no</strong> <code>R_c</code> (E1 — app restarted, optimistic row lost but server acked):
 <strong>drop + log.</strong> The ack carries no <code>body</code>/<code>channel_id</code>/<code>sender</code>,
 so a row can't be materialized from it; history re-fetch (W3) recovers the message. (Confirmed:
@@ -164,12 +182,16 @@ so a row can't be materialized from it; history re-fetch (W3) recovers the messa
 <summary>W3 — inbound dedup-upsert</summary>
 <p>A <code>MessageFrame</code> or history <code>MessageView</code> carries <code>msg_id</code> only:</p>
 <ul class="tight">
-<li>If a row already holds <code>serverUlid == msg_id</code>: <strong>drop</strong> (our own echo, or a
-re-fetch, or a re-delivery). Optionally refresh server-authoritative fields; never insert.</li>
+<li>If a row already holds <code>serverUlid == msg_id</code>: <strong>UPDATE it with the frame's
+server-authoritative fields</strong> (body, sender, createdAt) — do NOT blind-drop. For Phase-1 immutable
+messages the fields are identical so the update is a no-op, but the <em>upsert</em> shape (not drop) is what
+keeps W3 edit-safe: a Phase-2 edit frame for an existing <code>msg_id</code> must land its new content, not
+vanish.</li>
 <li>Else <code>INSERT (clientTempId=msg_id, serverUlid=msg_id, state=sent)</code>.</li>
 <li>The <code>UNIQUE(serverUlid)</code> index is the backstop: if W3's check races W2's update, the insert
-throws <code>UNIQUE constraint failed</code> instead of duplicating — caught, logged, treated as "already
-present" (it is).</li>
+throws <code>UNIQUE constraint failed</code>. <strong>The catch handler does NOT swallow-and-drop</strong>
+(that would discard the inbound frame's data — cage-match: "data incinerator"). It re-reads the now-present
+row and applies the same server-field UPDATE, so the frame's payload is never lost.</li>
 </ul>
 </details>
 
@@ -189,13 +211,30 @@ invariant.</strong> Ordering is for clean DeliveryState lifecycle (the user sees
 not a flicker through a second row).</li>
 </ol>
 <p>This split is the component boundary in action: B4 picks the order; the cache guarantees no duplication
-regardless of whether B4 got the order right.</p>
+<em>at rest</em> regardless of whether B4 got the order right — provided (i) invariant A holds (no transient
+duplicate is <em>observed</em> mid-collapse) and (ii) W1 commits before the wire send, so a drop-after-create
+reconnect always finds the optimistic row to drain rather than materializing a second one (cage-match: the
+ack is the only join frame, so a lost optimistic row can't be re-correlated from a later history insert).
+Both are now writer/invariant preconditions above, not assumptions.</p>
 
 <h2>Invariants (stated before the mechanism)</h2>
 <ul>
 <li><strong>U (uniqueness):</strong> <code>serverUlid</code> is UNIQUE; at most one row per ULID, enforced by
 index AND by every writer's pre-check. <em>The</em> invariant — duplication, the app's worst failure, is
-impossible if U holds across W1/W2/W3.</li>
+impossible <em>at rest</em> if U holds across W1/W2/W3/W4. <strong>But U fences the row, not every path that
+crosses it</strong> — see invariants A (stream atomicity) and R (reply join-key), which the cage-match
+surfaced as the ways a duplicate or a stranded reference leaks <em>around</em> a sound U.</li>
+<li><strong>A (stream atomicity — U holds in motion, not just at rest):</strong> the W2 collapse and every
+W3 upsert run in a <strong>single drift transaction</strong>, and <code>watchChannel</code> emits
+<strong>only after commit</strong>. Without this, a delete-then-update collapse can emit the intermediate
+state <code>[R_c(null), R_u(u)]</code> — a <em>transient observed duplicate</em> — even though the rest-state
+is one row (cage-match catch: the original "B4 cannot duplicate" claim was true at rest, false for what the
+UI sees). The test plan asserts emissions, not just final row count.</li>
+<li><strong>R (reply join-key):</strong> reply resolution joins on <code>serverUlid</code>, NEVER on
+<code>clientTempId</code>. A <code>replyToId</code> is always a server ULID (data-layer §B3); resolving it via
+the PK would strand it when W2 collapse deletes <code>R_u</code> (whose PK was the ULID). Because collapse
+<em>preserves the ULID</em> on <code>R_c</code>, a serverUlid-join survives it; a PK-join does not. (Cage-match
+catch — the original draft left the join column unspecified.)</li>
 <li><strong>O (outbox-as-query):</strong> there is no outbox table. The outbox <strong>is</strong>
 <code>SELECT * FROM messages WHERE serverUlid IS NULL AND deliveryState != 'failed' ORDER BY createdAt</code>.
 Send-state lives in exactly one row and cannot drift (chosen over a separate table precisely to avoid the
@@ -220,9 +259,11 @@ downgrade) must not brick load.</li>
 <tr><td><strong>C1</strong></td><td>W2 collapse vs. a UI holding the optimistic <code>clientTempId</code> as a scroll anchor — does keeping <code>R_c</code>'s <code>clientTempId</code> actually prevent flicker, or does the <code>createdAt</code> change reorder it visibly? (Likely fine — same body, near-same time — but verify with a list test.)</td></tr>
 <tr><td><strong>C2</strong></td><td>history pagination inserts an <strong>older</strong> batch while a live fanout inserts a <strong>newer</strong> message — does the ordering key keep them sorted without a full re-sort each insert? (drift re-runs the watch query; confirm the index covers <code>(channelId, createdAt, serverUlid)</code>.)</td></tr>
 <tr><td><strong>C3</strong></td><td>the <code>UNIQUE(serverUlid)</code> backstop fires (W3 races W2) — is it caught and swallowed as "already present", or does it bubble and kill the ingest loop? (Must be caught; a thrown constraint error in the frame loop is a socket-killer.)</td></tr>
-<tr><td><strong>C4</strong></td><td>schema migration safety — Phase 1 is v1; the first additive column (Phase 2) must have a <code>drift</code> migration. State the migration strategy now (drift <code>MigrationStrategy</code>, <code>onUpgrade</code>) so a later <code>ALTER</code> doesn't wipe the DB. <strong>Load/write must agree across versions, not just within one.</strong></td></tr>
+<tr><td><strong>C4</strong></td><td><strong>Migration strategy (concrete, not a to-do — cage-match: "an unfunded mandate").</strong> v1 ships with the <code>UNIQUE(serverUlid)</code> index from creation, so there is <em>no</em> retro-index-on-dirty-data step (the dangerous case — building a UNIQUE index over a DB that already holds duplicate ULIDs would fail). Rules fixed now: (a) every Phase-2+ column is <strong>additive and nullable</strong> with a default, via drift <code>onUpgrade</code> <code>m.addColumn</code> — never a destructive <code>ALTER</code>; (b) <strong>downgrade</strong> is survived by lenient-decode + drift ignoring unknown columns on read, but a v-next-written row opened by v-current must not crash — so new columns carry no load-time <code>NOT NULL</code> assertion the old schema lacks; (c) the read predicate, write predicate, and index predicate for <code>serverUlid</code> are the SAME across versions (load/write symmetry across versions). A test opens a v1-shaped DB under the current schema and asserts zero data loss.</td></tr>
 <tr><td><strong>C5</strong></td><td>two devices / two app instances same account — out of scope Phase 1 (single client), but note it: <code>clientTempId</code> uuids won't collide across devices; ULIDs are server-authoritative, so U still holds. No design debt incurred.</td></tr>
-<tr><td><strong>C6</strong></td><td>a <code>failed</code> row (gateway <code>ErrorFrame</code> for our send) — excluded from the outbox query (O), so it won't auto-redrain. Confirm manual retry re-enters it as <code>sending</code> (clears <code>failed</code>).</td></tr>
+<tr><td><strong>C6</strong></td><td>a <code>failed</code> row (gateway <code>ErrorFrame</code> for our send, W4) — excluded from the outbox query (O), so it won't auto-redrain. Confirm manual retry re-enters it as <code>sending</code> (clears <code>failed</code>).</td></tr>
+<tr><td><strong>C7</strong></td><td><strong>Server-authoritative edits / deletes / moderation redactions (cage-match: absent from the original list).</strong> A <code>msg_id</code> we already hold can return from history or fanout with a <em>corrected</em> body, sender label, deletion tombstone, or moderation state. The original "drop-if-present" would freeze stale local truth forever — neither a duplicate nor a lost row, but <em>lost server state</em>. W3's upsert-on-conflict (above) is the structural fix; the per-field <strong>merge policy</strong> (which fields are immutable vs. server-overwritable, how a tombstone renders) is deferred to the phase that introduces edits, but the <em>upsert shape</em> is committed in Phase 1 so the door isn't nailed shut.</td></tr>
+<tr><td><strong>C8</strong></td><td><strong>Gross clock skew (cage-match: "temporal wormhole").</strong> Covered by the clamped provisional <code>createdAt</code> + <code>COALESCE</code> ordering above; the test forces a +years client clock and asserts the optimistic row stays within the live view and lands in correct server order on ack — not a page-away teleport.</td></tr>
 </tbody>
 </table>
 
@@ -230,12 +271,16 @@ downgrade) must not brick load.</li>
 <ul class="tight">
 <li><span class="tag">W1</span> optimistic insert → outbox query returns it; stream emits it as <code>sending</code>.</li>
 <li><span class="tag">W2 happy</span> optimistic row + <code>ack(sameTempId)</code> → one row, <code>serverUlid</code> set, <code>state=sent</code>.</li>
-<li><span class="tag">W2 collapse</span> history inserts ULID <code>u</code> (row <code>R_u</code>); then <code>ack(c→u)</code> for optimistic <code>R_c</code> → <strong>one</strong> row remains, <code>clientTempId==c</code>, <code>serverUlid==u</code>, <code>state=sent</code>. <em>(The crux test.)</em></li>
-<li><span class="tag">W3 dedup</span> insert ULID <code>u</code>; insert <code>MessageFrame(msg_id=u)</code> again → still one row.</li>
-<li><span class="tag">W3 backstop</span> force the race (insert via W3 while W2 mid-flight, same ULID) → caught, one row, no thrown error escapes the ingest loop.</li>
+<li><span class="tag">W2 collapse</span> history inserts ULID <code>u</code> (row <code>R_u</code>) with server body/sender; then <code>ack(c→u)</code> for optimistic <code>R_c</code> → <strong>one</strong> row remains, <code>clientTempId==c</code>, <code>serverUlid==u</code>, and its <strong>body/sender/createdAt are <code>R_u</code>'s (server) values</strong>, <code>state=sent</code>. <em>(The crux test — asserts merge direction, not just count.)</em></li>
+<li><span class="tag">A stream-atomicity</span> drive the W2 collapse while a <code>watchChannel</code> listener records EVERY emission → <strong>no emitted list ever contains two rows for one <code>serverUlid</code></strong> (no transient observed duplicate mid-collapse).</li>
+<li><span class="tag">R reply-join</span> message <code>v</code> with <code>replyToId=u</code>; collapse the optimistic row onto <code>serverUlid=u</code> → <code>v</code>'s reply still resolves (join is on <code>serverUlid</code>, survives the <code>R_u</code> delete).</li>
+<li><span class="tag">W3 upsert</span> insert ULID <code>u</code>; deliver <code>MessageFrame(msg_id=u)</code> with a CHANGED field → still one row, field UPDATED (not dropped). (Phase-1 fields identical → no-op; the test pins the upsert shape for Phase 2.)</li>
+<li><span class="tag">W3 backstop</span> force the race (insert via W3 while W2 mid-flight, same ULID) → caught, the frame's payload is APPLIED via update, one row, no thrown error escapes the ingest loop.</li>
+<li><span class="tag">W4 error</span> <code>ErrorFrame(ref=c)</code> → row <code>c</code> goes <code>failed</code> &amp; leaves the outbox query; <code>ErrorFrame(ref=null)</code> → drop + log, no row mutated.</li>
 <li><span class="tag">O</span> rows with <code>serverUlid==null</code> &amp; not <code>failed</code> appear in the outbox query; acked/failed rows don't.</li>
+<li><span class="tag">C8 clock-skew</span> optimistic row with client clock set +years → stays within the live view (clamped), and on <code>ack</code> lands in correct server order without crossing a different sender's message.</li>
 <li><span class="tag">Symmetry</span> <code>serverUlid==null</code> row → DB write+read round-trips equal.</li>
-<li><span class="tag">Migration</span> open a v1 DB with the v-current schema → no data loss (once Phase 2 adds a column).</li>
+<li><span class="tag">Migration</span> open a v1-shaped DB under the current schema → no data loss; additive column loads as its default.</li>
 <li><span class="tag">Reactive</span> <code>watchChannel</code> emits ordered list on each write; cancels cleanly (no leaked controller).</li>
 </ul>
 
