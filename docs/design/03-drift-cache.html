@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 03 — Drift cache</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  .note { color:var(--muted); font-size:.9rem; }
+  .sev { font-weight:700; font-size:.78rem; letter-spacing:.03em; text-transform:uppercase; padding:.1em .5em;
+         border-radius:4px; color:#fff; }
+  .blocker { background:var(--blocker); } .major { background:var(--warn); }
+  .minor { background:#777; } .nit { background:#aaa; }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  .tag { display:inline-block; font:12px ui-monospace,monospace; background:#eef; color:#338; padding:.1em .5em;
+         border-radius:4px; margin-right:.3em; }
+  ul.tight li { margin:.25rem 0; }
+  .verified { color:var(--accent); font-weight:600; }
+</style>
+</head>
+<body>
+
+<h1>Design 03 — Drift cache</h1>
+<p class="lead">The local store B4 writes through — schema, the three writer paths, and the one uniqueness invariant that makes the app's worst failure impossible.</p>
+
+<div class="scope">
+<strong>Component scope (Phase 1, text-only):</strong> the on-device SQLite store (<code>drift</code> package)
+that holds the <em>one coherent local truth</em> the UI renders and the repository/reconcile engine
+(B4, Component 4) mutates. Tables + DAO + reactive per-channel streams.
+<strong>No reconcile orchestration here</strong> — that is B4. This component owns
+<em>storage, atomic operations, and invariant enforcement</em>; B4 owns <em>policy</em> (when to drain,
+how to order, which DeliveryState transition to apply). Drawing that line is the whole point: if the
+cache enforces "one row per logical message" at the write boundary, B4 cannot duplicate even with a
+buggy ordering.
+</div>
+
+<p class="note">Naming: the package is literally <code>drift</code> (formerly moor) — reactive SQLite with
+<code>build_runner</code> codegen and <code>Stream</code> queries (<code>.watch()</code>). "Drift cache" =
+the local store; the homophone is a coincidence we lean into.</p>
+
+<p>Reviewed-as-one because the <strong>schema + the three writer paths + the uniqueness invariant</strong>
+are a single bug surface; the table columns alone are trivial.</p>
+
+<h2>Source of truth — the gateway wire, re-verified by reading the running code</h2>
+<p>The schema is shaped by what <code>ws.py</code> <em>actually does</em> on the wire — <span class="verified">read, not assumed</span>
+(<code>aiko_chat_gateway/.../realtime/ws.py:66-89</code>):</p>
+<ol>
+  <li><strong>Ack precedes fanout, on one connection.</strong> <code>_handle_send</code> sends the
+  <code>ack</code> (line 82) <em>then</em> <code>hub.fanout</code>s the <code>message_frame</code> (line 89).
+  The sender, if subscribed, receives <strong>both</strong>: an <code>ack {client_msg_id → msg_id}</code>
+  first, then a <code>message</code> frame carrying <strong>only <code>msg_id</code></strong> (no
+  <code>client_msg_id</code> — <code>message_view</code> omits it).</li>
+  <li><strong>The server is idempotent on <code>client_msg_id</code>.</strong> <code>create_outbound</code>
+  returns <code>(row, created)</code>. The <code>ack</code> fires <strong>unconditionally</strong> (line 82);
+  bus-publish + fanout run <strong>only <code>if created</code></strong> (line 84). So an outbox
+  <strong>re-send is safe</strong>: same <code>msg_id</code> back in the ack, <strong>no second echo</strong>.</li>
+  <li><strong>The <code>ack</code> is the only frame carrying both ids.</strong> It is the sole join point
+  between the client temp id and the server ULID. Everything reconcile depends on this one frame.</li>
+</ol>
+<p class="note">These three facts (verified against the running gateway, per Kelvin's ground-in-environment-first
+shift) are what the schema and writer paths below are built to satisfy.</p>
+
+<h2>The duplicate-row trap (why this component exists)</h2>
+<p><code>Message.clientTempId</code> is the durable PK, and for server-origin rows
+<strong><code>clientTempId == serverUlid</code></strong> (<code>message.dart:141</code>). So the
+<em>same logical message</em> wears two different PKs across its life:</p>
+<table>
+<thead><tr><th>phase</th><th>clientTempId</th><th>serverUlid (<code>id</code>)</th><th>deliveryState</th></tr></thead>
+<tbody>
+<tr><td>optimistic (just composed)</td><td><code>&lt;uuid v4&gt;</code></td><td><code>null</code></td><td><code>sending</code></td></tr>
+<tr><td>after our own ack</td><td><code>&lt;uuid v4&gt;</code></td><td><code>&lt;ULID&gt;</code></td><td><code>sent</code></td></tr>
+<tr><td>its own fanout echo, naïvely inserted</td><td><code>&lt;ULID&gt;</code></td><td><code>&lt;ULID&gt;</code></td><td><code>sent</code></td></tr>
+</tbody>
+</table>
+<p>A naïve insert of the echo (or a history row for a message we sent) creates a
+<strong>second row keyed by the ULID</strong> — duplication. The defense is structural, not procedural:</p>
+
+<blockquote class="invariant">
+<strong>Invariant U (the load-bearing one): <code>serverUlid</code> is UNIQUE. At most one row may ever
+hold a given ULID.</strong> Any write that would introduce a second is either deduped (drop) or collapsed
+(merge) — never inserted. The <code>UNIQUE</code> index is the <em>write-level backstop</em> that turns a
+raced dedup-check into a caught error instead of a silent duplicate. (Load/write must agree: the same
+predicate — "this ULID is not already present" — gates both the check and the constraint.)
+</blockquote>
+
+<h2>Schema</h2>
+<p>Single <code>messages</code> table (the outbox is a <strong>query</strong>, not a table — see Invariant O),
+plus <code>channels</code>.</p>
+<pre><code>messages
+  clientTempId   TEXT  PRIMARY KEY              -- durable, client uuid OR = serverUlid for inbound
+  serverUlid     TEXT  NULL  UNIQUE             -- dedup authority; null until acked. ULID = time-sortable
+  channelId      TEXT  NOT NULL  (indexed)
+  senderUserId   TEXT  NULL
+  senderKind     TEXT  NOT NULL                 -- SenderKind.wire; lenient decode on read
+  senderLabel    TEXT  NULL                     -- nullable by wire contract (finding #4)
+  kind           TEXT  NOT NULL                 -- MessageKind.wire
+  body           TEXT  NOT NULL
+  replyToId      TEXT  NULL
+  createdAt      INTEGER NOT NULL               -- UTC unix millis (drift maps DateTime); provisional for optimistic
+  localSeq       INTEGER NOT NULL DEFAULT 0     -- DB-DERIVED monotonic counter: SELECT COALESCE(MAX(localSeq),0)+1 inside W1's txn. 0 for inbound. NOT an in-memory counter (would reset on restart). Send-order tiebreak.
+  deliveryState  TEXT  NOT NULL                 -- DeliveryState.wire
+
+channels
+  id          TEXT PRIMARY KEY
+  name        TEXT NOT NULL
+  kind        TEXT NOT NULL                     -- ChannelKind.wire; lenient decode
+  aikoChannel TEXT NULL                          -- the mapped aiko channel (gateway sends it)</code></pre>
+<p><strong>Ordering key: <code>ORDER BY createdAt ASC, localSeq ASC, COALESCE(serverUlid, clientTempId) ASC</code></strong>
+over an index on <code>(channelId, createdAt, localSeq, serverUlid)</code>. Three layers, each catching what
+the prior leaves ambiguous:</p>
+<ul class="tight">
+<li><code>createdAt</code> — the primary order; server time once acked, clamped client time while pending.</li>
+<li><code>localSeq</code> — the <strong>send-order tiebreak</strong> (round-3 fix). When several of <em>my own</em>
+optimistic rows clamp to the same <code>createdAt</code> (below), a bare clock tie would fall through to random
+<code>clientTempId</code> (uuid) order — so the user's own two consecutive sends could render reversed. The
+monotonic per-device <code>localSeq</code> preserves compose order among them. Inbound rows carry
+<code>0</code>, so this layer is inert for them (their <code>createdAt</code> already separates them).</li>
+<li><code>COALESCE(serverUlid, clientTempId)</code> — final total-order tiebreak; also fixes the
+engine-dependent <code>NULL</code> sort of a bare <code>serverUlid ASC</code> (every row gets a non-null sort
+value). A ULID sorts lexicographically by time, so among acked rows this is authoritative.</li>
+</ul>
+<blockquote>
+<strong>Provisional clock is clamped, not trusted.</strong> An un-acked row's <code>createdAt</code> is the
+client clock, which can be grossly wrong (cage-match: "a device set to 2049" teleports the message pages away,
+then snaps back on ack). Clamp the optimistic <code>createdAt</code> to <code>min(clientNow,
+lastKnownServerTime + δ)</code> so a skewed clock can't fling the row out of the live view; the ack replaces it
+with server truth. <strong>δ is a fixed small constant, NOT the ordering tiebreak</strong> — round 2 noted that
+making the tiebreak depend on δ collides rapid sends; that job now belongs to <code>localSeq</code>, leaving δ
+free to be a simple "just past the last known server time" nudge. The alternative — a <em>pending lane</em>
+outside the authoritative timeline until a server timestamp places the row — is a B4/UI policy call, flagged
+below.
+</blockquote>
+
+<h2>The writer census — every path that mutates a <code>messages</code> row</h2>
+<blockquote>
+<strong>Scope first, because the closure claim is only as good as its boundary (round-3 catch).</strong> This
+census governs writers of the <strong><code>messages</code> table</strong> — the table whose invariants
+(U/A/R/O) carry the app's correctness. Round 1 found one un-audited message-writer (W4); round 2 found two more
+(W5 retry, W6 delete); round 3 caught that "every path that can touch <em>a row</em>" silently overclaimed —
+the <code>channels</code> table has its own writers the message-census never covered. So the rule is now
+precise: <em>every path that mutates a <code>messages</code> row is W1–W6 or it violates the census</em>; the
+<code>channels</code> table and the message-table's non-mutating paths are enumerated separately below. An
+un-named message-writer is exactly where the next duplicate hides — but the boundary of the claim is stated, not
+assumed.
+</blockquote>
+<table>
+<thead><tr><th></th><th>writer</th><th>operation</th><th>invariant it must uphold</th></tr></thead>
+<tbody>
+<tr><td><strong>W1</strong></td><td>composer (optimistic send)</td><td>in one transaction: <code>localSeq = SELECT COALESCE(MAX(localSeq),0)+1</code> then <code>INSERT (clientTempId=uuid, serverUlid=null, state=sending, createdAt=clamped, localSeq)</code>. The <code>MAX+1</code> read is inside the same txn as the insert (atomic, restart-durable — never an in-memory counter). <strong>Committed BEFORE the wire send</strong> so a drop-after-create reconnect always finds a row to drain</td><td>U trivially (serverUlid null); O</td></tr>
+<tr><td><strong>W2</strong></td><td>ack handler</td><td>reconcile the optimistic row → adopt <strong>server-authoritative</strong> fields; set <code>state=sent</code>. <strong>Transition guard: only <code>sending|failed → sent</code></strong> (never regress a row already <code>sent</code>)</td><td><strong>U: collapse-on-collision (merge server truth IN)</strong></td></tr>
+<tr><td><strong>W3</strong></td><td>inbound (fanout echo + history)</td><td>dedup-upsert keyed on <code>serverUlid</code> — on conflict <strong>UPDATE with server fields</strong>, never blind-drop</td><td><strong>U: upsert-on-conflict</strong></td></tr>
+<tr><td><strong>W4</strong></td><td>error handler (<code>ErrorFrame</code>)</td><td>match <code>clientTempId == ref_client_msg_id</code> → <code>state=failed</code> <strong>ONLY when <code>serverUlid IS NULL</code></strong> (a late error must never regress a <code>sent</code> row — round-2 guard). <code>refClientMsgId</code> nullable (<code>envelopes.dart:89</code>) → null ref ⇒ it is a <em>systemic</em> error (rate-limit, channel-readonly), not a per-message one: fail ALL pending in the affected channel, or surface to B4 — never silently drop</td><td>O; idempotent state transition</td></tr>
+<tr><td><strong>W5</strong></td><td>manual retry (a <code>failed</code> row, C6)</td><td><strong>only when <code>serverUlid IS NULL</code></strong>: <code>state=failed → sending</code>, reuse the SAME <code>clientTempId</code> + <code>body</code> + <code>replyToId</code>, bump <code>localSeq=next()</code> (re-send goes to the bottom of the pending order), re-emit on the wire. The ack reconciles via W2 as normal (idempotent on <code>client_msg_id</code>)</td><td>U (serverUlid still null); O (re-enters the outbox)</td></tr>
+<tr><td><strong>W6</strong> <span class="note">(Phase 2)</span></td><td>user delete of an in-flight row</td><td><strong>Phase 1: UNSUPPORTED — there is no delete UI and no tombstone column, so local delete of a <code>messages</code> row is simply forbidden</strong> (a bare <code>DELETE</code> of a <code>sending</code> row would let it resurrect from history on the next ack — round-2 "showstopper"). When delete ships (Phase 2), W6 is tombstone-based: mark <code>state=deleting</code>, keep the row so W2's ack confirms the server delete, and W3 honors the tombstone instead of re-inserting. <strong>W6 joins the live census only when its tombstone column lands (C7)</strong> — until then it is a named-but-inactive writer, not part of the Phase-1 invariant set</td><td>U; tombstone survives the ack/history race</td></tr>
+</tbody>
+</table>
+<h3>The <code>channels</code> table — its own (small) census</h3>
+<p>The <code>channels</code> table has no <code>serverUlid</code>/U-equivalent, so it needs no dedup machinery —
+but round 3 was right that its writers must still be named:</p>
+<ul class="tight">
+<li><strong>CH1 — channel-list sync</strong> (<code>GET /v1/channels</code> on launch / refresh): upsert each
+channel by <code>id</code> (server-authoritative). The sole Phase-1 channel-table writer.</li>
+<li><strong>CH2 — channel lifecycle</strong> (delete / archive / leave) <span class="note">— Phase 2, but named
+because of its blast radius</span>: when a channel goes away, its messages must NOT be silently mass-deleted by
+an implicit <code>DELETE CASCADE</code> (round-3 "hidden bomb" — a DB-level writer that bypasses every message
+invariant). <strong>Phase-1 decision: NO foreign-key CASCADE between <code>channels</code> and
+<code>messages</code></strong> — message cleanup for a defunct channel is an explicit, audited application
+writer when it lands (it joins the message census then), never an invisible DB trigger.</li>
+</ul>
+<h3>Proven non-mutating paths (named so they can't masquerade as un-audited writers)</h3>
+<ul class="tight">
+<li><strong>migration / <code>onUpgrade</code></strong> — schema-only by contract; adds columns/indexes,
+performs <em>no row mutation</em> (no backfill rewriting <code>serverUlid</code>, no enum re-keying). A future
+migration that genuinely must touch rows becomes an audited message-writer and joins the census.</li>
+<li><strong>read-time / <code>watchChannel</code> mapping</strong> — strictly read-only; lenient enum decode
+lives in the Dart mapping layer, NEVER as a write-back. A read that "repairs" a row is forbidden.</li>
+<li><strong>connection lifecycle (disconnect / reconnect / offline)</strong> — explicitly a NON-writer
+(round-3): a dropped connection does <strong>NOT</strong> bulk-transition <code>sending → failed</code>. Pending
+rows stay <code>sending</code> and re-drain on reconnect (drain-first); a row goes <code>failed</code> ONLY via
+an explicit <code>ErrorFrame</code> (W4). Naming this forecloses the plausible-but-wrong "mark everything failed
+on disconnect" implementation, which would strand or double-send messages.</li>
+</ul>
+
+<details open>
+<summary>W2 — ack reconcile, the subtle one</summary>
+<p><code>ON ack(client_msg_id=c, msg_id=u, created_at=t)</code>:</p>
+<ul class="tight">
+<li>If a row <code>R_c</code> exists with <code>clientTempId == c</code> <strong>and</strong> no other row
+holds <code>serverUlid == u</code>: <code>UPDATE R_c SET serverUlid=u, createdAt=t, state=sent</code>.
+(The happy path.)</li>
+<li>If a row <code>R_u</code> <strong>already holds</strong> <code>serverUlid == u</code> (history fetched it
+first — the race): <strong>collapse, merging server truth INTO the optimistic row.</strong> In one
+transaction: <code>UPDATE R_c SET serverUlid=u, state=sent</code> AND copy <strong>ALL server-authoritative
+fields</strong> from <code>R_u</code> onto <code>R_c</code> — <code>createdAt, sender(senderUserId/senderKind/senderLabel),
+body, kind, replyToId, channelId</code> — then <code>DELETE R_u</code> (all three statements in the one txn, per
+Invariant A). <strong>The merge direction is server-wins-on-every-field, optimistic-wins-only-on-PK</strong>:
+we keep <code>R_c.clientTempId</code> and its <code>localSeq</code> (UI continuity — a list keyed on
+<code>clientTempId</code> doesn't see the row swap identities and flicker) but every other <em>value</em> comes
+from <code>R_u</code>. <span class="note">(Round 2 caught the earlier SQL copying only body/sender/createdAt
+while the prose claimed "every value" — the field list is now exhaustive so a future divergent field, e.g. a
+server <code>senderLabel</code> correction, isn't silently kept stale. Phase-1 fields are identical via
+idempotency, so this is edit-safety insurance, not a live fix.)</span></li>
+<li>If <strong>no</strong> <code>R_c</code> (E1 — app restarted, optimistic row lost but server acked):
+<strong>drop the ack AND schedule a history repair.</strong> The ack carries no
+<code>body</code>/<code>channel_id</code>/<code>sender</code>, so a row can't be materialized from it — but
+"log and hope history covers it" is not enough (round-2 catch: if the app crashes before the next history
+fetch, the message is absent indefinitely). So on an orphan ack, <strong>enqueue a bounded history-repair for
+that channel at-or-before <code>msg_id</code></strong>, making recovery an explicit scheduled action rather
+than an implicit assumption. <strong>The repair task must be PERSISTED</strong> (round-3: an in-memory schedule
+followed by a crash leaves the same indefinite-absence hole it exists to close) — it is owned by B4, durable
+across restart. (Confirmed: <code>envelopes.py</code> ack payload is ids-only.)</li>
+</ul>
+</details>
+
+<details>
+<summary>W3 — inbound dedup-upsert</summary>
+<p>A <code>MessageFrame</code> or history <code>MessageView</code> carries <code>msg_id</code> only:</p>
+<ul class="tight">
+<li>If a row already holds <code>serverUlid == msg_id</code>: <strong>UPDATE it with the frame's
+server-authoritative fields</strong> — do NOT blind-drop. For Phase-1 immutable messages the fields are
+identical so the update is a no-op, but the <em>upsert</em> shape (not drop) is what keeps W3 edit-safe: a
+Phase-2 edit frame for an existing <code>msg_id</code> must land its new content, not vanish. <strong>Identity
+guard (round-2):</strong> ULIDs are globally unique, so a matched row with a <em>different</em>
+<code>channelId</code> is impossible under a correct gateway — treat that mismatch as <em>corruption</em>
+(log + fail loudly), never silently overwrite <code>channelId</code>/sender identity onto the existing row.</li>
+<li>Else <code>INSERT (clientTempId=msg_id, serverUlid=msg_id, state=sent)</code>.</li>
+<li>The <code>UNIQUE(serverUlid)</code> index is the backstop: if W3's check races W2's update, the insert
+throws <code>UNIQUE constraint failed</code>. <strong>The catch handler does NOT swallow-and-drop</strong>
+(that would discard the inbound frame's data — cage-match: "data incinerator"). It re-reads the now-present
+row and applies the same server-field UPDATE, so the frame's payload is never lost.</li>
+</ul>
+</details>
+
+<h2>Reconnect ordering — drain-first (resolves the open question, but does NOT eliminate the race)</h2>
+<p>The handoff flagged: <em>outbox-drain vs history-fetch ordering on reconnect — drain-after-fetch can
+duplicate when a history server-id matches an outbox item.</em> Resolution, in two layers:</p>
+<ol>
+<li><strong>Policy (B4, minimizes the hazard): drain the outbox BEFORE fetching history.</strong> Re-send
+every <code>serverUlid IS NULL AND state != failed</code> row (same <code>clientTempId</code> → same wire
+<code>client_msg_id</code>). Each returns an ack (W2) that stamps the ULID. History fetch then becomes pure
+dedup-by-ULID.</li>
+<li><strong>Mechanism (this component, <em>guarantees</em> correctness): W2's collapse-on-collision.</strong>
+Drain-first only <em>reduces</em> the window — acks are async, so a history insert can still land a ULID
+before its ack arrives. W2's collapse (and the <code>UNIQUE</code> backstop) is what makes the residual race
+<strong>safe</strong>, not just unlikely. <strong>Do not rely on ordering for correctness; rely on the
+invariant.</strong> Ordering is for clean DeliveryState lifecycle (the user sees <code>sending → sent</code>,
+not a flicker through a second row).</li>
+</ol>
+<p>This split is the component boundary in action: B4 picks the order; the cache guarantees no duplication
+<em>at rest</em> regardless of whether B4 got the order right — provided (i) invariant A holds (no transient
+duplicate is <em>observed</em> mid-collapse) and (ii) W1 commits before the wire send, so a drop-after-create
+reconnect always finds the optimistic row to drain rather than materializing a second one (cage-match: the
+ack is the only join frame, so a lost optimistic row can't be re-correlated from a later history insert).
+Both are now writer/invariant preconditions above, not assumptions.</p>
+
+<h2>Invariants (stated before the mechanism)</h2>
+<ul>
+<li><strong>U (uniqueness):</strong> <strong>every NON-NULL <code>serverUlid</code> is UNIQUE</strong> — at most
+one row per ULID, enforced by the index AND by every writer's pre-check. The "non-null" is load-bearing
+precision (round-2 catch): SQLite's <code>UNIQUE</code> permits multiple <code>NULL</code>s, which is exactly
+what lets many un-acked optimistic rows coexist; W1 therefore <em>cannot</em> pre-check uniqueness (its
+<code>serverUlid</code> is null) — only W2/W3, which write a non-null ULID, do. <em>The</em> invariant —
+duplication, the app's worst failure, is impossible <em>at rest</em> if U holds across W2/W3 (the non-null
+writers). <strong>But U fences the row, not every path that crosses it</strong> — see invariants A (stream
+atomicity) and R (reply join-key), the ways a duplicate or stranded reference leaks <em>around</em> a sound U.</li>
+<li><strong>A (stream atomicity — U holds in motion, not just at rest):</strong> the W2 collapse and every
+W3 upsert run in a <strong>single <code>db.transaction(() async {…})</code></strong>, and <code>watchChannel</code>
+emits <strong>only after that transaction commits</strong>. This is a concrete drift contract, not a hope
+(round-2 catch — "a Carnot engine drawn with friction omitted"): drift coalesces a watcher's re-query to
+post-commit <em>only</em> when the multiple statements run inside one <code>transaction()</code>; a
+delete-then-update done as two bare awaited calls forfeits A and lets the watcher observe the intermediate
+<code>[R_c(null), R_u(u)]</code> — a <em>transient observed duplicate</em> even though the rest-state is one
+row. <strong>Implementation constraint: any multi-statement writer (W2 collapse, W3 conflict-then-update) MUST
+be wrapped in <code>transaction()</code>; a sequence of bare awaits is a bug, not a style choice.</strong> The
+test plan asserts emissions, not just final row count.</li>
+<li><strong>R (reply join-key):</strong> reply resolution joins on <code>serverUlid</code>, NEVER on
+<code>clientTempId</code>. A <code>replyToId</code> is always a server ULID (data-layer §B3); resolving it via
+the PK would strand it when W2 collapse deletes <code>R_u</code> (whose PK was the ULID). Because collapse
+<em>preserves the ULID</em> on <code>R_c</code>, a serverUlid-join survives it; a PK-join does not. (Cage-match
+catch — the original draft left the join column unspecified.)</li>
+<li><strong>O (outbox-as-query):</strong> there is no outbox table. The outbox <strong>is</strong>
+<code>SELECT * FROM messages WHERE serverUlid IS NULL AND deliveryState != 'failed' ORDER BY createdAt</code>.
+Send-state lives in exactly one row and cannot drift (chosen over a separate table precisely to avoid the
+two-table load/write-symmetry hazard).</li>
+<li><strong>Load/write symmetry:</strong> a row with <code>serverUlid == null</code> round-trips load AND save
+without throwing. Inherited from the data layer's two-id design; the schema makes <code>serverUlid</code>
+nullable (no sentinel) to preserve it.</li>
+<li><strong>Reactive lifetime:</strong> <code>watchChannel(channelId)</code> returns a
+<code>Stream&lt;List&lt;Message&gt;&gt;</code> that emits the ordered list on every relevant write and closes
+when its listener cancels. No leaked controllers (the transport-seam review caught a leak here once — same
+discipline).</li>
+<li><strong>Lenient decode on read:</strong> <code>senderKind</code>/<code>kind</code>/channel
+<code>kind</code> decode through the enum <code>fromWire</code> (unknown → safe default), never throw — a
+forward-compat string in the DB (written by a future client version, then opened by this one after a
+downgrade) must not brick load.</li>
+</ul>
+
+<h2>Edge cases the reviewer should attack</h2>
+<table>
+<thead><tr><th></th><th>case</th></tr></thead>
+<tbody>
+<tr><td><strong>C1</strong></td><td>W2 collapse vs. a UI scroll anchor on the optimistic <code>clientTempId</code>. <strong>Be honest (round-2 correction): keeping <code>clientTempId</code> keeps the row's IDENTITY stable, but the <code>createdAt</code> swap (clamped client time → server time) IS a guaranteed potential re-sort</strong> — the row can change position relative to its neighbors. We have not "prevented flicker," we've narrowed it to a position change without an identity change. For Phase-1 (provisional clock clamped close to real, immutable body) the delta is sub-second and the move is small, but the list test must MEASURE the position delta, not assume it away.</td></tr>
+<tr><td><strong>C2</strong></td><td>history pagination inserts an <strong>older</strong> batch while a live fanout inserts a <strong>newer</strong> message — does the ordering key keep them sorted without a full re-sort each insert? (drift re-runs the watch query; confirm the index covers <code>(channelId, createdAt, localSeq, serverUlid)</code> — the full ordering tuple.)</td></tr>
+<tr><td><strong>C3</strong></td><td>the <code>UNIQUE(serverUlid)</code> backstop fires (W3 races W2) — is it caught and swallowed as "already present", or does it bubble and kill the ingest loop? (Must be caught; a thrown constraint error in the frame loop is a socket-killer.)</td></tr>
+<tr><td><strong>C4</strong></td><td><strong>Migration strategy (concrete, not a to-do — cage-match: "an unfunded mandate").</strong> v1 ships with the <code>UNIQUE(serverUlid)</code> index from creation, so there is <em>no</em> retro-index-on-dirty-data step (the dangerous case — building a UNIQUE index over a DB that already holds duplicate ULIDs would fail). Rules fixed now: (a) every Phase-2+ column is <strong>additive and nullable</strong> with a default, via drift <code>onUpgrade</code> <code>m.addColumn</code> — never a destructive <code>ALTER</code>; (b) <strong>downgrade</strong> is survived by lenient-decode + drift ignoring unknown columns on read, but a v-next-written row opened by v-current must not crash — so new columns carry no load-time <code>NOT NULL</code> assertion the old schema lacks; (c) the read predicate, write predicate, and index predicate for <code>serverUlid</code> are the SAME across versions (load/write symmetry across versions). A test opens a v1-shaped DB under the current schema and asserts zero data loss.</td></tr>
+<tr><td><strong>C5</strong></td><td>two devices / two app instances same account — out of scope Phase 1 (single client), but note it: <code>clientTempId</code> uuids won't collide across devices; ULIDs are server-authoritative, so U still holds. No design debt incurred.</td></tr>
+<tr><td><strong>C6</strong></td><td>a <code>failed</code> row (gateway <code>ErrorFrame</code> for our send, W4) — excluded from the outbox query (O), so it won't auto-redrain. Manual retry is <strong>W5</strong> (now a first-class writer in the census): <code>failed → sending</code>, same <code>clientTempId</code>, bumped <code>localSeq</code>, only while <code>serverUlid IS NULL</code>.</td></tr>
+<tr><td><strong>C7</strong></td><td><strong>Server-authoritative edits / deletes / moderation redactions.</strong> A <code>msg_id</code> we already hold can return with a <em>corrected</em> body, sender label, deletion tombstone, or moderation state. The original "drop-if-present" would freeze stale local truth forever — <em>lost server state</em>. W3's upsert-on-conflict is the structural shape for field corrections; <strong>but the Phase-1 schema has NO tombstone/moderation/edit-version columns, so the cache does NOT structurally prevent lost-delete/moderation state today</strong> (round-2 honesty correction — don't overclaim). Deletes route through <strong>W6</strong> (tombstone-based, deferred). The per-field merge policy and the tombstone column land with the edit/delete phase; Phase 1 commits only the <em>upsert shape</em> so the door isn't nailed shut.</td></tr>
+<tr><td><strong>C8</strong></td><td><strong>Gross clock skew (cage-match: "temporal wormhole").</strong> Clamped provisional <code>createdAt</code> keeps the row in the live view; <code>localSeq</code> (not δ) orders sibling clamped sends; the ack lands it in server order. Test forces a +years clock AND two rapid sends → no teleport AND the two sends keep compose order.</td></tr>
+<tr><td><strong>C9</strong></td><td><strong>Optimistic reply to a not-yet-acked parent (round-2 catch).</strong> Invariant R requires <code>replyToId</code> to be a server ULID — but a user replying to a message whose ack hasn't landed has only the parent's <code>clientTempId</code>. Phase 1 carries <code>replyToId</code> on the wire but the UI ignores it, so this can't arise yet. <strong>Precondition for when replies go live: either forbid composing a reply until the parent is acked, or store the parent's <code>clientTempId</code> and rewrite it to the ULID on the parent's W2 ack.</strong> Named now so Invariant R isn't silently false the day replies ship.</td></tr>
+</tbody>
+</table>
+
+<h2>Test plan (ATDD — written before impl)</h2>
+<ul class="tight">
+<li><span class="tag">W1</span> optimistic insert → outbox query returns it; stream emits it as <code>sending</code>.</li>
+<li><span class="tag">W2 happy</span> optimistic row + <code>ack(sameTempId)</code> → one row, <code>serverUlid</code> set, <code>state=sent</code>.</li>
+<li><span class="tag">W2 collapse</span> history inserts ULID <code>u</code> (row <code>R_u</code>) with server body/sender; then <code>ack(c→u)</code> for optimistic <code>R_c</code> → <strong>one</strong> row remains, <code>clientTempId==c</code>, <code>serverUlid==u</code>, and its <strong>body/sender/createdAt are <code>R_u</code>'s (server) values</strong>, <code>state=sent</code>. <em>(The crux test — asserts merge direction, not just count.)</em></li>
+<li><span class="tag">A stream-atomicity</span> drive the W2 collapse while a <code>watchChannel</code> listener records EVERY emission → <strong>no emitted list ever contains two rows for one <code>serverUlid</code></strong> (no transient observed duplicate mid-collapse).</li>
+<li><span class="tag">R reply-join</span> message <code>v</code> with <code>replyToId=u</code>; collapse the optimistic row onto <code>serverUlid=u</code> → <code>v</code>'s reply still resolves (join is on <code>serverUlid</code>, survives the <code>R_u</code> delete).</li>
+<li><span class="tag">W3 upsert</span> insert ULID <code>u</code>; deliver <code>MessageFrame(msg_id=u)</code> with a CHANGED field → still one row, field UPDATED (not dropped). (Phase-1 fields identical → no-op; the test pins the upsert shape for Phase 2.)</li>
+<li><span class="tag">W3 backstop</span> force the race (insert via W3 while W2 mid-flight, same ULID) → caught, the frame's payload is APPLIED via update, one row, no thrown error escapes the ingest loop.</li>
+<li><span class="tag">W4 error</span> <code>ErrorFrame(ref=c)</code> on a <code>sending</code> row → <code>failed</code> &amp; leaves the outbox; <code>ErrorFrame(ref=c)</code> on an already-<code>sent</code> row (late error) → <strong>NO regression</strong> (guard: only when <code>serverUlid IS NULL</code>); <code>ErrorFrame(ref=null)</code> → systemic, fails all pending in channel (or surfaces to B4), never silent-drops.</li>
+<li><span class="tag">W5 retry</span> a <code>failed</code> row → retry → <code>sending</code>, same <code>clientTempId</code>, <code>localSeq</code> bumped (moves to bottom of pending), re-enters outbox; subsequent <code>ack</code> reconciles via W2.</li>
+<li><span class="tag">localSeq send-order</span> two optimistic sends under a skewed clock clamp to the SAME <code>createdAt</code> → they render in <strong>compose order</strong> (localSeq tiebreak), not random uuid order.</li>
+<li><span class="tag">O</span> rows with <code>serverUlid==null</code> &amp; not <code>failed</code> appear in the outbox query; acked/failed rows don't.</li>
+<li><span class="tag">C8 clock-skew</span> optimistic row with client clock set +years → stays within the live view (clamped), and on <code>ack</code> lands in correct server order without crossing a different sender's message.</li>
+<li><span class="tag">Symmetry</span> <code>serverUlid==null</code> row → DB write+read round-trips equal.</li>
+<li><span class="tag">Migration v1→current</span> open a v1-shaped DB under the current schema → no data loss; additive column loads as its default.</li>
+<li><span class="tag">Migration version-cycle</span> (round-2 ask) create under vNext schema → downgrade and WRITE a row with vCurrent code → re-upgrade and reopen vNext → assert no crash AND the vNext-only column's value survived the vCurrent write (SQLite column-specific UPDATEs don't clear unmapped columns — pin it).</li>
+<li><span class="tag">Reactive</span> <code>watchChannel</code> emits ordered list on each write; cancels cleanly (no leaked controller).</li>
+</ul>
+
+<h2>Open question for B4 (Component 4 — flagged, NOT resolved here)</h2>
+<p>W2's collapse keeps <code>R_c</code>'s <code>clientTempId</code>. The alternative — keep <code>R_u</code>,
+delete <code>R_c</code> — is simpler (no field copy) but swaps the UI key. <strong>B4 owns this call</strong>
+because it owns the UI-facing reconcile policy; the cache supports either via the same atomic transaction.
+Recommendation: keep <code>clientTempId</code> (continuity), but let the list-rendering test (C1) settle it.</p>
+
+</body>
+</html>
