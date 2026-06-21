@@ -82,11 +82,14 @@ void main() {
       // Optimistic row we sent.
       await cache.insertOptimistic(optimistic('c1', 'chan', 'mine'));
       // History fetched the server copy first (different body/sender to prove
-      // the merge DIRECTION, not just the count).
+      // the merge DIRECTION, not just the count). Distinct history time to
+      // prove the collapse stamps the ACK time, not R_u's, consistently with
+      // the happy path (Carnot finding).
       await cache.upsertInbound(server('01ULID_A', 'chan', 'server-body',
-          sender: _alice));
-      // Now our ack lands, mapping c1 -> 01ULID_A.
-      await cache.reconcileAck('c1', '01ULID_A', DateTime.utc(2026, 1, 1, 12, 9));
+          sender: _alice, at: DateTime.utc(2026, 1, 1, 12, 0)));
+      // Now our ack lands, mapping c1 -> 01ULID_A, with its own server time.
+      final ackTime = DateTime.utc(2026, 1, 1, 12, 9);
+      await cache.reconcileAck('c1', '01ULID_A', ackTime);
 
       final rows = await cache.watchChannel('chan').first;
       expect(rows, hasLength(1), reason: 'collapse must leave exactly one row');
@@ -95,6 +98,8 @@ void main() {
       expect(m.id, '01ULID_A');
       expect(m.body, 'server-body', reason: 'server-wins-on-fields');
       expect(m.sender.label, 'Alice', reason: 'server-wins-on-fields');
+      expect(m.createdAt, ackTime,
+          reason: 'collapse stamps the ACK time, same as the happy path');
       expect(m.deliveryState, DeliveryState.sent);
     });
 
@@ -110,22 +115,34 @@ void main() {
     });
   });
 
-  group('Invariant A — stream atomicity (no transient observed duplicate)', () {
-    test('collapse never emits a list containing two rows for one serverUlid',
+  group('Invariant A — stream atomicity', () {
+    test(
+        'collapse commits as exactly ONE emission (no mid-transaction '
+        'delete/update emission) AND never shows a duplicate serverUlid',
         () async {
       await cache.insertOptimistic(optimistic('c1', 'chan', 'mine'));
       await cache.upsertInbound(server('01ULID_A', 'chan', 'server-body'));
 
       final emissions = <List<Message>>[];
       final sub = cache.watchChannel('chan').listen(emissions.add);
-      await Future<void>.delayed(Duration.zero); // first emission
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final before = emissions.length; // the initial 2-row emission
 
       await cache.reconcileAck('c1', '01ULID_A', DateTime.utc(2026, 1, 1, 12, 9));
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
       await sub.cancel();
 
+      // The collapse's delete + update are ONE transaction, so the watcher
+      // fires ONCE post-commit. Without the transaction, delete-then-update
+      // would emit the intermediate [R_c(null)] state too (an extra emission).
+      // This is what actually tests Invariant A — the same-serverUlid check
+      // below is necessary but, with delete-first ordering, not sufficient.
+      expect(emissions.length - before, 1,
+          reason: 'collapse must emit exactly once (single transaction)');
+      expect(emissions.last, hasLength(1));
+
       for (final list in emissions) {
-        final ulids = list.map((m) => m.id).where((id) => id != null).toList();
+        final ulids = list.map((m) => m.id).whereType<String>().toList();
         expect(ulids.length, ulids.toSet().length,
             reason: 'no emission may contain two rows for one serverUlid');
       }
@@ -177,6 +194,15 @@ void main() {
       final affected = await cache.markFailed(null, systemicChannelId: 'chan');
       expect(affected.map((m) => m.clientTempId), containsAll(['c1', 'c2']));
     });
+
+    test('systemic error scoped to a channel does NOT leak other channels',
+        () async {
+      await cache.insertOptimistic(optimistic('c1', 'chanA', 'a'));
+      await cache.insertOptimistic(optimistic('c2', 'chanB', 'b'));
+      final affected = await cache.markFailed(null, systemicChannelId: 'chanA');
+      expect(affected.map((m) => m.clientTempId), ['c1'],
+          reason: 'the channel filter must AND with serverUlid IS NULL');
+    });
   });
 
   group('W5 — manual retry', () {
@@ -188,6 +214,19 @@ void main() {
       final out = await cache.outbox();
       expect(out, hasLength(1));
       expect(out.single.deliveryState, DeliveryState.sending);
+    });
+
+    test('retry bumps localSeq → the retried row moves to the BOTTOM of pending',
+        () async {
+      final t = DateTime.utc(2026, 1, 1, 12);
+      await cache.insertOptimistic(optimistic('c1', 'chan', 'first', at: t));
+      await cache.insertOptimistic(optimistic('c2', 'chan', 'second', at: t));
+      // Fail then retry c1 — it should jump from first to last in send order.
+      await cache.markFailed('c1');
+      await cache.retry('c1');
+      final out = await cache.outbox();
+      expect(out.map((m) => m.clientTempId).toList(), ['c2', 'c1'],
+          reason: 'retry bumps localSeq so the re-sent row drains last');
     });
   });
 

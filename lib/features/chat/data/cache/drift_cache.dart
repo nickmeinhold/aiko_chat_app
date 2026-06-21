@@ -102,9 +102,14 @@ class DriftCache extends _$DriftCache {
         deliveryState: m.deliveryState.wire,
       );
 
+  /// `MAX(localSeq)+1`. Race-free ONLY because drift serializes queries on a
+  /// single connection and SQLite is single-writer, so the enclosing
+  /// transaction's SELECT-then-INSERT can't interleave with another. This holds
+  /// for Phase 1 (one isolate, one cache instance). If multiple isolates/
+  /// connections ever open the same file, this becomes a TOCTOU — switch to a
+  /// dedicated atomic counter table then (flagged in the design's §schema).
   Future<int> _nextLocalSeq() async {
-    final q = selectOnly(messages)
-      ..addColumns([messages.localSeq.max()]);
+    final q = selectOnly(messages)..addColumns([messages.localSeq.max()]);
     final row = await q.getSingleOrNull();
     final maxSeq = row?.read(messages.localSeq.max());
     return (maxSeq ?? 0) + 1;
@@ -173,7 +178,12 @@ class DriftCache extends _$DriftCache {
           kind: Value(ru.kind),
           body: Value(ru.body),
           replyToId: Value(ru.replyToId),
-          createdAt: Value(ru.createdAt),
+          // createdAt from the ACK (serverCreatedAt), NOT ru.createdAt — so the
+          // collapse path and the happy path stamp the SAME value for the same
+          // reconciliation. They are provably equal anyway (the gateway sends
+          // ack.created_at = view["created_at"] from one row, ws.py:82), but
+          // using one source removes the path-dependent asymmetry.
+          createdAt: Value(serverCreatedAt.toUtc().millisecondsSinceEpoch),
           deliveryState: Value(DeliveryState.sent.wire),
         ));
       }
