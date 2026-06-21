@@ -118,7 +118,7 @@ plus <code>channels</code>.</p>
   body           TEXT  NOT NULL
   replyToId      TEXT  NULL
   createdAt      INTEGER NOT NULL               -- UTC unix millis (drift maps DateTime); provisional for optimistic
-  localSeq       INTEGER NOT NULL DEFAULT 0     -- monotonic per-device compose counter (W1); 0 for inbound. Send-order tiebreak.
+  localSeq       INTEGER NOT NULL DEFAULT 0     -- DB-DERIVED monotonic counter: SELECT COALESCE(MAX(localSeq),0)+1 inside W1's txn. 0 for inbound. NOT an in-memory counter (would reset on restart). Send-order tiebreak.
   deliveryState  TEXT  NOT NULL                 -- DeliveryState.wire
 
 channels
@@ -152,34 +152,55 @@ outside the authoritative timeline until a server timestamp places the row — i
 below.
 </blockquote>
 
-<h2>The writer paths — the complete census</h2>
+<h2>The writer census — every path that mutates a <code>messages</code> row</h2>
 <blockquote>
-<strong>Why "complete" is the round-3 headline.</strong> Round 1 found one un-audited writer (W4). Round 2
-found two more (W5 retry, W6 delete) plus two non-mutating paths the audit had never named. The pattern is the
-finding: <em>"audit every writer" is only a contract once the writer set is provably closed.</em> So this
-section now enumerates <strong>every</strong> path that can touch a row — the mutating ones (W1–W6) AND the
-paths that must be <em>proven not to mutate</em> (migration, read-time) — because an un-named writer is exactly
-where the next duplicate hides. If a future change adds a seventh writer, it goes in this table or it violates
-the census.
+<strong>Scope first, because the closure claim is only as good as its boundary (round-3 catch).</strong> This
+census governs writers of the <strong><code>messages</code> table</strong> — the table whose invariants
+(U/A/R/O) carry the app's correctness. Round 1 found one un-audited message-writer (W4); round 2 found two more
+(W5 retry, W6 delete); round 3 caught that "every path that can touch <em>a row</em>" silently overclaimed —
+the <code>channels</code> table has its own writers the message-census never covered. So the rule is now
+precise: <em>every path that mutates a <code>messages</code> row is W1–W6 or it violates the census</em>; the
+<code>channels</code> table and the message-table's non-mutating paths are enumerated separately below. An
+un-named message-writer is exactly where the next duplicate hides — but the boundary of the claim is stated, not
+assumed.
 </blockquote>
 <table>
 <thead><tr><th></th><th>writer</th><th>operation</th><th>invariant it must uphold</th></tr></thead>
 <tbody>
-<tr><td><strong>W1</strong></td><td>composer (optimistic send)</td><td><code>INSERT (clientTempId=uuid, serverUlid=null, state=sending, createdAt=clamped, localSeq=next())</code> — <strong>committed BEFORE the wire send</strong> (so a drop-after-create reconnect always finds a row to drain)</td><td>U trivially (serverUlid null); O</td></tr>
+<tr><td><strong>W1</strong></td><td>composer (optimistic send)</td><td>in one transaction: <code>localSeq = SELECT COALESCE(MAX(localSeq),0)+1</code> then <code>INSERT (clientTempId=uuid, serverUlid=null, state=sending, createdAt=clamped, localSeq)</code>. The <code>MAX+1</code> read is inside the same txn as the insert (atomic, restart-durable — never an in-memory counter). <strong>Committed BEFORE the wire send</strong> so a drop-after-create reconnect always finds a row to drain</td><td>U trivially (serverUlid null); O</td></tr>
 <tr><td><strong>W2</strong></td><td>ack handler</td><td>reconcile the optimistic row → adopt <strong>server-authoritative</strong> fields; set <code>state=sent</code>. <strong>Transition guard: only <code>sending|failed → sent</code></strong> (never regress a row already <code>sent</code>)</td><td><strong>U: collapse-on-collision (merge server truth IN)</strong></td></tr>
 <tr><td><strong>W3</strong></td><td>inbound (fanout echo + history)</td><td>dedup-upsert keyed on <code>serverUlid</code> — on conflict <strong>UPDATE with server fields</strong>, never blind-drop</td><td><strong>U: upsert-on-conflict</strong></td></tr>
 <tr><td><strong>W4</strong></td><td>error handler (<code>ErrorFrame</code>)</td><td>match <code>clientTempId == ref_client_msg_id</code> → <code>state=failed</code> <strong>ONLY when <code>serverUlid IS NULL</code></strong> (a late error must never regress a <code>sent</code> row — round-2 guard). <code>refClientMsgId</code> nullable (<code>envelopes.dart:89</code>) → null ref ⇒ it is a <em>systemic</em> error (rate-limit, channel-readonly), not a per-message one: fail ALL pending in the affected channel, or surface to B4 — never silently drop</td><td>O; idempotent state transition</td></tr>
 <tr><td><strong>W5</strong></td><td>manual retry (a <code>failed</code> row, C6)</td><td><strong>only when <code>serverUlid IS NULL</code></strong>: <code>state=failed → sending</code>, reuse the SAME <code>clientTempId</code> + <code>body</code> + <code>replyToId</code>, bump <code>localSeq=next()</code> (re-send goes to the bottom of the pending order), re-emit on the wire. The ack reconciles via W2 as normal (idempotent on <code>client_msg_id</code>)</td><td>U (serverUlid still null); O (re-enters the outbox)</td></tr>
-<tr><td><strong>W6</strong></td><td>user delete of an in-flight row <span class="note">(Phase 2 — no delete UI in Phase 1; named now so the census is closed)</span></td><td>NOT a bare <code>DELETE</code> — a <code>sending</code> row deleted locally then acked would resurrect from history (round-2 "showstopper"). Requires a <strong>tombstone</strong>: mark <code>state=deleting</code>, keep the row so W2's ack can transition it to a server-confirmed delete, and W3 must honor the tombstone instead of re-inserting. Needs a tombstone column (deferred with the edit/delete schema, C7)</td><td>U; tombstone survives the ack/history race</td></tr>
+<tr><td><strong>W6</strong> <span class="note">(Phase 2)</span></td><td>user delete of an in-flight row</td><td><strong>Phase 1: UNSUPPORTED — there is no delete UI and no tombstone column, so local delete of a <code>messages</code> row is simply forbidden</strong> (a bare <code>DELETE</code> of a <code>sending</code> row would let it resurrect from history on the next ack — round-2 "showstopper"). When delete ships (Phase 2), W6 is tombstone-based: mark <code>state=deleting</code>, keep the row so W2's ack confirms the server delete, and W3 honors the tombstone instead of re-inserting. <strong>W6 joins the live census only when its tombstone column lands (C7)</strong> — until then it is a named-but-inactive writer, not part of the Phase-1 invariant set</td><td>U; tombstone survives the ack/history race</td></tr>
 </tbody>
 </table>
-<p class="note"><strong>Non-mutating paths (named so they can't masquerade as un-audited writers):</strong>
-<strong>migration / <code>onUpgrade</code></strong> — schema-only by contract; it adds columns and indexes but
-performs <em>no row mutation</em> (no backfill that rewrites <code>serverUlid</code>, no enum normalization that
-re-keys a row). If a future migration genuinely must touch rows, it becomes W7 and joins the census.
-<strong>Read-time / <code>watchChannel</code> mapping</strong> — strictly read-only; lenient enum decode happens
-in the Dart mapping layer, NEVER as a write-back to the row. A read that "repairs" a row is forbidden — it would
-be an un-named writer.</p>
+<h3>The <code>channels</code> table — its own (small) census</h3>
+<p>The <code>channels</code> table has no <code>serverUlid</code>/U-equivalent, so it needs no dedup machinery —
+but round 3 was right that its writers must still be named:</p>
+<ul class="tight">
+<li><strong>CH1 — channel-list sync</strong> (<code>GET /v1/channels</code> on launch / refresh): upsert each
+channel by <code>id</code> (server-authoritative). The sole Phase-1 channel-table writer.</li>
+<li><strong>CH2 — channel lifecycle</strong> (delete / archive / leave) <span class="note">— Phase 2, but named
+because of its blast radius</span>: when a channel goes away, its messages must NOT be silently mass-deleted by
+an implicit <code>DELETE CASCADE</code> (round-3 "hidden bomb" — a DB-level writer that bypasses every message
+invariant). <strong>Phase-1 decision: NO foreign-key CASCADE between <code>channels</code> and
+<code>messages</code></strong> — message cleanup for a defunct channel is an explicit, audited application
+writer when it lands (it joins the message census then), never an invisible DB trigger.</li>
+</ul>
+<h3>Proven non-mutating paths (named so they can't masquerade as un-audited writers)</h3>
+<ul class="tight">
+<li><strong>migration / <code>onUpgrade</code></strong> — schema-only by contract; adds columns/indexes,
+performs <em>no row mutation</em> (no backfill rewriting <code>serverUlid</code>, no enum re-keying). A future
+migration that genuinely must touch rows becomes an audited message-writer and joins the census.</li>
+<li><strong>read-time / <code>watchChannel</code> mapping</strong> — strictly read-only; lenient enum decode
+lives in the Dart mapping layer, NEVER as a write-back. A read that "repairs" a row is forbidden.</li>
+<li><strong>connection lifecycle (disconnect / reconnect / offline)</strong> — explicitly a NON-writer
+(round-3): a dropped connection does <strong>NOT</strong> bulk-transition <code>sending → failed</code>. Pending
+rows stay <code>sending</code> and re-drain on reconnect (drain-first); a row goes <code>failed</code> ONLY via
+an explicit <code>ErrorFrame</code> (W4). Naming this forecloses the plausible-but-wrong "mark everything failed
+on disconnect" implementation, which would strand or double-send messages.</li>
+</ul>
 
 <details open>
 <summary>W2 — ack reconcile, the subtle one</summary>
@@ -190,9 +211,10 @@ holds <code>serverUlid == u</code>: <code>UPDATE R_c SET serverUlid=u, createdAt
 (The happy path.)</li>
 <li>If a row <code>R_u</code> <strong>already holds</strong> <code>serverUlid == u</code> (history fetched it
 first — the race): <strong>collapse, merging server truth INTO the optimistic row.</strong> In one
-transaction: copy <strong>ALL server-authoritative fields</strong> from <code>R_u</code> onto <code>R_c</code>
-— <code>createdAt, sender(senderUserId/senderKind/senderLabel), body, kind, replyToId, channelId</code> — then
-<code>DELETE R_u</code>. <strong>The merge direction is server-wins-on-every-field, optimistic-wins-only-on-PK</strong>:
+transaction: <code>UPDATE R_c SET serverUlid=u, state=sent</code> AND copy <strong>ALL server-authoritative
+fields</strong> from <code>R_u</code> onto <code>R_c</code> — <code>createdAt, sender(senderUserId/senderKind/senderLabel),
+body, kind, replyToId, channelId</code> — then <code>DELETE R_u</code> (all three statements in the one txn, per
+Invariant A). <strong>The merge direction is server-wins-on-every-field, optimistic-wins-only-on-PK</strong>:
 we keep <code>R_c.clientTempId</code> and its <code>localSeq</code> (UI continuity — a list keyed on
 <code>clientTempId</code> doesn't see the row swap identities and flicker) but every other <em>value</em> comes
 from <code>R_u</code>. <span class="note">(Round 2 caught the earlier SQL copying only body/sender/createdAt
@@ -205,7 +227,9 @@ idempotency, so this is edit-safety insurance, not a live fix.)</span></li>
 "log and hope history covers it" is not enough (round-2 catch: if the app crashes before the next history
 fetch, the message is absent indefinitely). So on an orphan ack, <strong>enqueue a bounded history-repair for
 that channel at-or-before <code>msg_id</code></strong>, making recovery an explicit scheduled action rather
-than an implicit assumption. (Confirmed: <code>envelopes.py</code> ack payload is ids-only.)</li>
+than an implicit assumption. <strong>The repair task must be PERSISTED</strong> (round-3: an in-memory schedule
+followed by a crash leaves the same indefinite-absence hole it exists to close) — it is owned by B4, durable
+across restart. (Confirmed: <code>envelopes.py</code> ack payload is ids-only.)</li>
 </ul>
 </details>
 
