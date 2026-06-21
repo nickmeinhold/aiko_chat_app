@@ -258,20 +258,21 @@ class DriftCache extends _$DriftCache {
 
   // --- W5: manual retry ------------------------------------------------------
 
-  /// W5 — retry a `failed` row: back to `sending`, same clientTempId/body,
-  /// bumped localSeq (moves to the bottom of the pending order). Only while
-  /// `serverUlid IS NULL`.
+  /// W5 — retry a `failed` row: flip `failed → sending`, only while
+  /// `serverUlid IS NULL`. **Preserves `createdAt` and `localSeq`** so the
+  /// message keeps its place in the conversation timeline — a retry must NOT
+  /// teleport the message to the bottom of the view. (The earlier "bump
+  /// localSeq → bottom of pending" contract was wrong: `createdAt` dominates
+  /// the sort, so a bump only reorders within a same-time bucket anyway, and
+  /// moving a retried message past later ones is the wrong UX. Cage-match
+  /// caught the incoherent contract.)
   Future<void> retry(String clientTempId) async {
-    await transaction(() async {
-      final seq = await _nextLocalSeq();
-      await (update(messages)
-            ..where((t) =>
-                t.clientTempId.equals(clientTempId) & t.serverUlid.isNull()))
-          .write(MessagesCompanion(
-        deliveryState: Value(DeliveryState.sending.wire),
-        localSeq: Value(seq),
-      ));
-    });
+    await (update(messages)
+          ..where((t) =>
+              t.clientTempId.equals(clientTempId) & t.serverUlid.isNull()))
+        .write(MessagesCompanion(
+      deliveryState: Value(DeliveryState.sending.wire),
+    ));
   }
 
   // --- reads -----------------------------------------------------------------

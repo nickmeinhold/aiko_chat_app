@@ -216,17 +216,19 @@ void main() {
       expect(out.single.deliveryState, DeliveryState.sending);
     });
 
-    test('retry bumps localSeq → the retried row moves to the BOTTOM of pending',
+    test('retry PRESERVES timeline position (does not teleport to the bottom)',
         () async {
-      final t = DateTime.utc(2026, 1, 1, 12);
-      await cache.insertOptimistic(optimistic('c1', 'chan', 'first', at: t));
-      await cache.insertOptimistic(optimistic('c2', 'chan', 'second', at: t));
-      // Fail then retry c1 — it should jump from first to last in send order.
+      // Distinct times so position is sort-determined, not bucket-tied —
+      // c1 is earlier and must STAY earlier after a retry.
+      await cache.insertOptimistic(
+          optimistic('c1', 'chan', 'first', at: DateTime.utc(2026, 1, 1, 12)));
+      await cache.insertOptimistic(optimistic('c2', 'chan', 'second',
+          at: DateTime.utc(2026, 1, 1, 12, 5)));
       await cache.markFailed('c1');
       await cache.retry('c1');
       final out = await cache.outbox();
-      expect(out.map((m) => m.clientTempId).toList(), ['c2', 'c1'],
-          reason: 'retry bumps localSeq so the re-sent row drains last');
+      expect(out.map((m) => m.clientTempId).toList(), ['c1', 'c2'],
+          reason: 'retry keeps the message in its original timeline position');
     });
   });
 
