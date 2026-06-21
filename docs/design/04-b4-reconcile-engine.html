@@ -45,12 +45,15 @@
 <p class="lead">The orchestration policy that turns the cache's atomic primitives into a message that survives <code>send → disconnect → reconnect → ack</code> with no duplicate, no loss, and a correct delivery state at every step.</p>
 
 <blockquote class="invariant">
-<strong>Round 2 (cage-match revisions).</strong> Round 1 (Maxwell/Kelvin/Carnot) returned three REQUEST_CHANGES that
-rhymed on one principle: <em>the design named a mechanism (re-entrancy guard, orphan backfill, systemic-error policy,
-ack-wait, history delta) and gestured at it instead of specifying the lock / termination / taxonomy.</em> Round 2
-specifies each one concretely or explicitly degrades it, and adds the one race the author under-told:
-<strong>self-echo</strong> — the gateway fans a message back to its own sender (<code>hub.fanout</code> has no sender
-exclusion, verified <code>hub.py:44</code>), so the collapse path fires on <em>every</em> send, not just reconnect.
+<strong>Round 2 → 3 (cage-match revisions).</strong> Round 1 findings rhymed on <em>"named a mechanism, didn't
+specify the lock/termination/taxonomy"</em>; round 2 specified each (re-entrancy guard, ack-wait, error taxonomy,
+clamp tradeoff) and added the self-echo race (<code>hub.fanout</code> has no sender exclusion, verified
+<code>hub.py:44</code> — the collapse path fires on <em>every</em> send). Round 2 then exposed a deeper layer (the
+"flow ratchet"): the history watermark was unsound under interrupted sync. <strong>Round 3</strong> adopts the
+forward <code>after</code> cursor (so <code>MAX(serverUlid)</code> is a crash-resumable watermark by construction),
+adds epoch-based cancellation so a terminal auth error stops in-flight reconnect work, classifies reconnect
+failures, and drops a false orphan-recovery claim. The round-3 findings rhymed too, tighter: <em>an in-flight async
+process needs a real lifecycle — watermark, cancellation, failure-classification — not just entry guards.</em>
 </blockquote>
 
 <div class="scope">
@@ -179,13 +182,15 @@ Future&lt;void&gt; _onAck(AckResult a) async {
     // row before the wire send, and there is no local delete (W6 is Phase 2). So
     // an orphaned ack means corruption or a bug, NOT a routine path. Policy:
     //   1. log loudly (telemetry) — this should never fire;
-    //   2. do NOT attempt a targeted backfill — the ack carries no channelId
-    //      (AckResult has only clientMsgId/msgId/createdAt), so a targeted
-    //      getHistory is impossible from an ack alone. The acked message is on
-    //      the server, so the NEXT reconnect's full history sync ingests it via
-    //      W3 regardless. No message is lost; only a (near-impossible) corruption
-    //      is surfaced rather than silently swallowed.
+    //   2. do NOT attempt recovery and do NOT claim "the next history sync gets
+    //      it" — that claim is FALSE (round 3): a forward delta won't fetch a ULID
+    //      below the watermark, and the ack carries no channelId for a targeted
+    //      fetch. There is nothing to recover BECAUSE THE BRANCH CANNOT EXECUTE in
+    //      Phase 1 (proof above). The enum exists to make the impossible OBSERVABLE,
+    //      not to repair it. If telemetry ever shows this firing, THEN add channelId
+    //      to the ack (gateway has it at ws.py:82) and do a targeted repair.
     _telemetry.orphanAck(a.clientMsgId, a.msgId);
+    assert(false, 'orphan ack — unreachable in Phase 1; see AckOutcome.orphaned');
   }
 }</code></pre>
 <p class="note">Why not just add <code>channelId</code> to the ack so targeted repair becomes possible? Because it
@@ -215,35 +220,56 @@ policy. The backoff counter is per-channel and resets on the first successful dr
 Future&lt;void&gt;? _reconnecting;   // non-null while a choreography runs
 bool _rerunRequested = false;  // a connected event arrived mid-flight
 
+int _runEpoch = 0;             // bumped on every terminal/disconnect — cancels in-flight work (round 3)
+bool _aborted(int epoch) =&gt; epoch != _runEpoch;
+
 void _onConnState(ConnectionState s) {
-  if (s != ConnectionState.connected) return;        // ignore disconnected/connecting/unauth
+  if (s != ConnectionState.connected) {              // disconnected / unauthenticated →
+    _runEpoch++;                                       //   cancel any in-flight choreography (round 3)
+    _failAllAckWaiters();                             //   release waiters so nothing hangs on the 3s timeout
+    return;
+  }
   if (_reconnecting != null) {                        // already choreographing →
     _rerunRequested = true;                           //   request exactly one re-run, don't spawn a second
     return;
   }
-  _reconnecting = _runReconnect().whenComplete(() {
+  final epoch = _runEpoch;
+  _reconnecting = _runReconnect(epoch).whenComplete(() {
     final rerun = _rerunRequested;
     _rerunRequested = false;
     _reconnecting = null;
-    if (rerun) _onConnState(ConnectionState.connected); // coalesced: at most one queued re-run
+    if (rerun && !_aborted(epoch)) _onConnState(ConnectionState.connected); // coalesced single re-run
   });
 }
 
-Future&lt;void&gt; _runReconnect() async {
-  _transport.subscribe(_subscribedChannelIds);        // additive, safe to repeat
-  await _drainOutbox();                               // re-send un-acked, await acks BEST-EFFORT
-  await _fetchDeltaHistory();                         // then reconcile against server truth
+Future&lt;void&gt; _runReconnect(int epoch) async {
+  try {
+    _transport.subscribe(_subscribedChannelIds);      // additive, safe to repeat
+    await _drainOutbox(epoch);                         // re-send un-acked, await acks BEST-EFFORT
+    if (_aborted(epoch)) return;                       // terminal arrived mid-drain → stop, don't write a dead cache
+    await _fetchDeltaHistory(epoch);                  // then reconcile against server truth
+  } catch (e, st) {
+    // A REST 500 / decode error is NOT a transport error frame — classify it here
+    // rather than leaking an unobserved async error. Telemetry + a backed-off retry
+    // (or just defer to the next `connected`); never silently swallow.
+    _telemetry.reconnectFailed(e, st);
+    if (!_aborted(epoch)) _scheduleBackoffReconnect();
+  }
 }
 
-Future&lt;void&gt; _drainOutbox() async {
+Future&lt;void&gt; _drainOutbox(int epoch) async {
   final pending = await _cache.outbox();              // O: the query, in send order
   final waiting = pending.map((m) =&gt; m.clientTempId).toSet();
   _registerAckWaiters(waiting);                        // REGISTER FIRST (fixes the ack-before-registration race)
   for (final m in pending) {
+    if (_aborted(epoch)) return;                       // terminal mid-dispatch → stop
     _transport.sendMessage(_toOutgoing(m));            // gateway is idempotent → safe re-send
   }
-  // A row already acked between outbox() and now (or fast self-echo) is complete
-  // immediately — don't burn the timeout waiting for an ack that already happened.
+  // A row whose ACK already landed (between outbox() and now) is complete immediately —
+  // don't burn the timeout. NOTE: a self-echo alone does NOT complete the waiter — it
+  // writes R_u (keyed by serverUlid) while the optimistic row (keyed by clientTempId)
+  // stays serverUlid==NULL until the ACK collapse; the waiter keys on clientTempId, so
+  // it resolves only once the ack has landed (round-3 correction).
   await _resolveAlreadyAcked(waiting);
   await _awaitAcksOrTimeout(waiting, timeout: const Duration(seconds: 3));
 }</code></pre>
@@ -279,43 +305,50 @@ observable contract. <span class="note">In Phase 1 <code>orphaned</code> is unre
 persists before the wire send and there is no local delete (W6 is Phase 2). So <code>orphaned</code> is a loud "this
 should never happen" telemetry signal, not a routine path. B4 does <strong>not</strong> attempt a targeted backfill
 (the ack has no <code>channelId</code> — see the round-1 BLOCKER); the acked message is on the server, so the next
-reconnect's full history sync ingests it via W3 regardless. The enum makes the impossible case <em>observable</em>;
-it does not pretend to repair it.</span></p>
+reconnect's full history sync would ingest it. <strong>Round 3:</strong> that recovery claim was dropped — it was
+false (a forward delta won't fetch below the watermark; the ack has no channelId for a targeted fetch). The honest
+position: <code>orphaned</code> is unreachable in Phase 1 by construction, so the enum exists purely to make the
+impossible <em>observable</em> (telemetry + a debug <code>assert</code>), not to repair it. No false guarantee.</span></p>
 </details>
 
 <details open>
-<summary>Gap 2 — reconnect wants a forward delta; <code>getHistory</code> only paginates backward</summary>
-<p>The plan says reconnect does <code>getHistory(after=lastKnownServerId)</code>. The shipped
-<code>ChatRestApi.getHistory(channelId, {before, limit})</code> only paginates <em>backward</em> from newest (a
-<code>before</code> ULID cursor; <code>messages_service.py:107-120</code> confirms <code>Message.id &lt; before</code>).
-There is no <code>after</code>.</p>
-<p><strong>Phase-1 resolution with a termination proof (MAJOR, round 2).</strong> The cursor basis is the
-<strong>server ULID total order</strong> — <span class="verified">verified</span> at
-<code>messages_service.py:112-117</code>: history is <code>WHERE Message.id &lt; before ORDER BY Message.id DESC</code>,
-i.e. the gateway orders <em>strictly by ULID</em>, and ULIDs are monotonic + globally unique. So "what did I miss?" is
-exactly "all ULIDs &gt; <code>lastKnownServerId</code>", and <code>lastKnownServerId</code> = the MAX
-<code>serverUlid</code> currently in the cache for the channel.</p>
-<pre><code>String? before = null;                          // start at newest
-while (true) {
-  final page = await _rest.getHistory(channelId, before: before, limit: 50);
-  for (final m in page.messages) _cache.upsertInbound(m);   // W3 dedups on serverUlid
-  final oldest = page.messages.isEmpty ? null : page.messages.first.id;  // ascending → first = oldest
-  if (page.nextBefore == null) break;            // (a) reached the start of history
-  if (oldest != null &amp;&amp; oldest.compareTo(lastKnownServerId) &lt;= 0) break;  // (b) overlap: gap closed
-  before = page.nextBefore;                       // else page further back
+<summary>Gap 2 — reconnect needs a forward delta; <code>getHistory</code> only paginates backward (resolved: add <code>after</code>)</summary>
+<p><strong>Round 2 tried a backward-paging hack and Carnot broke it (BLOCKER, round 2→3).</strong> The shipped
+<code>ChatRestApi.getHistory(channelId, {before, limit})</code> paginates <em>backward</em> only
+(<code>messages_service.py:112-117</code>: <code>WHERE Message.id &lt; before ORDER BY Message.id DESC</code>). The
+round-2 plan — "page backward from newest until the page overlaps <code>MAX(serverUlid)</code>" — is
+<strong>unsound under an interrupted sync</strong>: a paging loop can insert the newest page (advancing
+<code>MAX</code>) then crash before reaching the gap below. The next reconnect starts from the advanced
+<code>MAX</code>, sees immediate overlap, and <strong>permanently skips the older missed messages</strong>. The state
+variable forgot whether the prefix was complete. <code>Carnot: "an irreversible entropy leak."</code></p>
+<p><strong>Round-3 resolution — the forward <code>after</code> cursor the plan specified all along.</strong> This is a
+small cross-repo change (tracked as its own task), and it is the <em>correct</em> fix, not just a workaround:</p>
+<pre><code>// gateway (messages_service.get_history): mirror the existing backward path
+//   WHERE Message.id &gt; after ORDER BY Message.id ASC LIMIT n
+// app (ChatRestApi): getHistory(channelId, {String? before, String? after, int limit})
+
+Future&lt;void&gt; _fetchDeltaHistory(int epoch) async {
+  String? after = _cache.maxServerUlid(channelId);    // null on fresh install → fetch from start
+  while (!_aborted(epoch)) {
+    final page = await _rest.getHistory(channelId, after: after, limit: 50);
+    for (final m in page.messages) _cache.upsertInbound(m);  // ASC order; W3 dedups on serverUlid
+    if (page.messages.length &lt; 50) break;             // caught up to the live edge
+    after = page.messages.last.id;                     // advance forward (last = newest in an ASC page)
+  }
 }</code></pre>
-<p><strong>Termination:</strong> each iteration strictly decreases <code>before</code> along a finite total order, so
-the loop halts at (a) the oldest message or (b) the first page whose oldest ULID is <code>&le; lastKnownServerId</code>
-— the point where the fetched window provably overlaps what the cache already holds, so no ULID in
-<code>(lastKnownServerId, newest]</code> can remain unfetched. This is correct for &gt;50 offline messages (it keeps
-paging) and cheap for the common case (one page, immediate overlap). It does <strong>not</strong> rely on
-<code>created_at</code> ordering at all — only the ULID total order — sidestepping the skew/divergence Carnot flagged.
-<span class="note">Edge: if the cache is empty (<code>lastKnownServerId</code> null — fresh install / first open),
-condition (b) never fires and the loop pages to the start, which is the correct "load all history" behavior, bounded
-by (a).</span></p>
-<p><strong>Flagged for later:</strong> a true <code>after</code> cursor (forward delta) on the gateway +
-<code>ChatRestApi</code> is the scalable form; file it when channel volume or multi-channel fan-in makes the
-"fetch newest page" approach wasteful. Not Phase 1.</p>
+<p><strong>Why forward paging makes <code>MAX(serverUlid)</code> a VALID, crash-resumable watermark.</strong> Forward
+paging fills the <em>oldest gap first</em>, in ascending ULID order. So at every moment, the cache is contiguous from
+the start up to whatever it has fetched — there is no "hole below MAX". If the loop is interrupted at ULID <em>Y</em>,
+the cache is complete through <em>Y</em>, so the next reconnect resumes at <code>after = Y</code> and fills forward
+from exactly the right place. Contiguity is an <em>invariant the algorithm maintains by construction</em>, not a fact
+it has to remember. This is the thermodynamic difference: backward paging is irreversible (it can lose the gap);
+forward paging is reversible (resume from the watermark, no loss). <code>Feynman: "The same equations have the same
+solutions."</code> — the plan wrote <code>after=lastKnownServerId</code> for this exact reason.</p>
+<p><strong>Termination:</strong> each iteration strictly increases <code>after</code> along the finite ULID total
+order; the loop halts when a short page (<code>&lt; limit</code>) signals the live edge is reached. Correct for
+&gt;50 offline messages (keeps paging), cheap for the common case (one short page), and independent of
+<code>created_at</code> ordering — only the ULID total order. Empty cache (<code>after == null</code>) pages from the
+start = correct "load all history".</p>
 </details>
 
 <h2>Edge cases the reviewer should attack</h2>
@@ -354,6 +387,9 @@ implementing the <code>ChatTransport</code> interface with test-driven <code>emi
 <li><span class="tag">ack-already-acked</span> (round 2) reconnect drain where the row's ack arrives in the dispatch window (or via self-echo) → the waiter completes immediately, drain does NOT burn the full timeout (assert wall-clock &lt; timeout).</li>
 <li><span class="tag">offline-send</span> <code>emitConn(disconnected)</code> → <code>sendMessage</code> → row is <code>sending</code> (never <code>failed</code>) and queued; later <code>connected</code> drains it.</li>
 <li><span class="tag">B-live multi</span> (round 2) drive THREE disconnect/reconnect cycles, then <code>emitAck</code> once → assert the reconcile fires <strong>exactly once</strong> (a doubled/orphaned listener would fire it N times, masked by idempotent cache writes — so count effects, not just final state). Include a repository disposal → assert no handler fires after dispose.</li>
+<li><span class="tag">interrupted-sync</span> (round 3, the missing thermodynamic cycle) reconnect, ingest one forward page, simulate a crash/disconnect BEFORE the live edge → reconnect again → assert <strong>no gap</strong>: every ULID above the original watermark is present (forward paging resumed at the correct <code>after</code>). The test that proves the forward-cursor fix.</li>
+<li><span class="tag">terminal-cancel</span> (round 3) <code>emitConn(unauthenticated)</code> mid-drain → the in-flight choreography aborts (epoch bumped): assert <code>_fetchDeltaHistory</code> does NOT run afterward, no waiter hangs the full timeout, and no cache write happens post-abort.</li>
+<li><span class="tag">reconnect-failure</span> (round 3) <code>getHistory</code> throws (REST 500) → the error is caught + telemetered (not an unobserved async error), the guard clears, and a backed-off retry is scheduled.</li>
 <li><span class="tag">systemic-terminal</span> (round 2) <code>emitConn(unauthenticated)</code> (or an auth error frame) during drain → draining STOPS, no retry loop; pending rows stay <code>sending</code>; the unauthenticated state is surfaced (router redirect seam).</li>
 <li><span class="tag">systemic-transient</span> (round 2) <code>rate_limited</code> systemic error → pending rows stay <code>sending</code>, next drain is backed off (not hot-looped), one channel banner.</li>
 <li><span class="tag">orphan</span> <code>emitAck</code> for an unknown <code>clientMsgId</code> → <code>AckOutcome.orphaned</code> observed → telemetry fires, NO crash, message not lost (next history sync would ingest it). Asserts the impossible case degrades safely.</li>
@@ -363,6 +399,7 @@ implementing the <code>ChatTransport</code> interface with test-driven <code>emi
 <ul class="tight">
 <li>All merged on <code>main</code>: <code>DriftCache</code> (C3), <code>ChatRestApi</code>+<code>GatewayRestApi</code> (C2), <code>ChatTransport</code>+<code>GatewayTransport</code> (C1).</li>
 <li>New in this component: <code>chat_repository.dart</code>, the <code>AckOutcome</code> enum on the cache (Gap 1), Riverpod providers wiring cache+transport+rest+currentUser into the repository, and <code>test/support/fake_chat_transport.dart</code>.</li>
+<li><strong>Cross-repo prerequisite (Gap 2, round 3):</strong> the forward <code>after</code> cursor on the gateway <code>get_history</code> + <code>ChatRestApi.getHistory</code>. Tracked as its own task; B4's <code>_fetchDeltaHistory</code> depends on it. Until it lands, reconnect history-catch-up is the one path that can't ship correctly — so this is a build-order gate, not an optional follow-up.</li>
 <li>Out of scope (named so they don't masquerade as missing): the chat <em>screen</em> (B-UI, next component), media kinds, reactions/typing/presence, read receipts, channel ACL (gateway task #8), W6 delete.</li>
 </ul>
 
