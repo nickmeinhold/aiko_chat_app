@@ -211,10 +211,15 @@ holds <code>serverUlid == u</code>: <code>UPDATE R_c SET serverUlid=u, createdAt
 (The happy path.)</li>
 <li>If a row <code>R_u</code> <strong>already holds</strong> <code>serverUlid == u</code> (history fetched it
 first — the race): <strong>collapse, merging server truth INTO the optimistic row.</strong> In one
-transaction: <code>UPDATE R_c SET serverUlid=u, state=sent</code> AND copy <strong>ALL server-authoritative
-fields</strong> from <code>R_u</code> onto <code>R_c</code> — <code>createdAt, sender(senderUserId/senderKind/senderLabel),
-body, kind, replyToId, channelId</code> — then <code>DELETE R_u</code> (all three statements in the one txn, per
-Invariant A). <strong>The merge direction is server-wins-on-every-field, optimistic-wins-only-on-PK</strong>:
+transaction, <strong>in this order</strong>: (1) <code>DELETE R_u</code> FIRST to free the ULID, then (2)
+<code>UPDATE R_c SET serverUlid=u, state=sent</code> AND copy <strong>ALL server-authoritative fields</strong>
+from <code>R_u</code> (captured in memory before the delete) — <code>createdAt,
+sender(senderUserId/senderKind/senderLabel), body, kind, replyToId, channelId</code>. <span class="note">(Order
+is load-bearing — <strong>caught by the implementation test, NOT by four rounds of review</strong>: SQLite
+checks <code>UNIQUE</code> per-statement (immediate), so claiming <code>serverUlid=u</code> on <code>R_c</code>
+while <code>R_u</code> still holds <code>u</code> violates Invariant U mid-transaction. Delete-first is
+mandatory; both statements in one txn (Invariant A) means no intermediate state is ever observed. The earlier
+"UPDATE then DELETE" wording was wrong — a reasoning bug a running test exposed.)</span> <strong>The merge direction is server-wins-on-every-field, optimistic-wins-only-on-PK</strong>:
 we keep <code>R_c.clientTempId</code> and its <code>localSeq</code> (UI continuity — a list keyed on
 <code>clientTempId</code> doesn't see the row swap identities and flicker) but every other <em>value</em> comes
 from <code>R_u</code>. <span class="note">(Round 2 caught the earlier SQL copying only body/sender/createdAt
