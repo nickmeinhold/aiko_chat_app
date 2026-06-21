@@ -200,8 +200,10 @@ Future&lt;void&gt; _onAck(AckResult a) async {
 would be machinery for an unreachable case. If <code>orphaned</code> ever <em>does</em> fire in production telemetry,
 the proportionate fix is then to add <code>channel_id</code> to the ack envelope (the gateway already holds it at
 <code>ws.py:82</code>, inside <code>_handle_send</code> which has <code>frame["channel_id"]</code>) and upgrade this
-branch to a targeted backfill. Until the telemetry says otherwise, the next-history-sync backstop is sufficient and
-simpler. <code>Dijkstra: "Simplicity is prerequisite for reliability."</code></p>
+branch to a targeted backfill. Until the telemetry says otherwise, the branch is unreachable, so a debug
+<code>assert</code> + telemetry is sufficient and simpler — there is no recovery to build for a case that cannot
+occur (and, per round 3, no "next history sync" backstop exists under the forward delta).
+<code>Dijkstra: "Simplicity is prerequisite for reliability."</code></p>
 
 <h4>W3 / W4 — inbound and errors, with an explicit error taxonomy</h4>
 <p>W3 (<code>upsertInbound</code>) is a thin pass-through — the cache owns its atomicity (and, per self-echo above,
