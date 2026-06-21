@@ -44,6 +44,15 @@
 <h1>Design 04 — B4 reconcile engine</h1>
 <p class="lead">The orchestration policy that turns the cache's atomic primitives into a message that survives <code>send → disconnect → reconnect → ack</code> with no duplicate, no loss, and a correct delivery state at every step.</p>
 
+<blockquote class="invariant">
+<strong>Round 2 (cage-match revisions).</strong> Round 1 (Maxwell/Kelvin/Carnot) returned three REQUEST_CHANGES that
+rhymed on one principle: <em>the design named a mechanism (re-entrancy guard, orphan backfill, systemic-error policy,
+ack-wait, history delta) and gestured at it instead of specifying the lock / termination / taxonomy.</em> Round 2
+specifies each one concretely or explicitly degrades it, and adds the one race the author under-told:
+<strong>self-echo</strong> — the gateway fans a message back to its own sender (<code>hub.fanout</code> has no sender
+exclusion, verified <code>hub.py:44</code>), so the collapse path fires on <em>every</em> send, not just reconnect.
+</blockquote>
+
 <div class="scope">
 <strong>Component scope (Phase 1, text-only):</strong> the <code>ChatRepository</code> — the
 <strong>single writer</strong> to the <a href="03-drift-cache.html">drift cache</a> (Component 3) and the only
@@ -87,6 +96,19 @@ per this project's ground-in-the-environment-first rule, because B4's correctnes
 ack lands, <code>reconcileAck</code>'s <strong>collapse path</strong> (<code>drift_cache.dart:160-189</code>)
 DELETEs <code>R_u</code> then UPDATEs the optimistic row <code>R_c</code>, in one transaction. <em>B4 does not
 re-solve this</em> — it relies on it.</p>
+
+<blockquote class="invariant">
+<strong>Self-echo: the collapse path is the steady state, not the edge.</strong> <span class="verified">Verified
+<code>hub.py:44</code>:</span> <code>fanout</code> delivers to <em>every</em> connection subscribed to the channel,
+with <strong>no sender exclusion</strong>. The sender is subscribed (it is viewing the channel), so on a
+<em>normal</em> send it receives BOTH the <code>ack(c→u)</code> (<code>ws.py:82</code>) AND a
+<code>MessageFrame(msg_id=u)</code> of its own message (<code>ws.py:89</code>), in undefined order. Therefore the
+W2-collapse / W3-dedup race is not a reconnect curiosity — it runs on the happy path of every send. The design leans
+on this being atomic (it is, in the cache); the consequence for B4 is that the test plan must race ack-vs-self-echo
+in <em>both</em> orders for an ordinary send, not only across a reconnect. <span class="note">(A future gateway
+optimization could suppress self-fanout, mirroring the bus <code>echo.mark_sent</code> path; until it does, B4 must
+assume self-echo.)</span>
+</blockquote>
 
 <h3>2. The gateway re-send contract — the invariant B4's drain depends on</h3>
 <p>B4's reconnect re-sends un-acked outbox rows. "Un-acked" includes <em>the message arrived; only the ack was
@@ -136,8 +158,9 @@ best-effort-with-timeout await the AMR reality demands.
 }</code></pre>
 <ul class="tight">
 <li><strong><code>_me</code> — B4 needs the current user identity</strong> to render the optimistic row as "me" (the wire send carries no sender; the gateway derives it from the JWT, I5). So <code>ChatRepository</code> depends on the resolved <code>AppUser</code> (from auth). <span class="note">This is a real dependency edge to wire via Riverpod, not a free-floating singleton.</span></li>
-<li><strong><code>_clampToBottom</code></strong> — the optimistic <code>createdAt</code> is <code>max(now, newestCreatedAt + 1ms)</code> for the channel, so a skewed client clock can't park a pending message in the past. W2 overwrites it with server time on ack. <code>localSeq</code> (W1: MAX+1) is the within-same-millis tiebreak that keeps rapid sends in compose order.</li>
-<li><strong>No try/catch around the wire send</strong> — <code>transport.sendMessage</code> never throws (Component 1 contract); deliverability flows back via the acks/errors/connectionState streams and the outbox. B4 does not couple send success to the call returning.</li>
+<li><strong><code>_clampToBottom</code></strong> — the optimistic <code>createdAt</code> is <code>max(now, newestCreatedAt + 1ms)</code> for the channel, so a skewed client clock can't park a pending message in the past. <code>localSeq</code> (W1: MAX+1) is the within-same-millis tiebreak that keeps rapid sends in compose order.</li>
+<li><strong>Named tradeoff — ack may settle a message slightly <em>upward</em> under forward skew.</strong> If the client clock is ahead, the clamped optimistic <code>createdAt</code> &gt; server time; W2 stamps the authoritative server time on ack, so the row can move up the timeline at the moment it turns <code>sent</code>. <strong>This is accepted, not a bug:</strong> server time MUST win (it is the only ordering all clients agree on — a client-time-wins rule would desync the AMR room). The movement is bounded by the clock skew and happens once, at ack. It is named here and pinned by a test (<span class="tag">ack-reorder</span>) so it can't masquerade as a regression. The stronger "no teleport" guarantee (B-noteleport) applies to <em>retry</em>, where there is no new server truth to honor.</li>
+<li><strong>No try/catch around the wire send — and it is intentionally not awaited.</strong> The transport contract is <code>String sendMessage(OutgoingMessage)</code> (<code>chat_transport.dart:51</code>): <em>synchronous</em>, returns the <code>clientTempId</code>, and <strong>never throws</strong> — deliverability is signalled out-of-band via the acks/errors/connectionState streams and the outbox, never via the call returning. So there is no <code>Future</code> to await and no exception to catch; coupling send-success to the call would be a category error.</li>
 </ul>
 
 <h3>W2 / W3 / W4 paths — the stream handlers (established once, B-live)</h3>
@@ -150,44 +173,94 @@ best-effort-with-timeout await the AMR reality demands.
 
 Future&lt;void&gt; _onAck(AckResult a) async {
   final outcome = await _cache.reconcileAck(a.clientMsgId, a.msgId, _parse(a.createdAt));
+  _completeAckWaiter(a.clientMsgId);                 // unblock a drain waiter (see reconnect)
   if (outcome == AckOutcome.orphaned) {
-    // Defensive: no optimistic row for this clientMsgId (should be impossible in
-    // Phase 1 — W1 always persists before send, and there is no local delete).
-    // Schedule a history backfill so the acked message still lands via W3.
-    _scheduleBackfill(a /* channelId unknown from ack alone — see Open Q1 */);
+    // Unreachable in Phase 1 BY CONSTRUCTION: W1 always persists the optimistic
+    // row before the wire send, and there is no local delete (W6 is Phase 2). So
+    // an orphaned ack means corruption or a bug, NOT a routine path. Policy:
+    //   1. log loudly (telemetry) — this should never fire;
+    //   2. do NOT attempt a targeted backfill — the ack carries no channelId
+    //      (AckResult has only clientMsgId/msgId/createdAt), so a targeted
+    //      getHistory is impossible from an ack alone. The acked message is on
+    //      the server, so the NEXT reconnect's full history sync ingests it via
+    //      W3 regardless. No message is lost; only a (near-impossible) corruption
+    //      is surfaced rather than silently swallowed.
+    _telemetry.orphanAck(a.clientMsgId, a.msgId);
   }
 }</code></pre>
-<p>W3 (<code>upsertInbound</code>) and W4 (<code>markFailed</code>) are thin pass-throughs — the cache owns their
-atomicity. The only judgment B4 adds on W4 is the <em>systemic</em> error (<code>refClientMsgId == null</code>):
-the cache returns the affected pending rows; B4 decides policy (Phase 1: leave them in <code>sending</code> for the
-next reconnect drain to retry; do <strong>not</strong> silently fail them, and surface a single channel-level banner
-rather than N per-message failures).</p>
+<p class="note">Why not just add <code>channelId</code> to the ack so targeted repair becomes possible? Because it
+would be machinery for an unreachable case. If <code>orphaned</code> ever <em>does</em> fire in production telemetry,
+the proportionate fix is then to add <code>channel_id</code> to the ack envelope (the gateway already holds it at
+<code>ws.py:82</code>, inside <code>_handle_send</code> which has <code>frame["channel_id"]</code>) and upgrade this
+branch to a targeted backfill. Until the telemetry says otherwise, the next-history-sync backstop is sufficient and
+simpler. <code>Dijkstra: "Simplicity is prerequisite for reliability."</code></p>
+
+<h4>W3 / W4 — inbound and errors, with an explicit error taxonomy</h4>
+<p>W3 (<code>upsertInbound</code>) is a thin pass-through — the cache owns its atomicity (and, per self-echo above,
+this is where a message's own fanout lands). W4 (<code>markFailed</code>) needs a real <strong>error taxonomy</strong>,
+because "retry on next reconnect" infinite-loops on a terminal failure (an expired token retries forever, burning the
+robot's battery):</p>
+<table>
+<tr><th>Error</th><th>Shape</th><th>B4 policy</th></tr>
+<tr><td><strong>Per-message</strong></td><td><code>refClientMsgId != null</code> (e.g. <code>no_channel</code>, <code>bad_frame</code>)</td><td>cache marks that row <code>failed</code> (only while <code>serverUlid IS NULL</code>); it leaves the outbox. UI offers W5 retry. No auto-retry.</td></tr>
+<tr><td><strong>Systemic — transient</strong></td><td><code>refClientMsgId == null</code>, code in {<code>rate_limited</code>, transient server}</td><td>leave pending rows in <code>sending</code>; apply <strong>exponential backoff</strong> before the next drain (do not hot-loop); surface a single channel-level banner, not N per-message failures.</td></tr>
+<tr><td><strong>Systemic — terminal</strong></td><td>auth/token failure (or transport emits <code>ConnectionState.unauthenticated</code>)</td><td><strong>stop draining entirely.</strong> Route through <code>unauthenticated</code> (the transport's terminal state, <code>chat_transport.dart:6</code>) → the router redirects to login. No retry loop; pending rows stay <code>sending</code> and resume after re-auth.</td></tr>
+</table>
+<p class="note">The axis is <em>transient vs terminal</em>, not <em>per-message vs systemic</em> — a terminal systemic
+error (auth) and a transient systemic error (rate-limit) are not thermodynamically equivalent and must not share a
+policy. The backoff counter is per-channel and resets on the first successful drain.</p>
 
 <h3>The reconnect choreography — drain-first, timeout-bounded (B-order)</h3>
-<pre><code>Future&lt;void&gt; _onConnState(ConnectionState s) async {
-  if (s != ConnectionState.connected) return;       // ignore disconnected/connecting
-  _transport.subscribe(_subscribedChannelIds);      // additive, safe to repeat
-  await _drainOutbox();                              // re-send un-acked, await acks BEST-EFFORT
-  await _fetchDeltaHistory();                        // then reconcile against server truth
+<pre><code>// --- Single-flight re-entrancy guard (BLOCKER fix, round 2) ---
+Future&lt;void&gt;? _reconnecting;   // non-null while a choreography runs
+bool _rerunRequested = false;  // a connected event arrived mid-flight
+
+void _onConnState(ConnectionState s) {
+  if (s != ConnectionState.connected) return;        // ignore disconnected/connecting/unauth
+  if (_reconnecting != null) {                        // already choreographing →
+    _rerunRequested = true;                           //   request exactly one re-run, don't spawn a second
+    return;
+  }
+  _reconnecting = _runReconnect().whenComplete(() {
+    final rerun = _rerunRequested;
+    _rerunRequested = false;
+    _reconnecting = null;
+    if (rerun) _onConnState(ConnectionState.connected); // coalesced: at most one queued re-run
+  });
+}
+
+Future&lt;void&gt; _runReconnect() async {
+  _transport.subscribe(_subscribedChannelIds);        // additive, safe to repeat
+  await _drainOutbox();                               // re-send un-acked, await acks BEST-EFFORT
+  await _fetchDeltaHistory();                         // then reconcile against server truth
 }
 
 Future&lt;void&gt; _drainOutbox() async {
-  final pending = await _cache.outbox();             // O: the query, in send order
+  final pending = await _cache.outbox();              // O: the query, in send order
+  final waiting = pending.map((m) =&gt; m.clientTempId).toSet();
+  _registerAckWaiters(waiting);                        // REGISTER FIRST (fixes the ack-before-registration race)
   for (final m in pending) {
-    _transport.sendMessage(_toOutgoing(m));          // gateway is idempotent → safe re-send
+    _transport.sendMessage(_toOutgoing(m));            // gateway is idempotent → safe re-send
   }
-  // Best-effort settle: wait until every drained tempId is acked OR a short timeout.
-  // A robot on flaky wifi may never ack — the collapse path is the backstop, so we
-  // proceed regardless. This bound is the AMR-reality knob.
-  await _awaitAcksOrTimeout(
-    pending.map((m) =&gt; m.clientTempId).toSet(),
-    timeout: const Duration(seconds: 3));
+  // A row already acked between outbox() and now (or fast self-echo) is complete
+  // immediately — don't burn the timeout waiting for an ack that already happened.
+  await _resolveAlreadyAcked(waiting);
+  await _awaitAcksOrTimeout(waiting, timeout: const Duration(seconds: 3));
 }</code></pre>
-<p><code>_awaitAcksOrTimeout</code> registers a <code>Completer</code> per drained <code>clientTempId</code>, completed
-by <code>_onAck</code> when its ack arrives; a single <code>Future.wait(...).timeout(...)</code> bounds the whole
-settle. On timeout we proceed to history — the collapse path (cache) guarantees correctness if an ack lands
-afterward. <strong>This is the one place the design deliberately accepts "good enough" because the backstop makes
-it safe.</strong></p>
+<p><strong>Re-entrancy (BLOCKER, round 2).</strong> A flapping link can emit <code>connected</code> twice. The guard
+is <em>single-flight with one coalesced re-run</em>: while <code>_reconnecting != null</code>, a second
+<code>connected</code> sets <code>_rerunRequested</code> and returns; the in-flight choreography re-runs exactly once
+on completion. So at most one choreography runs at a time, and a bounce that arrives mid-history-paging is not lost
+(it queues the single re-run) but also cannot stack N concurrent paging loops. <code>_onConnState</code> is now
+<em>synchronous</em> up to the guard, so the check-and-set can't itself interleave.</p>
+<p><strong>Ack-wait race (MAJOR, round 2).</strong> Waiters are registered <em>before</em> sends are dispatched, and
+<code>_resolveAlreadyAcked</code> completes any whose row is already <code>serverUlid != null</code> in the cache —
+so an ack that lands in the dispatch window (fast local gateway, replayed stream, or self-echo) can't be missed and
+leave the drain burning the full timeout. <code>_awaitAcksOrTimeout</code> is a single
+<code>Future.wait(...).timeout(...)</code>; on timeout we proceed to history — the collapse path guarantees
+correctness if an ack lands afterward. <strong>This is the one place the design deliberately accepts "good enough"
+because the backstop makes it safe</strong>, and it is now the <em>only</em> such place — the other four "good
+enough"s from round 1 are now specified.</p>
 
 <h2>The two upstream gaps this design surfaces</h2>
 <p>Grounding the design against the real interfaces revealed two seams that don't quite meet. Both are small,
@@ -202,9 +275,12 @@ change:</strong> return an enum.</p>
 <pre><code>enum AckOutcome { reconciled, collapsed, orphaned }
 Future&lt;AckOutcome&gt; reconcileAck(String clientTempId, String serverUlid, DateTime serverCreatedAt)</code></pre>
 <p>This adds no writer (census intact), is trivially testable, and turns a silent defensive branch into an
-observable contract. <span class="note">In Phase 1 <code>orphaned</code> should be unreachable — W1 always persists
-before the wire send and there is no local delete (W6 is Phase 2). So <code>orphaned</code> is a loud "this should
-never happen" signal, not a routine path; B4 logs it and backfills rather than trusting it can't occur.</span></p>
+observable contract. <span class="note">In Phase 1 <code>orphaned</code> is unreachable by construction — W1 always
+persists before the wire send and there is no local delete (W6 is Phase 2). So <code>orphaned</code> is a loud "this
+should never happen" telemetry signal, not a routine path. B4 does <strong>not</strong> attempt a targeted backfill
+(the ack has no <code>channelId</code> — see the round-1 BLOCKER); the acked message is on the server, so the next
+reconnect's full history sync ingests it via W3 regardless. The enum makes the impossible case <em>observable</em>;
+it does not pretend to repair it.</span></p>
 </details>
 
 <details open>
@@ -213,11 +289,30 @@ never happen" signal, not a routine path; B4 logs it and backfills rather than t
 <code>ChatRestApi.getHistory(channelId, {before, limit})</code> only paginates <em>backward</em> from newest (a
 <code>before</code> ULID cursor; <code>messages_service.py:107-120</code> confirms <code>Message.id &lt; before</code>).
 There is no <code>after</code>.</p>
-<p><strong>Phase-1 resolution (no upstream change):</strong> on reconnect, fetch the <em>newest</em> page
-(<code>before: null, limit: 50</code>) and W3-upsert all of it. Because W3 dedups on <code>serverUlid</code>,
-re-ingesting already-known messages is a no-op; only genuinely-missed messages insert. Walk older pages only if the
-oldest returned ULID is still <code>&gt; lastKnownServerId</code> (a gap remains). For a single low-traffic channel
-this is correct and cheap.</p>
+<p><strong>Phase-1 resolution with a termination proof (MAJOR, round 2).</strong> The cursor basis is the
+<strong>server ULID total order</strong> — <span class="verified">verified</span> at
+<code>messages_service.py:112-117</code>: history is <code>WHERE Message.id &lt; before ORDER BY Message.id DESC</code>,
+i.e. the gateway orders <em>strictly by ULID</em>, and ULIDs are monotonic + globally unique. So "what did I miss?" is
+exactly "all ULIDs &gt; <code>lastKnownServerId</code>", and <code>lastKnownServerId</code> = the MAX
+<code>serverUlid</code> currently in the cache for the channel.</p>
+<pre><code>String? before = null;                          // start at newest
+while (true) {
+  final page = await _rest.getHistory(channelId, before: before, limit: 50);
+  for (final m in page.messages) _cache.upsertInbound(m);   // W3 dedups on serverUlid
+  final oldest = page.messages.isEmpty ? null : page.messages.first.id;  // ascending → first = oldest
+  if (page.nextBefore == null) break;            // (a) reached the start of history
+  if (oldest != null &amp;&amp; oldest.compareTo(lastKnownServerId) &lt;= 0) break;  // (b) overlap: gap closed
+  before = page.nextBefore;                       // else page further back
+}</code></pre>
+<p><strong>Termination:</strong> each iteration strictly decreases <code>before</code> along a finite total order, so
+the loop halts at (a) the oldest message or (b) the first page whose oldest ULID is <code>&le; lastKnownServerId</code>
+— the point where the fetched window provably overlaps what the cache already holds, so no ULID in
+<code>(lastKnownServerId, newest]</code> can remain unfetched. This is correct for &gt;50 offline messages (it keeps
+paging) and cheap for the common case (one page, immediate overlap). It does <strong>not</strong> rely on
+<code>created_at</code> ordering at all — only the ULID total order — sidestepping the skew/divergence Carnot flagged.
+<span class="note">Edge: if the cache is empty (<code>lastKnownServerId</code> null — fresh install / first open),
+condition (b) never fires and the loop pages to the start, which is the correct "load all history" behavior, bounded
+by (a).</span></p>
 <p><strong>Flagged for later:</strong> a true <code>after</code> cursor (forward delta) on the gateway +
 <code>ChatRestApi</code> is the scalable form; file it when channel volume or multi-channel fan-in makes the
 "fetch newest page" approach wasteful. Not Phase 1.</p>
@@ -228,9 +323,9 @@ this is correct and cheap.</p>
 <li><strong>Lost-ack re-send</strong> — message arrives at gateway, ack lost. Reconnect drains → re-send → gateway returns SAME ULID (idempotent) → W2 stamps it. Then history fetch returns the same message → W3 dedups. <strong>One row.</strong> Attack: does B4 ever treat the re-send's ack as a <em>new</em> message?</li>
 <li><strong>History beats the re-send's ack</strong> — drain dispatched, but the 3s timeout fires before the ack; history fetch runs and inserts <code>R_u</code>; the ack lands afterward → cache collapse path → one row. Attack: is the collapse path actually reached, or does B4 swallow the late ack?</li>
 <li><strong>App killed between W1 commit and wire send</strong> — optimistic row persisted, never sent. Next connect: it's in the outbox, drains, sends, acks. <strong>No loss.</strong> Attack: does B4 re-clamp <code>createdAt</code> or bump <code>localSeq</code> on this re-send (it must not — B-noteleport)?</li>
-<li><strong>Double <code>connected</code> events</strong> — transport emits <code>connected</code> twice (flaky link). Two concurrent reconnect choreographies. Attack: do two drains double-send (safe — idempotent) but also double-fetch history and race the W3 upserts? Needs a re-entrancy guard so only one choreography runs at a time.</li>
+<li><strong>Double <code>connected</code> events</strong> — flaky link emits <code>connected</code> twice. <em>Resolved (round 2):</em> the single-flight guard (<code>_reconnecting</code> + coalesced <code>_rerunRequested</code>) runs at most one choreography and queues at most one re-run. Attack: can a third event mid-run, or a bounce during history paging, still stack concurrent paging loops or lose the final reconcile?</li>
 <li><strong>Send while disconnected</strong> — W1 commits, wire send is a no-op (socket down). The row sits in the outbox until reconnect drains it. Attack: does the UI correctly show <code>sending</code> (not <code>failed</code>) while offline?</li>
-<li><strong>Systemic error during drain</strong> — gateway rejects all pending (rate-limit). W4 returns the rows; B4's policy must not wedge the reconnect. Attack: does a systemic error abort the reconnect or degrade gracefully?</li>
+<li><strong>Systemic error during drain</strong> — <em>Resolved (round 2):</em> the error taxonomy splits transient (rate-limit → backoff, stay <code>sending</code>) from terminal (auth → stop draining, route through <code>unauthenticated</code>). Attack: does a terminal error mid-drain leave any waiter hanging on the 3s timeout, or any row stuck where backoff never resets?</li>
 <li><strong>Orphan ack (Gap 1)</strong> — force <code>rc == null</code> (e.g. an ack for an unknown <code>clientMsgId</code>). Attack: does B4 lose the message, or backfill it?</li>
 </ul>
 
@@ -244,18 +339,24 @@ implementing the <code>ChatTransport</code> interface with test-driven <code>emi
 <code>WebSocketChannel</code> level — too low for B4; we fake the <em>interface</em>, per plan §B6.)</p>
 <ul class="tight">
 <li><span class="tag">W1</span> <code>sendMessage</code> → cache has one <code>sending</code> row, <code>serverUlid==null</code>, in the outbox; transport recorded one send with the matching <code>clientTempId</code>.</li>
-<li><span class="tag">W1 order</span> commit-before-send: spy proves <code>insertOptimistic</code> completes before <code>transport.sendMessage</code> is called.</li>
-<li><span class="tag">W2 happy</span> send → <code>emitAck(sameTempId→u)</code> → one row, <code>serverUlid==u</code>, <code>state==sent</code>, <code>createdAt</code> == server time.</li>
+<li><span class="tag">W1 order</span> commit-before-send, with the <strong>real</strong> cache (MINOR, round 2): assert ordering via observable state, not a cache spy — when <code>FakeChatTransport.sendMessage</code> is first called, query the real cache and assert the optimistic row is <em>already present</em> (committed). Keeps the integration property; no mock cache.</li>
+<li><span class="tag">W2 happy (ack only)</span> send → <code>emitAck(sameTempId→u)</code> → one row, <code>serverUlid==u</code>, <code>state==sent</code>, <code>createdAt</code> == server time.</li>
+<li><span class="tag">self-echo A</span> <em>real happy path</em> (round 2): send → <code>emitAck(c→u)</code> THEN <code>emitMessage(self-echo u)</code> → exactly one row (echo dedups via W3 on <code>serverUlid</code>).</li>
+<li><span class="tag">self-echo B</span> reversed order: send → <code>emitMessage(self-echo u)</code> THEN <code>emitAck(c→u)</code> → exactly one row (cache collapse path). Both orders asserted — self-echo races the ack on every send.</li>
+<li><span class="tag">ack-reorder</span> (round 2) forward-skewed clock → optimistic <code>createdAt</code> &gt; server time → on <code>emitAck</code> the row's <code>createdAt</code> becomes server time (named tradeoff: settles upward, deterministically; pins the behavior so it can't look like a regression).</li>
 <li><span class="tag">collapse</span> send → <code>emitMessage(history row u)</code> (W3) → <code>emitAck(c→u)</code> → ONE row, <code>clientTempId==c</code>, <code>serverUlid==u</code>, server fields. (Cache-owned, but B4-driven ordering — pin it end to end.)</li>
 <li><span class="tag">disconnect→reconnect→noDup</span> <em>the crux test.</em> send (row pending) → <code>emitConn(disconnected)</code> → <code>emitConn(connected)</code> → assert transport re-sent the pending row → <code>emitAck</code> for it → fetch history returns the same message → <strong>exactly one row</strong>, <code>state==sent</code>.</li>
 <li><span class="tag">lost-ack</span> as above but the FIRST send's ack never arrives; only the re-send's does (same ULID) → one row, no dup.</li>
 <li><span class="tag">drain-first order</span> reconnect with one pending row + history containing it → assert <code>transport.sendMessage</code> (drain) is invoked before <code>rest.getHistory</code> (B-order).</li>
 <li><span class="tag">ack-timeout</span> reconnect, drained row's ack never arrives → after the timeout, <code>getHistory</code> still runs (reconnect does not hang); history inserts the row; late ack → collapse → one row.</li>
 <li><span class="tag">no-teleport</span> failed row → reconnect drain re-sends it → its <code>createdAt</code> + <code>localSeq</code> unchanged (B-noteleport).</li>
-<li><span class="tag">double-connected</span> two <code>emitConn(connected)</code> in quick succession → only one history fetch (re-entrancy guard); sends may repeat (idempotent) but no duplicate row results.</li>
+<li><span class="tag">re-entrancy</span> (round 2) two <code>emitConn(connected)</code> in quick succession while the first choreography is still paging → <strong>exactly one</strong> concurrent choreography (assert <code>getHistory</code> is not called concurrently); the second event coalesces into <strong>exactly one</strong> queued re-run, not N. A third event during the run still yields one re-run.</li>
+<li><span class="tag">ack-already-acked</span> (round 2) reconnect drain where the row's ack arrives in the dispatch window (or via self-echo) → the waiter completes immediately, drain does NOT burn the full timeout (assert wall-clock &lt; timeout).</li>
 <li><span class="tag">offline-send</span> <code>emitConn(disconnected)</code> → <code>sendMessage</code> → row is <code>sending</code> (never <code>failed</code>) and queued; later <code>connected</code> drains it.</li>
-<li><span class="tag">B-live</span> ack arriving AFTER a disconnect/reconnect cycle is still handled (the listener was not orphaned by the bounce).</li>
-<li><span class="tag">orphan</span> <code>emitAck</code> for an unknown <code>clientMsgId</code> → <code>AckOutcome.orphaned</code> observed → backfill scheduled, message not lost.</li>
+<li><span class="tag">B-live multi</span> (round 2) drive THREE disconnect/reconnect cycles, then <code>emitAck</code> once → assert the reconcile fires <strong>exactly once</strong> (a doubled/orphaned listener would fire it N times, masked by idempotent cache writes — so count effects, not just final state). Include a repository disposal → assert no handler fires after dispose.</li>
+<li><span class="tag">systemic-terminal</span> (round 2) <code>emitConn(unauthenticated)</code> (or an auth error frame) during drain → draining STOPS, no retry loop; pending rows stay <code>sending</code>; the unauthenticated state is surfaced (router redirect seam).</li>
+<li><span class="tag">systemic-transient</span> (round 2) <code>rate_limited</code> systemic error → pending rows stay <code>sending</code>, next drain is backed off (not hot-looped), one channel banner.</li>
+<li><span class="tag">orphan</span> <code>emitAck</code> for an unknown <code>clientMsgId</code> → <code>AckOutcome.orphaned</code> observed → telemetry fires, NO crash, message not lost (next history sync would ingest it). Asserts the impossible case degrades safely.</li>
 </ul>
 
 <h2>Dependencies &amp; build order</h2>
