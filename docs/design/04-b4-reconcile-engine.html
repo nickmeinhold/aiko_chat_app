@@ -53,10 +53,13 @@ clamp tradeoff) and added the self-echo race (<code>hub.fanout</code> has no sen
 forward <code>after</code> cursor + epoch cancellation + failure classification, and dropped a false orphan-recovery
 claim. <strong>Round 4</strong> fixes what round 3 exposed, all one principle — <em>single-writer/single-owner for
 every coordination variable</em>: a dedicated <code>historyContiguousThrough</code> watermark (the pager is its only
-writer; live W3 no longer corrupts the resume cursor), the REST/WS handoff fence, the dropped-legit-reconnect epoch
+writer; live W3 no longer corrupts the resume cursor), the dropped-legit-reconnect epoch
 bug, the post-await TOCTOU check, and <code>!isCompleted</code>-guarded Completers. The watermark bug wore three
-masks (interrupted backward paging → live-W3-advances-MAX → now killed at the root); this is the project's own
-"complete writer census" lesson applied to a read-as-watermark column.
+masks (interrupted backward paging → live-W3-advances-MAX → killed at the root); this is the project's own
+"complete writer census" lesson applied to a read-as-watermark column. <strong>Round 5</strong> closes the last
+finding (Carnot): the REST/WS handoff is now fenced by a gateway <strong>subscription-ack</strong> — the gateway
+returns the channel's newest ULID at subscription-effective time, so history covers everything ≤ fence and the live
+stream owns everything &gt; fence, with no gap (the round-4 fire-and-forget liveFloor left a quiet-channel miss window).
 </blockquote>
 
 <div class="scope">
@@ -255,10 +258,11 @@ void _onConnState(ConnectionState s) {
 
 Future&lt;void&gt; _runReconnect(int epoch) async {
   try {
-    _transport.subscribe(_subscribedChannelIds);      // additive, safe to repeat
+    final fences = await _transport.subscribe(_subscribedChannelIds); // round 5: awaitable, returns channelId→fence
+    if (_aborted(epoch)) return;
     await _drainOutbox(epoch);                         // re-send un-acked, await acks BEST-EFFORT
     if (_aborted(epoch)) return;                       // terminal arrived mid-drain → stop, don't write a dead cache
-    await _fetchDeltaHistory(epoch);                  // then reconcile against server truth
+    await _fetchDeltaHistory(epoch, fences[channelId]!); // reconcile up to the subscription fence
   } catch (e, st) {
     // Classify (round 4) — not every thrown error is backoff-worthy:
     //   - auth (REST 401/403): TERMINAL → route to unauthenticated, NO backoff loop.
@@ -364,43 +368,44 @@ those messages forever. <code>MAX</code> has two writers; only the pager guarant
 // cache: a durable per-channel `historyContiguousThrough` ULID — SINGLE writer: this loop only.
 //        It is NOT MAX(serverUlid); live W3 inserts never touch it.
 
-Future&lt;void&gt; _fetchDeltaHistory(int epoch) async {
+// Round 5: the handoff is fenced by a SUBSCRIPTION-ACK, not a best-effort liveFloor.
+// gateway: on `subscribe`, reply `suback{channelId: fenceUlid}` where fenceUlid is the
+//   channel's newest persisted ULID at the moment the subscription becomes effective.
+//   The gateway processes subscribe before any subsequent fanout on that connection, so
+//   EVERY message with ULID > fence is guaranteed delivered live; everything <= fence is
+//   in history. The fence is the exact REST/WS seam.
+// transport: subscribe() becomes awaitable → Future<Map<String,String>> (channelId→fence).
+
+Future&lt;void&gt; _fetchDeltaHistory(int epoch, String fence) async {
   String? cursor = _cache.historyContiguousThrough(channelId);  // null on fresh install → from start
-  // REST/WS handoff fence: the oldest ULID the LIVE stream has delivered since we
-  // subscribed (recorded by the _msgs handler). Paging only needs to reach THIS —
-  // beyond it, the live stream owns contiguity (we subscribed before fetching).
-  final liveFloor = _liveFloorSince(epoch, channelId);          // may be null on a quiet channel
-  while (true) {
+  while (cursor == null || cursor.compareTo(fence) &lt; 0) {        // page until we reach the fence
     final page = await _rest.getHistory(channelId, after: cursor, limit: 50);
     if (_aborted(epoch)) return;                                 // TOCTOU: re-check AFTER await, BEFORE write
+    if (page.messages.isEmpty) break;                            // server has nothing more ≤ fence
     for (final m in page.messages) _cache.upsertInbound(m);     // ASC; W3 dedups on serverUlid
-    if (page.messages.isNotEmpty) cursor = page.messages.last.id;
-    final reachedLiveFloor = liveFloor != null &amp;&amp; cursor != null
-        &amp;&amp; cursor.compareTo(liveFloor) &gt;= 0;                    // overlap with the live stream
-    if (page.messages.length &lt; 50 || reachedLiveFloor) break;   // caught up
+    cursor = page.messages.last.id;
   }
   if (_aborted(epoch)) return;
-  _cache.advanceHistoryContiguous(channelId, cursor);            // advance the watermark — ONLY here
+  // Advance the watermark to the fence: history now covers everything ≤ fence, and the
+  // live stream owns everything &gt; fence. No gap, quiet channel or not.
+  _cache.advanceHistoryContiguous(channelId, fence);            // advance the watermark — ONLY here
 }</code></pre>
-<p><strong>Why this is sound (round 4).</strong> Three properties, each a fix for a named round-3 finding:</p>
+<p><strong>Why this is sound (round 5).</strong> Three properties, each a fix for a named finding:</p>
 <ul class="tight">
-<li><strong>Single-writer watermark</strong> — <code>historyContiguousThrough</code> is advanced ONLY by this loop, ONLY after a page is durably applied. Live W3 inserts never move it. So it always means exactly "the cache is contiguous from the start through here", and an interrupted sync (which never reaches <code>advanceHistoryContiguous</code>) leaves it where it was → the next reconnect re-fills from the true contiguous boundary. The watermark cannot lie because nothing else can write it. <code>Carnot: "the agent matters."</code></li>
-<li><strong>REST/WS handoff fence</strong> — we <code>subscribe</code> before fetching (line in <code>_runReconnect</code>), so every message after the subscription arrives via live W3. Paging forward only needs to reach <code>liveFloor</code> (the oldest live ULID seen since subscribe); past that, the live stream owns contiguity. A quiet channel (no live messages) terminates on a short page, and subscribe-happens-before-fetch means any later message is delivered live. <span class="note">Residual edge: the gateway <code>subscribe</code> is fire-and-forget (no ack), so a message committed in the REST-vs-subscribe ordering window is covered by the <em>next</em> resync, not this one. The rigorous close is a gateway <strong>subscription-ack</strong> (cross-repo, flagged below) — Phase 1 accepts the bounded eventual-consistency window.</span></li>
-<li><strong>TOCTOU fence</strong> — <code>_aborted(epoch)</code> is re-checked <em>after</em> the <code>await</code> and before any cache write, and again before advancing the watermark, so a terminal/disconnect during the REST round-trip cannot write a dead cache (round-3 BLOCKER).</li>
+<li><strong>Single-writer watermark (round 4)</strong> — <code>historyContiguousThrough</code> is advanced ONLY by this loop, ONLY after pages are durably applied. Live W3 inserts never move it. An interrupted sync (which never reaches <code>advanceHistoryContiguous</code>) leaves it where it was → the next reconnect re-fills from the true contiguous boundary. The watermark cannot lie because nothing else writes it. <code>Carnot: "the agent matters."</code></li>
+<li><strong>Subscription-ack handoff fence (round 5) — airtight, quiet channel or not</strong> — the gateway returns a <code>fence</code> ULID that is the channel's newest persisted message at subscription-effective time. Because the gateway processes the <code>subscribe</code> before any later fanout on that connection, the partition is exact: <strong>everything ≤ fence is in history; everything &gt; fence is delivered live.</strong> The pager fetches forward until <code>cursor ≥ fence</code>, then advances the watermark to <code>fence</code>. There is no window in which a message escapes both — the fire-and-forget gap from round 4 is closed. Cross-repo (gateway <code>suback</code> + awaitable <code>subscribe</code>) — a <strong>Phase-1 prerequisite</strong>, not a follow-up.</li>
+<li><strong>TOCTOU fence (round 3)</strong> — <code>_aborted(epoch)</code> re-checked <em>after</em> the <code>await</code>, before any cache write, and before advancing the watermark, so a terminal/disconnect during the REST round-trip cannot write a dead cache.</li>
 </ul>
-<p><strong>Termination:</strong> <code>cursor</code> strictly increases along the finite ULID total order; the loop halts
-at a short page (live edge) or <code>liveFloor</code> overlap. Independent of <code>created_at</code>. Empty cache
-(<code>cursor == null</code>) pages from the start = correct "load all history".</p>
-<p class="note"><strong>Flagged cross-repo (rigor):</strong> a gateway <strong>subscription-ack</strong> would let B4
-fence the REST/WS handoff exactly (page until overlap with a confirmed-subscribed sequence) instead of relying on the
-next-resync backstop. Same class of small gateway change as the <code>after</code> cursor; filed, not Phase-1-blocking.</p>
-</details>
+<p><strong>Termination:</strong> <code>cursor</code> strictly increases along the finite ULID total order toward the fixed
+<code>fence</code>; the loop halts at <code>cursor ≥ fence</code> or an empty page. Independent of <code>created_at</code>.
+Empty cache (<code>cursor == null</code>) pages from the start = correct "load all history" up to the fence.</p>
 
 <h2>Edge cases the reviewer should attack</h2>
 <ul class="tight">
 <li><strong>Lost-ack re-send</strong> — message arrives at gateway, ack lost. Reconnect drains → re-send → gateway returns SAME ULID (idempotent) → W2 stamps it. Then history fetch returns the same message → W3 dedups. <strong>One row.</strong> Attack: does B4 ever treat the re-send's ack as a <em>new</em> message?</li>
 <li><strong>History beats the re-send's ack</strong> — drain dispatched, but the 3s timeout fires before the ack; history fetch runs and inserts <code>R_u</code>; the ack lands afterward → cache collapse path → one row. Attack: is the collapse path actually reached, or does B4 swallow the late ack?</li>
 <li><strong>App killed between W1 commit and wire send</strong> — optimistic row persisted, never sent. Next connect: it's in the outbox, drains, sends, acks. <strong>No loss.</strong> Attack: does B4 re-clamp <code>createdAt</code> or bump <code>localSeq</code> on this re-send (it must not — B-noteleport)?</li>
+<li><strong>Quiet-channel handoff</strong> — <em>Resolved (round 5):</em> the subscription-ack fence partitions history (≤ fence) from live (&gt; fence) exactly, closing the round-4 fire-and-forget window. Attack: is the fence guaranteed to be the newest ULID at subscription-effective time, or can the gateway compute it before the subscription actually takes effect (re-opening the gap)?</li>
 <li><strong>Double <code>connected</code> events</strong> — flaky link emits <code>connected</code> twice. <em>Resolved (round 2):</em> the single-flight guard (<code>_reconnecting</code> + coalesced <code>_rerunRequested</code>) runs at most one choreography and queues at most one re-run. Attack: can a third event mid-run, or a bounce during history paging, still stack concurrent paging loops or lose the final reconcile?</li>
 <li><strong>Send while disconnected</strong> — W1 commits, wire send is a no-op (socket down). The row sits in the outbox until reconnect drains it. Attack: does the UI correctly show <code>sending</code> (not <code>failed</code>) while offline?</li>
 <li><strong>Systemic error during drain</strong> — <em>Resolved (round 2):</em> the error taxonomy splits transient (rate-limit → backoff, stay <code>sending</code>) from terminal (auth → stop draining, route through <code>unauthenticated</code>). Attack: does a terminal error mid-drain leave any waiter hanging on the 3s timeout, or any row stuck where backoff never resets?</li>
@@ -434,6 +439,7 @@ implementing the <code>ChatTransport</code> interface with test-driven <code>emi
 <li><span class="tag">B-live multi</span> (round 2) drive THREE disconnect/reconnect cycles, then <code>emitAck</code> once → assert the reconcile fires <strong>exactly once</strong> (a doubled/orphaned listener would fire it N times, masked by idempotent cache writes — so count effects, not just final state). Include a repository disposal → assert no handler fires after dispose.</li>
 <li><span class="tag">interrupted-sync</span> (round 3, the missing thermodynamic cycle) reconnect, ingest one forward page, simulate a crash/disconnect BEFORE the live edge → reconnect again → assert <strong>no gap</strong>: every ULID above the original watermark is present (forward paging resumed at the correct <code>after</code>). The test that proves the forward-cursor fix.</li>
 <li><span class="tag">live-W3-watermark</span> (round 4, the crux) during a forward sync (cache contiguous through X, fetching X+1..X+50), inject a LIVE W3 message Z (Z &gt; the unfetched gap) → crash before the gap is filled → reconnect → assert <strong>no gap</strong>: the resume uses <code>historyContiguousThrough</code> (still X), NOT <code>MAX(serverUlid)</code> (now Z), so X+51..Y are refetched. Proves the single-writer watermark.</li>
+<li><span class="tag">handoff-fence</span> (round 5, the quiet-channel gap) subscribe returns <code>fence=F</code>; a message Z (Z &gt; F's predecessor, ≤ F) committed in the REST-vs-subscribe window → assert the pager pages until <code>cursor ≥ F</code> and Z lands in the cache even though the channel then goes silent (no further live messages, no reconnect). Proves the subscription-ack closes the window the round-4 liveFloor left open.</li>
 <li><span class="tag">epoch-rerun</span> (round 4) run starts → <code>emitConn(disconnected)</code> (epoch bumps) → <code>emitConn(connected)</code> arrives before the old run finishes → assert the fresh reconnect DOES run (the dropped-legit-reconnect bug is fixed) with its own epoch.</li>
 <li><span class="tag">completer-race</span> (round 4) <code>emitConn(disconnected)</code> and <code>emitAck</code> for the same drained row in the same microtask → assert NO <code>StateError</code> escapes (both completion paths guard on <code>!isCompleted</code>); the stream stays alive.</li>
 <li><span class="tag">history-TOCTOU</span> (round 4) reconnect, <code>getHistory</code> in flight → <code>emitConn(disconnected)</code> resolves the await with a page → assert that page is NOT upserted (post-await abort check) and the watermark is NOT advanced.</li>
@@ -449,7 +455,7 @@ implementing the <code>ChatTransport</code> interface with test-driven <code>emi
 <ul class="tight">
 <li>All merged on <code>main</code>: <code>DriftCache</code> (C3), <code>ChatRestApi</code>+<code>GatewayRestApi</code> (C2), <code>ChatTransport</code>+<code>GatewayTransport</code> (C1).</li>
 <li>New in this component: <code>chat_repository.dart</code>, the <code>AckOutcome</code> enum on the cache (Gap 1), a durable per-channel <code>historyContiguousThrough</code> watermark on the cache (round 4 — single-writer; a column on <code>channels</code> or a meta table), Riverpod providers wiring cache+transport+rest+currentUser into the repository, and <code>test/support/fake_chat_transport.dart</code>.</li>
-<li><strong>Cross-repo prerequisite (Gap 2, round 3):</strong> the forward <code>after</code> cursor on the gateway <code>get_history</code> + <code>ChatRestApi.getHistory</code>. Tracked as its own task; B4's <code>_fetchDeltaHistory</code> depends on it. Until it lands, reconnect history-catch-up is the one path that can't ship correctly — so this is a build-order gate, not an optional follow-up.</li>
+<li><strong>Cross-repo prerequisites (build-order gates, not follow-ups):</strong> (a) the forward <code>after</code> cursor on the gateway <code>get_history</code> + <code>ChatRestApi.getHistory</code> (Gap 2, round 3); (b) the gateway <strong>subscription-ack</strong> (<code>suback{channelId→fence}</code>) + an awaitable <code>ChatTransport.subscribe</code> returning the fence map (round 5). B4's <code>_fetchDeltaHistory</code> depends on both — reconnect history-catch-up cannot ship correctly without them. Tracked as their own task.</li>
 <li>Out of scope (named so they don't masquerade as missing): the chat <em>screen</em> (B-UI, next component), media kinds, reactions/typing/presence, read receipts, channel ACL (gateway task #8), W6 delete.</li>
 </ul>
 
