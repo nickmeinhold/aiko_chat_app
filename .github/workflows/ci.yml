@@ -1,0 +1,42 @@
+name: CI
+
+# Minimal CI floor for aiko_chat_app (task #22). Runs on every PR and on push to
+# main: analyze (errors/warnings fatal; the 16 pre-existing `prefer_initializing_formals`
+# infos are kept VISIBLE but non-blocking — see below) + the full test suite.
+#
+# No build_runner step: the generated drift code (drift_cache.g.dart) is committed
+# (task #21), so a clean checkout builds + tests without code-gen.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.0
+          channel: stable
+          cache: true
+
+      # drift's NativeDatabase loads libsqlite3 at runtime for `flutter test` on
+      # the host VM (the sqlite3_flutter_libs package only covers device builds).
+      # ubuntu-latest ships it, but install explicitly so the gate never flakes
+      # on a missing system lib.
+      - name: Ensure sqlite3 is available
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-0
+
+      - run: flutter pub get
+
+      # Errors + warnings are fatal; infos are not. The 16 current infos are all
+      # `prefer_initializing_formals` on named constructors where `this._field`
+      # would leak the private name into the public API — an intentional style
+      # choice, not debt. Tighten to --fatal-infos once that lint is resolved
+      # (suppressed in analysis_options or the style is changed) — see task #33.
+      - run: flutter analyze --no-fatal-infos
+
+      - run: flutter test
