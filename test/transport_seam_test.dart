@@ -220,7 +220,9 @@ void main() {
         channelFactory: (uri) => fake = FakeWebSocketChannel(),
       );
       await t.connect();
-      t.subscribe(['c1']);
+      final subF = t.subscribe(['c1']);
+      fake.emit('{"type":"suback","channel_fences":{"c1":"01J"}}');
+      await subF; // resolved by the suback
       final id = t.sendMessage(const OutgoingMessage(
           clientTempId: 'tmp1', channelId: 'c1', body: 'hello'));
       expect(id, 'tmp1');
@@ -229,6 +231,53 @@ void main() {
           fake.sent.any(
               (f) => f.contains('"type":"send"') && f.contains('"body":"hello"')),
           isTrue);
+    });
+
+    test('subscribe awaits the suback and returns the per-channel fence map',
+        () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+      );
+      await t.connect();
+      final subF = t.subscribe(['c1', 'c2']);
+      // c2 is an empty channel -> "" fence (no history boundary).
+      fake.emit('{"type":"suback","channel_fences":{"c1":"01J","c2":""}}');
+      expect(await subF, {'c1': '01J', 'c2': ''});
+    });
+
+    test('a suback with no pending subscribe is ignored, not fatal', () async {
+      // The transport's reconnect resubscribe fires a frame without an awaiter;
+      // its suback must be dropped quietly, never crash the socket or error.
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+      );
+      await t.connect();
+      fake.emit('{"type":"suback","channel_fences":{"c1":"01J"}}');
+      await Future<void>.delayed(Duration.zero);
+      // Socket still usable: a subsequent real subscribe still resolves.
+      final subF = t.subscribe(['c1']);
+      fake.emit('{"type":"suback","channel_fences":{"c1":"01K"}}');
+      expect(await subF, {'c1': '01K'});
+    });
+
+    test('a pending subscribe rejects when the socket drops before its suback',
+        () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+      );
+      await t.connect();
+      final subF = t.subscribe(['c1']); // no suback emitted
+      fake.closeFromServer(); // drop before the ack arrives
+      await expectLater(subF, throwsA(isA<TransportError>()));
     });
 
     test('connect failure with dead refresh -> unauthenticated', () async {

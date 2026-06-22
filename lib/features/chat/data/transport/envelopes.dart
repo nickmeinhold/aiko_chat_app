@@ -48,6 +48,19 @@ sealed class ServerFrame {
           return UnknownFrame(raw, reason: 'message missing msg');
         }
         return MessageFrame(msg.cast<String, dynamic>());
+      case 'suback':
+        final fences = j['channel_fences'];
+        if (fences is! Map) {
+          return UnknownFrame(raw, reason: 'suback missing channel_fences');
+        }
+        final out = <String, String>{};
+        for (final e in fences.entries) {
+          if (e.key is! String || e.value is! String) {
+            return UnknownFrame(raw, reason: 'suback fence not string');
+          }
+          out[e.key as String] = e.value as String;
+        }
+        return SubAckFrame(out);
       case 'error':
         return ErrorFrame(
           code: (j['code'] as String?) ?? 'unknown',
@@ -79,6 +92,16 @@ class MessageFrame extends ServerFrame {
   const MessageFrame(this.msg);
 
   String? get msgId => msg['msg_id'] as String?;
+}
+
+/// Subscription-ack: the server confirmed a `subscribe` and reports each
+/// channel's live/history *fence* — the newest persisted ULID at
+/// subscription-effective time (`""` for an empty channel). The reconcile
+/// engine partitions on it: `serverUlid <= fence` is fetched from history,
+/// `> fence` arrives live, with no gap (design 04 §Gap 2).
+class SubAckFrame extends ServerFrame {
+  final Map<String, String> channelFences;
+  const SubAckFrame(this.channelFences);
 }
 
 /// Server rejected/failed a frame. [refClientMsgId] ties it back to the

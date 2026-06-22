@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -39,6 +40,12 @@ class GatewayTransport implements ChatTransport {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   final Set<String> _subscribed = {};
+
+  /// Awaitable `subscribe` calls awaiting their `suback`, in send order. A suback
+  /// resolves the oldest pending one (FIFO); a drop rejects them all. The
+  /// internal reconnect resubscribe ([_resubscribe]) does NOT enqueue here — it
+  /// is fire-and-forget, so its suback finds an empty queue and is dropped.
+  final Queue<Completer<Map<String, String>>> _pendingSubacks = Queue();
   bool _wantConnected = false;
   bool _connecting = false;
   int _backoffAttempt = 0;
@@ -78,9 +85,21 @@ class GatewayTransport implements ChatTransport {
   }
 
   @override
-  void subscribe(List<String> channelIds) {
+  Future<Map<String, String>> subscribe(List<String> channelIds) {
     _subscribed.addAll(channelIds);
+    final completer = Completer<Map<String, String>>();
+    if (_channel == null) {
+      // Disconnected: nothing can ack. The reconcile engine subscribes within a
+      // live epoch, so this is surfaced as an error rather than a silent hang.
+      completer.completeError(const TransportError(
+          code: 'not_connected', detail: 'subscribe before connect'));
+      return completer.future;
+    }
+    _pendingSubacks.add(completer);
+    // Always (re)send the FULL set — subscribe is additive and idempotent
+    // server-side, and the fence is recomputed for every channel each time.
     _sendRaw(SubscribeFrame(_subscribed.toList()).encode());
+    return completer.future;
   }
 
   @override
@@ -190,6 +209,13 @@ class GatewayTransport implements ChatTransport {
             clientMsgId: f.clientMsgId, msgId: f.msgId, createdAt: f.createdAt));
       case MessageFrame f:
         _messages.add(Message.fromView(f.msg));
+      case SubAckFrame f:
+        if (_pendingSubacks.isNotEmpty) {
+          _pendingSubacks.removeFirst().complete(f.channelFences);
+        } else {
+          // A resubscribe ack with no awaiter (reconnect path) — drop quietly.
+          _log?.call('suback with no pending subscribe: ${f.channelFences}');
+        }
       case ErrorFrame f:
         _errors.add(TransportError(
             code: f.code, detail: f.detail, refClientMsgId: f.refClientMsgId));
@@ -226,6 +252,19 @@ class GatewayTransport implements ChatTransport {
     _sub = null;
     await _channel?.sink.close();
     _channel = null;
+    _failPendingSubacks();
+  }
+
+  /// Reject every in-flight `subscribe` whose `suback` can no longer arrive (the
+  /// socket is gone). Without this a reconnect-mid-subscribe would hang forever.
+  void _failPendingSubacks() {
+    while (_pendingSubacks.isNotEmpty) {
+      final c = _pendingSubacks.removeFirst();
+      if (!c.isCompleted) {
+        c.completeError(const TransportError(
+            code: 'disconnected', detail: 'socket dropped before suback'));
+      }
+    }
   }
 
   /// Release all resources. Call when the transport is permanently disposed.
