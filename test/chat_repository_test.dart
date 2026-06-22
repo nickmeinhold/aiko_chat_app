@@ -62,12 +62,10 @@ void main() {
     await cache.close();
   });
 
-  // Let stream listeners + their async handlers drain.
-  Future<void> pump() async {
-    for (var i = 0; i < 5; i++) {
-      await Future<void>.delayed(Duration.zero);
-    }
-  }
+  // Let stream listeners + their async handlers (+ drift IO) drain. A small real
+  // delay is more robust than counting microtasks for the multi-await
+  // choreography paths.
+  Future<void> pump() => Future<void>.delayed(const Duration(milliseconds: 15));
 
   Future<List<Message>> rows() => cache.watchChannel(_chan).first;
 
@@ -223,6 +221,163 @@ void main() {
       transport.emitConn(ConnectionState.connected);
       await pump();
       expect(rest.getHistoryCalls, isEmpty);
+    });
+  });
+
+  group('watermark single-writer (round-4 spine)', () {
+    test('interrupted-sync — watermark advances ONLY on completion; resume '
+        'refills with no gap', () async {
+      transport.fences = {_chan: '01D'};
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan,
+          messages: [_server('01A', 'a'), _server('01B', 'b')],
+          nextAfter: '01B');
+      rest.pagesByAfter['01B'] = HistoryPage(
+          channelId: _chan,
+          messages: [_server('01C', 'c'), _server('01D', 'd')],
+          nextAfter: '01D');
+      // First sync crashes mid-paging (page 2 fails).
+      rest.throwOnAfter.add('01B');
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+
+      // Page 1 ingested, but the watermark did NOT advance (sync incomplete).
+      expect(await cache.historyContiguousThrough(_chan), isNull);
+      final after1 = (await rows()).map((m) => m.id).toSet();
+      expect(after1, containsAll(['01A', '01B']));
+      expect(after1.contains('01C'), isFalse);
+
+      // Recover: the second reconnect resumes from the TRUE contiguous boundary
+      // (null → from the start), refetches page 1 (deduped) + page 2.
+      rest.throwOnAfter.clear();
+      rest.getHistoryCalls.clear();
+      transport.emitConn(ConnectionState.disconnected);
+      await pump();
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+
+      expect(rest.getHistoryCalls.first, '',
+          reason: 'resume from the contiguous boundary, not the live edge');
+      expect((await rows()).map((m) => m.id),
+          containsAll(['01A', '01B', '01C', '01D'])); // no gap
+      expect(await cache.historyContiguousThrough(_chan), '01D');
+    });
+
+    test('live-W3-watermark — resume uses historyContiguousThrough, NOT '
+        'MAX(serverUlid)', () async {
+      // Sync 1 completes: watermark = 01B.
+      transport.fences = {_chan: '01B'};
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan,
+          messages: [_server('01A', 'a'), _server('01B', 'b')],
+          nextAfter: '01B');
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+      expect(await cache.historyContiguousThrough(_chan), '01B');
+
+      // A LIVE message Z lands far ahead — MAX(serverUlid) jumps to 01Z. W3 only;
+      // it must NOT touch the watermark.
+      transport.emitMessage(_server('01Z', 'live'));
+      await pump();
+
+      // Reconnect: the 01C..01D gap must refill. The resume cursor MUST be the
+      // watermark (01B), NOT MAX (01Z) — else 01C,01D are skipped forever.
+      transport.fences = {_chan: '01D'};
+      rest.pagesByAfter['01B'] = HistoryPage(
+          channelId: _chan,
+          messages: [_server('01C', 'c'), _server('01D', 'd')],
+          nextAfter: '01D');
+      rest.getHistoryCalls.clear();
+      transport.emitConn(ConnectionState.disconnected);
+      await pump();
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+
+      expect(rest.getHistoryCalls.first, '01B',
+          reason: 'resume from the single-writer watermark, not MAX=01Z');
+      final ids = (await rows()).map((m) => m.id).toSet();
+      expect(ids.containsAll({'01A', '01B', '01C', '01D', '01Z'}), isTrue);
+    });
+  });
+
+  group('outbox lifecycle', () {
+    test('no-teleport — retry preserves createdAt + timeline position', () async {
+      await repo.sendMessage(_chan, 'first');
+      await repo.sendMessage(_chan, 'second');
+      transport.emitError(const TransportError(
+          code: 'no_channel', detail: 'x', refClientMsgId: 'tmp0'));
+      await pump();
+      final failed = (await rows()).firstWhere((m) => m.clientTempId == 'tmp0');
+      expect(failed.deliveryState, DeliveryState.failed);
+      final origAt = failed.createdAt;
+
+      await repo.retry('tmp0');
+      await pump();
+      final retried = (await rows()).firstWhere((m) => m.clientTempId == 'tmp0');
+      expect(retried.deliveryState, DeliveryState.sending);
+      expect(retried.createdAt, origAt, reason: 'retry must not teleport');
+      // Still before 'second' in the timeline (position preserved).
+      final ordered = (await rows()).map((m) => m.clientTempId).toList();
+      expect(ordered.indexOf('tmp0'), lessThan(ordered.indexOf('tmp1')));
+      // Re-sent on retry.
+      expect(transport.sent.where((m) => m.clientTempId == 'tmp0').length,
+          greaterThanOrEqualTo(2));
+    });
+
+    test('offline-send — stays sending (never failed) + drains on reconnect',
+        () async {
+      transport.emitConn(ConnectionState.disconnected);
+      await pump();
+      await repo.sendMessage(_chan, 'offline');
+      expect((await rows()).single.deliveryState, DeliveryState.sending);
+      expect(await cache.outbox(), hasLength(1));
+
+      transport.fences = {_chan: ''};
+      final before = transport.sent.length;
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+      expect(transport.sent.length, greaterThan(before),
+          reason: 'reconnect drains the offline row');
+    });
+
+    test('already-acked row is not re-drained on reconnect', () async {
+      await repo.sendMessage(_chan, 'hi');
+      transport.emitAck('tmp0', '01U');
+      await pump();
+      expect((await rows()).single.id, '01U');
+      expect(await cache.outbox(), isEmpty);
+
+      transport.fences = {_chan: ''};
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+      expect(transport.sent.where((m) => m.clientTempId == 'tmp0').length, 1,
+          reason: 'acked row left the outbox; never re-sent');
+    });
+  });
+
+  group('terminal cancellation', () {
+    test('unauthenticated mid-choreography aborts: no history, rows stay sending',
+        () async {
+      await repo.sendMessage(_chan, 'hi');
+      transport.emitConn(ConnectionState.disconnected);
+      await pump();
+
+      // Wedge subscribe so the terminal event lands mid-choreography.
+      transport.subscribeGate = Completer<void>();
+      transport.fences = {_chan: '01U'};
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+      transport.emitConn(ConnectionState.connected);
+      await pump(); // started, wedged on subscribe
+
+      transport.emitConn(ConnectionState.unauthenticated); // terminal mid-flight
+      await pump();
+      transport.subscribeGate!.complete(); // release; post-await abort fires
+      await pump();
+
+      expect(rest.getHistoryCalls, isEmpty, reason: 'aborted before history');
+      expect((await rows()).single.deliveryState, DeliveryState.sending,
+          reason: 'pending row untouched; resumes after re-auth');
     });
   });
 }

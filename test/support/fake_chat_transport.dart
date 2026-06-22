@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
@@ -93,14 +94,26 @@ class FakeChatRestApi implements ChatRestApi {
   /// Every getHistory call's `after` cursor, in order.
   final List<String?> getHistoryCalls = [];
 
-  /// If set, getHistory throws this (test terminal/transient error paths).
+  /// If set, getHistory throws this on EVERY call (terminal/transient paths).
   Object? throwOnGetHistory;
+
+  /// getHistory throws for these specific `after` cursors (simulate a mid-sync
+  /// failure on one page). Keyed by the resolved cursor (`null` → '').
+  final Set<String> throwOnAfter = {};
+
+  /// If set, getHistory awaits this gate before returning — lets a test hold a
+  /// page in flight to probe re-entrancy / TOCTOU.
+  Completer<void>? getHistoryGate;
 
   @override
   Future<HistoryPage> getHistory(String channelId,
       {String? before, String? after, int limit = 50}) async {
     getHistoryCalls.add(after);
+    if (getHistoryGate != null) await getHistoryGate!.future;
     if (throwOnGetHistory != null) throw throwOnGetHistory!;
+    if (throwOnAfter.contains(after ?? '')) {
+      throw StateError('staged failure on after=${after ?? ''}');
+    }
     return pagesByAfter[after ?? ''] ??
         HistoryPage(channelId: channelId, messages: const []);
   }
@@ -117,4 +130,23 @@ class FakeChatRestApi implements ChatRestApi {
   Future<AppUser> me() => throw UnimplementedError();
   @override
   Future<List<Channel>> listChannels() => throw UnimplementedError();
+}
+
+/// Records the observability calls B4 makes, so tests can assert that the
+/// "must be seen, never swallowed" cases (orphan ack, reconnect failure, history
+/// gap) actually fired.
+class SpyTelemetry extends ChatTelemetry {
+  final List<(String, String)> orphans = [];
+  final List<Object> reconnectErrors = [];
+  final List<(String, String?, String)> historyGaps = [];
+
+  @override
+  void orphanAck(String clientMsgId, String serverUlid) =>
+      orphans.add((clientMsgId, serverUlid));
+  @override
+  void reconnectFailed(Object error, StackTrace stack) =>
+      reconnectErrors.add(error);
+  @override
+  void historyGapBeforeFence(String channelId, String? cursor, String fence) =>
+      historyGaps.add((channelId, cursor, fence));
 }
