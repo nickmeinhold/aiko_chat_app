@@ -399,6 +399,7 @@ Future&lt;void&gt; _fetchDeltaHistory(int epoch, String fence) async {
 <p><strong>Termination:</strong> <code>cursor</code> strictly increases along the finite ULID total order toward the fixed
 <code>fence</code>; the loop halts at <code>cursor ≥ fence</code> or an empty page. Independent of <code>created_at</code>.
 Empty cache (<code>cursor == null</code>) pages from the start = correct "load all history" up to the fence.</p>
+</details>
 
 <h2>Edge cases the reviewer should attack</h2>
 <ul class="tight">
