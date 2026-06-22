@@ -266,6 +266,26 @@ void main() {
       expect(await subF, {'c1': '01K'});
     });
 
+    test('an uncorrelated suback does not steal a pending subscribe '
+        '(resubscribe-ack race — Carnot)', () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+      );
+      await t.connect();
+      final subF = t.subscribe(['c2']);
+      // A reconnect resubscribe ack for the OLD {c1} set arrives first. Under
+      // blind FIFO this would resolve our c2 call with a c2-less map. Content
+      // correlation drops it (it doesn't cover c2).
+      fake.emit('{"type":"suback","channel_fences":{"c1":"01A"}}');
+      // The real ack for our subscribe (covers c2) arrives next.
+      fake.emit('{"type":"suback","channel_fences":{"c1":"01A","c2":"01B"}}');
+      expect(await subF, {'c1': '01A', 'c2': '01B'},
+          reason: 'must resolve with the ack that actually carries c2');
+    });
+
     test('a pending subscribe rejects when the socket drops before its suback',
         () async {
       late FakeWebSocketChannel fake;
