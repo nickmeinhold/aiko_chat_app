@@ -17,6 +17,20 @@ import '../../domain/message.dart';
 
 part 'drift_cache.g.dart';
 
+/// The observable result of a [DriftCache.reconcileAck] (design 04 Gap 1). Turns
+/// the cache's previously-silent defensive branches into a contract B4 can act
+/// on. Adds no writer — the census stays closed.
+///
+/// * [reconciled] — the optimistic row was stamped with its server ULID (happy
+///   path), or was already stamped (an idempotent re-ack — no regression).
+/// * [collapsed] — history had already inserted the server row; the ack merged
+///   server truth onto the optimistic row and freed the duplicate (one row).
+/// * [orphaned] — no optimistic row matched the ack. **Unreachable in Phase 1
+///   by construction** (W1 always persists before the wire send; no local
+///   delete until W6/Phase 2), so B4 treats it as an invariant assertion +
+///   telemetry, never a recovery path.
+enum AckOutcome { reconciled, collapsed, orphaned }
+
 /// The `messages` table. `@DataClassName('MessageRow')` avoids colliding with
 /// the domain [Message] type.
 @DataClassName('MessageRow')
@@ -61,12 +75,39 @@ class Channels extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-@DriftDatabase(tables: [Messages, Channels])
+/// Per-channel sync bookkeeping. Phase 1 holds one column: the reconnect resume
+/// watermark (design 04 §Gap 2, round 4). Kept in its own table (not a column on
+/// `channels`) so the watermark exists independently of channel-list sync.
+class SyncMeta extends Table {
+  TextColumn get channelId => text()();
+
+  /// The newest ULID through which history is *contiguously* cached for this
+  /// channel — the reconnect resume cursor. **SINGLE WRITER: the pager loop
+  /// only** (`advanceHistoryContiguous`). Live W3 inserts never touch it; that
+  /// separation is the round-4 fix (MAX(serverUlid) had two writers and lost
+  /// messages on an interrupted sync). NULL = nothing fetched yet → page from
+  /// the start.
+  TextColumn get historyContiguousThrough => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {channelId};
+}
+
+@DriftDatabase(tables: [Messages, Channels, SyncMeta])
 class DriftCache extends _$DriftCache {
   DriftCache(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) => m.createAll(),
+        onUpgrade: (m, from, to) async {
+          // v1 -> v2: the reconnect resume watermark (design 04 round 4).
+          if (from < 2) await m.createTable(syncMeta);
+        },
+      );
 
   // --- conversion -----------------------------------------------------------
 
@@ -135,14 +176,15 @@ class DriftCache extends _$DriftCache {
   /// the row first) it collapses, merging server truth INTO the optimistic row
   /// and keeping `clientTempId`/`localSeq` for UI continuity. Guard: only a row
   /// still `serverUlid IS NULL` is reconciled (never regress a sent row).
-  Future<void> reconcileAck(
+  Future<AckOutcome> reconcileAck(
       String clientTempId, String serverUlid, DateTime serverCreatedAt) async {
-    await transaction(() async {
+    return transaction(() async {
       final rc = await (select(messages)
             ..where((t) => t.clientTempId.equals(clientTempId)))
           .getSingleOrNull();
-      if (rc == null) return; // orphan ack — B4 schedules a persisted repair.
-      if (rc.serverUlid != null) return; // already reconciled; no regression.
+      if (rc == null) return AckOutcome.orphaned; // see AckOutcome.orphaned.
+      // Already reconciled (idempotent re-ack) — reconciled, never a regression.
+      if (rc.serverUlid != null) return AckOutcome.reconciled;
 
       final ru = await (select(messages)
             ..where((t) => t.serverUlid.equals(serverUlid)))
@@ -157,6 +199,7 @@ class DriftCache extends _$DriftCache {
           createdAt: Value(serverCreatedAt.toUtc().millisecondsSinceEpoch),
           deliveryState: Value(DeliveryState.sent.wire),
         ));
+        return AckOutcome.reconciled;
       } else {
         // Collapse: merge ALL server-authoritative fields from R_u onto R_c,
         // keeping R_c's clientTempId + localSeq. DELETE R_u FIRST to free the
@@ -186,6 +229,7 @@ class DriftCache extends _$DriftCache {
           createdAt: Value(serverCreatedAt.toUtc().millisecondsSinceEpoch),
           deliveryState: Value(DeliveryState.sent.wire),
         ));
+        return AckOutcome.collapsed;
       }
     });
   }
@@ -303,5 +347,40 @@ class DriftCache extends _$DriftCache {
       ]);
     final rows = await q.get();
     return rows.map(_toDomain).toList();
+  }
+
+  // --- reconnect resume watermark (design 04 §Gap 2, round 4) -----------------
+
+  /// The reconnect resume cursor for [channelId]: the newest ULID through which
+  /// history is contiguously cached. NULL until the first page is durably
+  /// applied (fresh install) → the pager fetches from the start.
+  Future<String?> historyContiguousThrough(String channelId) async {
+    final row = await (select(syncMeta)
+          ..where((t) => t.channelId.equals(channelId)))
+        .getSingleOrNull();
+    return row?.historyContiguousThrough;
+  }
+
+  /// Advance the resume watermark for [channelId] to [ulid]. The **ONLY** writer
+  /// of this column (round-4 single-writer invariant) — call it ONLY from the
+  /// history pager, ONLY after the pages up to [ulid] are durably applied. The
+  /// write is **monotonic**: an [ulid] not strictly greater than the stored
+  /// value is ignored, so even a stray out-of-order call can never rewind the
+  /// contiguity boundary (single-writer AND monotonic — the coordination-variable
+  /// discipline this whole component is built on).
+  Future<void> advanceHistoryContiguous(String channelId, String ulid) async {
+    await transaction(() async {
+      final current = await (select(syncMeta)
+            ..where((t) => t.channelId.equals(channelId)))
+          .getSingleOrNull();
+      if (current?.historyContiguousThrough != null &&
+          ulid.compareTo(current!.historyContiguousThrough!) <= 0) {
+        return; // not strictly forward — never rewind.
+      }
+      await into(syncMeta).insertOnConflictUpdate(
+        SyncMetaCompanion.insert(
+            channelId: channelId, historyContiguousThrough: Value(ulid)),
+      );
+    });
   }
 }
