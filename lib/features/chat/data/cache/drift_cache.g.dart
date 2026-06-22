@@ -1056,16 +1056,266 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   }
 }
 
+class $SyncMetaTable extends SyncMeta
+    with TableInfo<$SyncMetaTable, SyncMetaData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SyncMetaTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _channelIdMeta = const VerificationMeta(
+    'channelId',
+  );
+  @override
+  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+    'channel_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _historyContiguousThroughMeta =
+      const VerificationMeta('historyContiguousThrough');
+  @override
+  late final GeneratedColumn<String> historyContiguousThrough =
+      GeneratedColumn<String>(
+        'history_contiguous_through',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  @override
+  List<GeneratedColumn> get $columns => [channelId, historyContiguousThrough];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sync_meta';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SyncMetaData> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('channel_id')) {
+      context.handle(
+        _channelIdMeta,
+        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_channelIdMeta);
+    }
+    if (data.containsKey('history_contiguous_through')) {
+      context.handle(
+        _historyContiguousThroughMeta,
+        historyContiguousThrough.isAcceptableOrUnknown(
+          data['history_contiguous_through']!,
+          _historyContiguousThroughMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {channelId};
+  @override
+  SyncMetaData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SyncMetaData(
+      channelId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}channel_id'],
+      )!,
+      historyContiguousThrough: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}history_contiguous_through'],
+      ),
+    );
+  }
+
+  @override
+  $SyncMetaTable createAlias(String alias) {
+    return $SyncMetaTable(attachedDatabase, alias);
+  }
+}
+
+class SyncMetaData extends DataClass implements Insertable<SyncMetaData> {
+  final String channelId;
+
+  /// The newest ULID through which history is *contiguously* cached for this
+  /// channel — the reconnect resume cursor. **SINGLE WRITER: the pager loop
+  /// only** (`advanceHistoryContiguous`). Live W3 inserts never touch it; that
+  /// separation is the round-4 fix (MAX(serverUlid) had two writers and lost
+  /// messages on an interrupted sync). NULL = nothing fetched yet → page from
+  /// the start.
+  final String? historyContiguousThrough;
+  const SyncMetaData({required this.channelId, this.historyContiguousThrough});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['channel_id'] = Variable<String>(channelId);
+    if (!nullToAbsent || historyContiguousThrough != null) {
+      map['history_contiguous_through'] = Variable<String>(
+        historyContiguousThrough,
+      );
+    }
+    return map;
+  }
+
+  SyncMetaCompanion toCompanion(bool nullToAbsent) {
+    return SyncMetaCompanion(
+      channelId: Value(channelId),
+      historyContiguousThrough: historyContiguousThrough == null && nullToAbsent
+          ? const Value.absent()
+          : Value(historyContiguousThrough),
+    );
+  }
+
+  factory SyncMetaData.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SyncMetaData(
+      channelId: serializer.fromJson<String>(json['channelId']),
+      historyContiguousThrough: serializer.fromJson<String?>(
+        json['historyContiguousThrough'],
+      ),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'channelId': serializer.toJson<String>(channelId),
+      'historyContiguousThrough': serializer.toJson<String?>(
+        historyContiguousThrough,
+      ),
+    };
+  }
+
+  SyncMetaData copyWith({
+    String? channelId,
+    Value<String?> historyContiguousThrough = const Value.absent(),
+  }) => SyncMetaData(
+    channelId: channelId ?? this.channelId,
+    historyContiguousThrough: historyContiguousThrough.present
+        ? historyContiguousThrough.value
+        : this.historyContiguousThrough,
+  );
+  SyncMetaData copyWithCompanion(SyncMetaCompanion data) {
+    return SyncMetaData(
+      channelId: data.channelId.present ? data.channelId.value : this.channelId,
+      historyContiguousThrough: data.historyContiguousThrough.present
+          ? data.historyContiguousThrough.value
+          : this.historyContiguousThrough,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncMetaData(')
+          ..write('channelId: $channelId, ')
+          ..write('historyContiguousThrough: $historyContiguousThrough')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(channelId, historyContiguousThrough);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SyncMetaData &&
+          other.channelId == this.channelId &&
+          other.historyContiguousThrough == this.historyContiguousThrough);
+}
+
+class SyncMetaCompanion extends UpdateCompanion<SyncMetaData> {
+  final Value<String> channelId;
+  final Value<String?> historyContiguousThrough;
+  final Value<int> rowid;
+  const SyncMetaCompanion({
+    this.channelId = const Value.absent(),
+    this.historyContiguousThrough = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SyncMetaCompanion.insert({
+    required String channelId,
+    this.historyContiguousThrough = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : channelId = Value(channelId);
+  static Insertable<SyncMetaData> custom({
+    Expression<String>? channelId,
+    Expression<String>? historyContiguousThrough,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (channelId != null) 'channel_id': channelId,
+      if (historyContiguousThrough != null)
+        'history_contiguous_through': historyContiguousThrough,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SyncMetaCompanion copyWith({
+    Value<String>? channelId,
+    Value<String?>? historyContiguousThrough,
+    Value<int>? rowid,
+  }) {
+    return SyncMetaCompanion(
+      channelId: channelId ?? this.channelId,
+      historyContiguousThrough:
+          historyContiguousThrough ?? this.historyContiguousThrough,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (channelId.present) {
+      map['channel_id'] = Variable<String>(channelId.value);
+    }
+    if (historyContiguousThrough.present) {
+      map['history_contiguous_through'] = Variable<String>(
+        historyContiguousThrough.value,
+      );
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncMetaCompanion(')
+          ..write('channelId: $channelId, ')
+          ..write('historyContiguousThrough: $historyContiguousThrough, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$DriftCache extends GeneratedDatabase {
   _$DriftCache(QueryExecutor e) : super(e);
   $DriftCacheManager get managers => $DriftCacheManager(this);
   late final $MessagesTable messages = $MessagesTable(this);
   late final $ChannelsTable channels = $ChannelsTable(this);
+  late final $SyncMetaTable syncMeta = $SyncMetaTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
-  List<DatabaseSchemaEntity> get allSchemaEntities => [messages, channels];
+  List<DatabaseSchemaEntity> get allSchemaEntities => [
+    messages,
+    channels,
+    syncMeta,
+  ];
 }
 
 typedef $$MessagesTableCreateCompanionBuilder =
@@ -1587,6 +1837,151 @@ typedef $$ChannelsTableProcessedTableManager =
       Channel,
       PrefetchHooks Function()
     >;
+typedef $$SyncMetaTableCreateCompanionBuilder =
+    SyncMetaCompanion Function({
+      required String channelId,
+      Value<String?> historyContiguousThrough,
+      Value<int> rowid,
+    });
+typedef $$SyncMetaTableUpdateCompanionBuilder =
+    SyncMetaCompanion Function({
+      Value<String> channelId,
+      Value<String?> historyContiguousThrough,
+      Value<int> rowid,
+    });
+
+class $$SyncMetaTableFilterComposer
+    extends Composer<_$DriftCache, $SyncMetaTable> {
+  $$SyncMetaTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get channelId => $composableBuilder(
+    column: $table.channelId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get historyContiguousThrough => $composableBuilder(
+    column: $table.historyContiguousThrough,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$SyncMetaTableOrderingComposer
+    extends Composer<_$DriftCache, $SyncMetaTable> {
+  $$SyncMetaTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get channelId => $composableBuilder(
+    column: $table.channelId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get historyContiguousThrough => $composableBuilder(
+    column: $table.historyContiguousThrough,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$SyncMetaTableAnnotationComposer
+    extends Composer<_$DriftCache, $SyncMetaTable> {
+  $$SyncMetaTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get channelId =>
+      $composableBuilder(column: $table.channelId, builder: (column) => column);
+
+  GeneratedColumn<String> get historyContiguousThrough => $composableBuilder(
+    column: $table.historyContiguousThrough,
+    builder: (column) => column,
+  );
+}
+
+class $$SyncMetaTableTableManager
+    extends
+        RootTableManager<
+          _$DriftCache,
+          $SyncMetaTable,
+          SyncMetaData,
+          $$SyncMetaTableFilterComposer,
+          $$SyncMetaTableOrderingComposer,
+          $$SyncMetaTableAnnotationComposer,
+          $$SyncMetaTableCreateCompanionBuilder,
+          $$SyncMetaTableUpdateCompanionBuilder,
+          (
+            SyncMetaData,
+            BaseReferences<_$DriftCache, $SyncMetaTable, SyncMetaData>,
+          ),
+          SyncMetaData,
+          PrefetchHooks Function()
+        > {
+  $$SyncMetaTableTableManager(_$DriftCache db, $SyncMetaTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SyncMetaTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SyncMetaTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SyncMetaTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> channelId = const Value.absent(),
+                Value<String?> historyContiguousThrough = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => SyncMetaCompanion(
+                channelId: channelId,
+                historyContiguousThrough: historyContiguousThrough,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String channelId,
+                Value<String?> historyContiguousThrough = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => SyncMetaCompanion.insert(
+                channelId: channelId,
+                historyContiguousThrough: historyContiguousThrough,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$SyncMetaTableProcessedTableManager =
+    ProcessedTableManager<
+      _$DriftCache,
+      $SyncMetaTable,
+      SyncMetaData,
+      $$SyncMetaTableFilterComposer,
+      $$SyncMetaTableOrderingComposer,
+      $$SyncMetaTableAnnotationComposer,
+      $$SyncMetaTableCreateCompanionBuilder,
+      $$SyncMetaTableUpdateCompanionBuilder,
+      (
+        SyncMetaData,
+        BaseReferences<_$DriftCache, $SyncMetaTable, SyncMetaData>,
+      ),
+      SyncMetaData,
+      PrefetchHooks Function()
+    >;
 
 class $DriftCacheManager {
   final _$DriftCache _db;
@@ -1595,4 +1990,6 @@ class $DriftCacheManager {
       $$MessagesTableTableManager(_db, _db.messages);
   $$ChannelsTableTableManager get channels =>
       $$ChannelsTableTableManager(_db, _db.channels);
+  $$SyncMetaTableTableManager get syncMeta =>
+      $$SyncMetaTableTableManager(_db, _db.syncMeta);
 }
