@@ -110,11 +110,12 @@ class GatewayRestApi implements ChatRestApi {
 
   @override
   Future<HistoryPage> getHistory(String channelId,
-      {String? before, int limit = 50}) async {
+      {String? before, String? after, int limit = 50}) async {
     final r = await _authed.get(
       '/v1/channels/$channelId/messages',
       queryParameters: {
         'before': ?before,
+        'after': ?after,
         'limit': limit,
       },
     );
@@ -126,6 +127,7 @@ class GatewayRestApi implements ChatRestApi {
           .map((e) => Message.fromView((e as Map).cast<String, dynamic>()))
           .toList(),
       nextBefore: data['next_before'] as String?,
+      nextAfter: data['next_after'] as String?,
     );
   }
 

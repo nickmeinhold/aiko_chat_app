@@ -153,12 +153,25 @@ void main() {
       expect(s.user.username, 'alice');
     });
 
-    test('getHistory parses messages + cursor', () async {
+    test('getHistory parses messages + both cursors', () async {
       final api = apiWith((_) => jsonBody(200,
-          '{"channel_id":"c1","messages":[{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}],"next_before":"01J"}'));
+          '{"channel_id":"c1","messages":[{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}],"next_before":"01J","next_after":"01K"}'));
       final page = await api.getHistory('c1');
       expect(page.messages.single.body, 'hi');
       expect(page.nextBefore, '01J');
+      expect(page.nextAfter, '01K');
+    });
+
+    test('getHistory forwards the `after` cursor as a query param', () async {
+      RequestOptions? captured;
+      final api = apiWith((opts) {
+        captured = opts;
+        return jsonBody(200, '{"channel_id":"c1","messages":[],"next_after":null}');
+      });
+      await api.getHistory('c1', after: '01ABC');
+      expect(captured!.queryParameters['after'], '01ABC');
+      // before is omitted (null-aware element) when not supplied
+      expect(captured!.queryParameters.containsKey('before'), isFalse);
     });
   });
 
