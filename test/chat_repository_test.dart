@@ -37,12 +37,14 @@ void main() {
   late FakeChatTransport transport;
   late FakeChatRestApi rest;
   late ChatRepository repo;
+  late SpyTelemetry spy;
   late int seq;
 
   setUp(() {
     cache = DriftCache(NativeDatabase.memory());
     transport = FakeChatTransport();
     rest = FakeChatRestApi();
+    spy = SpyTelemetry();
     seq = 0;
     repo = ChatRepository(
       cache: cache,
@@ -50,6 +52,7 @@ void main() {
       rest: rest,
       me: _me,
       subscribedChannelIds: const [_chan],
+      telemetry: spy,
       ackTimeout: const Duration(milliseconds: 80),
       newTempId: () => 'tmp${seq++}',
     );
@@ -378,6 +381,149 @@ void main() {
       expect(rest.getHistoryCalls, isEmpty, reason: 'aborted before history');
       expect((await rows()).single.deliveryState, DeliveryState.sending,
           reason: 'pending row untouched; resumes after re-auth');
+    });
+  });
+
+  group('reconnect concurrency (round 2/3/4 fixes)', () {
+    test('re-entrancy — two connected events → ONE concurrent choreography + '
+        'ONE coalesced re-run', () async {
+      transport.fences = {_chan: '01A'};
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+      rest.getHistoryGate = Completer<void>(); // wedge the first paging
+
+      transport.emitConn(ConnectionState.connected);
+      await pump(); // first choreography wedged inside getHistory
+      expect(transport.subscribeCalls, hasLength(1));
+      expect(rest.getHistoryCalls, hasLength(1));
+
+      transport.emitConn(ConnectionState.connected); // coalesces, no 2nd run
+      await pump();
+      expect(transport.subscribeCalls, hasLength(1),
+          reason: 'second connected coalesced; no concurrent choreography');
+      expect(rest.getHistoryCalls, hasLength(1),
+          reason: 'no concurrent getHistory');
+
+      rest.getHistoryGate!.complete(); // release first; the re-run fires
+      await pump();
+      expect(transport.subscribeCalls, hasLength(2),
+          reason: 'exactly ONE coalesced re-run, not N');
+    });
+
+    test('epoch-rerun — a disconnect between two connected events does NOT '
+        'suppress the legit reconnect', () async {
+      transport.fences = {_chan: '01A'};
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+      rest.getHistoryGate = Completer<void>();
+
+      transport.emitConn(ConnectionState.connected);
+      await pump(); // wedged (epoch E)
+      transport.emitConn(ConnectionState.disconnected); // epoch bumps E -> E+1
+      await pump();
+      transport.emitConn(ConnectionState.connected); // queues a re-run
+      await pump();
+
+      rest.getHistoryGate!.complete(); // release the dead run
+      await pump();
+      expect(transport.subscribeCalls.length, greaterThanOrEqualTo(2),
+          reason: 'the fresh reconnect ran despite the mid-flight disconnect');
+    });
+
+    test('history-TOCTOU — a disconnect during getHistory drops the resolved '
+        'page (no write, no watermark advance)', () async {
+      transport.fences = {_chan: '01B'};
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan,
+          messages: [_server('01A', 'a'), _server('01B', 'b')],
+          nextAfter: '01B');
+      rest.getHistoryGate = Completer<void>();
+
+      transport.emitConn(ConnectionState.connected);
+      await pump(); // wedged inside getHistory, page in flight
+      transport.emitConn(ConnectionState.disconnected); // epoch bumps mid-await
+      await pump();
+      rest.getHistoryGate!.complete(); // the await now resolves with a page
+      await pump();
+
+      expect(await rows(), isEmpty,
+          reason: 'post-await abort: the resolved page must NOT be upserted');
+      expect(await cache.historyContiguousThrough(_chan), isNull,
+          reason: 'watermark must NOT advance on an aborted sync');
+    });
+
+    test('completer-race — disconnect + ack for the same drained row → no '
+        'StateError escapes', () async {
+      await repo.sendMessage(_chan, 'hi'); // tmp0, pending
+      transport.emitConn(ConnectionState.disconnected);
+      await pump();
+      transport.fences = {_chan: ''};
+      transport.emitConn(ConnectionState.connected);
+      await pump(); // drain registered a waiter, awaiting the ack
+
+      // Race both completion paths on the SAME waiter Completer.
+      transport.emitConn(ConnectionState.disconnected); // _failAllAckWaiters
+      transport.emitAck('tmp0', '01U'); // _completeAckWaiter
+      await pump();
+
+      // No StateError poisoned the loop: a fresh send still works.
+      await repo.sendMessage(_chan, 'again');
+      await pump();
+      expect((await rows()).any((m) => m.body == 'again'), isTrue);
+    });
+
+    test('reconnect-failure — getHistory 500 is caught + telemetered, guard '
+        'clears (a later reconnect still runs)', () async {
+      transport.fences = {_chan: '01A'};
+      rest.throwOnGetHistory = StateError('boom 500');
+
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+      expect(spy.reconnectErrors, isNotEmpty,
+          reason: 'the error is observed, not an unobserved async throw');
+
+      // Guard cleared: a later reconnect (with history working) runs to success.
+      rest.throwOnGetHistory = null;
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+      transport.emitConn(ConnectionState.disconnected);
+      await pump();
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+      expect(await cache.historyContiguousThrough(_chan), '01A');
+    });
+
+    test('systemic-transient — a null-ref error leaves pending rows `sending` '
+        '(not failed)', () async {
+      await repo.sendMessage(_chan, 'hi');
+      transport.emitError(const TransportError(
+          code: 'rate_limited', detail: 'slow down', refClientMsgId: null));
+      await pump();
+      expect((await rows()).single.deliveryState, DeliveryState.sending,
+          reason: 'transient systemic error must not fail the row');
+      expect(await cache.outbox(), hasLength(1));
+    });
+
+    test('handoff-fence — a message ≤ fence is pulled by history even if the '
+        'channel then goes silent', () async {
+      // Z (01E) committed in the REST-vs-subscribe window, ≤ fence; no live emit.
+      transport.fences = {_chan: '01F'};
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan,
+          messages: [
+            _server('01C', 'c'),
+            _server('01E', 'z'), // the quiet-channel message
+            _server('01F', 'f'),
+          ],
+          nextAfter: '01F');
+
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+      // No further live messages, no reconnect — the channel is silent.
+      final ids = (await rows()).map((m) => m.id).toSet();
+      expect(ids.contains('01E'), isTrue,
+          reason: 'history paged up to the fence, capturing Z');
+      expect(await cache.historyContiguousThrough(_chan), '01F');
     });
   });
 }
