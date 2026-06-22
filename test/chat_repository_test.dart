@@ -11,6 +11,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -33,6 +34,11 @@ Message _server(String ulid, String body, {String at = '2026-01-01T12:00:01Z'}) 
     );
 
 void main() {
+  // The orphan test runs an isolated second in-memory cache concurrently with
+  // the shared fixture (to capture its debug assert in a guarded zone). That is
+  // exactly the case drift's multiple-database warning exists for; silence it.
+  driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+
   late DriftCache cache;
   late FakeChatTransport transport;
   late FakeChatRestApi rest;
@@ -524,6 +530,204 @@ void main() {
       expect(ids.contains('01E'), isTrue,
           reason: 'history paged up to the fence, capturing Z');
       expect(await cache.historyContiguousThrough(_chan), '01F');
+    });
+  });
+
+  // --- the remaining design-04 ATDD specs (round-2..5 tail) ------------------
+
+  group('ack-reorder (named tradeoff: server time wins)', () {
+    test('a forward-skewed optimistic createdAt settles UPWARD to server time '
+        'on ack', () async {
+      // The optimistic row is clamped to `max(now, ...)` — with a fast-forward
+      // client clock that is AHEAD of the server. On ack, W2 stamps the
+      // authoritative server time, which is EARLIER, so the row moves up the
+      // timeline. This is accepted (server time is the only order all clients
+      // agree on); the test pins it so it can't masquerade as a regression.
+      await repo.sendMessage(_chan, 'hi');
+      final optimisticAt = (await rows()).single.createdAt;
+      // Server time deliberately far in the PAST relative to any real `now`.
+      const serverIso = '2020-01-01T00:00:00Z';
+      transport.emitAck('tmp0', '01U', createdAt: serverIso);
+      await pump();
+
+      final r = (await rows()).single;
+      expect(r.id, '01U');
+      expect(r.deliveryState, DeliveryState.sent);
+      expect(r.createdAt, DateTime.parse(serverIso).toUtc(),
+          reason: 'server time wins — even though it moves the row upward');
+      expect(r.createdAt.isBefore(optimisticAt), isTrue,
+          reason: 'the named tradeoff: the row settles upward at ack');
+    });
+  });
+
+  group('ack-already-acked (drain does not burn the timeout)', () {
+    test('a row whose ack already settled does NOT make the drain wait', () async {
+      // Ack lands while connected → the row leaves the outbox. A later reconnect
+      // drain has nothing to await, so history runs PROMPTLY (well under the
+      // 80ms ackTimeout) rather than burning the full timeout.
+      await repo.sendMessage(_chan, 'hi');
+      transport.emitAck('tmp0', '01U');
+      await pump();
+      expect(await cache.outbox(), isEmpty);
+
+      transport.fences = {_chan: '01U'};
+      rest.pagesByAfter[''] =
+          HistoryPage(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+      rest.getHistoryCalls.clear();
+
+      transport.emitConn(ConnectionState.connected);
+      // A probe SHORTER than the ackTimeout (80ms): if the drain wrongly waited
+      // on the already-settled row, history would not have run yet.
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+      expect(rest.getHistoryCalls, isNotEmpty,
+          reason: 'already-acked row left the outbox → drain did not wait');
+    });
+
+    test('counter-case — a self-echo alone does NOT early-complete the waiter '
+        '(round-3 distinction)', () async {
+      // W3 echo writes R_u keyed by serverUlid, but the optimistic row stays
+      // serverUlid==NULL (collapse happens on ACK, not echo). So the row is
+      // still in the outbox on reconnect, and the drain MUST wait for the real
+      // ack — history is gated behind the ackTimeout, not the echo.
+      await repo.sendMessage(_chan, 'hi');
+      transport.emitMessage(_server('01U', 'hi')); // echo only, no ack
+      await pump();
+      expect(await cache.outbox(), hasLength(1),
+          reason: 'optimistic row stays pending until the ACK collapse');
+
+      transport.emitConn(ConnectionState.disconnected);
+      await pump();
+      transport.fences = {_chan: '01U'};
+      rest.pagesByAfter[''] =
+          HistoryPage(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+      rest.getHistoryCalls.clear();
+
+      transport.emitConn(ConnectionState.connected);
+      // SHORT probe (< 80ms): the drain is still awaiting the ack, so no history.
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+      expect(rest.getHistoryCalls, isEmpty,
+          reason: 'self-echo did not settle the row → drain waits for the ack');
+      // After the timeout elapses, history runs anyway (drain does not hang).
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(rest.getHistoryCalls, isNotEmpty,
+          reason: 'past the ackTimeout, history proceeds');
+    });
+  });
+
+  group('B-live multi (one listener wiring, no leak across reconnects)', () {
+    test('THREE reconnect cycles → one suback each; ack reconciles once; no '
+        'handler fires after dispose', () async {
+      await repo.sendMessage(_chan, 'hi'); // tmp0, pending
+      transport.fences = {_chan: ''}; // empty channel → no history paging
+
+      for (var i = 0; i < 3; i++) {
+        transport.emitConn(ConnectionState.disconnected);
+        await pump();
+        transport.emitConn(ConnectionState.connected);
+        await pump();
+      }
+      // A leaked/doubled connection-state listener would re-run the choreography
+      // and subscribe MORE than once per reconnect. Exactly one per cycle proves
+      // the streams were wired ONCE and outlive every reconnect (invariant B-live).
+      expect(transport.subscribeCalls, hasLength(3),
+          reason: 'one suback per reconnect — no doubled connection listener');
+
+      transport.emitAck('tmp0', '01U');
+      await pump();
+      final r = await rows();
+      expect(r, hasLength(1), reason: 'the ack reconciled exactly once');
+      expect(r.single.id, '01U');
+      expect(r.single.deliveryState, DeliveryState.sent);
+
+      // After dispose, the inbound streams still exist but the repo cancelled its
+      // subscriptions — a leaked W3 listener would upsert this; it must NOT appear.
+      await repo.dispose();
+      transport.emitMessage(_server('02Z', 'after dispose'));
+      await pump();
+      expect((await rows()).any((m) => m.id == '02Z'), isFalse,
+          reason: 'no handler fires after dispose (subscriptions cancelled)');
+    });
+  });
+
+  group('auth-terminal-catch (getHistory 401 routes to unauthenticated)', () {
+    test('a terminal Unauthorized from getHistory disconnects (no transient '
+        'redrain loop)', () async {
+      // No pending row → the drain is empty and we reach getHistory directly.
+      rest.throwOnGetHistory = const Unauthorized(401);
+      transport.fences = {_chan: '01A'};
+
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+
+      expect(spy.reconnectErrors, isNotEmpty,
+          reason: 'the auth failure is observed, not an unobserved async throw');
+      expect(spy.reconnectErrors.last, isA<Unauthorized>());
+      expect(transport.disconnectCalls, 1,
+          reason: 'terminal auth → route to unauthenticated, not a transient redrain');
+    });
+  });
+
+  group('systemic-terminal (auth error FRAME stops draining)', () {
+    test('an auth-coded systemic error disconnects; pending rows stay sending',
+        () async {
+      await repo.sendMessage(_chan, 'hi'); // tmp0, pending
+      transport.emitError(const TransportError(
+          code: 'unauthorized', detail: 'token expired', refClientMsgId: null));
+      await pump();
+
+      expect(transport.disconnectCalls, 1,
+          reason: 'auth-coded systemic error routes to unauthenticated');
+      expect((await rows()).single.deliveryState, DeliveryState.sending,
+          reason: 'pending row untouched; it resumes after re-auth');
+      expect(await cache.outbox(), hasLength(1));
+    });
+  });
+
+  group('orphan (the impossible case is OBSERVED, not swallowed)', () {
+    test('an ack for an unknown clientMsgId fires telemetry AND trips the debug '
+        'assert (observed, never swallowed)', () async {
+      // Unreachable in Phase 1 by construction (W1 persists before send), but the
+      // enum + telemetry make it OBSERVABLE if it ever fires. The design's
+      // tripwire is a debug `assert(false)` in `_onAck` — which surfaces as an
+      // uncaught async error from the stream handler. We run on an ISOLATED
+      // harness inside a guarded zone so that error is captured here (not leaked
+      // into the shared fixtures), proving BOTH halves of the contract:
+      // telemetry fires (the production signal) AND the assert trips (the dev
+      // tripwire). In release the assert is stripped → telemetry-only, no crash.
+      final localSpy = SpyTelemetry();
+      final localCache = DriftCache(NativeDatabase.memory());
+      final localTransport = FakeChatTransport();
+      final caught = <Object>[];
+      final localRepo = ChatRepository(
+        cache: localCache,
+        transport: localTransport,
+        rest: FakeChatRestApi(),
+        me: _me,
+        subscribedChannelIds: const [_chan],
+        telemetry: localSpy,
+        ackTimeout: const Duration(milliseconds: 80),
+        newTempId: () => 'x',
+      );
+
+      await runZonedGuarded(() async {
+        localRepo.start(); // listeners run in THIS zone → its errors land here
+        localTransport.emitAck('ghost', '01U'); // no optimistic row → orphaned
+        await pump();
+      }, (e, _) => caught.add(e));
+
+      // The production-observable contract: telemetry surfaced the orphan.
+      expect(localSpy.orphans, hasLength(1),
+          reason: 'the orphan ack is surfaced to telemetry');
+      expect(localSpy.orphans.single, ('ghost', '01U'));
+      // The dev tripwire: the debug assert tripped (captured, not crashing).
+      expect(caught, hasLength(1));
+      expect(caught.single, isA<AssertionError>());
+      // No row was created — the orphan is observed, NOT backfilled.
+      expect(await localCache.watchChannel(_chan).first, isEmpty);
+
+      await localRepo.dispose();
+      await localTransport.dispose();
+      await localCache.close();
     });
   });
 }

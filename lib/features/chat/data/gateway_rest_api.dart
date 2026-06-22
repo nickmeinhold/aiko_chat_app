@@ -94,41 +94,58 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
-  Future<AppUser> me() async {
-    final r = await _authed.get('/v1/me');
-    return AppUser.fromJson(_map(r.data));
-  }
+  Future<AppUser> me() => _authedCall(() async {
+        final r = await _authed.get('/v1/me');
+        return AppUser.fromJson(_map(r.data));
+      });
 
   @override
-  Future<List<Channel>> listChannels() async {
-    final r = await _authed.get('/v1/channels');
-    final list = (_map(r.data)['channels'] as List?) ?? const [];
-    return list
-        .map((e) => Channel.fromJson((e as Map).cast<String, dynamic>()))
-        .toList();
-  }
+  Future<List<Channel>> listChannels() => _authedCall(() async {
+        final r = await _authed.get('/v1/channels');
+        final list = (_map(r.data)['channels'] as List?) ?? const [];
+        return list
+            .map((e) => Channel.fromJson((e as Map).cast<String, dynamic>()))
+            .toList();
+      });
 
   @override
   Future<HistoryPage> getHistory(String channelId,
-      {String? before, String? after, int limit = 50}) async {
-    final r = await _authed.get(
-      '/v1/channels/$channelId/messages',
-      queryParameters: {
-        'before': ?before,
-        'after': ?after,
-        'limit': limit,
-      },
-    );
-    final data = _map(r.data);
-    final list = (data['messages'] as List?) ?? const [];
-    return HistoryPage(
-      channelId: channelId,
-      messages: list
-          .map((e) => Message.fromView((e as Map).cast<String, dynamic>()))
-          .toList(),
-      nextBefore: data['next_before'] as String?,
-      nextAfter: data['next_after'] as String?,
-    );
+          {String? before, String? after, int limit = 50}) =>
+      _authedCall(() async {
+        final r = await _authed.get(
+          '/v1/channels/$channelId/messages',
+          queryParameters: {
+            'before': ?before,
+            'after': ?after,
+            'limit': limit,
+          },
+        );
+        final data = _map(r.data);
+        final list = (data['messages'] as List?) ?? const [];
+        return HistoryPage(
+          channelId: channelId,
+          messages: list
+              .map((e) => Message.fromView((e as Map).cast<String, dynamic>()))
+              .toList(),
+          nextBefore: data['next_before'] as String?,
+          nextAfter: data['next_after'] as String?,
+        );
+      });
+
+  /// Run an authed request, translating a *terminal* auth rejection — a 401 that
+  /// survived [AuthInterceptor]'s single-flight refresh-and-retry, or a 403 —
+  /// into the domain [Unauthorized], so callers (the reconcile engine) classify
+  /// it without importing `dio`. Transient errors (network/timeout/5xx) and any
+  /// non-Dio error propagate unchanged: they must NOT be read as a logout
+  /// (design 02 — a network blip is not an auth failure).
+  static Future<T> _authedCall<T>(Future<T> Function() call) async {
+    try {
+      return await call();
+    } on DioException catch (e) {
+      final code = e.response?.statusCode;
+      if (code == 401 || code == 403) throw Unauthorized(code);
+      rethrow;
+    }
   }
 
   static Map<String, dynamic> _map(Object? data) =>

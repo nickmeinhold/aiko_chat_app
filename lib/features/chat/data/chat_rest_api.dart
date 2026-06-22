@@ -20,6 +20,23 @@ class HistoryPage {
       this.nextAfter});
 }
 
+/// Thrown by an authenticated REST call when the request is *terminally*
+/// rejected for auth reasons — a 401 that survived the interceptor's
+/// single-flight refresh-and-retry, or a 403. Distinct from a transient
+/// network/timeout/5xx error (which propagates as-is and must NOT trigger a
+/// logout — design 02). The reconcile engine recognises THIS type to route a
+/// reconnect to the unauthenticated state instead of a transient redrain,
+/// **without depending on `dio`** (the layering invariant below: the repository
+/// depends on this seam, never the HTTP client). The REST impl translates the
+/// transport-level [DioException] into this at the boundary.
+class Unauthorized implements Exception {
+  /// The HTTP status that triggered it (401 or 403), for telemetry/debugging.
+  final int? statusCode;
+  const Unauthorized([this.statusCode]);
+  @override
+  String toString() => 'Unauthorized(statusCode: $statusCode)';
+}
+
 /// The history/auth/media REST seam (plan §B1; media is a later phase). No
 /// lifecycle. Riverpod + the repository depend on THIS, never on `dio`.
 abstract interface class ChatRestApi {

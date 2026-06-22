@@ -337,13 +337,15 @@ class ChatRepository {
       DateTime.now().toUtc();
 
   /// Classify a reconnect exception as terminal-auth (stop draining, route to
-  /// login) vs transient (backed-off redrain). STUB: until the `auth-terminal`
-  /// test wires a recognizable auth-error type from the REST layer (a 401/403),
-  /// every thrown reconnect error is treated as transient. The auth-TERMINAL
-  /// path via the transport's `ConnectionState.unauthenticated` is already
-  /// handled (it bumps the epoch in `_onConnState`); only the
-  /// auth-error-thrown-from-`getHistory` case is deferred. See task #19.
-  bool _isAuthError(Object e) => false;
+  /// login) vs transient (backed-off redrain). A terminal auth rejection from
+  /// the REST seam surfaces as [Unauthorized] — a 401 that survived the auth
+  /// interceptor's single-flight refresh-and-retry, or a 403 (translated from
+  /// `dio` at the REST boundary so this layer stays HTTP-client-agnostic).
+  /// Everything else (network/timeout/5xx) is transient: pending rows stay
+  /// `sending` for the next reconnect's redrain. This is the REST-thrown twin of
+  /// the transport's `ConnectionState.unauthenticated` path (handled in
+  /// `_onConnState`); both route to login.
+  bool _isAuthError(Object e) => e is Unauthorized;
 
   bool _isAuthErrorCode(String code) =>
       code == 'unauthorized' || code == 'token_expired' || code == 'forbidden';

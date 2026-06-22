@@ -37,6 +37,10 @@ class FakeChatTransport implements ChatTransport {
 
   bool disposed = false;
 
+  /// How many times the repository routed to [disconnect] (the auth-terminal
+  /// path: a reconnect that hit [Unauthorized] disconnects → unauthenticated).
+  int disconnectCalls = 0;
+
   @override
   Stream<ConnectionState> get connectionState => _conn.stream;
   @override
@@ -50,7 +54,10 @@ class FakeChatTransport implements ChatTransport {
   Future<void> connect() async {}
 
   @override
-  Future<void> disconnect() async => emitConn(ConnectionState.disconnected);
+  Future<void> disconnect() async {
+    disconnectCalls++;
+    emitConn(ConnectionState.disconnected);
+  }
 
   @override
   Future<Map<String, String>> subscribe(List<String> channelIds) async {
