@@ -510,6 +510,34 @@ void main() {
       expect(await cache.outbox(), hasLength(1));
     });
 
+    test('rerun-no-resurrection — a disconnect after a queued rerun cancels it '
+        '(no choreography against a disconnected transport)', () async {
+      // connected (wedged in getHistory) → connected (queues a rerun) →
+      // disconnected (must CANCEL the queued rerun). When the dead run finishes,
+      // it must NOT resurrect the choreography: there is no live `connected`
+      // justifying it. A genuine reconnect later would emit a fresh `connected`.
+      transport.fences = {_chan: '01A'};
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+      rest.getHistoryGate = Completer<void>();
+
+      transport.emitConn(ConnectionState.connected);
+      await pump(); // first run wedged inside getHistory
+      expect(transport.subscribeCalls, hasLength(1));
+
+      transport.emitConn(ConnectionState.connected); // queues a rerun
+      await pump();
+      transport.emitConn(ConnectionState.disconnected); // must cancel the rerun
+      await pump();
+
+      rest.getHistoryGate!.complete(); // dead run resolves (aborted by epoch)
+      await pump();
+
+      expect(transport.subscribeCalls, hasLength(1),
+          reason: 'the queued rerun was cancelled by the disconnect — no '
+              'subscribe/drain/history against a disconnected transport');
+    });
+
     test('handoff-fence — a message ≤ fence is pulled by history even if the '
         'channel then goes silent', () async {
       // Z (01E) committed in the REST-vs-subscribe window, ≤ fence; no live emit.
@@ -680,6 +708,40 @@ void main() {
       expect((await rows()).single.deliveryState, DeliveryState.sending,
           reason: 'pending row untouched; it resumes after re-auth');
       expect(await cache.outbox(), hasLength(1));
+    });
+  });
+
+  group('lifecycle guards (cage-match round-1 fixes)', () {
+    test('start() is not idempotent — a second call is a loud StateError '
+        '(B-live: streams wire ONCE)', () {
+      // setUp already called start() once. A second call would double every
+      // listener (doubled ack reconciliation + reconnect choreography).
+      expect(() => repo.start(), throwsStateError);
+    });
+
+    test('an inbound W3 write that throws is OWNED via telemetry, not leaked '
+        'as an unhandled async error', () async {
+      // A message with a null serverUlid violates the cache contract
+      // (upsertInbound requires id != null) → it throws. The handler must catch
+      // it and surface it, leaving the stream alive.
+      transport.emitMessage(Message(
+        clientTempId: 'noid',
+        id: null, // <- invalid for an inbound row; upsertInbound throws
+        channelId: _chan,
+        sender: const MessageSender(
+            userId: 'u2', kind: SenderKind.human, label: 'Alice'),
+        body: 'bad',
+        createdAt: DateTime.parse('2026-01-01T12:00:00Z').toUtc(),
+        deliveryState: DeliveryState.sent,
+      ));
+      await pump();
+
+      expect(spy.inboundWriteErrors, hasLength(1),
+          reason: 'the failed inbound write is observed, not an unowned throw');
+      // The stream is still alive: a subsequent valid message lands fine.
+      transport.emitMessage(_server('01U', 'ok'));
+      await pump();
+      expect((await rows()).any((m) => m.id == '01U'), isTrue);
     });
   });
 

@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
+    show Unauthorized;
 import 'package:aiko_chat_app/features/chat/data/gateway_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/gateway_transport.dart';
@@ -172,6 +174,50 @@ void main() {
       expect(captured!.queryParameters['after'], '01ABC');
       // before is omitted (null-aware element) when not supplied
       expect(captured!.queryParameters.containsKey('before'), isFalse);
+    });
+  });
+
+  group('authed REST: terminal Unauthorized vs transient 401 (cage-match fix)', () {
+    // Full backend WITH the AuthInterceptor in play (apiWith above skips it), so
+    // the interceptor's transient-vs-terminal refresh taxonomy is exercised.
+    GatewayRestApi backend({
+      required Future<String> Function(String) remoteRefresh,
+      required int statusCode,
+    }) {
+      final tokens = DefaultTokenProvider(
+          store: InMemoryTokenStore(_seed), remoteRefresh: remoteRefresh);
+      ResponseBody handler(RequestOptions _) => jsonBody(statusCode, '{}');
+      final authed = Dio(BaseOptions(baseUrl: 'http://x'))
+        ..httpClientAdapter = FakeHttpAdapter(handler)
+        ..interceptors.add(AuthInterceptor(
+            tokens, Dio(BaseOptions(baseUrl: 'http://x'))..httpClientAdapter = FakeHttpAdapter(handler)));
+      final bare = Dio(BaseOptions(baseUrl: 'http://x'))
+        ..httpClientAdapter = FakeHttpAdapter(handler);
+      return GatewayRestApi(bare: bare, authed: authed);
+    }
+
+    test('a TERMINAL 401 (refresh rejected) → Unauthorized', () async {
+      final api = backend(
+          remoteRefresh: (_) async => throw const RefreshRejected(),
+          statusCode: 401);
+      await expectLater(api.getHistory('c1'), throwsA(isA<Unauthorized>()));
+    });
+
+    test('a TRANSIENT 401 (refresh network blip) → NOT Unauthorized — stays a '
+        'DioException so rows redrain and the user is not logged out', () async {
+      final api = backend(
+          remoteRefresh: (_) async => throw Exception('refresh network blip'),
+          statusCode: 401);
+      await expectLater(
+        api.getHistory('c1'),
+        throwsA(allOf(isA<DioException>(), isNot(isA<Unauthorized>()))),
+      );
+    });
+
+    test('a 403 → Unauthorized (terminal; no refresh attempted)', () async {
+      final api =
+          backend(remoteRefresh: (_) async => 'unused', statusCode: 403);
+      await expectLater(api.getHistory('c1'), throwsA(isA<Unauthorized>()));
     });
   });
 

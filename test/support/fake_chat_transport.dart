@@ -146,6 +146,7 @@ class SpyTelemetry extends ChatTelemetry {
   final List<(String, String)> orphans = [];
   final List<Object> reconnectErrors = [];
   final List<(String, String?, String)> historyGaps = [];
+  final List<Object> inboundWriteErrors = [];
 
   @override
   void orphanAck(String clientMsgId, String serverUlid) =>
@@ -156,4 +157,7 @@ class SpyTelemetry extends ChatTelemetry {
   @override
   void historyGapBeforeFence(String channelId, String? cursor, String fence) =>
       historyGaps.add((channelId, cursor, fence));
+  @override
+  void inboundWriteFailed(Object error, StackTrace stack) =>
+      inboundWriteErrors.add(error);
 }

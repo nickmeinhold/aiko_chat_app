@@ -39,7 +39,12 @@ class AuthInterceptor extends Interceptor {
     try {
       newToken = await _tokens.refreshAccessToken();
     } catch (_) {
-      handler.next(err); // transient refresh failure -> surface original error
+      // TRANSIENT refresh failure (network/timeout/5xx) — the session is NOT
+      // known-dead. Mark the forwarded 401 so `_authedCall` does NOT translate
+      // it to terminal `Unauthorized` (which would log the user out on a network
+      // blip — the exact failure design 02's refresh taxonomy exists to prevent).
+      err.requestOptions.extra['auth_transient'] = true;
+      handler.next(err); // surface original error as transient
       return;
     }
     if (newToken == null) {
@@ -142,8 +147,14 @@ class GatewayRestApi implements ChatRestApi {
     try {
       return await call();
     } on DioException catch (e) {
+      // A 401 forwarded after a TRANSIENT refresh failure carries the
+      // `auth_transient` marker (set by AuthInterceptor) — it is NOT terminal,
+      // so propagate it as-is (B4 leaves rows `sending` for redrain). Only a
+      // genuinely terminal rejection — a 401 that survived refresh-and-retry, or
+      // a 403 — becomes the domain `Unauthorized`.
+      final transient = e.requestOptions.extra['auth_transient'] == true;
       final code = e.response?.statusCode;
-      if (code == 401 || code == 403) throw Unauthorized(code);
+      if (!transient && (code == 401 || code == 403)) throw Unauthorized(code);
       rethrow;
     }
   }

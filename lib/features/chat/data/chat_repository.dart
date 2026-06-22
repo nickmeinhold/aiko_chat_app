@@ -24,6 +24,11 @@ abstract class ChatTelemetry {
   void orphanAck(String clientMsgId, String serverUlid) {}
   void reconnectFailed(Object error, StackTrace stack) {}
   void historyGapBeforeFence(String channelId, String? cursor, String fence) {}
+
+  /// An inbound (W3) cache write threw. Surfaced so a failed upsert is OWNED
+  /// (observed) rather than leaking as an unhandled async error from the stream
+  /// handler.
+  void inboundWriteFailed(Object error, StackTrace stack) {}
 }
 
 class _NoopTelemetry extends ChatTelemetry {
@@ -62,6 +67,7 @@ class ChatRepository {
 
   final List<StreamSubscription<dynamic>> _subs = [];
   bool _disposed = false;
+  bool _started = false;
 
   /// The optimistic-render identity: the wire send carries no sender (the gateway
   /// derives it from the JWT, I5), so B4 renders the local row as "me".
@@ -75,6 +81,13 @@ class ChatRepository {
   // --- B-live: wire the streams ONCE -----------------------------------------
 
   void start() {
+    // B-live: the streams are wired exactly ONCE. A second start() would double
+    // every listener (doubled ack reconciliation + reconnect choreography), so
+    // a repeat call is a loud programming error, not a silent no-op.
+    if (_started) {
+      throw StateError('ChatRepository.start() called twice — streams wire ONCE (B-live)');
+    }
+    _started = true;
     _subs.add(_transport.acks.listen(_onAck)); // W2
     _subs.add(_transport.messages.listen(_onMessage)); // W3
     _subs.add(_transport.errors.listen(_onError)); // W4
@@ -160,8 +173,15 @@ class ChatRepository {
     }
   }
 
-  void _onMessage(Message m) {
-    _cache.upsertInbound(m); // W3 — fanout echo + others' + history-via-stream
+  Future<void> _onMessage(Message m) async {
+    // W3 — fanout echo + others' + history-via-stream. Awaited + guarded so a
+    // cache failure (invariant violation, closed DB) is OWNED via telemetry
+    // rather than leaking as an unhandled async error from this stream handler.
+    try {
+      await _cache.upsertInbound(m);
+    } catch (e, st) {
+      _telemetry.inboundWriteFailed(e, st);
+    }
   }
 
   Future<void> _onError(TransportError e) async {
@@ -192,6 +212,14 @@ class ChatRepository {
   void _onConnState(ConnectionState s) {
     if (s != ConnectionState.connected) {
       _runEpoch++; // cancel in-flight choreography
+      // A disconnect INVALIDATES any queued rerun: the rerun's only justification
+      // is a `connected` event, and this non-connected state supersedes it.
+      // Without this, a `connected → connected (queues rerun) → disconnected`
+      // sequence would fire the rerun anyway when the dead run completes —
+      // running subscribe/drain/history against a transport that is actually
+      // disconnected (a false resurrection). A genuine reconnect later emits a
+      // fresh `connected` that re-triggers the choreography properly.
+      _rerunRequested = false;
       _failAllAckWaiters(); // release waiters; nothing hangs on the timeout
       return;
     }
@@ -269,7 +297,22 @@ class ChatRepository {
       for (final m in page.messages) {
         await _cache.upsertInbound(m); // ASC; W3 dedups on serverUlid
       }
-      cursor = page.messages.last.id;
+      final newCursor = page.messages.last.id;
+      // PROGRESS GUARD: the loop's liveness depends on the gateway treating
+      // `after` as EXCLUSIVE — a frozen contract owned by a DIFFERENT repo. If a
+      // page ever fails to advance (non-exclusive `after`, a ULID tie, or a
+      // null-id history row), the loop would re-fetch the same cursor forever,
+      // hammering getHistory + re-upserting. Refuse to loop: surface it as the
+      // invariant violation it is, don't hang.
+      if (newCursor == null ||
+          (cursor != null && newCursor.compareTo(cursor) <= 0)) {
+        _telemetry.historyGapBeforeFence(channelId, cursor, fence);
+        assert(false,
+            'history page did not advance (cursor=$cursor newCursor=$newCursor) '
+            '— is the gateway `after` cursor exclusive?');
+        return;
+      }
+      cursor = newCursor;
     }
     if (_aborted(epoch)) return;
     // History now covers everything ≤ fence; live owns everything > fence. The
