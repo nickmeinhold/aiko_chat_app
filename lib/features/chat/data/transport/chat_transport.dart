@@ -41,9 +41,16 @@ abstract interface class ChatTransport {
   /// Close the socket and stop reconnecting (until [connect] is called again).
   Future<void> disconnect();
 
-  /// (Re)subscribe to channels. Additive server-side; safe to re-send the full
-  /// set after a reconnect.
-  void subscribe(List<String> channelIds);
+  /// (Re)subscribe to channels and await the server's subscription-ack. Returns
+  /// the per-channel **fence** map (channelId -> newest persisted ULID at
+  /// subscription-effective time; `""` for an empty channel). The reconcile
+  /// engine fetches history up to the fence and lets the live stream own
+  /// everything beyond it — no gap (design 04 §Gap 2). Additive server-side;
+  /// safe to re-send the full set after a reconnect.
+  ///
+  /// Completes with a [TransportError] if the socket drops before the ack (the
+  /// caller retries in a fresh reconnect epoch) or if called while disconnected.
+  Future<Map<String, String>> subscribe(List<String> channelIds);
 
   /// Serialise + send a message frame. ALWAYS returns the clientTempId and
   /// never throws; deliverability is signalled via [connectionState]/[errors]
