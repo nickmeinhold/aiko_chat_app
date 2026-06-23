@@ -1,0 +1,92 @@
+name: e2e cross-repo suback
+
+# Capability gate for Change B (task #34): boots the REAL aiko_chat_gateway and
+# drives the REAL app transport codec against it over a live WebSocket + reconnect
+# (e2e/cross_repo_suback_test.dart). This is the one job that proves the two halves
+# of the wire contract actually agree — every other check is per-repo against fakes.
+#
+# It is SEPARATE from the ci.yml floor (which runs only `flutter test` over test/).
+# The floor stays fast and self-contained; this job is heavier (four checkouts +
+# a Python gateway boot) and lives on its own.
+#
+# Four repos, installed editable, so the gateway boots exactly as it really boots
+# (the aiko bus import is mandatory at module load; at runtime it degrades to a
+# no-op with no broker — verified). aiko_services/aiko_chat track their default
+# branch: an upstream change that breaks the contract SHOULD turn this red.
+#
+# PREREQUISITE (one-time): a repo secret `GATEWAY_CHECKOUT_TOKEN` — a token with
+# read (contents) access to the PRIVATE nickmeinhold/aiko_chat_gateway. The
+# default GITHUB_TOKEN only reaches THIS repo. Until the secret exists this job
+# fails at the gateway checkout step (loudly, by design).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: e2e-xrepo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app (this repo)
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Checkout gateway (private)
+        uses: actions/checkout@v4
+        with:
+          repository: nickmeinhold/aiko_chat_gateway
+          token: ${{ secrets.GATEWAY_CHECKOUT_TOKEN }}
+          path: gateway
+
+      - name: Checkout aiko_services (public)
+        uses: actions/checkout@v4
+        with:
+          repository: geekscape/aiko_services
+          path: aiko_services
+
+      - name: Checkout aiko_chat (public)
+        uses: actions/checkout@v4
+        with:
+          repository: geekscape/aiko_chat
+          path: aiko_chat
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12' # aiko_services 0.6 caps at <3.13
+
+      # Order: the two libs the gateway imports first, then the gateway[dev].
+      # They are not declared deps of the gateway (not on PyPI), so they must be
+      # installed explicitly from their checkouts. Verified on a clean venv.
+      - name: Install gateway + bus libs (editable)
+        run: |
+          pip install -e ./aiko_services
+          pip install -e ./aiko_chat
+          pip install -e "./gateway[dev]"
+
+      - name: Resolve gateway runtime env
+        run: |
+          echo "AIKO_GATEWAY_DIR=${{ github.workspace }}/gateway" >> "$GITHUB_ENV"
+          echo "AIKO_GATEWAY_PYTHON=$(which python)" >> "$GITHUB_ENV"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.0
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      # The test boots the gateway (uvicorn subprocess, no broker, throwaway
+      # sqlite) via AIKO_GATEWAY_PYTHON/AIKO_GATEWAY_DIR set above.
+      - name: Run cross-repo e2e
+        working-directory: app
+        run: flutter test e2e/cross_repo_suback_test.dart
