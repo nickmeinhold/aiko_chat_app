@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart';
@@ -26,17 +27,29 @@ QueryExecutor openUserCache(String? userId) {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
-    final file = File(p.join(dir.path, _cacheFileName(userId)));
+    final file = File(p.join(dir.path, cacheFileName(userId)));
     return NativeDatabase.createInBackground(file);
   });
 }
 
-/// Derives a filesystem-safe cache filename from a user id. Server user ids are
-/// ULIDs (Crockford base32 — already path-safe), but we never trust an id that
-/// flows into a path: strip anything outside `[0-9A-Za-z_-]` so a malformed id
-/// can't escape the cache directory. An id that sanitizes to empty falls back to
-/// a constant bucket rather than a path that resolves to the directory itself.
-String _cacheFileName(String userId) {
-  final safe = userId.replaceAll(RegExp(r'[^0-9A-Za-z_-]'), '');
-  return 'cache_${safe.isEmpty ? 'unknown' : safe}.sqlite';
+/// Derives a filesystem-safe, **injective** cache filename from a user id.
+///
+/// Injectivity IS the isolation guarantee: distinct user ids MUST map to
+/// distinct files, or one user could open another's cache (the Carnot C3 leak
+/// this whole design prevents). We hex-encode the raw UTF-8 bytes of the id — a
+/// 1:1, reversible transform. Critically this is collision-free where the
+/// obvious alternatives are not:
+///   - strip-the-bad-chars is many-to-one: `a/b` and `ab` both reduce to `ab`,
+///     and any two ids that sanitize to empty share one bucket — silently
+///     fusing two users' caches;
+///   - base64url is injective but case-sensitive, so on a case-insensitive
+///     filesystem (macOS/APFS default) two ids can still collide by case-fold.
+/// Hex output is always lowercase `[0-9a-f]`: injective, path-safe, never empty
+/// for a non-empty id, and stable across case-insensitive filesystems.
+String cacheFileName(String userId) {
+  final hex = utf8
+      .encode(userId)
+      .map((b) => b.toRadixString(16).padLeft(2, '0'))
+      .join();
+  return 'cache_$hex.sqlite';
 }

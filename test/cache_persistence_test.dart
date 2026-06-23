@@ -9,6 +9,7 @@
 
 import 'dart:io';
 
+import 'package:aiko_chat_app/features/chat/data/cache/cache_database.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:drift/native.dart';
@@ -79,5 +80,33 @@ void main() {
     // And A still has its own.
     final aMsgs = await aCache.watchChannel('general').first;
     expect(aMsgs.map((m) => m.id), ['01ULID_A']);
+  });
+
+  group('cacheFileName — injective + filesystem-safe (the isolation primitive)',
+      () {
+    test('distinct ids that the old strip-sanitizer FUSED now map to distinct '
+        'files', () {
+      // These are exactly the collision pairs the cage-match (Carnot) named:
+      // strip-the-bad-chars reduced `a/b` and `ab` both to `ab`, and every
+      // all-illegal id to a single `unknown` bucket. Hex encoding is injective.
+      expect(cacheFileName('a/b'), isNot(cacheFileName('ab')));
+      expect(cacheFileName('!!!'), isNot(cacheFileName('???')));
+      expect(cacheFileName(''), isNot(cacheFileName('a')));
+    });
+
+    test('output is always lowercase-hex and path-safe', () {
+      for (final id in ['01ARZ3NDEKTSV4RRFFQ69G5FAV', 'a/b/../escape', '名前']) {
+        expect(cacheFileName(id), matches(RegExp(r'^cache_[0-9a-f]*\.sqlite$')),
+            reason: 'a user id must never inject path separators or non-hex '
+                'characters into the cache filename');
+      }
+    });
+
+    test('two distinct ULIDs get distinct files (the normal case)', () {
+      expect(
+        cacheFileName('01ARZ3NDEKTSV4RRFFQ69G5FAV'),
+        isNot(cacheFileName('01BX5ZZKBKACTAV9WEVGEMMVRZ')),
+      );
+    });
   });
 }
