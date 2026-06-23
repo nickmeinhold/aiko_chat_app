@@ -112,9 +112,16 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// lifecycle: no manual clear, and no writer-vs-clear race (Carnot R2-1/C3).
   /// Only the app-scoped transport (kept alive by [connectionStateProvider])
   /// needs an explicit disconnect.
+  ///
+  /// Tokens are cleared FIRST, before the (slower, awaited) disconnect — so the
+  /// token-clear is effectively immediate. If it ran last, a fast re-login
+  /// during the disconnect-await could write fresh tokens that the trailing
+  /// clear would then stomp, leaving a logged-in-but-tokenless session (Carnot
+  /// R3-B). Clearing first means any human-paced re-login's `setTokens` always
+  /// lands after this clear, never before it.
   Future<void> _teardownResources() async {
-    await ref.read(transportProvider).disconnect();
     await _tokens.clearTokens();
+    await ref.read(transportProvider).disconnect();
   }
 
   /// Explicit, user-initiated logout.
