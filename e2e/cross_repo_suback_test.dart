@@ -75,7 +75,8 @@ void main() {
     final userId = (reg['user'] as Map)['user_id'] as String;
     expect(accessToken, isNotEmpty);
 
-    final channels = await gw.getJson('/v1/channels');
+    // /v1/channels requires auth (gateway I1) — pass the registration token.
+    final channels = await gw.getJson('/v1/channels', bearer: accessToken);
     final channelId = (channels['channels'] as List)
         .map((c) => c as Map)
         .firstWhere((c) => c['aiko_channel'] == 'general')['id'] as String;
@@ -275,6 +276,13 @@ class _Gateway {
       ],
       workingDirectory: gatewayDir,
       environment: {
+        // Declare a non-prod environment. The gateway defaults `environment` to
+        // "production", which FAIL-CLOSES the boot on the dev jwt_secret (and
+        // closes registration). This harness is a test, so it declares itself —
+        // exactly as the gateway's own tests/conftest.py does. Keeping the
+        // gateway checkout HEAD-following means a genuine contract break still
+        // turns this gate red; only the harness's own setup is fixed here.
+        'ENVIRONMENT': 'test',
         // Four slashes = absolute path → file-backed sqlite shared across the
         // app's many SessionLocal connections (`:memory:` is connection-private).
         'DB_URL': 'sqlite+aiosqlite:///${dbFile.path}',
@@ -337,8 +345,11 @@ class _Gateway {
     return false;
   }
 
-  Future<Map<String, dynamic>> getJson(String path) async {
+  Future<Map<String, dynamic>> getJson(String path, {String? bearer}) async {
     final req = await _http.getUrl(Uri.parse('http://127.0.0.1:$port$path'));
+    if (bearer != null) {
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearer');
+    }
     final resp = await req.close();
     final body = await resp.transform(utf8.decoder).join();
     if (resp.statusCode != 200) {
