@@ -27,7 +27,13 @@ final currentUserProvider = Provider<AppUser?>(
 /// The channels the user can see. Gated on auth: empty when logged out so the
 /// repository (which derives its subscription set from this) never tries to
 /// subscribe with no session.
-final channelsProvider = FutureProvider<List<Channel>>((ref) async {
+///
+/// `autoDispose`: while logged out (login screen) nothing watches the chat
+/// providers, so they tear down — `repo.dispose()` cancels the transport subs —
+/// and a re-login builds them FRESH rather than flushing stale cross-logout
+/// state (which crashed with "setState during build") and never leaves two
+/// repos racing on the one transport singleton (Carnot C2).
+final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) return const [];
   return ref.watch(restApiProvider).listChannels();
@@ -37,7 +43,7 @@ final channelsProvider = FutureProvider<List<Channel>>((ref) async {
 /// authenticated [AppUser] (for optimistic "me" rendering) and the fixed
 /// subscription set (from [channelsProvider]); it then wires streams once and
 /// opens the socket (whose `connected` event drives subscribe→drain→history).
-final chatRepositoryProvider = FutureProvider<ChatRepository>((ref) async {
+final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) {
     // Not reachable from the UI (the router shows login when logged out), but
@@ -65,7 +71,7 @@ final chatRepositoryProvider = FutureProvider<ChatRepository>((ref) async {
 /// forwards its cache-backed stream — each [MessageTile] watches the narrowest
 /// slice (this family entry) rather than the whole repo.
 final messagesProvider =
-    StreamProvider.family<List<Message>, String>((ref, channelId) async* {
+    StreamProvider.autoDispose.family<List<Message>, String>((ref, channelId) async* {
   final repo = await ref.watch(chatRepositoryProvider.future);
   yield* repo.watchChannel(channelId);
 });

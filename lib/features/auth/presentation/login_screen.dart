@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../chat/data/chat_rest_api.dart' show Unauthorized;
 import '../application/auth_controller.dart';
 
 /// Username/password login, with a toggle into register mode (which adds a
@@ -120,11 +121,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   /// Keep raw transport/exception detail out of the UI; show a short message.
+  /// Classify on the domain [Unauthorized] type (a 401/403 that survived the
+  /// interceptor's refresh-and-retry), not a brittle `toString().contains`.
   String _friendlyError(Object error) {
-    final text = error.toString();
-    if (text.contains('401') || text.contains('Unauthorized')) {
-      return 'Incorrect username or password.';
-    }
+    if (error is Unauthorized) return 'Incorrect username or password.';
     return 'Something went wrong. Please try again.';
   }
 }

@@ -32,8 +32,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       final auth = ref.read(authControllerProvider);
       final loc = state.matchedLocation;
 
-      // Cold-start restore in flight: hold on the splash.
-      if (auth.isLoading) return loc == '/splash' ? null : '/splash';
+      // Auth in flight. The COLD-START restore parks on the splash, but a
+      // login/register submitted FROM the login screen also flips state to
+      // loading — and that must keep the login screen (with its own in-button
+      // progress + error UI), not flash the full-screen splash (Maxwell F1).
+      if (auth.isLoading) {
+        if (loc == '/login') return null; // a login in flight owns its own UI
+        return loc == '/splash' ? null : '/splash';
+      }
 
       final loggedIn = auth.value != null;
 

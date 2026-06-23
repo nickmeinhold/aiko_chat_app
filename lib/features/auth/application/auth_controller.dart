@@ -94,19 +94,36 @@ class AuthController extends AsyncNotifier<AppUser?> {
     });
   }
 
-  /// Explicit, user-initiated logout: stop the realtime transport, clear the
-  /// tokens, drop to logged-out (router redirects to login).
-  Future<void> logout() async {
+  /// Full session teardown — the SINGLE owner of "end this session". Both the
+  /// explicit [logout] and the signal-driven [_becomeUnauthenticated] route
+  /// through it, so a terminal logout is ALWAYS complete, never partial:
+  ///   - disconnect the realtime socket — else the session-singleton transport
+  ///     keeps the old (now server-invalid) socket and the next login's
+  ///     `connect()` early-returns on a live `_channel`, reusing a dead session
+  ///     and never re-running subscribe→drain→history (Carnot C1);
+  ///   - drop the in-memory cache — else a different user logging in on the same
+  ///     app instance sees the previous user's messages (Carnot C3);
+  ///   - clear tokens; publish logged-out (router → login).
+  /// The cache is wiped via [DriftCache.clearAll] (a row delete) rather than
+  /// `ref.invalidate(cacheProvider)` — invalidating the provider mid-teardown
+  /// triggers a dependent rebuild during the widget build the auth-state change
+  /// already kicked off ("setState during build"). Clearing rows is a normal
+  /// data update the StreamProvider absorbs cleanly.
+  Future<void> _endSession() async {
     await ref.read(transportProvider).disconnect();
+    await ref.read(cacheProvider).clearAll(); // session isolation
     await _tokens.clearTokens();
     state = const AsyncValue.data(null);
   }
 
-  /// The idempotent terminal-logout both dead-session signals converge on. The
-  /// token store is already cleared by [DefaultTokenProvider] on either path;
-  /// this only has to publish logged-out state (and is a no-op if already so).
+  /// Explicit, user-initiated logout.
+  Future<void> logout() => _endSession();
+
+  /// The idempotent terminal-logout both dead-session signals converge on
+  /// (transport `unauthenticated` + REST `onUnauthenticated`). No-op if already
+  /// logged out, so duplicate terminal signals tear down exactly once.
   void _becomeUnauthenticated() {
     if (state.value == null && !state.isLoading) return; // already logged out
-    state = const AsyncValue.data(null);
+    unawaited(_endSession());
   }
 }

@@ -109,6 +109,16 @@ class DriftCache extends _$DriftCache {
         },
       );
 
+  /// Wipe every row across all tables — used on logout so a different user
+  /// signing in on the same app instance cannot see the previous session's
+  /// cached messages (session isolation; cage-match Carnot C3). One transaction
+  /// so observers see a single atomic empty-out, not a half-cleared cache.
+  Future<void> clearAll() => transaction(() async {
+        await delete(messages).go();
+        await delete(channels).go();
+        await delete(syncMeta).go();
+      });
+
   // --- conversion -----------------------------------------------------------
 
   Message _toDomain(MessageRow r) => Message(

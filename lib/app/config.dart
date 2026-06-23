@@ -24,20 +24,23 @@ class GatewayConfig {
       'GATEWAY_BASE_URL',
       defaultValue: 'http://localhost:8095',
     );
+    var base = raw.trim();
     // Strip a trailing slash so URL composition (`$base/v1/...`) never doubles.
-    final base = raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw;
+    if (base.endsWith('/')) base = base.substring(0, base.length - 1);
     return GatewayConfig(httpBaseUrl: base);
   }
 
   /// The WSS base, derived from [httpBaseUrl] so it can never disagree about the
-  /// host/port: `https://` → `wss://`, `http://` → `ws://`.
+  /// host/port: `https`→`wss`, `http`→`ws`. Parsed via [Uri] rather than string
+  /// surgery so a normalised/uppercase scheme or stray structure is handled
+  /// correctly (Kelvin K1).
   String get wsBaseUrl {
-    if (httpBaseUrl.startsWith('https://')) {
-      return 'wss://${httpBaseUrl.substring('https://'.length)}';
-    }
-    if (httpBaseUrl.startsWith('http://')) {
-      return 'ws://${httpBaseUrl.substring('http://'.length)}';
-    }
-    return httpBaseUrl; // already a ws(s) scheme or schemeless — pass through
+    final uri = Uri.parse(httpBaseUrl);
+    final scheme = switch (uri.scheme) {
+      'https' => 'wss',
+      'http' => 'ws',
+      final other => other, // already ws/wss (or unknown) — leave as-is
+    };
+    return uri.replace(scheme: scheme).toString();
   }
 }

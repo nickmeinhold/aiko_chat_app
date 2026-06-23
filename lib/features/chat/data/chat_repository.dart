@@ -160,6 +160,7 @@ class ChatRepository {
   // --- W2 / W3 / W4: stream handlers -----------------------------------------
 
   Future<void> _onAck(AckResult a) async {
+    if (_disposed) return; // a torn-down repo must not write (rebuild overlap)
     final outcome = await _cache.reconcileAck(
         a.clientMsgId, a.msgId, _parseServerTime(a.createdAt));
     _completeAckWaiter(a.clientMsgId); // unblock a drain waiter
@@ -174,6 +175,7 @@ class ChatRepository {
   }
 
   Future<void> _onMessage(Message m) async {
+    if (_disposed) return; // a torn-down repo must not write (rebuild overlap)
     // W3 — fanout echo + others' + history-via-stream. Awaited + guarded so a
     // cache failure (invariant violation, closed DB) is OWNED via telemetry
     // rather than leaking as an unhandled async error from this stream handler.
@@ -185,6 +187,7 @@ class ChatRepository {
   }
 
   Future<void> _onError(TransportError e) async {
+    if (_disposed) return; // a torn-down repo must not write (rebuild overlap)
     if (e.refClientMsgId != null) {
       // Per-message: fail that row (cache guards serverUlid IS NULL). UI offers
       // W5 retry; no auto-retry.

@@ -136,6 +136,60 @@ void main() {
     expect(find.text('Offline — reconnecting…'), findsOneWidget);
   });
 
+  testWidgets('REST-terminal logout tears down the transport', (tester) async {
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: FakeRestApi(), transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+
+    // Simulate a REST refresh-token rejection (DefaultTokenProvider fires
+    // onUnauthenticated → authEvents sink). Terminal logout must be a FULL
+    // teardown: the socket is disconnected, not just the router redirected.
+    container.read(authEventsProvider).add(null);
+    await tester.pumpAndSettle();
+
+    expect(transport.disconnectCalls, greaterThanOrEqualTo(1)); // Carnot C1
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+  });
+
+  testWidgets('logout → different user → no cross-session messages', (tester) async {
+    final rest = FakeRestApi();
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // User A sends a message into the (in-memory) cache.
+    await tester.enterText(find.byType(TextField).first, 'secret-from-A');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    expect(find.text('secret-from-A'), findsOneWidget);
+
+    // Log out, then a DIFFERENT user logs in on the same app instance.
+    await tester.tap(find.byIcon(Icons.logout));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+
+    rest.user = const AppUser(
+        userId: 'u2', username: 'bob', displayName: 'Bob', aikoUsername: 'bob');
+    await signIn(tester);
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    expect(find.text('secret-from-A'), findsNothing); // cache cleared on logout (Carnot C3)
+  });
+
   testWidgets('cold start with stored session → restores to chat', (tester) async {
     final store = InMemoryTokenStore(
       const AuthTokens(accessToken: 'a', refreshToken: 'r'),
