@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout app (this repo)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: app
 
@@ -49,26 +49,26 @@ jobs:
           echo "GATEWAY_CHECKOUT_TOKEN present."
 
       - name: Checkout gateway (private)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: nickmeinhold/aiko_chat_gateway
           token: ${{ secrets.GATEWAY_CHECKOUT_TOKEN }}
           path: gateway
 
       - name: Checkout aiko_services (public)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: geekscape/aiko_services
           path: aiko_services
 
       - name: Checkout aiko_chat (public)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: geekscape/aiko_chat
           path: aiko_chat
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12' # aiko_services 0.6 caps at <3.13
 
