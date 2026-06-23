@@ -12,3 +12,16 @@ PRODUCT_BUNDLE_IDENTIFIER = cc.imagineering.aikoChatApp
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 cc.imagineering. All rights reserved.
+
+// Signing team (Enspyr Pty Ltd). Required for the data-protection keychain:
+// flutter_secure_storage on macOS needs a real AppIdentifierPrefix (from a signing
+// team) for the keychain-access-groups entitlement, else login fails with -34018
+// (errSecMissingEntitlement). Set here so all three Runner configs (Debug/Release/
+// Profile, which share this xcconfig) sign with the same team. See task #44.
+DEVELOPMENT_TEAM = SPL85G447K
+
+// Override the project-level ad-hoc identity ("-"): the keychain-access-groups
+// entitlement requires a real development certificate. Target-level setting wins
+// over the inherited project default, so the Runner target signs with the Enspyr
+// Apple Development cert (resolved automatically by CODE_SIGN_STYLE = Automatic).
+CODE_SIGN_IDENTITY = Apple Development
