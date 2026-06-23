@@ -111,31 +111,47 @@ class ChatRepository {
   /// re-sends on the next connect (invariant B-optimistic).
   Future<void> sendMessage(String channelId, String body,
       {String? replyToId}) async {
-    final tempId = _newTempId();
-    final optimistic = Message(
-      clientTempId: tempId,
-      id: null, // serverUlid NULL → in the outbox
-      channelId: channelId,
-      sender: _meSender,
-      body: body,
-      replyToId: replyToId,
-      createdAt: await _clampToBottom(channelId),
-      deliveryState: DeliveryState.sending,
-    );
-    await _cache.insertOptimistic(optimistic); // COMMITS before the wire send
-    _transport.sendMessage(OutgoingMessage(
-        clientTempId: tempId, channelId: channelId, body: body, replyToId: replyToId));
+    if (_disposed) return; // no writes to a torn-down session's (closing) cache
+    try {
+      final tempId = _newTempId();
+      final optimistic = Message(
+        clientTempId: tempId,
+        id: null, // serverUlid NULL → in the outbox
+        channelId: channelId,
+        sender: _meSender,
+        body: body,
+        replyToId: replyToId,
+        createdAt: await _clampToBottom(channelId),
+        deliveryState: DeliveryState.sending,
+      );
+      await _cache.insertOptimistic(optimistic); // COMMITS before the wire send
+      _transport.sendMessage(OutgoingMessage(
+          clientTempId: tempId, channelId: channelId, body: body, replyToId: replyToId));
+    } catch (e, st) {
+      // The entry guard proves entry-time state only; dispose can begin DURING
+      // the awaits above and close the cache. A teardown-race write is benign
+      // (session ending) — own it; a genuine error still propagates.
+      if (!_disposed) rethrow;
+      _telemetry.inboundWriteFailed(e, st);
+    }
   }
 
   /// W5 — manual retry of a failed row (preserves createdAt + localSeq;
   /// B-noteleport). Re-sends immediately if connected; otherwise the next drain
   /// picks it up from the outbox.
   Future<void> retry(String clientTempId) async {
-    await _cache.retry(clientTempId);
-    final row = (await _cache.outbox())
-        .where((m) => m.clientTempId == clientTempId)
-        .firstOrNull;
-    if (row != null) _transport.sendMessage(_toOutgoing(row));
+    if (_disposed) return; // no writes to a torn-down session's (closing) cache
+    try {
+      await _cache.retry(clientTempId);
+      final row = (await _cache.outbox())
+          .where((m) => m.clientTempId == clientTempId)
+          .firstOrNull;
+      if (row != null) _transport.sendMessage(_toOutgoing(row));
+    } catch (e, st) {
+      // Teardown race (cache closing) is benign; a genuine error propagates.
+      if (!_disposed) rethrow;
+      _telemetry.inboundWriteFailed(e, st);
+    }
   }
 
   /// `max(now, newestCreatedAt + 1ms)` for the channel, so a skewed client clock
@@ -160,8 +176,17 @@ class ChatRepository {
   // --- W2 / W3 / W4: stream handlers -----------------------------------------
 
   Future<void> _onAck(AckResult a) async {
-    final outcome = await _cache.reconcileAck(
-        a.clientMsgId, a.msgId, _parseServerTime(a.createdAt));
+    if (_disposed) return; // a torn-down repo must not write (rebuild overlap)
+    final AckOutcome outcome;
+    try {
+      outcome = await _cache.reconcileAck(
+          a.clientMsgId, a.msgId, _parseServerTime(a.createdAt));
+    } catch (e, st) {
+      // A write already past the guard can land as the cache closes during
+      // teardown — benign (the session is ending), so OWN it, don't leak it.
+      _telemetry.inboundWriteFailed(e, st);
+      return;
+    }
     _completeAckWaiter(a.clientMsgId); // unblock a drain waiter
     if (outcome == AckOutcome.orphaned) {
       // Unreachable in Phase 1 BY CONSTRUCTION (W1 persists before send; no
@@ -174,6 +199,7 @@ class ChatRepository {
   }
 
   Future<void> _onMessage(Message m) async {
+    if (_disposed) return; // a torn-down repo must not write (rebuild overlap)
     // W3 — fanout echo + others' + history-via-stream. Awaited + guarded so a
     // cache failure (invariant violation, closed DB) is OWNED via telemetry
     // rather than leaking as an unhandled async error from this stream handler.
@@ -185,10 +211,16 @@ class ChatRepository {
   }
 
   Future<void> _onError(TransportError e) async {
+    if (_disposed) return; // a torn-down repo must not write (rebuild overlap)
     if (e.refClientMsgId != null) {
       // Per-message: fail that row (cache guards serverUlid IS NULL). UI offers
-      // W5 retry; no auto-retry.
-      await _cache.markFailed(e.refClientMsgId);
+      // W5 retry; no auto-retry. Guarded: a write landing as the cache closes
+      // during teardown is benign (session ending) — own it, don't leak it.
+      try {
+        await _cache.markFailed(e.refClientMsgId);
+      } catch (err, st) {
+        _telemetry.inboundWriteFailed(err, st);
+      }
       return;
     }
     // Systemic. Terminal (auth) stops draining entirely and routes to
@@ -199,7 +231,11 @@ class ChatRepository {
       await _transport.disconnect();
       return;
     }
-    await _cache.markFailed(null); // surface pending rows; they stay `sending`.
+    try {
+      await _cache.markFailed(null); // surface pending rows; they stay `sending`.
+    } catch (err, st) {
+      _telemetry.inboundWriteFailed(err, st); // benign if cache closing (teardown)
+    }
   }
 
   // --- reconnect choreography: drain-first, timeout-bounded (B-order) ---------
