@@ -112,20 +112,28 @@ class ChatRepository {
   Future<void> sendMessage(String channelId, String body,
       {String? replyToId}) async {
     if (_disposed) return; // no writes to a torn-down session's (closing) cache
-    final tempId = _newTempId();
-    final optimistic = Message(
-      clientTempId: tempId,
-      id: null, // serverUlid NULL → in the outbox
-      channelId: channelId,
-      sender: _meSender,
-      body: body,
-      replyToId: replyToId,
-      createdAt: await _clampToBottom(channelId),
-      deliveryState: DeliveryState.sending,
-    );
-    await _cache.insertOptimistic(optimistic); // COMMITS before the wire send
-    _transport.sendMessage(OutgoingMessage(
-        clientTempId: tempId, channelId: channelId, body: body, replyToId: replyToId));
+    try {
+      final tempId = _newTempId();
+      final optimistic = Message(
+        clientTempId: tempId,
+        id: null, // serverUlid NULL → in the outbox
+        channelId: channelId,
+        sender: _meSender,
+        body: body,
+        replyToId: replyToId,
+        createdAt: await _clampToBottom(channelId),
+        deliveryState: DeliveryState.sending,
+      );
+      await _cache.insertOptimistic(optimistic); // COMMITS before the wire send
+      _transport.sendMessage(OutgoingMessage(
+          clientTempId: tempId, channelId: channelId, body: body, replyToId: replyToId));
+    } catch (e, st) {
+      // The entry guard proves entry-time state only; dispose can begin DURING
+      // the awaits above and close the cache. A teardown-race write is benign
+      // (session ending) — own it; a genuine error still propagates.
+      if (!_disposed) rethrow;
+      _telemetry.inboundWriteFailed(e, st);
+    }
   }
 
   /// W5 — manual retry of a failed row (preserves createdAt + localSeq;
@@ -133,11 +141,17 @@ class ChatRepository {
   /// picks it up from the outbox.
   Future<void> retry(String clientTempId) async {
     if (_disposed) return; // no writes to a torn-down session's (closing) cache
-    await _cache.retry(clientTempId);
-    final row = (await _cache.outbox())
-        .where((m) => m.clientTempId == clientTempId)
-        .firstOrNull;
-    if (row != null) _transport.sendMessage(_toOutgoing(row));
+    try {
+      await _cache.retry(clientTempId);
+      final row = (await _cache.outbox())
+          .where((m) => m.clientTempId == clientTempId)
+          .firstOrNull;
+      if (row != null) _transport.sendMessage(_toOutgoing(row));
+    } catch (e, st) {
+      // Teardown race (cache closing) is benign; a genuine error propagates.
+      if (!_disposed) rethrow;
+      _telemetry.inboundWriteFailed(e, st);
+    }
   }
 
   /// `max(now, newestCreatedAt + 1ms)` for the channel, so a skewed client clock
