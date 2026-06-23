@@ -75,7 +75,8 @@ void main() {
     final userId = (reg['user'] as Map)['user_id'] as String;
     expect(accessToken, isNotEmpty);
 
-    final channels = await gw.getJson('/v1/channels');
+    // /v1/channels requires auth (gateway I1) — pass the registration token.
+    final channels = await gw.getJson('/v1/channels', bearer: accessToken);
     final channelId = (channels['channels'] as List)
         .map((c) => c as Map)
         .firstWhere((c) => c['aiko_channel'] == 'general')['id'] as String;
@@ -344,8 +345,11 @@ class _Gateway {
     return false;
   }
 
-  Future<Map<String, dynamic>> getJson(String path) async {
+  Future<Map<String, dynamic>> getJson(String path, {String? bearer}) async {
     final req = await _http.getUrl(Uri.parse('http://127.0.0.1:$port$path'));
+    if (bearer != null) {
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearer');
+    }
     final resp = await req.close();
     final body = await resp.transform(utf8.decoder).join();
     if (resp.statusCode != 200) {
