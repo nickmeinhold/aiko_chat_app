@@ -275,6 +275,13 @@ class _Gateway {
       ],
       workingDirectory: gatewayDir,
       environment: {
+        // Declare a non-prod environment. The gateway defaults `environment` to
+        // "production", which FAIL-CLOSES the boot on the dev jwt_secret (and
+        // closes registration). This harness is a test, so it declares itself —
+        // exactly as the gateway's own tests/conftest.py does. Keeping the
+        // gateway checkout HEAD-following means a genuine contract break still
+        // turns this gate red; only the harness's own setup is fixed here.
+        'ENVIRONMENT': 'test',
         // Four slashes = absolute path → file-backed sqlite shared across the
         // app's many SessionLocal connections (`:memory:` is connection-private).
         'DB_URL': 'sqlite+aiosqlite:///${dbFile.path}',
