@@ -13,10 +13,11 @@ library;
 
 import 'dart:async';
 
-import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/auth/token_provider.dart';
+import '../features/auth/application/auth_controller.dart';
+import '../features/chat/data/cache/cache_database.dart';
 import '../features/chat/data/cache/drift_cache.dart';
 import '../features/chat/data/chat_rest_api.dart';
 import '../features/chat/data/gateway_rest_api.dart';
@@ -97,16 +98,26 @@ final transportProvider = Provider<ChatTransport>((ref) {
   return transport;
 });
 
-/// The local message cache. Phase 1 is `NativeDatabase.memory()` — history is
-/// lost on restart and the reconnect-resume watermark is moot until a
-/// file-backed cache lands (task #40, a named B-UI fast-follow tradeoff).
+/// The local message cache — a **per-user, file-backed** SQLite database, the
+/// durable home of message history AND the B4 reconnect watermark
+/// (`historyContiguousThrough`). File-backing is what makes the reconnect-resume
+/// machinery meaningful: an in-memory cache wiped on every launch has nothing for
+/// the forward-fill to resume *from*.
 ///
-/// `autoDispose`: the cache is SESSION-scoped (only the autoDispose chat layer
-/// watches it). Logging out unmounts the chat screen → the repo disposes (writes
-/// stop) and then this closes — so a different user logging in gets a fresh,
-/// empty DB. Session isolation by lifecycle, not by manual clear (Carnot C3).
+/// The file is keyed on the authenticated user id (see [openUserCache]), which
+/// preserves the session isolation the old in-memory design got from autoDispose:
+/// two users on one device open *different* files, so neither can read the
+/// other's history (Carnot C3). A null user id (no session) → ephemeral memory DB.
+///
+/// `autoDispose` + `.select` on the user id: the provider rebuilds only when the
+/// user actually changes (not on transient auth emissions). Logging out unmounts
+/// the chat screen → the repo disposes (writes stop) and then this closes the DB;
+/// a different user logging in builds a fresh executor over *their* file.
 final cacheProvider = Provider.autoDispose<DriftCache>((ref) {
-  final cache = DriftCache(NativeDatabase.memory());
+  final userId = ref.watch(
+    authControllerProvider.select((s) => s.value?.userId),
+  );
+  final cache = DriftCache(openUserCache(userId));
   ref.onDispose(cache.close);
   return cache;
 });

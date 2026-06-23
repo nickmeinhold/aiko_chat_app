@@ -9,8 +9,10 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/main.dart';
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,6 +39,11 @@ ProviderContainer makeContainer({
       remoteRefresh: (_) async => 'access2',
       onUnauthenticated: () => container.read(authEventsProvider).add(null),
     )),
+    // The real cacheProvider is now file-backed via path_provider, which has no
+    // platform channel under flutter_test. Widget tests get an in-memory cache —
+    // they exercise the UI wiring, not on-disk persistence (that's covered by
+    // cache_persistence_test.dart).
+    cacheProvider.overrideWith((ref) => DriftCache(NativeDatabase.memory())),
   ]);
   return container;
 }
