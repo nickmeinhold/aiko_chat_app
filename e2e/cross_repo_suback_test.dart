@@ -231,7 +231,10 @@ class _Gateway {
   final Process _proc;
   final int port;
   final File _dbFile;
-  final HttpClient _http = HttpClient();
+  // connectionTimeout bounds a hung connect (e.g. a dead/stolen-port server)
+  // so a probe can't block past the health deadline (cage-match RR: Carnot).
+  final HttpClient _http = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 5);
 
   _Gateway._(this._proc, this.port, this._dbFile);
 
@@ -285,13 +288,17 @@ class _Gateway {
     // must kill it (and remove the temp db), else setUpAll throws without `gw`
     // ever being assigned and tearDownAll can't clean up — a leak (cage-match:
     // Carnot MEDIUM).
+    // gw is declared outside the try so the catch can close the HttpClient it
+    // created — otherwise a failed retry leaks a client on the exact error path
+    // this cleanup exists to harden (cage-match RR: Carnot).
+    _Gateway? gw;
     try {
       // Tee the gateway log so a failure prints something actionable.
       final log = <String>[];
       proc.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen(log.add);
       proc.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen(log.add);
 
-      final gw = _Gateway._(proc, port, dbFile);
+      gw = _Gateway._(proc, port, dbFile);
       var procExited = false;
       unawaited(proc.exitCode.then((_) => procExited = true));
 
@@ -305,6 +312,7 @@ class _Gateway {
       }
       return gw;
     } catch (_) {
+      gw?._http.close(force: true); // close the client this attempt created
       proc.kill(ProcessSignal.sigkill);
       if (await dbFile.exists()) {
         try {
