@@ -104,26 +104,33 @@ class AuthController extends AsyncNotifier<AppUser?> {
   ///   - drop the in-memory cache — else a different user logging in on the same
   ///     app instance sees the previous user's messages (Carnot C3);
   ///   - clear tokens; publish logged-out (router → login).
-  /// The cache is wiped via [DriftCache.clearAll] (a row delete) rather than
-  /// `ref.invalidate(cacheProvider)` — invalidating the provider mid-teardown
-  /// triggers a dependent rebuild during the widget build the auth-state change
-  /// already kicked off ("setState during build"). Clearing rows is a normal
-  /// data update the StreamProvider absorbs cleanly.
-  Future<void> _endSession() async {
+  /// Tear down the realtime session. The per-session CACHE and repo are NOT
+  /// touched here: they are `autoDispose`-scoped to the chat screen, so logging
+  /// out unmounts the screen and the autoDispose chain disposes the repo (writes
+  /// stop, `_disposed` flips) and THEN closes the cache — leaf-to-root. A fresh
+  /// login builds a fresh empty cache, so session isolation falls out of the
+  /// lifecycle: no manual clear, and no writer-vs-clear race (Carnot R2-1/C3).
+  /// Only the app-scoped transport (kept alive by [connectionStateProvider])
+  /// needs an explicit disconnect.
+  Future<void> _teardownResources() async {
     await ref.read(transportProvider).disconnect();
-    await ref.read(cacheProvider).clearAll(); // session isolation
     await _tokens.clearTokens();
-    state = const AsyncValue.data(null);
   }
 
   /// Explicit, user-initiated logout.
-  Future<void> logout() => _endSession();
+  Future<void> logout() async {
+    state = const AsyncValue.data(null);
+    await _teardownResources();
+  }
 
   /// The idempotent terminal-logout both dead-session signals converge on
-  /// (transport `unauthenticated` + REST `onUnauthenticated`). No-op if already
-  /// logged out, so duplicate terminal signals tear down exactly once.
+  /// (transport `unauthenticated` + REST `onUnauthenticated`). State is flipped
+  /// SYNCHRONOUSLY before the async teardown, so a second concurrent terminal
+  /// signal in the same microtask drain sees null and short-circuits — the
+  /// teardown runs exactly once (Carnot R2-2).
   void _becomeUnauthenticated() {
     if (state.value == null && !state.isLoading) return; // already logged out
-    unawaited(_endSession());
+    state = const AsyncValue.data(null);
+    unawaited(_teardownResources());
   }
 }

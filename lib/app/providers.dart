@@ -100,7 +100,12 @@ final transportProvider = Provider<ChatTransport>((ref) {
 /// The local message cache. Phase 1 is `NativeDatabase.memory()` — history is
 /// lost on restart and the reconnect-resume watermark is moot until a
 /// file-backed cache lands (task #40, a named B-UI fast-follow tradeoff).
-final cacheProvider = Provider<DriftCache>((ref) {
+///
+/// `autoDispose`: the cache is SESSION-scoped (only the autoDispose chat layer
+/// watches it). Logging out unmounts the chat screen → the repo disposes (writes
+/// stop) and then this closes — so a different user logging in gets a fresh,
+/// empty DB. Session isolation by lifecycle, not by manual clear (Carnot C3).
+final cacheProvider = Provider.autoDispose<DriftCache>((ref) {
   final cache = DriftCache(NativeDatabase.memory());
   ref.onDispose(cache.close);
   return cache;
