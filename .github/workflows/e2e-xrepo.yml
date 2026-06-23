@@ -36,6 +36,18 @@ jobs:
         with:
           path: app
 
+      # Fail with the explicit merge-gate message rather than a generic
+      # checkout/auth error if the secret is absent (cage-match: Carnot LOW).
+      - name: Verify gateway-checkout secret is present
+        env:
+          TOKEN: ${{ secrets.GATEWAY_CHECKOUT_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Missing repo secret GATEWAY_CHECKOUT_TOKEN (read access to the private nickmeinhold/aiko_chat_gateway). Add it at Settings -> Secrets and variables -> Actions. See task #34 / PR #9."
+            exit 1
+          fi
+          echo "GATEWAY_CHECKOUT_TOKEN present."
+
       - name: Checkout gateway (private)
         uses: actions/checkout@v4
         with:

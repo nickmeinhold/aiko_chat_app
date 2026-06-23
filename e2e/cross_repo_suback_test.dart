@@ -135,13 +135,21 @@ void main() {
     // 4. The handshake survives a reconnect: drop the socket, reconnect, and a
     // fresh subscribe must suback with the fence now advanced to the persisted
     // message (proving both sides agree on the boundary across a reconnect).
+    //
+    // mark() BEFORE each transition so the waits prove a NEW disconnected/
+    // connected actually occurred — not a stale earlier event of the same value
+    // (the connected from the FIRST connect is already in the buffer).
+    final beforeDisconnect = conn.mark();
     await transport.disconnect();
     await conn.firstWhere((s) => s == ConnectionState.disconnected,
-        reason: 'transport never reported disconnected');
+        from: beforeDisconnect,
+        reason: 'no NEW disconnected after disconnect()');
 
+    final beforeReconnect = conn.mark();
     await transport.connect();
     await conn.firstWhere((s) => s == ConnectionState.connected,
-        reason: 'transport never reconnected');
+        from: beforeReconnect,
+        reason: 'no NEW connected after reconnect (stale-state false-green guard)');
 
     final fences2 = await transport.subscribe([channelId]);
     expect(fences2, containsPair(channelId, ack.msgId),
@@ -165,8 +173,13 @@ class _StaticTokenProvider implements TokenProvider {
   Future<String?> refreshAccessToken() async => _token;
 }
 
-/// Buffers a broadcast stream so a `firstWhere` can match events that may have
-/// already arrived, with a bounded wait for ones that haven't.
+/// Buffers a broadcast stream so a wait can match events that may have already
+/// arrived. Supports a [mark] cursor so a wait can be restricted to events that
+/// arrive AFTER a chosen point — essential for proving a *transition* (e.g. a
+/// reconnect's `connected`) rather than matching a STALE earlier event of the
+/// same value. Without this, `firstWhere(s == connected)` after a reconnect
+/// would happily match the connected from the FIRST connect and prove nothing
+/// (cage-match: Carnot's HIGH false-green catch).
 class _Inbox<T> {
   final List<T> _seen = [];
   final List<void Function()> _waiters = [];
@@ -180,22 +193,31 @@ class _Inbox<T> {
     });
   }
 
+  /// A cursor at the current end of the buffer. A subsequent
+  /// `firstWhere(..., from: mark())` ignores everything already seen, so it can
+  /// only be satisfied by an event that arrives AFTER this point.
+  int mark() => _seen.length;
+
   Future<T> firstWhere(bool Function(T) test,
-      {String? reason, Duration timeout = const Duration(seconds: 15)}) async {
+      {int from = 0,
+      String? reason,
+      Duration timeout = const Duration(seconds: 15)}) {
     final completer = Completer<T>();
-    void check() {
+    late void Function() check;
+    check = () {
       if (completer.isCompleted) return;
-      for (final e in _seen) {
-        if (test(e)) {
-          completer.complete(e);
+      for (var i = from; i < _seen.length; i++) {
+        if (test(_seen[i])) {
+          completer.complete(_seen[i]);
+          _waiters.remove(check); // matched — unregister.
           return;
         }
       }
-    }
-
+    };
     _waiters.add(check);
     check();
     return completer.future.timeout(timeout, onTimeout: () {
+      _waiters.remove(check); // timed out — don't leave a dead waiter installed.
       throw TimeoutException(
           'Inbox.firstWhere timed out${reason == null ? '' : ': $reason'}. '
           'Seen: $_seen');
@@ -216,7 +238,24 @@ class _Gateway {
   static Future<_Gateway> boot() async {
     final gatewayDir = _resolveGatewayDir();
     final python = _resolvePython(gatewayDir);
+    // The free-port probe (bind:0 → close → hand the port to uvicorn) has an
+    // unavoidable TOCTOU window: another process could grab the port between the
+    // close and uvicorn's bind. Retry the whole boot a few times so a stolen
+    // port is a brief flake, not a hard red (cage-match: Kelvin + Carnot). A
+    // stolen port makes uvicorn exit immediately, which _awaitHealth detects and
+    // fails fast on — so the retries don't burn the test's time budget.
+    Object? lastError;
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await _bootOnce(gatewayDir, python);
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    throw StateError('Gateway failed to boot after 3 attempts.\n$lastError');
+  }
 
+  static Future<_Gateway> _bootOnce(String gatewayDir, String python) async {
     // Free port: bind to 0, read the assigned port, release it for uvicorn.
     final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = probe.port;
@@ -242,26 +281,44 @@ class _Gateway {
       },
     );
 
-    // Tee the gateway log so a failure prints something actionable.
-    final log = <String>[];
-    proc.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen(log.add);
-    proc.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen(log.add);
+    // A uvicorn process now exists. ANY failure before we return a live gateway
+    // must kill it (and remove the temp db), else setUpAll throws without `gw`
+    // ever being assigned and tearDownAll can't clean up — a leak (cage-match:
+    // Carnot MEDIUM).
+    try {
+      // Tee the gateway log so a failure prints something actionable.
+      final log = <String>[];
+      proc.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen(log.add);
+      proc.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen(log.add);
 
-    final gw = _Gateway._(proc, port, dbFile);
-    final ok = await gw._awaitHealth(const Duration(seconds: 30));
-    if (!ok) {
+      final gw = _Gateway._(proc, port, dbFile);
+      var procExited = false;
+      unawaited(proc.exitCode.then((_) => procExited = true));
+
+      final ok = await gw._awaitHealth(const Duration(seconds: 20), () => procExited);
+      if (!ok) {
+        throw StateError(
+            'Gateway did not become healthy on :$port within 20s '
+            '(process ${procExited ? "exited early — likely a stolen port" : "alive but no /health 200"}).\n'
+            'python=$python\ngatewayDir=$gatewayDir\n'
+            '--- gateway log ---\n${log.join('\n')}');
+      }
+      return gw;
+    } catch (_) {
       proc.kill(ProcessSignal.sigkill);
-      throw StateError(
-          'Gateway did not become healthy on :$port within 30s.\n'
-          'python=$python\ngatewayDir=$gatewayDir\n'
-          '--- gateway log ---\n${log.join('\n')}');
+      if (await dbFile.exists()) {
+        try {
+          await dbFile.delete();
+        } catch (_) {/* best-effort temp cleanup */}
+      }
+      rethrow;
     }
-    return gw;
   }
 
-  Future<bool> _awaitHealth(Duration budget) async {
+  Future<bool> _awaitHealth(Duration budget, bool Function() procExited) async {
     final deadline = DateTime.now().add(budget);
     while (DateTime.now().isBefore(deadline)) {
+      if (procExited()) return false; // died (e.g. stolen port) — fail fast
       try {
         await getJson('/health');
         return true;
