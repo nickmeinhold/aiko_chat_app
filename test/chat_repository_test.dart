@@ -848,6 +848,54 @@ void main() {
     });
   });
 
+  group('inbound serialization queue (PR#7 finding 2)', () {
+    test('a slow inbound message BLOCKS a later ack — mutations run in arrival '
+        'order, never interleaved', () async {
+      // Isolated harness with a cache whose FIRST upsertInbound is gated, so we
+      // can freeze message-A mid-write and prove the later ack waits behind it.
+      final gate = Completer<void>();
+      final order = <String>[];
+      final gatedCache = _GatedCache(NativeDatabase.memory(),
+          firstUpsertGate: gate, log: order);
+      final t = FakeChatTransport();
+      final r = ChatRepository(
+        cache: gatedCache,
+        transport: t,
+        rest: FakeChatRestApi(),
+        me: _me,
+        subscribedChannelIds: const [_chan],
+        ackTimeout: const Duration(milliseconds: 80),
+        newTempId: () => 'tmp',
+      );
+      r.start();
+
+      // Seed an optimistic row so the ack has something to reconcile.
+      await r.sendMessage(_chan, 'mine');
+
+      // Emit a message (its upsert will block on the gate) THEN an ack. Without
+      // the FIFO, the ack's reconcile could interleave ahead of the stuck
+      // upsert. With it, the ack cannot start until the upsert completes.
+      t.emitMessage(_server('01B', 'theirs'));
+      t.emitAck('tmp', '01A');
+      await pump();
+
+      // The message upsert started and is STILL blocked; the ack has NOT run.
+      expect(order, ['upsert:01B-start'],
+          reason: 'ack must wait behind the in-flight message (FIFO)');
+
+      gate.complete(); // release message-A
+      await pump();
+
+      // Now both ran, in arrival order: message fully applied, THEN ack.
+      expect(order, ['upsert:01B-start', 'upsert:01B-done', 'ack:tmp'],
+          reason: 'mutations applied strictly in arrival order');
+
+      await r.dispose();
+      await t.dispose();
+      await gatedCache.close();
+    });
+  });
+
   group('ULID canonical-case discipline (PR#7 finding 4)', () {
     test('isCanonicalUlidCase — uppercase Crockford passes, any lowercase fails',
         () {
@@ -872,4 +920,34 @@ void main() {
       );
     });
   });
+}
+
+/// A [DriftCache] that gates its FIRST `upsertInbound` on a completer and logs
+/// the start/finish of each inbound mutation — so a test can freeze one write
+/// mid-flight and observe whether a later mutation interleaves (it must not,
+/// once they share the repository's FIFO queue).
+class _GatedCache extends DriftCache {
+  _GatedCache(super.e, {required this.firstUpsertGate, required this.log});
+
+  final Completer<void> firstUpsertGate;
+  final List<String> log;
+  bool _gated = false;
+
+  @override
+  Future<void> upsertInbound(Message serverMsg) async {
+    log.add('upsert:${serverMsg.id}-start');
+    if (!_gated) {
+      _gated = true;
+      await firstUpsertGate.future; // freeze the first message write
+    }
+    await super.upsertInbound(serverMsg);
+    log.add('upsert:${serverMsg.id}-done');
+  }
+
+  @override
+  Future<AckOutcome> reconcileAck(
+      String clientTempId, String serverUlid, DateTime serverCreatedAt) {
+    log.add('ack:$clientTempId');
+    return super.reconcileAck(clientTempId, serverUlid, serverCreatedAt);
+  }
 }
