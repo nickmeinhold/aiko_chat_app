@@ -848,6 +848,118 @@ void main() {
     });
   });
 
+  group('inbound serialization queue (PR#7 finding 2)', () {
+    test('a slow inbound message BLOCKS a later ack — mutations run in arrival '
+        'order, never interleaved', () async {
+      // Isolated harness with a cache whose FIRST upsertInbound is gated, so we
+      // can freeze message-A mid-write and prove the later ack waits behind it.
+      final gate = Completer<void>();
+      final order = <String>[];
+      final gatedCache = _GatedCache(NativeDatabase.memory(),
+          firstUpsertGate: gate, log: order);
+      final t = FakeChatTransport();
+      final r = ChatRepository(
+        cache: gatedCache,
+        transport: t,
+        rest: FakeChatRestApi(),
+        me: _me,
+        subscribedChannelIds: const [_chan],
+        ackTimeout: const Duration(milliseconds: 80),
+        newTempId: () => 'tmp',
+      );
+      r.start();
+
+      // Seed an optimistic row so the ack has something to reconcile.
+      await r.sendMessage(_chan, 'mine');
+
+      // Emit a message (its upsert will block on the gate) THEN an ack. Without
+      // the FIFO, the ack's reconcile could interleave ahead of the stuck
+      // upsert. With it, the ack cannot start until the upsert completes.
+      t.emitMessage(_server('01B', 'theirs'));
+      t.emitAck('tmp', '01A');
+      await pump();
+
+      // The message upsert started and is STILL blocked; the ack has NOT run.
+      expect(order, ['upsert:01B-start'],
+          reason: 'ack must wait behind the in-flight message (FIFO)');
+
+      gate.complete(); // release message-A
+      await pump();
+
+      // Now both ran, in arrival order: message fully applied, THEN ack.
+      expect(order, ['upsert:01B-start', 'upsert:01B-done', 'ack:tmp'],
+          reason: 'mutations applied strictly in arrival order');
+
+      await r.dispose();
+      await t.dispose();
+      await gatedCache.close();
+    });
+
+    test('dispose() TERMINATES even with a unit wedged mid-flight (bounded '
+        'drain — cage-match Carnot F1)', () async {
+      // A unit's cache write never completes (gate never released). dispose()
+      // must still return (bounded by _disposeDrainTimeout) rather than hang to
+      // the heat death of the universe. We use a tiny timeout via a short real
+      // wait: the test only asserts dispose COMPLETES, not the wall-clock bound.
+      final neverReleased = Completer<void>(); // intentionally never completed
+      final order = <String>[];
+      final gatedCache = _GatedCache(NativeDatabase.memory(),
+          firstUpsertGate: neverReleased, log: order);
+      final t = FakeChatTransport();
+      final r = ChatRepository(
+        cache: gatedCache,
+        transport: t,
+        rest: FakeChatRestApi(),
+        me: _me,
+        subscribedChannelIds: const [_chan],
+        disposeDrainTimeout: const Duration(milliseconds: 50), // fast fail-safe
+        newTempId: () => 'tmp',
+      );
+      r.start();
+      t.emitMessage(_server('01B', 'wedged')); // upsert blocks forever
+      await pump();
+      expect(order, ['upsert:01B-start'], reason: 'the unit is wedged mid-write');
+
+      // dispose() must complete despite the wedged unit, bounded by the
+      // injected fail-safe (50ms here). `completes` would time the whole test
+      // out if dispose hung.
+      await expectLater(r.dispose().timeout(const Duration(seconds: 2)),
+          completes);
+
+      await t.dispose();
+      await gatedCache.close();
+    });
+
+    test('ack-before-message also preserved in arrival order', () async {
+      // The mirror of the first test: a gated ANYTHING isn't needed — without a
+      // gate the two units still run in enqueue order. Emit ack THEN message and
+      // assert the recorded order matches arrival.
+      final order = <String>[];
+      final gatedCache = _GatedCache(NativeDatabase.memory(),
+          firstUpsertGate: Completer<void>()..complete(), log: order);
+      final t = FakeChatTransport();
+      final r = ChatRepository(
+        cache: gatedCache,
+        transport: t,
+        rest: FakeChatRestApi(),
+        me: _me,
+        subscribedChannelIds: const [_chan],
+        newTempId: () => 'tmp',
+      );
+      r.start();
+      await r.sendMessage(_chan, 'mine'); // seed optimistic row for the ack
+      t.emitAck('tmp', '01A'); // ack first
+      t.emitMessage(_server('01B', 'theirs')); // then a message
+      await pump();
+      expect(order, ['ack:tmp', 'upsert:01B-start', 'upsert:01B-done'],
+          reason: 'ack enqueued first → runs first, then the message');
+
+      await r.dispose();
+      await t.dispose();
+      await gatedCache.close();
+    });
+  });
+
   group('ULID canonical-case discipline (PR#7 finding 4)', () {
     test('isCanonicalUlidCase — uppercase Crockford passes, any lowercase fails',
         () {
@@ -872,4 +984,34 @@ void main() {
       );
     });
   });
+}
+
+/// A [DriftCache] that gates its FIRST `upsertInbound` on a completer and logs
+/// the start/finish of each inbound mutation — so a test can freeze one write
+/// mid-flight and observe whether a later mutation interleaves (it must not,
+/// once they share the repository's FIFO queue).
+class _GatedCache extends DriftCache {
+  _GatedCache(super.e, {required this.firstUpsertGate, required this.log});
+
+  final Completer<void> firstUpsertGate;
+  final List<String> log;
+  bool _gated = false;
+
+  @override
+  Future<void> upsertInbound(Message serverMsg) async {
+    log.add('upsert:${serverMsg.id}-start');
+    if (!_gated) {
+      _gated = true;
+      await firstUpsertGate.future; // freeze the first message write
+    }
+    await super.upsertInbound(serverMsg);
+    log.add('upsert:${serverMsg.id}-done');
+  }
+
+  @override
+  Future<AckOutcome> reconcileAck(
+      String clientTempId, String serverUlid, DateTime serverCreatedAt) {
+    log.add('ack:$clientTempId');
+    return super.reconcileAck(clientTempId, serverUlid, serverCreatedAt);
+  }
 }

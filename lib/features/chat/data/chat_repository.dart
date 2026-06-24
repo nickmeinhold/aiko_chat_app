@@ -46,6 +46,7 @@ class ChatRepository {
   final List<String> _subscribedChannelIds;
   final ChatTelemetry _telemetry;
   final Duration _ackTimeout;
+  final Duration _disposeDrainTimeout;
   final String Function() _newTempId;
 
   ChatRepository({
@@ -56,6 +57,7 @@ class ChatRepository {
     required List<String> subscribedChannelIds,
     ChatTelemetry telemetry = const _NoopTelemetry(),
     Duration ackTimeout = const Duration(seconds: 3),
+    Duration disposeDrainTimeout = const Duration(seconds: 5),
     required String Function() newTempId,
   })  : _cache = cache,
         _transport = transport,
@@ -64,6 +66,7 @@ class ChatRepository {
         _subscribedChannelIds = subscribedChannelIds,
         _telemetry = telemetry,
         _ackTimeout = ackTimeout,
+        _disposeDrainTimeout = disposeDrainTimeout,
         _newTempId = newTempId;
 
   final List<StreamSubscription<dynamic>> _subs = [];
@@ -89,10 +92,60 @@ class ChatRepository {
       throw StateError('ChatRepository.start() called twice — streams wire ONCE (B-live)');
     }
     _started = true;
-    _subs.add(_transport.acks.listen(_onAck)); // W2
-    _subs.add(_transport.messages.listen(_onMessage)); // W3
-    _subs.add(_transport.errors.listen(_onError)); // W4
+    // INBOUND SERIALIZATION (PR#7 finding 2). The three inbound mutation streams
+    // (ack/message/error) are NOT serialized against each other by Dart: while
+    // one handler is suspended at an `await`, another can begin and interleave
+    // its cache write. The cache is atomic PER operation, but ORDERING ACROSS
+    // operations was left to scheduler chance (an ack and the message it acks
+    // could reconcile out of order). Funnel all three through ONE repository-
+    // owned FIFO queue so single-writer ordering is STRUCTURAL, not incidental.
+    // connectionState stays direct: it is the reconnect COORDINATOR (epoch-
+    // guarded; its own writes go through the cache via drain/history), not a
+    // simple inbound mutation, and it must be able to bump the epoch to cancel
+    // in-flight work without waiting behind the queue.
+    _subs.add(_transport.acks.listen((a) => _enqueueInbound(() => _onAck(a)))); // W2
+    _subs.add(_transport.messages
+        .listen((m) => _enqueueInbound(() => _onMessage(m)))); // W3
+    _subs.add(_transport.errors
+        .listen((e) => _enqueueInbound(() => _onError(e)))); // W4
     _subs.add(_transport.connectionState.listen(_onConnState)); // reconnect
+  }
+
+  // --- inbound mutation serialization queue (PR#7 finding 2) -----------------
+
+  /// The tail of the inbound FIFO. Each enqueued unit chains onto the previous
+  /// one's completion, so units run with no interleaving — the single-writer
+  /// discipline made structural. "Arrival order" here means LISTENER-CALLBACK
+  /// order: the order the three transport streams (acks/messages/errors) deliver
+  /// events to this repository, NOT a server causal order across those
+  /// independent streams. Within that, the queue guarantees each unit runs to
+  /// completion before the next starts.
+  Future<void> _inboundTail = Future<void>.value();
+
+  void _enqueueInbound(Future<void> Function() unit) {
+    _inboundTail = _inboundTail.then((_) {
+      if (_disposed) return null; // drop queued work for a torn-down session
+      return unit();
+    }).catchError((Object e, StackTrace st) {
+      // The FIFO chain must outlive any single unit's failure, so nothing thrown
+      // here may propagate down the `then` chain (that would poison every later
+      // unit). Each escapee is instead OBSERVED, not swallowed (cage-match
+      // Carnot F3):
+      //   - AssertionError — a debug tripwire (e.g. the orphan-ack assert).
+      //     Re-surfaced as an uncaught zone error so it crashes LOUDLY in debug
+      //     (stripped in release), proving the impossible case fired.
+      //   - Any other escape is unexpected (handlers already own their runtime
+      //     errors via internal try/catch). Route it to telemetry so it is
+      //     visible. TRADEOFF: it is no longer observable via `await
+      //     _inboundTail` in dispose() (the chain stays green by design) — the
+      //     telemetry seam is the single observability point for an escaped
+      //     inbound error, in dispose() and everywhere else alike.
+      if (e is AssertionError) {
+        Zone.current.handleUncaughtError(e, st);
+      } else {
+        _telemetry.inboundWriteFailed(e, st);
+      }
+    });
   }
 
   Future<void> dispose() async {
@@ -103,6 +156,23 @@ class ChatRepository {
       await s.cancel();
     }
     _subs.clear();
+    // Drain the inbound FIFO so a unit that was mid-flight when dispose() began
+    // finishes (its writes are guarded benign by _disposed) before we return —
+    // no inbound mutation outlives dispose(). Queued-but-unstarted units are
+    // dropped by the _disposed check in _enqueueInbound.
+    //
+    // BOUNDED (cage-match Carnot F1): the in-flight unit awaits cache/transport
+    // work that *should* complete promptly, but dispose() must ALWAYS terminate
+    // — a wedged unit must not hang teardown to the heat death of the universe.
+    // The timeout is a fail-safe, not the expected path; if it ever fires it
+    // means an inbound mutation is stuck, which is itself worth observing.
+    // Upper bound (_disposeDrainTimeout, default 5s, injectable for tests): a
+    // generous-but-finite fail-safe so teardown can never hang on a wedged unit.
+    try {
+      await _inboundTail.timeout(_disposeDrainTimeout);
+    } on TimeoutException catch (e, st) {
+      _telemetry.inboundWriteFailed(e, st);
+    }
   }
 
   // --- W1: optimistic send ---------------------------------------------------
