@@ -97,7 +97,9 @@ class GatewayTransport implements ChatTransport {
       // a state/API mismatch (cage-match: Carnot). The reconcile engine
       // subscribes within a live epoch, so this is an error, not a silent hang.
       completer.completeError(const TransportError(
-          code: 'not_connected', detail: 'subscribe before connect'));
+          code: 'not_connected',
+          parsedCode: TransportErrorCode.other,
+          detail: 'subscribe before connect'));
       return completer.future;
     }
     _subscribed.addAll(channelIds);
@@ -219,7 +221,10 @@ class GatewayTransport implements ChatTransport {
         _resolveSubAck(f.channelFences);
       case ErrorFrame f:
         _errors.add(TransportError(
-            code: f.code, detail: f.detail, refClientMsgId: f.refClientMsgId));
+            code: f.code,
+            parsedCode: f.parsedCode,
+            detail: f.detail,
+            refClientMsgId: f.refClientMsgId));
       case UnknownFrame f:
         _log?.call('dropped unknown frame: ${f.reason}');
     }
@@ -278,7 +283,9 @@ class GatewayTransport implements ChatTransport {
       final p = _pendingSubacks.removeFirst();
       if (!p.completer.isCompleted) {
         p.completer.completeError(const TransportError(
-            code: 'disconnected', detail: 'socket dropped before suback'));
+            code: 'disconnected',
+            parsedCode: TransportErrorCode.other,
+            detail: 'socket dropped before suback'));
       }
     }
   }

@@ -1,4 +1,7 @@
 import '../../domain/message.dart';
+import 'envelopes.dart';
+
+export 'envelopes.dart' show TransportErrorCode;
 
 /// Realtime connection lifecycle. `unauthenticated` is terminal until the user
 /// re-logs-in (the router watches it → redirect to login); it is distinct from
@@ -15,12 +18,24 @@ class AckResult {
 }
 
 /// Server `error` decoded. [refClientMsgId] ties it to a failed send when known.
+///
+/// [parsedCode] is the closed-set classification mapped from the raw wire
+/// [code] at the envelope parse boundary — the repository switches on it (never
+/// on the raw string) so a typo can't silently downgrade a terminal auth error.
 class TransportError {
+  /// The raw wire `code` string, preserved verbatim for logging/telemetry.
   final String code;
+
+  /// The raw [code] mapped to the closed set ([TransportErrorCode.unknown] for
+  /// anything unrecognised).
+  final TransportErrorCode parsedCode;
   final String detail;
   final String? refClientMsgId;
   const TransportError(
-      {required this.code, required this.detail, this.refClientMsgId});
+      {required this.code,
+      required this.parsedCode,
+      required this.detail,
+      this.refClientMsgId});
 }
 
 /// The realtime seam (plan §B1). Riverpod + the repository depend on THIS, never

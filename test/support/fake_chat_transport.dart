@@ -78,6 +78,19 @@ class FakeChatTransport implements ChatTransport {
       .add(AckResult(clientMsgId: clientMsgId, msgId: msgId, createdAt: createdAt));
   void emitMessage(Message m) => _messages.add(m);
   void emitError(TransportError e) => _errors.add(e);
+
+  /// Emit an error from a RAW wire `code`, running it through the production
+  /// [TransportErrorCode.fromWire] mapping (exactly as `gateway_transport` does)
+  /// so tests exercise the real raw→enum classification — including the
+  /// unknown-code path — rather than hand-supplying the parsed enum.
+  void emitErrorCode(String code,
+          {String detail = '', String? refClientMsgId}) =>
+      _errors.add(TransportError(
+        code: code,
+        parsedCode: TransportErrorCode.fromWire(code),
+        detail: detail,
+        refClientMsgId: refClientMsgId,
+      ));
   void emitConn(ConnectionState s) => _conn.add(s);
 
   Future<void> dispose() async {
