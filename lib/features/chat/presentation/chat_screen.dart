@@ -75,14 +75,59 @@ class ConnectionBanner extends ConsumerWidget {
 
 /// The reactive message list for [channelId]. Rows are ascending (oldest first);
 /// the list sits at the bottom (newest) since chat reads bottom-up.
-class MessageList extends ConsumerWidget {
+///
+/// Auto-scrolls to the newest message when new data arrives — but only when the
+/// user is already pinned near the bottom. If they've scrolled UP to read
+/// history, we leave them there rather than yanking them down on every message.
+class MessageList extends ConsumerStatefulWidget {
   const MessageList({super.key, required this.channelId});
 
   final String channelId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final messagesAsync = ref.watch(messagesProvider(channelId));
+  ConsumerState<MessageList> createState() => _MessageListState();
+}
+
+class _MessageListState extends ConsumerState<MessageList> {
+  final _scrollController = ScrollController();
+
+  /// How close (in logical pixels) to the bottom counts as "pinned to newest".
+  /// A small slack absorbs the partial last row / fractional offsets.
+  static const _bottomThreshold = 80.0;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// Whether the viewport is currently at (or near) the bottom — i.e. the user
+  /// is reading the live tail rather than scrolled up into history. Returns true
+  /// before the first layout (no clients yet) so the initial render lands at the
+  /// newest message.
+  bool get _isNearBottom {
+    if (!_scrollController.hasClients) return true;
+    final position = _scrollController.position;
+    return position.maxScrollExtent - position.pixels <= _bottomThreshold;
+  }
+
+  void _scrollToBottom({required bool animate}) {
+    if (!_scrollController.hasClients) return;
+    final target = _scrollController.position.maxScrollExtent;
+    if (animate) {
+      _scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    } else {
+      _scrollController.jumpTo(target);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final messagesAsync = ref.watch(messagesProvider(widget.channelId));
     final myUserId = ref.watch(currentUserProvider)?.userId;
 
     return messagesAsync.when(
@@ -92,7 +137,21 @@ class MessageList extends ConsumerWidget {
         if (messages.isEmpty) {
           return const Center(child: Text('No messages yet. Say hello!'));
         }
+        // Decide BEFORE the new frame lays out: were we pinned to the tail? If
+        // so, follow the new message down once layout (and thus the new
+        // maxScrollExtent) is in place. Animate on subsequent updates; jump on
+        // the first paint so we open at the newest message without a visible
+        // scroll.
+        final wasNearBottom = _isNearBottom;
+        final hadClients = _scrollController.hasClients;
+        if (wasNearBottom) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _scrollToBottom(animate: hadClients);
+          });
+        }
         return ListView.builder(
+          controller: _scrollController,
           padding: const EdgeInsets.all(8),
           itemCount: messages.length,
           itemBuilder: (_, i) {
