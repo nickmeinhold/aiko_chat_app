@@ -197,6 +197,77 @@ void main() {
     expect(find.text('secret-from-A'), findsNothing); // cache cleared on logout (Carnot C3)
   });
 
+  testWidgets('new messages auto-scroll the list to the newest (#42)',
+      (tester) async {
+    final rest = FakeRestApi();
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // Send enough messages through the real composer path to overflow the
+    // (600px) test viewport, so the list actually has somewhere to scroll.
+    for (var i = 0; i < 20; i++) {
+      await tester.enterText(find.byType(TextField).first, 'msg-$i');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pumpAndSettle();
+    }
+
+    // The list must be sitting at the bottom (newest), not pinned at the top.
+    final listFinder = find.descendant(
+        of: find.byType(ListView), matching: find.byType(Scrollable));
+    final position = tester.state<ScrollableState>(listFinder).position;
+    expect(position.maxScrollExtent, greaterThan(0),
+        reason: 'content should overflow the viewport');
+    expect(position.pixels, closeTo(position.maxScrollExtent, 1.0),
+        reason: 'should be auto-scrolled to the newest message');
+
+    // The newest bubble is rendered (and thus reachable without manual scroll).
+    expect(find.text('msg-19'), findsOneWidget);
+  });
+
+  testWidgets('scrolled-up reader is NOT yanked to the bottom on new data (#42)',
+      (tester) async {
+    final rest = FakeRestApi();
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    for (var i = 0; i < 20; i++) {
+      await tester.enterText(find.byType(TextField).first, 'old-$i');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pumpAndSettle();
+    }
+
+    // Scroll UP into history (away from the tail).
+    final listFinder = find.descendant(
+        of: find.byType(ListView), matching: find.byType(Scrollable));
+    final position = tester.state<ScrollableState>(listFinder).position;
+    position.jumpTo(0);
+    await tester.pumpAndSettle();
+    expect(position.pixels, 0);
+
+    // A new message arrives while the user is reading history.
+    await tester.enterText(find.byType(TextField).first, 'fresh');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pumpAndSettle();
+
+    // They stay where they were — no yank to the bottom.
+    expect(position.pixels, 0,
+        reason: 'a reader scrolled up should keep their position');
+  });
+
   testWidgets('cold start with stored session → restores to chat', (tester) async {
     final store = InMemoryTokenStore(
       const AuthTokens(accessToken: 'a', refreshToken: 'r'),
