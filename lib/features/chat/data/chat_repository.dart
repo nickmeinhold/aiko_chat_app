@@ -13,6 +13,7 @@ import 'dart:async';
 
 import '../../auth/domain/auth_models.dart';
 import '../domain/message.dart';
+import '../domain/ulid.dart';
 import 'cache/drift_cache.dart';
 import 'chat_rest_api.dart';
 import 'transport/chat_transport.dart';
@@ -111,7 +112,14 @@ class ChatRepository {
   /// re-sends on the next connect (invariant B-optimistic).
   Future<void> sendMessage(String channelId, String body,
       {String? replyToId}) async {
-    if (_disposed) return; // no writes to a torn-down session's (closing) cache
+    // Disposed-guard (PR#7 cage-match finding 3). DECISION: silent no-op, NOT a
+    // loud StateError. Unlike start() (a true double-wire programming error), a
+    // post-dispose send is a benign LIFECYCLE RACE: the repo is an autoDispose
+    // Riverpod value, so a UI action firing as the provider tears down must not
+    // crash the app — it just has nowhere to land (the cache is closing). The
+    // entry guard proves entry-time state; a dispose that begins DURING the
+    // awaits below is caught + owned in the catch (teardown-race write).
+    if (_disposed) return;
     try {
       final tempId = _newTempId();
       final optimistic = Message(
@@ -140,7 +148,7 @@ class ChatRepository {
   /// B-noteleport). Re-sends immediately if connected; otherwise the next drain
   /// picks it up from the outbox.
   Future<void> retry(String clientTempId) async {
-    if (_disposed) return; // no writes to a torn-down session's (closing) cache
+    if (_disposed) return; // silent no-op (see sendMessage): benign teardown race
     try {
       await _cache.retry(clientTempId);
       final row = (await _cache.outbox())
@@ -227,7 +235,7 @@ class ChatRepository {
     // unauthenticated via the transport's terminal state; transient leaves rows
     // `sending` for a backed-off redrain. (The ConnectionState.unauthenticated
     // path is handled in _onConnState; here we only surface pending rows.)
-    if (_isAuthErrorCode(e.code)) {
+    if (e.parsedCode.isAuthTerminal) {
       await _transport.disconnect();
       return;
     }
@@ -311,7 +319,13 @@ class ChatRepository {
 
   Future<void> _fetchDeltaHistory(
       int epoch, String channelId, String fence) async {
+    // The loop + progress guards below compare ids lexicographically; that is
+    // only monotonic for canonical (UPPERCASE) ULIDs. Assert at the boundary so
+    // a non-canonical fence/cursor fails LOUDLY instead of silently breaking
+    // ordering (PR#7 finding 4). Empty fence ('' = below every ULID) is fine.
+    if (fence.isNotEmpty) assertCanonicalUlid(fence, context: 'fence');
     String? cursor = await _cache.historyContiguousThrough(channelId);
+    if (cursor != null) assertCanonicalUlid(cursor, context: 'resume cursor');
     if (_aborted(epoch)) return;
     while (cursor == null ? fence.isNotEmpty : cursor.compareTo(fence) < 0) {
       // `cursor ?? ''` — a NULL cursor must page forward-from-start; the gateway
@@ -334,6 +348,9 @@ class ChatRepository {
         await _cache.upsertInbound(m); // ASC; W3 dedups on serverUlid
       }
       final newCursor = page.messages.last.id;
+      if (newCursor != null) {
+        assertCanonicalUlid(newCursor, context: 'history page cursor');
+      }
       // PROGRESS GUARD: the loop's liveness depends on the gateway treating
       // `after` as EXCLUSIVE — a frozen contract owned by a DIFFERENT repo. If a
       // page ever fails to advance (non-exclusive `after`, a ULID tie, or a
@@ -425,7 +442,4 @@ class ChatRepository {
   /// the transport's `ConnectionState.unauthenticated` path (handled in
   /// `_onConnState`); both route to login.
   bool _isAuthError(Object e) => e is Unauthorized;
-
-  bool _isAuthErrorCode(String code) =>
-      code == 'unauthorized' || code == 'token_expired' || code == 'forbidden';
 }

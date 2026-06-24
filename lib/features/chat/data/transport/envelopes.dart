@@ -10,6 +10,66 @@ library;
 import 'dart:convert';
 
 // ---------------------------------------------------------------------------
+// Transport error classification (closed set, compiler-enforced).
+// ---------------------------------------------------------------------------
+
+/// The closed set of server `error` codes B4 reasons about, mapped from the raw
+/// wire string ONCE at the parse boundary ([fromWire]). A typed code is what
+/// keeps the auth-vs-transient decision honest: a misspelled raw string can no
+/// longer silently downgrade a TERMINAL auth rejection to a transient redrain
+/// (the original [String]-keyed bug, PR#7 cage-match finding 1).
+///
+/// [unknown] is an EXPLICIT variant for any code we don't recognise. It is NOT
+/// treated as transient by default — an unrecognised systemic error of unknown
+/// severity must not be silently absorbed into the "leave rows sending" path;
+/// the repository classifies [unknown] conservatively (non-auth, surfaced) but
+/// the variant makes the open-world case visible rather than collapsing it into
+/// a known one.
+enum TransportErrorCode {
+  /// Terminal auth: the token/credentials are rejected. Routes to login.
+  unauthorized,
+
+  /// Terminal auth: the access token expired and refresh did not recover it.
+  tokenExpired,
+
+  /// Terminal auth: authenticated but not permitted. Routes to login.
+  forbidden,
+
+  /// A recognised non-auth code (e.g. `no_channel`, `rate_limited`): systemic
+  /// or per-message, but NOT an auth-terminal condition.
+  other,
+
+  /// A code we don't recognise. Explicit so an additive/garbled server code is
+  /// observable, never silently classified as transient. See enum doc.
+  unknown;
+
+  /// The auth-terminal codes — the closed set that stops draining and routes to
+  /// `unauthenticated`. Exhaustive by construction (compiler-checked switch).
+  bool get isAuthTerminal => switch (this) {
+        TransportErrorCode.unauthorized ||
+        TransportErrorCode.tokenExpired ||
+        TransportErrorCode.forbidden =>
+          true,
+        TransportErrorCode.other || TransportErrorCode.unknown => false,
+      };
+
+  /// Map a raw wire `code` string to the closed set. Unrecognised → [unknown]
+  /// (NOT [other]) so a typo/additive code is loud, not silently benign. An
+  /// empty/missing code (the envelope default `'unknown'`) also lands here.
+  static TransportErrorCode fromWire(String code) => switch (code) {
+        'unauthorized' => TransportErrorCode.unauthorized,
+        'token_expired' => TransportErrorCode.tokenExpired,
+        'forbidden' => TransportErrorCode.forbidden,
+        'no_channel' ||
+        'rate_limited' ||
+        'invalid' ||
+        'too_large' =>
+          TransportErrorCode.other,
+        _ => TransportErrorCode.unknown,
+      };
+}
+
+// ---------------------------------------------------------------------------
 // Server -> client (inbound). Sealed: exhaustive switch at the call site.
 // ---------------------------------------------------------------------------
 
@@ -62,8 +122,10 @@ sealed class ServerFrame {
         }
         return SubAckFrame(out);
       case 'error':
+        final rawCode = (j['code'] as String?) ?? 'unknown';
         return ErrorFrame(
-          code: (j['code'] as String?) ?? 'unknown',
+          code: rawCode,
+          parsedCode: TransportErrorCode.fromWire(rawCode),
           detail: (j['detail'] as String?) ?? '',
           refClientMsgId: j['ref_client_msg_id'] as String?,
         );
@@ -107,11 +169,19 @@ class SubAckFrame extends ServerFrame {
 /// Server rejected/failed a frame. [refClientMsgId] ties it back to the
 /// offending `send` when known (null for malformed subscribe/non-dict frames).
 class ErrorFrame extends ServerFrame {
+  /// The raw wire `code` string, preserved verbatim for logging/telemetry.
   final String code;
+
+  /// The raw [code] mapped to the closed set at the parse boundary (the single
+  /// place the wire string becomes a typed decision).
+  final TransportErrorCode parsedCode;
   final String detail;
   final String? refClientMsgId;
   const ErrorFrame(
-      {required this.code, required this.detail, this.refClientMsgId});
+      {required this.code,
+      required this.parsedCode,
+      required this.detail,
+      this.refClientMsgId});
 }
 
 /// A frame we couldn't classify. Held (not thrown) so the transport can log it

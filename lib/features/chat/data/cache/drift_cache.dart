@@ -14,6 +14,7 @@ library;
 import 'package:drift/drift.dart';
 
 import '../../domain/message.dart';
+import '../../domain/ulid.dart';
 
 part 'drift_cache.g.dart';
 
@@ -369,6 +370,11 @@ class DriftCache extends _$DriftCache {
   /// contiguity boundary (single-writer AND monotonic — the coordination-variable
   /// discipline this whole component is built on).
   Future<void> advanceHistoryContiguous(String channelId, String ulid) async {
+    // The monotonic compare below assumes canonical (UPPERCASE) ULID case; a
+    // non-canonical [ulid] would sort wrongly and could rewind/skip the
+    // watermark. Assert at the boundary (debug-only; PR#7 finding 4). Empty
+    // fence ('' = below every ULID) is the valid empty-channel sentinel.
+    if (ulid.isNotEmpty) assertCanonicalUlid(ulid, context: 'watermark');
     await transaction(() async {
       final current = await (select(syncMeta)
             ..where((t) => t.channelId.equals(channelId)))

@@ -246,8 +246,14 @@ void main() {
           (a) => a.clientMsgId == 'tmp1' && a.msgId == '01J')));
       final gotMsg = expectLater(
           t.messages, emits(predicate<Message>((m) => m.body == 'hi')));
+      // The raw wire `code` is preserved verbatim AND classified at the parse
+      // boundary: an unrecognised code (`bad`) maps to `unknown`, never silently
+      // to a known/transient code.
       final gotErr = expectLater(
-          t.errors, emits(predicate<TransportError>((e) => e.code == 'bad')));
+          t.errors,
+          emits(predicate<TransportError>((e) =>
+              e.code == 'bad' &&
+              e.parsedCode == TransportErrorCode.unknown)));
 
       fake.emit('{"type":"ack","client_msg_id":"tmp1","msg_id":"01J"}');
       fake.emit(

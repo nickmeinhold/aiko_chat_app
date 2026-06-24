@@ -11,6 +11,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:aiko_chat_app/features/chat/domain/ulid.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -313,8 +314,7 @@ void main() {
     test('no-teleport — retry preserves createdAt + timeline position', () async {
       await repo.sendMessage(_chan, 'first');
       await repo.sendMessage(_chan, 'second');
-      transport.emitError(const TransportError(
-          code: 'no_channel', detail: 'x', refClientMsgId: 'tmp0'));
+      transport.emitErrorCode('no_channel', detail: 'x', refClientMsgId: 'tmp0');
       await pump();
       final failed = (await rows()).firstWhere((m) => m.clientTempId == 'tmp0');
       expect(failed.deliveryState, DeliveryState.failed);
@@ -502,8 +502,7 @@ void main() {
     test('systemic-transient — a null-ref error leaves pending rows `sending` '
         '(not failed)', () async {
       await repo.sendMessage(_chan, 'hi');
-      transport.emitError(const TransportError(
-          code: 'rate_limited', detail: 'slow down', refClientMsgId: null));
+      transport.emitErrorCode('rate_limited', detail: 'slow down');
       await pump();
       expect((await rows()).single.deliveryState, DeliveryState.sending,
           reason: 'transient systemic error must not fail the row');
@@ -696,18 +695,60 @@ void main() {
   });
 
   group('systemic-terminal (auth error FRAME stops draining)', () {
-    test('an auth-coded systemic error disconnects; pending rows stay sending',
-        () async {
+    // Each terminal-auth wire code must route to disconnect (unauthenticated)
+    // via the TYPED classification — NOT a raw-string compare a typo could break.
+    for (final code in ['unauthorized', 'token_expired', 'forbidden']) {
+      test('an auth-coded ($code) systemic error disconnects; rows stay sending',
+          () async {
+        await repo.sendMessage(_chan, 'hi'); // tmp0, pending
+        transport.emitErrorCode(code, detail: 'auth');
+        await pump();
+
+        expect(transport.disconnectCalls, 1,
+            reason: 'auth-coded systemic error routes to unauthenticated');
+        expect((await rows()).single.deliveryState, DeliveryState.sending,
+            reason: 'pending row untouched; it resumes after re-auth');
+        expect(await cache.outbox(), hasLength(1));
+      });
+    }
+
+    test('an UNKNOWN systemic code does NOT route to disconnect (not silently '
+        'treated as auth-terminal)', () async {
       await repo.sendMessage(_chan, 'hi'); // tmp0, pending
-      transport.emitError(const TransportError(
-          code: 'unauthorized', detail: 'token expired', refClientMsgId: null));
+      // A code we don't recognise (a typo or an additive server code) maps to
+      // TransportErrorCode.unknown → NOT auth-terminal: it must not log the user
+      // out. The row stays `sending` for the next reconnect's redrain.
+      transport.emitErrorCode('unauthorised_typo', detail: 'oops');
       await pump();
 
-      expect(transport.disconnectCalls, 1,
-          reason: 'auth-coded systemic error routes to unauthenticated');
+      expect(transport.disconnectCalls, 0,
+          reason: 'an unknown code must NOT be classified as auth-terminal');
       expect((await rows()).single.deliveryState, DeliveryState.sending,
-          reason: 'pending row untouched; it resumes after re-auth');
+          reason: 'unknown systemic code leaves the row sending (transient-safe)');
       expect(await cache.outbox(), hasLength(1));
+    });
+
+    test('TransportErrorCode.fromWire — known codes map; everything else is '
+        'unknown (NOT other, NOT auth-terminal)', () {
+      expect(TransportErrorCode.fromWire('unauthorized'),
+          TransportErrorCode.unauthorized);
+      expect(TransportErrorCode.fromWire('token_expired'),
+          TransportErrorCode.tokenExpired);
+      expect(
+          TransportErrorCode.fromWire('forbidden'), TransportErrorCode.forbidden);
+      expect(
+          TransportErrorCode.fromWire('rate_limited'), TransportErrorCode.other);
+      // The load-bearing assertion: a typo/additive code is `unknown`, and
+      // `unknown` is NOT auth-terminal (so it can't downgrade a terminal auth
+      // rejection into a logout, and can't masquerade as a known transient).
+      expect(TransportErrorCode.fromWire('Unauthorized'),
+          TransportErrorCode.unknown,
+          reason: 'case-sensitive: canonical wire codes are lowercase');
+      expect(
+          TransportErrorCode.fromWire('totally_new'), TransportErrorCode.unknown);
+      expect(TransportErrorCode.unknown.isAuthTerminal, isFalse);
+      expect(TransportErrorCode.other.isAuthTerminal, isFalse);
+      expect(TransportErrorCode.unauthorized.isAuthTerminal, isTrue);
     });
   });
 
@@ -742,6 +783,20 @@ void main() {
       transport.emitMessage(_server('01U', 'ok'));
       await pump();
       expect((await rows()).any((m) => m.id == '01U'), isTrue);
+    });
+
+    test('post-dispose sendMessage/retry are a silent no-op (no write, no throw) '
+        '— PR#7 finding 3', () async {
+      await repo.dispose();
+      // DECISION: silent-drop, not StateError — a post-dispose call is a benign
+      // autoDispose lifecycle race, not a programming error. It must neither
+      // crash nor touch the (closing) cache.
+      await expectLater(repo.sendMessage(_chan, 'after dispose'), completes);
+      await expectLater(repo.retry('whatever'), completes);
+      await pump();
+      // Nothing was written and no wire send was dispatched.
+      expect(await rows(), isEmpty);
+      expect(transport.sent, isEmpty);
     });
   });
 
@@ -790,6 +845,31 @@ void main() {
       await localRepo.dispose();
       await localTransport.dispose();
       await localCache.close();
+    });
+  });
+
+  group('ULID canonical-case discipline (PR#7 finding 4)', () {
+    test('isCanonicalUlidCase — uppercase Crockford passes, any lowercase fails',
+        () {
+      expect(isCanonicalUlidCase('01ARZ3NDEKTSV4RRFFQ69G5FAV'), isTrue);
+      expect(isCanonicalUlidCase(''), isTrue); // empty fence sentinel
+      expect(isCanonicalUlidCase('01arz3ndektsv4rrffq69g5fav'), isFalse);
+      expect(isCanonicalUlidCase('01ARZ3NDEKTSV4RRFFQ69G5FAv'), isFalse,
+          reason: 'a single lowercase char breaks compareTo monotonicity');
+    });
+
+    test('advanceHistoryContiguous asserts canonical case — a lowercase ULID '
+        'fails LOUDLY, not silently', () async {
+      // Canonical advances fine.
+      await cache.advanceHistoryContiguous(_chan, '01ARZ3NDEKTSV4RRFFQ69G5FAV');
+      expect(await cache.historyContiguousThrough(_chan),
+          '01ARZ3NDEKTSV4RRFFQ69G5FAV');
+      // A non-canonical (lowercase) watermark would sort wrongly — it must trip
+      // the debug assert rather than silently corrupt the monotonic compare.
+      expect(
+        () => cache.advanceHistoryContiguous(_chan, '01arz3ndektsv4rrffq69g5fz'),
+        throwsA(isA<AssertionError>()),
+      );
     });
   });
 }
