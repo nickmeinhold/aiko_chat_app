@@ -894,6 +894,70 @@ void main() {
       await t.dispose();
       await gatedCache.close();
     });
+
+    test('dispose() TERMINATES even with a unit wedged mid-flight (bounded '
+        'drain — cage-match Carnot F1)', () async {
+      // A unit's cache write never completes (gate never released). dispose()
+      // must still return (bounded by _disposeDrainTimeout) rather than hang to
+      // the heat death of the universe. We use a tiny timeout via a short real
+      // wait: the test only asserts dispose COMPLETES, not the wall-clock bound.
+      final neverReleased = Completer<void>(); // intentionally never completed
+      final order = <String>[];
+      final gatedCache = _GatedCache(NativeDatabase.memory(),
+          firstUpsertGate: neverReleased, log: order);
+      final t = FakeChatTransport();
+      final r = ChatRepository(
+        cache: gatedCache,
+        transport: t,
+        rest: FakeChatRestApi(),
+        me: _me,
+        subscribedChannelIds: const [_chan],
+        disposeDrainTimeout: const Duration(milliseconds: 50), // fast fail-safe
+        newTempId: () => 'tmp',
+      );
+      r.start();
+      t.emitMessage(_server('01B', 'wedged')); // upsert blocks forever
+      await pump();
+      expect(order, ['upsert:01B-start'], reason: 'the unit is wedged mid-write');
+
+      // dispose() must complete despite the wedged unit, bounded by the
+      // injected fail-safe (50ms here). `completes` would time the whole test
+      // out if dispose hung.
+      await expectLater(r.dispose().timeout(const Duration(seconds: 2)),
+          completes);
+
+      await t.dispose();
+      await gatedCache.close();
+    });
+
+    test('ack-before-message also preserved in arrival order', () async {
+      // The mirror of the first test: a gated ANYTHING isn't needed — without a
+      // gate the two units still run in enqueue order. Emit ack THEN message and
+      // assert the recorded order matches arrival.
+      final order = <String>[];
+      final gatedCache = _GatedCache(NativeDatabase.memory(),
+          firstUpsertGate: Completer<void>()..complete(), log: order);
+      final t = FakeChatTransport();
+      final r = ChatRepository(
+        cache: gatedCache,
+        transport: t,
+        rest: FakeChatRestApi(),
+        me: _me,
+        subscribedChannelIds: const [_chan],
+        newTempId: () => 'tmp',
+      );
+      r.start();
+      await r.sendMessage(_chan, 'mine'); // seed optimistic row for the ack
+      t.emitAck('tmp', '01A'); // ack first
+      t.emitMessage(_server('01B', 'theirs')); // then a message
+      await pump();
+      expect(order, ['ack:tmp', 'upsert:01B-start', 'upsert:01B-done'],
+          reason: 'ack enqueued first → runs first, then the message');
+
+      await r.dispose();
+      await t.dispose();
+      await gatedCache.close();
+    });
   });
 
   group('ULID canonical-case discipline (PR#7 finding 4)', () {
