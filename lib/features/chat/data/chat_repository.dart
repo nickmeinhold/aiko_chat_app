@@ -46,6 +46,7 @@ class ChatRepository {
   final List<String> _subscribedChannelIds;
   final ChatTelemetry _telemetry;
   final Duration _ackTimeout;
+  final Duration _disposeDrainTimeout;
   final String Function() _newTempId;
 
   ChatRepository({
@@ -56,6 +57,7 @@ class ChatRepository {
     required List<String> subscribedChannelIds,
     ChatTelemetry telemetry = const _NoopTelemetry(),
     Duration ackTimeout = const Duration(seconds: 3),
+    Duration disposeDrainTimeout = const Duration(seconds: 5),
     required String Function() newTempId,
   })  : _cache = cache,
         _transport = transport,
@@ -64,6 +66,7 @@ class ChatRepository {
         _subscribedChannelIds = subscribedChannelIds,
         _telemetry = telemetry,
         _ackTimeout = ackTimeout,
+        _disposeDrainTimeout = disposeDrainTimeout,
         _newTempId = newTempId;
 
   final List<StreamSubscription<dynamic>> _subs = [];
@@ -111,11 +114,12 @@ class ChatRepository {
   // --- inbound mutation serialization queue (PR#7 finding 2) -----------------
 
   /// The tail of the inbound FIFO. Each enqueued unit chains onto the previous
-  /// one's completion, so units run strictly in ARRIVAL order with no
-  /// interleaving — the single-writer discipline made structural. A unit's own
-  /// failure is already owned inside the handler (telemetry); the `.catchError`
-  /// here is a belt-and-braces guard so one unit's escape can never break the
-  /// chain for the next (the queue must outlive any single mutation).
+  /// one's completion, so units run with no interleaving — the single-writer
+  /// discipline made structural. "Arrival order" here means LISTENER-CALLBACK
+  /// order: the order the three transport streams (acks/messages/errors) deliver
+  /// events to this repository, NOT a server causal order across those
+  /// independent streams. Within that, the queue guarantees each unit runs to
+  /// completion before the next starts.
   Future<void> _inboundTail = Future<void>.value();
 
   void _enqueueInbound(Future<void> Function() unit) {
@@ -123,12 +127,19 @@ class ChatRepository {
       if (_disposed) return null; // drop queued work for a torn-down session
       return unit();
     }).catchError((Object e, StackTrace st) {
-      // A handler owns its own RUNTIME errors internally (try/catch +
-      // telemetry); the only thing that escapes to here is a programming-error
-      // `AssertionError` (a debug tripwire, e.g. the orphan-ack assert). Preserve
-      // BOTH invariants: re-surface the tripwire as an uncaught zone error (so it
-      // crashes loudly in debug, stripped in release) WITHOUT breaking the FIFO
-      // chain for subsequent units. Any other escapee is owned via telemetry.
+      // The FIFO chain must outlive any single unit's failure, so nothing thrown
+      // here may propagate down the `then` chain (that would poison every later
+      // unit). Each escapee is instead OBSERVED, not swallowed (cage-match
+      // Carnot F3):
+      //   - AssertionError — a debug tripwire (e.g. the orphan-ack assert).
+      //     Re-surfaced as an uncaught zone error so it crashes LOUDLY in debug
+      //     (stripped in release), proving the impossible case fired.
+      //   - Any other escape is unexpected (handlers already own their runtime
+      //     errors via internal try/catch). Route it to telemetry so it is
+      //     visible. TRADEOFF: it is no longer observable via `await
+      //     _inboundTail` in dispose() (the chain stays green by design) — the
+      //     telemetry seam is the single observability point for an escaped
+      //     inbound error, in dispose() and everywhere else alike.
       if (e is AssertionError) {
         Zone.current.handleUncaughtError(e, st);
       } else {
@@ -149,7 +160,19 @@ class ChatRepository {
     // finishes (its writes are guarded benign by _disposed) before we return —
     // no inbound mutation outlives dispose(). Queued-but-unstarted units are
     // dropped by the _disposed check in _enqueueInbound.
-    await _inboundTail;
+    //
+    // BOUNDED (cage-match Carnot F1): the in-flight unit awaits cache/transport
+    // work that *should* complete promptly, but dispose() must ALWAYS terminate
+    // — a wedged unit must not hang teardown to the heat death of the universe.
+    // The timeout is a fail-safe, not the expected path; if it ever fires it
+    // means an inbound mutation is stuck, which is itself worth observing.
+    // Upper bound (_disposeDrainTimeout, default 5s, injectable for tests): a
+    // generous-but-finite fail-safe so teardown can never hang on a wedged unit.
+    try {
+      await _inboundTail.timeout(_disposeDrainTimeout);
+    } on TimeoutException catch (e, st) {
+      _telemetry.inboundWriteFailed(e, st);
+    }
   }
 
   // --- W1: optimistic send ---------------------------------------------------
