@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runbook — Phase-1 human e2e (Flutter app ↔ live gateway)</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa;
+          --warn:#b35900; --blocker:#c0392b; --ok:#0b5; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.gate { background:#fdf3f2; border-left-color:var(--blocker); }
+  .note { color:var(--muted); font-size:.9rem; }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  .tag { display:inline-block; font:12px ui-monospace,monospace; background:#eef; color:#338; padding:.1em .5em;
+         border-radius:4px; margin-right:.3em; }
+  ol.steps > li { margin:.7rem 0; }
+  ul.tight li { margin:.25rem 0; }
+  .pass { color:var(--ok); font-weight:600; }
+  .toc a { color:#338; text-decoration:none; }
+  .toc a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+
+<h1>Runbook — Phase-1 human e2e</h1>
+<p class="lead">Driving the Flutter/macOS app by hand against a <em>live</em> gateway, and confirming the Phase-1 wiring holds across the deploy boundary.</p>
+
+<div class="scope">
+<strong>Scope.</strong> Phase 1, text-only. This is the <em>human</em> e2e — a person clicking the real signed/sandboxed
+macOS app against a real gateway. It is the only instrument that crosses the packaging + deploy boundary
+(<code>concept_packaging_boundary_blind_spot</code>): the test pyramid is structurally blind to entitlement, keychain,
+and deploy-wiring failures. Everything below is grounded in the current source — paths cite real files.
+</div>
+
+<blockquote class="gate">
+<strong>⛔ Gated, as of 2026-06-25.</strong> This runbook is <em>ready to execute</em> but not yet runnable:
+the gateway is not deployed to <code>chat.imagineering.cc</code>. A TLS probe to that host returns
+<code>tlsv1 alert internal error</code> (the edge answers 443 but no gateway behind it), and the gateway repo sits at
+<strong>#1281 incr&nbsp;2</strong> — <strong>incr&nbsp;3 (the deploy)</strong> is the unblock. Run this the moment incr&nbsp;3 lands.
+Re-probe first: <code>curl -sS -m8 -o/dev/null -w '%{http_code}\n' https://chat.imagineering.cc/v1/healthz</code>.
+</blockquote>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ul class="tight">
+  <li><a href="#tldr">TL;DR — the one command</a></li>
+  <li><a href="#pre">Pre-flight (macOS gotchas already paid for)</a></li>
+  <li><a href="#launch">Launch</a></li>
+  <li><a href="#verify">Verify checklist — what each click <em>proves</em></a></li>
+  <li><a href="#fail">When it fails — triage map</a></li>
+  <li><a href="#why">Why by hand (and not just the test pyramid)</a></li>
+</ul>
+</nav>
+
+<h2 id="tldr">TL;DR — the one command</h2>
+<pre><code>flutter run -d macos \
+  --dart-define=GATEWAY_BASE_URL=https://chat.imagineering.cc</code></pre>
+<p>
+Then: <strong>Register</strong> a fresh account (a brand-new prod gateway has no users — register, don't log in),
+send a message, watch it go <code>sending</code>→<code>sent</code>, quit the app, relaunch, confirm the message survived.
+That round trip exercises the whole Phase-1 spine.
+</p>
+<p class="note">
+The same binary targets localhost with no flag (<code>GatewayConfig.fromEnvironment()</code> defaults to
+<code>http://localhost:8095</code> — <code>lib/app/config.dart:22</code>). <code>wsBaseUrl</code> is <em>derived</em>
+from the HTTP base (<code>https</code>→<code>wss</code>), so you only ever set the one define and the two can't drift.
+</p>
+
+<h2 id="pre">Pre-flight — the macOS gotchas already paid for</h2>
+<p>These two bugs were the test pyramid's blind spots; both are fixed in <code>main</code>. They are listed so a failed
+launch is diagnosed in seconds, not rediscovered.</p>
+<details>
+<summary>1 — Network access requires the <code>network.client</code> entitlement (fixed, PR#13)</summary>
+<p>A sandboxed macOS app cannot reach the gateway without <code>com.apple.security.network.client</code> in the entitlements.
+If a fresh build ever can't connect <em>and localhost works from curl</em>, check the entitlements first
+(<code>macos/Runner/*.entitlements</code>). The symptom is a silent connection failure, not an error dialog.</p>
+</details>
+<details>
+<summary>2 — Keychain <code>-34018</code> on token storage (fixed, PR#15)</summary>
+<p>Secure token storage failed with <code>errSecMissingEntitlement</code> (<code>-34018</code>) until the app was signed with
+the Enspyr dev team + <code>keychain-access-groups</code>. If login succeeds but the session doesn't <em>persist across
+relaunch</em> (you're kicked to <code>/login</code> every cold start), suspect signing/keychain, not the auth logic —
+the token never got written.</p>
+</details>
+
+<h2 id="launch">Launch</h2>
+<ol class="steps">
+  <li>Confirm the gateway is live: <code>curl -sS -m8 https://chat.imagineering.cc/v1/healthz</code> returns 200.
+      (Adjust the health path to whatever incr&nbsp;3 exposes.)</li>
+  <li>From the app repo root, run the <a href="#tldr">one command</a> above.</li>
+  <li>The app boots to <code>/splash</code> while cold-start session restore runs (<code>auth_controller.dart:60</code>
+      <code>_restoreSession</code>). With no stored tokens it falls through to <code>/login</code> — expected on a clean machine.</li>
+</ol>
+
+<h2 id="verify">Verify checklist — what each click <em>proves</em></h2>
+<p>Each row is a Phase-1 invariant made observable. The point of the human e2e is that these are the exact guarantees the
+data layer was <em>built</em> to provide — so a green run here is the design working end to end, not a smoke test.</p>
+<table>
+<thead><tr><th>Do this</th><th>Expect</th><th>Proves</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>Register</strong> a new account (username + display name + password; toggle in <code>login_screen.dart</code>).</td>
+  <td>Lands directly on the chat screen — register signs straight in.</td>
+  <td><code>POST /v1/auth/register</code> returns tokens; <code>setTokens</code> → router guard trips logged-in → <code>/</code>
+      (<code>auth_controller.dart:87</code>, <code>router.dart:50</code>).</td>
+</tr>
+<tr>
+  <td><strong>Send</strong> a message.</td>
+  <td>Row appears <em>immediately</em> with a single "sending/sent" checkmark, before any network round trip.</td>
+  <td><code>B-optimistic</code> — the optimistic row commits to the cache <em>before</em> the wire send, so an app kill
+      between the two loses nothing (design 04).</td>
+</tr>
+<tr>
+  <td>Watch the row after send.</td>
+  <td>The indicator settles to <code>sent</code> within a beat.</td>
+  <td>The ack stream reconciled the temp row to its server ULID (<code>_onAck</code> / <code>reconcileAck</code>).
+      <span class="note">Phase 1 collapses sent/delivered/read into one tick by design — task #1272.</span></td>
+</tr>
+<tr>
+  <td><strong>Quit</strong> the app (⌘Q) and <strong>relaunch</strong> with the same command.</td>
+  <td>You land straight on chat (no login), and your message is still there.</td>
+  <td>Session survives via <code>me()</code>-backed restore + the per-user file-backed Drift cache survives restart.
+      This is the <em>deploy-boundary</em> proof — code-supports ≠ deployed-truth.</td>
+</tr>
+<tr>
+  <td><strong>Log out</strong>, then log back in.</td>
+  <td>Clean transition; no stale messages from the previous session leak in.</td>
+  <td>autoDispose session scope tears the cache + socket down leaf-to-root (Carnot C1/C3) — session isolation falls out
+      of the lifecycle.</td>
+</tr>
+<tr>
+  <td><strong>Pull the network</strong> briefly (toggle Wi-Fi), then restore it.</td>
+  <td>You are <em>not</em> logged out; the socket reconnects and catches up.</td>
+  <td>The transient-vs-terminal 401 boundary: a blip is <code>disconnected</code> (retried), only a real token
+      rejection is <code>unauthenticated</code> (logout) — <code>auth_error_boundary</code>, the whole point of the seam.</td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="fail">When it fails — triage map</h2>
+<table>
+<thead><tr><th>Symptom</th><th>Likely cause</th><th>Check</th></tr></thead>
+<tbody>
+<tr><td>Can't connect, but <code>curl</code> to the gateway works</td><td>Missing <code>network.client</code> entitlement</td><td>Pre-flight #1</td></tr>
+<tr><td>Login works but every relaunch shows <code>/login</code></td><td>Keychain not writing (signing)</td><td>Pre-flight #2</td></tr>
+<tr><td>Logged out on a brief network blip</td><td>A 401 boundary regression — transient mistranslated to terminal</td><td><code>AuthInterceptor</code> <code>auth_transient</code> marker; <code>feedback_auth_error_boundary</code></td></tr>
+<tr><td>Connection refused / TLS alert at the host</td><td>Gateway not actually deployed (the current state)</td><td>The <a href="#tldr">gate</a> — re-check incr&nbsp;3</td></tr>
+<tr><td>App connects but no channels / can't send</td><td>Gateway-side ACL / topology, not the app</td><td>Gateway #1281 incr&nbsp;2 topology reconcile; cross-repo</td></tr>
+</tbody>
+</table>
+
+<h2 id="why">Why by hand, and not just the test pyramid</h2>
+<blockquote class="invariant">
+<code>concept_packaging_boundary_blind_spot</code> — a live signed/sandboxed run is the <em>only</em> instrument that crosses
+the packaging boundary. Both macOS bugs above (entitlement, keychain) passed every unit/integration test and still broke
+the real app, because the harness never signs, sandboxes, or deploys. <code>code-supports ≠ deploy-wired ≠ verified-live</code>:
+green CI proves the code, this runbook proves the deployed truth.
+</blockquote>
+
+<p class="note">
+Sources: <code>lib/app/config.dart</code>, <code>lib/app/router.dart</code>, <code>lib/features/auth/application/auth_controller.dart</code>,
+<code>lib/features/chat/data/gateway_rest_api.dart</code>, <code>docs/design/04-b4-reconcile-engine.html</code>.
+Deferred Phase-1 follow-ups: #1272 (delivery-state granularity), #1276 (inbound-queue backpressure).
+</p>
+
+</body>
+</html>
