@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aiko Chat — public launch roadmap</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa;
+          --warn:#b35900; --blocker:#c0392b; --ok:#0b5; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:880px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:12.5px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.gate { background:#fdf3f2; border-left-color:var(--blocker); }
+  blockquote.win { background:#f0fbf4; border-left-color:var(--accent); }
+  .note { color:var(--muted); font-size:.9rem; }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  .pill { display:inline-block; font:11px ui-monospace,monospace; padding:.12em .5em; border-radius:4px;
+          color:#fff; letter-spacing:.02em; }
+  .done { background:var(--ok); } .wip { background:var(--warn); } .todo { background:#777; }
+  .block { background:var(--blocker); }
+  .toc a { color:#338; text-decoration:none; } .toc a:hover { text-decoration:underline; }
+  ul.tight li { margin:.25rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Aiko Chat — public launch roadmap</h1>
+<p class="lead">From "Phase-1 text chat that runs on macOS" to "publicly on the App Store + Play Store, on real phones." The honest map: three walls, one critical path, and the rejection landmines that bite chat apps specifically.</p>
+
+<div class="scope">
+<strong>Goal (set 2026-06-26).</strong> Public release on <strong>both</strong> stores (Nick on one platform, Robin on the other), not just a private TestFlight build. This doc holds the ~15 obligations so none drift. Status pills are live as of the date in each row — update them as work lands.
+</div>
+
+<blockquote class="win">
+<strong>✅ Two big de-risks already banked (2026-06-26):</strong>
+<strong>iOS compiles clean on the first build ever</strong> — <code>Runner.app</code> (19.2MB), Xcode 42.6s, zero errors, with the
+<code>flutter_secure_storage</code> + <code>connectivity_plus</code> native plugins linked for arm64. And bundle IDs are
+already real (<code>cc.imagineering.aikoChatApp</code> / <code>cc.imagineering.aiko_chat_app</code>), not <code>com.example</code>.
+The mobile-engineering wall is shorter than "never built" implied.
+</blockquote>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ul class="tight">
+  <li><a href="#path">The critical path (one diagram)</a></li>
+  <li><a href="#w0">Wall 0 — backend reachable &amp; production-grade</a></li>
+  <li><a href="#w1">Wall 1 — mobile engineering</a></li>
+  <li><a href="#w2">Wall 2 — compliance &amp; store (the schedule driver)</a></li>
+  <li><a href="#landmines">The rejection landmines (chat-app specific)</a></li>
+  <li><a href="#milestone">The "on our phones" milestone vs. the "public" milestone</a></li>
+</ul>
+</nav>
+
+<h2 id="path">The critical path</h2>
+<pre><code>Gateway live (incr-3) ──┬──> iOS/Android on-device build + sign ──> TestFlight + Play Internal ──> [ON OUR PHONES] ✅
+                        │
+                        └──> Compliance epics (acct-delete, moderation) ──> store listing + legal ──> SUBMIT ──> review ──> [PUBLIC] 🏆</code></pre>
+<p>
+The fork is the good news. The <strong>top branch lands in days</strong> once the gateway is up — it does not wait for compliance.
+The <strong>bottom branch is weeks</strong>, driven almost entirely by the moderation epic. So we get the daily-driver win early
+and grind compliance while already using the app.
+</p>
+
+<h2 id="w0">Wall 0 — backend reachable &amp; production-grade</h2>
+<blockquote class="gate">
+<strong>⛔ Gates everything.</strong> A phone on cellular cannot reach <code>localhost</code>. Nothing on a device works until the
+gateway is live at <code>https://chat.imagineering.cc</code>.
+</blockquote>
+<table>
+<thead><tr><th>Item</th><th>Status</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Gateway deployed to chat.imagineering.cc</td><td><span class="pill block">BLOCKER</span></td><td>#1281 incr-3 (re-homed to <code>imagineering-infra</code>, task #1339). The single gate for both branches.</td></tr>
+<tr><td>Production-grade durability</td><td><span class="pill todo">OPEN Q</span></td><td>SQLite-on-volume is fine for 2 users; revisit store + backups before public scale.</td></tr>
+<tr><td>Uptime / restart behaviour</td><td><span class="pill todo">TODO</span></td><td>A public app needs the gateway to survive reboots + reconnect cleanly (the B4 engine already handles client-side).</td></tr>
+</tbody>
+</table>
+
+<h2 id="w1">Wall 1 — mobile engineering (the short wall)</h2>
+<table>
+<thead><tr><th>Item</th><th>Status</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>iOS compiles</td><td><span class="pill done">DONE 06-26</span></td><td>Clean first build, 19.2MB .app, native plugins linked.</td></tr>
+<tr><td>iOS codesign + provisioning for device</td><td><span class="pill todo">TODO</span></td><td>Apple acct active. Needs a provisioning profile + likely an iOS keychain-access-group dance (the device analog of the macOS <code>-34018</code> saga).</td></tr>
+<tr><td>Android compiles</td><td><span class="pill wip">CHECKING</span></td><td>Debug build running 06-26.</td></tr>
+<tr><td>Android <em>release</em> signing</td><td><span class="pill todo">TODO</span></td><td>Needs a real upload keystore — debug-signed APKs cannot go to Play.</td></tr>
+<tr><td>App icon + launch screen</td><td><span class="pill todo">VERIFY</span></td><td>Icon assets exist; confirm they're the Aiko brand, not a placeholder.</td></tr>
+<tr><td>Push notifications (APNs + FCM)</td><td><span class="pill todo">FAST-FOLLOW</span></td><td>Not required to <em>submit</em>, but a chat app with no notifications feels broken. Recommend v1.1, not launch-blocking.</td></tr>
+</tbody>
+</table>
+
+<h2 id="w2">Wall 2 — compliance &amp; store (the long wall = the schedule driver)</h2>
+<table>
+<thead><tr><th>Item</th><th>Status</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><strong>In-app account deletion</strong></td><td><span class="pill block">BLOCKER</span></td><td>Task #3. Apple 5.1.1(v). Gateway DELETE endpoint + app settings UI. Reviewer <em>will</em> check.</td></tr>
+<tr><td><strong>Moderation: report + block + EULA</strong></td><td><span class="pill block">BLOCKER</span></td><td>Task #4. Apple 1.2 + Google UGC. The #1 chat-app rejection cause. Biggest single epic — gateway + app + EULA + ops process.</td></tr>
+<tr><td>Privacy policy (hosted URL)</td><td><span class="pill todo">TODO</span></td><td>Host on imagineering.cc (domain + Caddy already yours).</td></tr>
+<tr><td>App Privacy labels / Play Data Safety</td><td><span class="pill todo">TODO</span></td><td>Declare collected data (account, messages). Must match reality.</td></tr>
+<tr><td>Export-compliance declaration</td><td><span class="pill todo">TODO</span></td><td>Uses HTTPS → standard exemption, but must be declared.</td></tr>
+<tr><td>Store records + listing assets</td><td><span class="pill todo">TODO</span></td><td>App Store Connect record; Play Console ($25 one-time); screenshots, description, age rating.</td></tr>
+</tbody>
+</table>
+
+<h2 id="landmines">The rejection landmines — why <em>chat</em> apps specifically get bounced</h2>
+<p>A generic app sails through where a chat app fails. These three are the difference, and all three are real work that doesn't exist yet:</p>
+<details open>
+<summary>1 — User-generated content needs moderation (Apple 1.2 / Google UGC)</summary>
+<p>Any app where users post content others see must ship: a <strong>report</strong> mechanism, a <strong>block</strong> mechanism,
+a <strong>EULA with zero tolerance</strong> for objectionable content/users, and a commitment to <strong>act on reports within 24h</strong>.
+Missing this is the single most common chat-app rejection. → Task #4.</p>
+</details>
+<details>
+<summary>2 — Account creation demands account deletion (Apple 5.1.1(v))</summary>
+<p>Aiko has register/login, so it must offer in-app account deletion. There is currently no delete path at all. → Task #3.</p>
+</details>
+<details>
+<summary>3 — Data disclosure must match behaviour (App Privacy / Data Safety)</summary>
+<p>The privacy labels you declare are checked against what the app actually collects. A chat app collects account identity +
+message content — declare it accurately or face a post-review takedown.</p>
+</details>
+
+<h2 id="milestone">Two milestones, not one</h2>
+<table>
+<thead><tr><th></th><th>"On our phones"</th><th>"Public on the stores"</th></tr></thead>
+<tbody>
+<tr><td>Mechanism</td><td>TestFlight (iOS) + Play Internal Testing</td><td>App Store + Play public review</td></tr>
+<tr><td>Gated on</td><td>Wall 0 + Wall 1</td><td>+ all of Wall 2</td></tr>
+<tr><td>Rough horizon</td><td>Days after gateway live</td><td>Weeks (moderation epic drives it)</td></tr>
+<tr><td>Why it's not a detour</td><td colspan="2">TestFlight/Internal are <em>stages of</em> the public pipeline — the same uploaded build. Phones-first is the on-ramp to public, not a side road.</td></tr>
+</tbody>
+</table>
+
+<p class="note">
+Related: <a href="../runbooks/phase1-human-e2e.html">phase-1 human e2e runbook</a> · gateway deploy = <code>imagineering-infra</code> task #1339 / epic #1281 ·
+launch blockers = tasks #3 (account deletion), #4 (moderation). Created 2026-06-26.
+</p>
+
+</body>
+</html>
