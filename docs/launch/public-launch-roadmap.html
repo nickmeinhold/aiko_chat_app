@@ -98,7 +98,7 @@ gateway is live at <code>https://chat.imagineering.cc</code>.
 <tbody>
 <tr><td>iOS compiles</td><td><span class="pill done">DONE 06-26</span></td><td>Clean first build, 19.2MB .app, native plugins linked.</td></tr>
 <tr><td>iOS codesign + provisioning for device</td><td><span class="pill todo">TODO</span></td><td>Apple acct active. Needs a provisioning profile + likely an iOS keychain-access-group dance (the device analog of the macOS <code>-34018</code> saga).</td></tr>
-<tr><td>Android compiles</td><td><span class="pill wip">CHECKING</span></td><td>Debug build running 06-26.</td></tr>
+<tr><td>Android compiles</td><td><span class="pill done">DONE 06-26</span></td><td>Clean debug build, <code>app-debug.apk</code> 167s, zero errors (release with R8 will be far smaller than the fat debug APK).</td></tr>
 <tr><td>Android <em>release</em> signing</td><td><span class="pill todo">TODO</span></td><td>Needs a real upload keystore — debug-signed APKs cannot go to Play.</td></tr>
 <tr><td>App icon + launch screen</td><td><span class="pill todo">VERIFY</span></td><td>Icon assets exist; confirm they're the Aiko brand, not a placeholder.</td></tr>
 <tr><td>Push notifications (APNs + FCM)</td><td><span class="pill todo">FAST-FOLLOW</span></td><td>Not required to <em>submit</em>, but a chat app with no notifications feels broken. Recommend v1.1, not launch-blocking.</td></tr>
