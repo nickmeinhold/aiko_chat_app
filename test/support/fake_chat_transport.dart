@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
@@ -150,6 +152,21 @@ class FakeChatRestApi implements ChatRestApi {
   Future<AppUser> me() => throw UnimplementedError();
   @override
   Future<List<Channel>> listChannels() => throw UnimplementedError();
+  @override
+  Future<SocialOutcome> socialSignIn({
+    required SocialProvider provider,
+    required String idToken,
+    required String rawNonce,
+    String? name,
+  }) =>
+      throw UnimplementedError();
+  @override
+  Future<AuthSession> claimHandle({
+    required String provisioningToken,
+    required String handle,
+    required String displayName,
+  }) =>
+      throw UnimplementedError();
 }
 
 /// Records the observability calls B4 makes, so tests can assert that the

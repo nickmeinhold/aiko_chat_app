@@ -8,8 +8,11 @@
 
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
+import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart' show HandleTaken;
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
@@ -28,12 +31,15 @@ ProviderContainer makeContainer({
   required FakeRestApi rest,
   required FakeChatTransport transport,
   InMemoryTokenStore? store,
+  FakeSocialAuthClient? social,
 }) {
   final tokenStore = store ?? InMemoryTokenStore();
   late final ProviderContainer container;
   container = ProviderContainer(overrides: [
     restApiProvider.overrideWithValue(rest),
     transportProvider.overrideWithValue(transport),
+    // The real social client hits Apple/Google platform channels — fake it.
+    socialAuthClientProvider.overrideWithValue(social ?? FakeSocialAuthClient()),
     tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
       store: tokenStore,
       remoteRefresh: (_) async => 'access2',
@@ -266,6 +272,93 @@ void main() {
     // They stay where they were — no yank to the bottom.
     expect(position.pixels, 0,
         reason: 'a reader scrolled up should keep their position');
+  });
+
+  // --- social sign-in (#5) -------------------------------------------------
+
+  testWidgets('login screen offers the Google social button + divider',
+      (tester) async {
+    final container = makeContainer(
+        rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+
+    expect(find.widgetWithText(OutlinedButton, 'Continue with Google'),
+        findsOneWidget);
+    expect(find.text('or'), findsOneWidget); // social / password divider
+  });
+
+  testWidgets('social sign-in with a known identity → straight to chat',
+      (tester) async {
+    final rest = FakeRestApi(); // default socialOutcome = Authenticated
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Continue with Google'));
+    await tester.pumpAndSettle();
+
+    expect(rest.socialCalls, 1);
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+  });
+
+  testWidgets('social sign-in with a NEW identity → claim-handle → chat',
+      (tester) async {
+    final rest = FakeRestApi()
+      ..socialOutcome = const PendingHandle(
+          provisioningToken: 'ptok', suggestedName: 'Robin');
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Continue with Google'));
+    await tester.pumpAndSettle();
+
+    // A new identity is routed to the pick-your-handle screen, NOT chat.
+    expect(find.widgetWithText(AppBar, 'Pick your handle'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Display name'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).at(0), 'robin');
+    await tester.tap(find.widgetWithText(FilledButton, 'Continue'));
+    await tester.pumpAndSettle();
+
+    expect(rest.claimCalls, 1);
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+  });
+
+  testWidgets('claim-handle surfaces a taken handle inline', (tester) async {
+    final rest = FakeRestApi()
+      ..socialOutcome = const PendingHandle(provisioningToken: 'ptok')
+      ..claimThrows = const HandleTaken();
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Continue with Google'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(0), 'taken');
+    await tester.tap(find.widgetWithText(FilledButton, 'Continue'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('That handle is taken — try another.'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Pick your handle'), findsOneWidget);
+  });
+
+  testWidgets('cancelling social sign-in stays on login with no error',
+      (tester) async {
+    final social = FakeSocialAuthClient(throws: const SocialSignInCancelled());
+    final container = makeContainer(
+        rest: FakeRestApi(), transport: FakeChatTransport(), social: social);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Continue with Google'));
+    await tester.pumpAndSettle();
+
+    expect(social.signInCalls, 1);
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget); // still login
+    expect(find.textContaining('went wrong'), findsNothing); // no error banner
   });
 
   testWidgets('cold start with stored session → restores to chat', (tester) async {

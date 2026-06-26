@@ -24,14 +24,34 @@ import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../../chat/data/transport/chat_transport.dart';
+import '../data/social_auth_client.dart';
 import '../domain/auth_models.dart';
+import '../domain/social_models.dart';
 
 final authControllerProvider =
     AsyncNotifierProvider<AuthController, AppUser?>(AuthController.new);
 
+/// The transient "a new social identity has been verified but has not yet
+/// claimed a handle" state. It lives ALONGSIDE [authControllerProvider]'s
+/// `AppUser?` rather than inside it, so the logged-in/out state machine is
+/// untouched: a non-null value here (while logged out) is what drives the
+/// router to `/claim-handle`. Cleared once the handle is claimed (→ logged in)
+/// or the user abandons the flow.
+final pendingHandleProvider =
+    NotifierProvider<PendingHandleNotifier, PendingHandle?>(
+        PendingHandleNotifier.new);
+
+class PendingHandleNotifier extends Notifier<PendingHandle?> {
+  @override
+  PendingHandle? build() => null;
+  void set(PendingHandle pending) => state = pending;
+  void clear() => state = null;
+}
+
 class AuthController extends AsyncNotifier<AppUser?> {
   ChatRestApi get _rest => ref.read(restApiProvider);
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
+  SocialAuthClient get _social => ref.read(socialAuthClientProvider);
 
   @override
   Future<AppUser?> build() async {
@@ -90,6 +110,61 @@ class AuthController extends AsyncNotifier<AppUser?> {
     state = await AsyncValue.guard(() async {
       final session = await _rest.register(username, displayName, password);
       await _tokens.setTokens(session.tokens);
+      return session.user;
+    });
+  }
+
+  /// Sign in with a social [provider]. Drives the native SDK for a credential,
+  /// hands the ID token to the gateway, then either logs straight in (known
+  /// identity) or parks a [PendingHandle] (new identity) so the router shows the
+  /// claim-handle screen. A user cancellation restores the prior state silently
+  /// — no error banner.
+  Future<void> signInWith(SocialProvider provider) async {
+    final prior = state.value;
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      final SocialCredential cred;
+      try {
+        cred = await _social.signIn(provider);
+      } on SocialSignInCancelled {
+        return prior; // user backed out — no-op, restore prior state
+      }
+      final outcome = await _rest.socialSignIn(
+        provider: provider,
+        idToken: cred.idToken,
+        rawNonce: cred.rawNonce,
+        name: cred.name,
+      );
+      switch (outcome) {
+        case Authenticated(:final session):
+          await _tokens.setTokens(session.tokens);
+          return session.user;
+        case PendingHandle pending:
+          // Stay logged out; the pending state drives the router to
+          // /claim-handle, where claimHandle() completes the sign-in.
+          ref.read(pendingHandleProvider.notifier).set(pending);
+          return prior;
+      }
+    });
+  }
+
+  /// Complete a new social identity's sign-in by claiming a handle. Requires a
+  /// pending identity (set by [signInWith]); on success adopts the tokens,
+  /// clears the pending state, and publishes the user (→ chat).
+  Future<void> claimHandle(String handle, String displayName) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      final pending = ref.read(pendingHandleProvider);
+      if (pending == null) {
+        throw StateError('claimHandle called with no pending social identity');
+      }
+      final session = await _rest.claimHandle(
+        provisioningToken: pending.provisioningToken,
+        handle: handle,
+        displayName: displayName,
+      );
+      await _tokens.setTokens(session.tokens);
+      ref.read(pendingHandleProvider.notifier).clear();
       return session.user;
     });
   }

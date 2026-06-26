@@ -17,6 +17,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/auth/token_provider.dart';
 import '../features/auth/application/auth_controller.dart';
+import '../features/auth/data/gateway_social_auth_client.dart';
+import '../features/auth/data/social_auth_client.dart';
 import '../features/chat/data/cache/cache_database.dart';
 import '../features/chat/data/cache/drift_cache.dart';
 import '../features/chat/data/chat_rest_api.dart';
@@ -81,6 +83,12 @@ final restApiProvider = Provider<ChatRestApi>(
 /// The shared single-flight token provider (used by REST interceptor + WSS).
 final tokenProviderProvider = Provider<DefaultTokenProvider>(
   (ref) => ref.watch(backendProvider).tokens,
+);
+
+/// The social sign-in seam (Apple/Google native SDKs). Tests override this with
+/// a fake so the auth controller is exercised without a platform channel.
+final socialAuthClientProvider = Provider<SocialAuthClient>(
+  (ref) => GatewaySocialAuthClient(),
 );
 
 // --- realtime + cache ------------------------------------------------------
