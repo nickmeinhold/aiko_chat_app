@@ -1,4 +1,6 @@
+import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 
@@ -32,8 +34,17 @@ class FakeRestApi implements ChatRestApi {
   /// If set, `me()` (cold-start restore) throws this.
   Object? meThrows;
 
+  /// Programmable result of `socialSignIn`. Default: a known identity (log
+  /// straight in). Set a [PendingHandle] to exercise the claim-handle path.
+  SocialOutcome? socialOutcome;
+
+  /// If set, `claimHandle` throws this (e.g. `HandleTaken`).
+  Object? claimThrows;
+
   int loginCalls = 0;
   int meCalls = 0;
+  int socialCalls = 0;
+  int claimCalls = 0;
 
   AuthSession _session() => AuthSession(
         user: user,
@@ -64,10 +75,59 @@ class FakeRestApi implements ChatRestApi {
   }
 
   @override
+  Future<SocialOutcome> socialSignIn({
+    required SocialProvider provider,
+    required String idToken,
+    required String rawNonce,
+    String? name,
+  }) async {
+    socialCalls++;
+    return socialOutcome ?? Authenticated(_session());
+  }
+
+  @override
+  Future<AuthSession> claimHandle({
+    required String provisioningToken,
+    required String handle,
+    required String displayName,
+  }) async {
+    claimCalls++;
+    if (claimThrows != null) throw claimThrows!;
+    return _session();
+  }
+
+  @override
   Future<List<Channel>> listChannels() async => channels;
 
   @override
   Future<HistoryPage> getHistory(String channelId,
           {String? before, String? after, int limit = 50}) async =>
       HistoryPage(channelId: channelId, messages: const []);
+}
+
+/// A [SocialAuthClient] fake — returns a canned credential (or throws, e.g.
+/// [SocialSignInCancelled]) without touching a platform channel.
+class FakeSocialAuthClient implements SocialAuthClient {
+  FakeSocialAuthClient({this.credential, this.throws});
+
+  /// If set, [signIn] throws this instead of returning a credential.
+  Object? throws;
+  SocialCredential? credential;
+
+  int signInCalls = 0;
+  SocialProvider? lastProvider;
+
+  @override
+  Future<SocialCredential> signIn(SocialProvider provider) async {
+    signInCalls++;
+    lastProvider = provider;
+    if (throws != null) throw throws!;
+    return credential ??
+        SocialCredential(
+          provider: provider,
+          idToken: 'fake-id-token',
+          rawNonce: 'fake-nonce',
+          name: 'Fake Name',
+        );
+  }
 }

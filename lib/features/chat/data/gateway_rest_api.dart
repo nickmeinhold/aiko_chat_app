@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 
+import '../../auth/data/social_auth_client.dart';
 import '../../auth/domain/auth_models.dart';
+import '../../auth/domain/social_models.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
@@ -96,6 +98,62 @@ class GatewayRestApi implements ChatRestApi {
     final r = await _bare
         .post('/v1/auth/refresh', data: {'refresh_token': refreshToken});
     return _map(r.data)['access_token'] as String;
+  }
+
+  @override
+  Future<SocialOutcome> socialSignIn({
+    required SocialProvider provider,
+    required String idToken,
+    required String rawNonce,
+    String? name,
+  }) async {
+    final r = await _bare.post('/v1/auth/social', data: {
+      'provider': provider.name, // 'apple' | 'google'
+      'id_token': idToken,
+      'nonce': rawNonce,
+      if (name != null) 'name': name,
+    });
+    final m = _map(r.data);
+    // Route on the PRIMARY signal — a provisioning_token (or explicit
+    // status:pending) — not the mere ABSENCE of an access_token, so a malformed
+    // authenticated response fails loudly instead of casting a null
+    // provisioning_token (cage-match consensus: Maxwell/Kelvin/Carnot).
+    final ptok = m['provisioning_token'];
+    if (m['status'] == 'pending' || ptok != null) {
+      if (ptok is! String) {
+        throw const FormatException(
+            'social: pending response missing provisioning_token');
+      }
+      return PendingHandle(
+        provisioningToken: ptok,
+        suggestedName: m['suggested_name'] as String?,
+        email: m['email'] as String?,
+      );
+    }
+    if (m['access_token'] == null) {
+      throw const FormatException(
+          'social: response has neither access_token nor provisioning_token');
+    }
+    return Authenticated(AuthSession.fromJson(m));
+  }
+
+  @override
+  Future<AuthSession> claimHandle({
+    required String provisioningToken,
+    required String handle,
+    required String displayName,
+  }) async {
+    try {
+      final r = await _bare.post('/v1/auth/social/claim', data: {
+        'provisioning_token': provisioningToken,
+        'handle': handle,
+        'display_name': displayName,
+      });
+      return AuthSession.fromJson(_map(r.data));
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409) throw const HandleTaken();
+      rethrow;
+    }
   }
 
   @override

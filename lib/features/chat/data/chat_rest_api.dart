@@ -1,4 +1,6 @@
+import '../../auth/data/social_auth_client.dart';
 import '../../auth/domain/auth_models.dart';
+import '../../auth/domain/social_models.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
 
@@ -37,12 +39,43 @@ class Unauthorized implements Exception {
   String toString() => 'Unauthorized(statusCode: $statusCode)';
 }
 
+/// Thrown by [ChatRestApi.claimHandle] when the requested handle is already
+/// taken (the gateway returns 409). The claim UI surfaces this inline ("that
+/// handle is taken") rather than as a generic failure.
+class HandleTaken implements Exception {
+  const HandleTaken();
+  @override
+  String toString() => 'HandleTaken';
+}
+
 /// The history/auth/media REST seam (plan §B1; media is a later phase). No
 /// lifecycle. Riverpod + the repository depend on THIS, never on `dio`.
 abstract interface class ChatRestApi {
   Future<AuthSession> login(String username, String password);
   Future<AuthSession> register(
       String username, String displayName, String password);
+
+  /// Verify a provider ID token at the gateway. Returns [Authenticated] for a
+  /// known identity (log straight in) or [PendingHandle] for a new one (which
+  /// must then call [claimHandle]). [rawNonce] is the un-hashed nonce — the
+  /// gateway checks the token's `nonce` claim against `sha256(rawNonce)`.
+  /// [name] forwards the provider's display name (Apple only sends it on the
+  /// first sign-in, so it may be null).
+  Future<SocialOutcome> socialSignIn({
+    required SocialProvider provider,
+    required String idToken,
+    required String rawNonce,
+    String? name,
+  });
+
+  /// Complete provisioning for a new social identity by claiming a [handle].
+  /// [provisioningToken] comes from the [PendingHandle]. Throws [HandleTaken]
+  /// on a 409 conflict.
+  Future<AuthSession> claimHandle({
+    required String provisioningToken,
+    required String handle,
+    required String displayName,
+  });
 
   /// Exchange a refresh token for a fresh access token (the refresh token is
   /// NOT rotated by the gateway). Returns the new access token.

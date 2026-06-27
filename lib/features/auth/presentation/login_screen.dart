@@ -1,8 +1,12 @@
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../../chat/data/chat_rest_api.dart' show Unauthorized;
 import '../application/auth_controller.dart';
+import '../data/social_auth_client.dart';
 
 /// Username/password login, with a toggle into register mode (which adds a
 /// display-name field). Watches [authControllerProvider]: a spinner while the
@@ -44,6 +48,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  void _social(SocialProvider provider) {
+    ref.read(authControllerProvider.notifier).signInWith(provider);
+  }
+
+  /// Apple requires Sign in with Apple be *offered* whenever other social
+  /// logins are, but only its own platforms get the native sheet (Android would
+  /// need the web flow — deferred).
+  bool get _appleAvailable =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
+  /// Native Google sign-in (`authenticate()`) is unsupported on web — the web
+  /// SDK requires its own rendered-button flow, which this app (no web target)
+  /// doesn't ship. Hide the button there rather than show one that can't
+  /// complete (Carnot).
+  bool get _googleAvailable => !kIsWeb;
+
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
@@ -60,6 +82,34 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // --- social sign-in (the primary onboarding) ---------------
+                if (_appleAvailable) ...[
+                  SignInWithAppleButton(
+                    onPressed: busy ? () {} : () => _social(SocialProvider.apple),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_googleAvailable) ...[
+                  OutlinedButton.icon(
+                    onPressed:
+                        busy ? null : () => _social(SocialProvider.google),
+                    icon: const Icon(Icons.account_circle_outlined),
+                    label: const Text('Continue with Google'),
+                  ),
+                  const SizedBox(height: 20),
+                ],
+                Row(
+                  children: const [
+                    Expanded(child: Divider()),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8),
+                      child: Text('or'),
+                    ),
+                    Expanded(child: Divider()),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                // --- username / password (fallback) ------------------------
                 TextField(
                   controller: _username,
                   enabled: !busy,
