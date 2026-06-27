@@ -120,6 +120,9 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// claim-handle screen. A user cancellation restores the prior state silently
   /// — no error banner.
   Future<void> signInWith(SocialProvider provider) async {
+    // Social sign-in is ingress-only: ignore it when already authenticated, so a
+    // stray call can't park a PendingHandle behind a live session (Carnot).
+    if (state.value != null) return;
     final prior = state.value;
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
@@ -195,6 +198,10 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// R3-B). Clearing first means any human-paced re-login's `setTokens` always
   /// lands after this clear, never before it.
   Future<void> _teardownResources() async {
+    // Clear any half-finished social provisioning so a teardown ALWAYS lands in
+    // a clean logged-out state — otherwise an abandoned PendingHandle survives
+    // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
+    ref.read(pendingHandleProvider.notifier).clear();
     await _tokens.clearTokens();
     await ref.read(transportProvider).disconnect();
   }

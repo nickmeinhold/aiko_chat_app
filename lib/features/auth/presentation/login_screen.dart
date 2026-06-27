@@ -60,6 +60,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       (defaultTargetPlatform == TargetPlatform.iOS ||
           defaultTargetPlatform == TargetPlatform.macOS);
 
+  /// Native Google sign-in (`authenticate()`) is unsupported on web — the web
+  /// SDK requires its own rendered-button flow, which this app (no web target)
+  /// doesn't ship. Hide the button there rather than show one that can't
+  /// complete (Carnot).
+  bool get _googleAvailable => !kIsWeb;
+
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
@@ -83,12 +89,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                   const SizedBox(height: 12),
                 ],
-                OutlinedButton.icon(
-                  onPressed: busy ? null : () => _social(SocialProvider.google),
-                  icon: const Icon(Icons.account_circle_outlined),
-                  label: const Text('Continue with Google'),
-                ),
-                const SizedBox(height: 20),
+                if (_googleAvailable) ...[
+                  OutlinedButton.icon(
+                    onPressed:
+                        busy ? null : () => _social(SocialProvider.google),
+                    icon: const Icon(Icons.account_circle_outlined),
+                    label: const Text('Continue with Google'),
+                  ),
+                  const SizedBox(height: 20),
+                ],
                 Row(
                   children: const [
                     Expanded(child: Divider()),

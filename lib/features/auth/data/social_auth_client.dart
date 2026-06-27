@@ -12,9 +12,11 @@ enum SocialProvider { apple, google }
 /// A provider credential captured on-device, ready to hand to the gateway.
 ///
 /// [idToken] is the provider's OIDC ID token (a JWT) — the gateway verifies it
-/// against the provider's JWKS. [rawNonce] is the UN-hashed nonce we generated:
-/// the provider embeds `sha256(rawNonce)` in the token's `nonce` claim, and the
-/// gateway re-derives and compares to defeat replay. [name] is the display name
+/// against the provider's JWKS. [rawNonce] is the UN-hashed nonce we generated;
+/// what the provider embeds in the token's `nonce` claim is provider-specific
+/// (Apple embeds `sha256(rawNonce)`, Google embeds it verbatim), so we always
+/// send the gateway the RAW nonce and it applies the per-provider transform
+/// before comparing — defeats replay. [name] is the display name
 /// the provider returned — Apple supplies it ONLY on the very first sign-in, so
 /// it may be null on every subsequent one (the gateway must persist it then).
 class SocialCredential {

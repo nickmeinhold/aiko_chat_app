@@ -114,15 +114,25 @@ class GatewayRestApi implements ChatRestApi {
       if (name != null) 'name': name,
     });
     final m = _map(r.data);
-    // A new identity that must claim a handle: the gateway returns a
-    // provisioning token and NO access token. Distinguish on either signal so a
-    // missing `status` field doesn't misroute a genuinely-pending response.
-    if (m['status'] == 'pending' || m['access_token'] == null) {
+    // Route on the PRIMARY signal — a provisioning_token (or explicit
+    // status:pending) — not the mere ABSENCE of an access_token, so a malformed
+    // authenticated response fails loudly instead of casting a null
+    // provisioning_token (cage-match consensus: Maxwell/Kelvin/Carnot).
+    final ptok = m['provisioning_token'];
+    if (m['status'] == 'pending' || ptok != null) {
+      if (ptok is! String) {
+        throw const FormatException(
+            'social: pending response missing provisioning_token');
+      }
       return PendingHandle(
-        provisioningToken: m['provisioning_token'] as String,
+        provisioningToken: ptok,
         suggestedName: m['suggested_name'] as String?,
         email: m['email'] as String?,
       );
+    }
+    if (m['access_token'] == null) {
+      throw const FormatException(
+          'social: response has neither access_token nor provisioning_token');
     }
     return Authenticated(AuthSession.fromJson(m));
   }
