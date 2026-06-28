@@ -151,6 +151,8 @@ class FakeChatRestApi implements ChatRestApi {
   @override
   Future<AppUser> me() => throw UnimplementedError();
   @override
+  Future<void> deleteAccount() => throw UnimplementedError();
+  @override
   Future<List<Channel>> listChannels() => throw UnimplementedError();
   @override
   Future<SocialOutcome> socialSignIn({

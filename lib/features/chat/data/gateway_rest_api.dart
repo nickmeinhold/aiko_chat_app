@@ -163,6 +163,25 @@ class GatewayRestApi implements ChatRestApi {
       });
 
   @override
+  Future<void> deleteAccount() async {
+    try {
+      await _authedCall(() => _authed.delete('/v1/account'));
+    } on DioException catch (e) {
+      // _authedCall already mapped a terminal 401/403 → Unauthorized and
+      // rethrew everything else. A 409 means "sole admin of a channel" — map it
+      // to the typed domain error carrying the gateway's explanatory `detail`.
+      if (e.response?.statusCode == 409) {
+        final detail = (e.response?.data is Map)
+            ? (e.response!.data as Map)['detail']?.toString()
+            : null;
+        throw SoleAdminDeletionBlocked(
+            detail ?? 'You are the sole admin of a channel.');
+      }
+      rethrow;
+    }
+  }
+
+  @override
   Future<List<Channel>> listChannels() => _authedCall(() async {
         final r = await _authed.get('/v1/channels');
         final list = (_map(r.data)['channels'] as List?) ?? const [];

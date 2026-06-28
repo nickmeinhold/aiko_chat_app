@@ -212,6 +212,29 @@ class AuthController extends AsyncNotifier<AppUser?> {
     await _teardownResources();
   }
 
+  /// Permanently delete the account (Apple 5.1.1(v)). Unlike [logout], which
+  /// cannot fail and so flips to logged-out immediately, this calls the gateway
+  /// FIRST and only tears down on success — a failure (e.g. [SoleAdminDeletion
+  /// Blocked]) must leave the user logged in so the settings UI can show why.
+  /// On the gateway's 204 the local teardown is identical to logout, and the
+  /// router's auth guard redirects to /login (no manual navigation). The thrown
+  /// error propagates to the caller for an inline message.
+  Future<void> deleteAccount() async {
+    await _rest.deleteAccount(); // throws on 409/terminal-401 → stays logged in
+    // Past this line the gateway has committed an IRREVERSIBLE delete (204): the
+    // operation has SUCCEEDED. Local teardown is best-effort cleanup, so a failure
+    // here must NEVER surface as "delete failed" (cage-match, Carnot). Tokens are
+    // cleared inside _teardownResources before the awaited disconnect, so the
+    // security-critical step still runs; a disconnect error only leaves an inert,
+    // auth-less socket the next launch rebuilds.
+    state = const AsyncValue.data(null);
+    try {
+      await _teardownResources();
+    } catch (_) {
+      // Swallowed — the account is already gone; nothing actionable for the user.
+    }
+  }
+
   /// The idempotent terminal-logout both dead-session signals converge on
   /// (transport `unauthenticated` + REST `onUnauthenticated`). State is flipped
   /// SYNCHRONOUSLY before the async teardown, so a second concurrent terminal

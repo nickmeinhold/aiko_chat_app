@@ -12,7 +12,9 @@ import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
-import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart' show HandleTaken;
+import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
+    show HandleTaken, SoleAdminDeletionBlocked;
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
@@ -376,5 +378,75 @@ void main() {
 
     // No login form — the stored tokens + me() restored the session.
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+  });
+
+  // --- account deletion (Apple 5.1.1(v)) ------------------------------------
+
+  testWidgets('deleting the account tears down the session to the login screen',
+      (tester) async {
+    final rest = FakeRestApi();
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+
+    // chat → settings → Delete account → confirm.
+    await tester.tap(find.byIcon(Icons.settings));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
+    await tester.tap(find.text('Delete account'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    expect(rest.deleteCalls, 1);
+    // The auth guard redirected to /login (no chat, no settings).
+    expect(find.widgetWithText(AppBar, 'general'), findsNothing);
+    expect(find.widgetWithText(AppBar, 'Settings'), findsNothing);
+    expect(find.byType(TextField), findsWidgets); // login form is back
+  });
+
+  testWidgets('a sole-admin 409 keeps the user logged in with a message',
+      (tester) async {
+    final rest = FakeRestApi()
+      ..deleteThrows = const SoleAdminDeletionBlocked(
+          'cannot delete account while sole admin of channel(s) general');
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    await tester.tap(find.byIcon(Icons.settings));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete account'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    // Rejected → still on settings, still logged in, with the explanation.
+    expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
+    expect(find.textContaining('sole admin'), findsOneWidget);
+  });
+
+  test('deleteAccount leaves the session logged in when the gateway rejects it',
+      () async {
+    final rest = FakeRestApi()
+      ..deleteThrows = const SoleAdminDeletionBlocked('nope');
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+    await container.read(authControllerProvider.future); // settle restore
+    await container.read(authControllerProvider.notifier).login('nick', 'pw');
+    expect(container.read(authControllerProvider).value, isNotNull);
+
+    await expectLater(
+      container.read(authControllerProvider.notifier).deleteAccount(),
+      throwsA(isA<SoleAdminDeletionBlocked>()),
+    );
+    // The load-bearing invariant: a rejected delete must NOT log the user out.
+    expect(container.read(authControllerProvider).value, isNotNull);
   });
 }

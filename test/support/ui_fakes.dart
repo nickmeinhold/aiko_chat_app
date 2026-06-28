@@ -41,10 +41,14 @@ class FakeRestApi implements ChatRestApi {
   /// If set, `claimHandle` throws this (e.g. `HandleTaken`).
   Object? claimThrows;
 
+  /// If set, `deleteAccount` throws this (e.g. `SoleAdminDeletionBlocked`).
+  Object? deleteThrows;
+
   int loginCalls = 0;
   int meCalls = 0;
   int socialCalls = 0;
   int claimCalls = 0;
+  int deleteCalls = 0;
 
   AuthSession _session() => AuthSession(
         user: user,
@@ -94,6 +98,12 @@ class FakeRestApi implements ChatRestApi {
     claimCalls++;
     if (claimThrows != null) throw claimThrows!;
     return _session();
+  }
+
+  @override
+  Future<void> deleteAccount() async {
+    deleteCalls++;
+    if (deleteThrows != null) throw deleteThrows!;
   }
 
   @override
