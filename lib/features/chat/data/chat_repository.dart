@@ -411,12 +411,21 @@ class ChatRepository {
         // fence becomes unreachable by currently-visible rows. This is expected,
         // not corruption. Handle it as a benign re-sync: surface it via telemetry
         // (still observable — it IS unusual), then RETURN WITHOUT advancing the
-        // watermark. The next reconnect recomputes a FRESH per-viewer fence (now
-        // consistent with the shrunk visibility) and the loop converges — see the
-        // gateway's latest_ulid docstring (within-instant coupling) + claude-tasks
-        // #15. Not advancing means we never claim coverage we don't have, so a
-        // GENUINE gap (if one ever existed) still re-attempts every reconnect
-        // rather than being masked.
+        // watermark. The next reconnect recomputes a FRESH per-viewer fence and
+        // the loop converges.
+        //
+        // CONVERGENCE CONTRACT (cage-match Carnot HIGH, cross-repo): the self-heal
+        // holds ONLY because the gateway's `latest_ulid` fence is per-viewer and
+        // applies the SAME visibility filter as `get_history` (soft-delete + block)
+        // — aiko_chat_gateway#22. So once a block/delete lands, the next subscribe's
+        // fence excludes the now-hidden row and is reachable. If the gateway ever
+        // regressed that (a fence over rows hidden from the viewer), this would
+        // refetch the same watermark every reconnect forever — a permanent
+        // reconnect-cycle retry rather than a hot loop. Repeated gaps across
+        // reconnects should therefore be treated as a sync FAULT, not noise
+        // (claude-tasks #16). Not advancing the watermark means we never claim
+        // coverage we don't have — a genuine gap re-attempts rather than being
+        // masked (it is now telemetried, not asserted).
         _telemetry.historyGapBeforeFence(channelId, cursor, fence);
         return;
       }

@@ -84,12 +84,16 @@ class _BlockedTileState extends ConsumerState<_BlockedTile> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       await ref.read(blockedUsersProvider.notifier).unblock(widget.user.userId);
+      // The successful unblock removes this user from the controller's state, so
+      // the list rebuilds and THIS tile's State is disposed during the await.
+      // Guard before touching anything (cage-match Kelvin + Carnot): the messenger
+      // was captured pre-await so it's safe, but bail if we're gone.
+      if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(content: Text('${widget.user.displayName} unblocked.')),
       );
-      // The list rebuilds from the controller's optimistic state removal — this
-      // tile is gone, so no setState(_busy=false) needed (and would fire after
-      // dispose). Guard anyway for the error path below.
+      // No setState(_busy=false) on success — the tile is gone. The error path
+      // below restores it.
     } catch (_) {
       if (!mounted) return;
       setState(() => _busy = false);

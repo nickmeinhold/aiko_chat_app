@@ -5,6 +5,8 @@
 // an in-memory token store), mirroring widget_test.dart, then logs in so
 // blockedUsersProvider sees an authenticated user.
 
+import 'dart:async';
+
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
@@ -104,6 +106,41 @@ void main() {
 
     expect(rest.reportCalls, [('m1', ReportReason.harassment)]);
     expect(c.read(blockedUserIdsProvider), isEmpty); // reporting never blocks
+  });
+
+  test('block WAITS for the in-flight initial load before mutating — the race '
+      'guard contract (cage-match Carnot HIGH)', () async {
+    // The clobber Carnot flagged (a stale build publishing over the mutation) is a
+    // nondeterministic microtask race; rather than assert a flaky OUTCOME, this
+    // pins the GUARD that removes the race deterministically: block() must not
+    // complete until the initial listBlocks load has settled, so build() can never
+    // land after — and thus never clobber — the mutation.
+    final rest = FakeRestApi();
+    final c = _loggedInContainer(rest);
+    await c.read(authControllerProvider.future);
+    await c.read(authControllerProvider.notifier).login('nick', 'pw');
+
+    // Hold the initial GET in flight, THEN start the build so it parks in loading.
+    rest.listBlocksGate = Completer<void>();
+    c.read(blockedUsersProvider);
+
+    var blockDone = false;
+    final blockFut = c
+        .read(blockedUsersProvider.notifier)
+        .block('u2', displayName: 'Alice')
+        .then((_) => blockDone = true);
+
+    // Let microtasks drain. With the await-future guard, block() is still parked
+    // on the gated load → NOT done. Without it, block() races ahead and completes.
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(blockDone, isFalse,
+        reason: 'block must wait for the initial load to settle before mutating');
+
+    rest.listBlocksGate!.complete();
+    await blockFut;
+    expect(blockDone, isTrue);
+    expect(c.read(blockedUserIdsProvider), {'u2'});
   });
 
   test('a failing block surfaces the error and leaves state unchanged', () async {

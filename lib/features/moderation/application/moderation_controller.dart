@@ -2,8 +2,8 @@
 ///
 /// Owns the current account's block list and the block/unblock/report actions.
 /// The block enforcement is BACKEND-first (the gateway hides blocked content on
-/// read/fanout); this layer adds the INSTANT client-side effect — an optimistic
-/// block updates [blockedUserIdsProvider] immediately, so already-cached messages
+/// read/fanout); this layer adds the client-side effect — once the gateway
+/// confirms a block, [blockedUserIdsProvider] updates and already-cached messages
 /// from the blocked user vanish on the next frame without waiting for a reload.
 library;
 
@@ -45,10 +45,22 @@ class BlockedUsersController extends AsyncNotifier<List<BlockedUser>> {
   }
 
   /// Block [userId] (optionally with a known [displayName] so the list renders
-  /// without a reload). Optimistic: the gateway call goes first, then state is
-  /// updated so the UI hides the user instantly. On a sustained failure the
-  /// future throws and state is unchanged (the caller surfaces the error).
+  /// without a reload). REST-confirmed THEN local state: the gateway call goes
+  /// first, then state is updated so the UI hides the user. On a sustained failure
+  /// the future throws and state is unchanged (the caller surfaces the error).
+  ///
+  /// LOAD-RACE GUARD (cage-match Carnot HIGH): `messagesProvider` lazily kicks off
+  /// build()'s listBlocks GET; a block fired before that GET settles would set
+  /// state, then be CLOBBERED when the stale in-flight build publishes its
+  /// pre-block snapshot — the block silently reappearing. Awaiting `future` first
+  /// serializes the mutation AFTER the load completes (instant once loaded), so
+  /// build can no longer overwrite it. The load's own error is swallowed here (a
+  /// failed initial GET shouldn't block the user from blocking — we proceed from
+  /// an empty/last-good state).
   Future<void> block(String userId, {String? displayName}) async {
+    try {
+      await future;
+    } catch (_) {/* initial load failed; proceed from current state */}
     await ref.read(restApiProvider).blockUser(userId);
     final current = state.value ?? const <BlockedUser>[];
     if (current.any((b) => b.userId == userId)) return; // already present
@@ -60,8 +72,13 @@ class BlockedUsersController extends AsyncNotifier<List<BlockedUser>> {
     state = AsyncData([entry, ...current]);
   }
 
-  /// Unblock [userId]. Optimistic removal after the gateway confirms.
+  /// Unblock [userId]. REST-confirmed then local removal. Same load-race guard as
+  /// [block] — settle the initial load before mutating so a concurrent build()
+  /// can't clobber the removal.
   Future<void> unblock(String userId) async {
+    try {
+      await future;
+    } catch (_) {/* initial load failed; proceed from current state */}
     await ref.read(restApiProvider).unblockUser(userId);
     final current = state.value ?? const <BlockedUser>[];
     state = AsyncData(current.where((b) => b.userId != userId).toList());

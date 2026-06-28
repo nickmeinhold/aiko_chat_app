@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
@@ -123,6 +125,10 @@ class FakeRestApi implements ChatRestApi {
   final List<BlockedUser> blocks = [];
   final List<(String messageId, ReportReason reason)> reportCalls = [];
 
+  /// If set, `listBlocks` awaits this before returning — lets a test hold the
+  /// initial load in flight to probe the block/build clobber race.
+  Completer<void>? listBlocksGate;
+
   @override
   Future<void> blockUser(String userId) async {
     if (moderationThrows != null) throw moderationThrows!;
@@ -142,7 +148,10 @@ class FakeRestApi implements ChatRestApi {
   }
 
   @override
-  Future<List<BlockedUser>> listBlocks() async => List.unmodifiable(blocks);
+  Future<List<BlockedUser>> listBlocks() async {
+    if (listBlocksGate != null) await listBlocksGate!.future;
+    return List.unmodifiable(blocks);
+  }
 
   @override
   Future<void> reportMessage(String messageId, ReportReason reason) async {
