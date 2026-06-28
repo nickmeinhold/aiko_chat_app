@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
@@ -21,6 +22,11 @@ class ChatScreen extends ConsumerWidget {
       appBar: AppBar(
         title: Text(channelsAsync.value?.firstOrNull?.name ?? 'Chat'),
         actions: [
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings),
+            onPressed: () => context.push('/settings'),
+          ),
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),

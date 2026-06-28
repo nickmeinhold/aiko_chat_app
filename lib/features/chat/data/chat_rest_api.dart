@@ -48,6 +48,17 @@ class HandleTaken implements Exception {
   String toString() => 'HandleTaken';
 }
 
+/// Thrown by [ChatRestApi.deleteAccount] when the gateway refuses the deletion
+/// because the user is the sole admin of one or more channels (409). The
+/// settings UI surfaces [message] so the user knows which channels to hand over
+/// or leave first, rather than a generic failure.
+class SoleAdminDeletionBlocked implements Exception {
+  final String message;
+  const SoleAdminDeletionBlocked(this.message);
+  @override
+  String toString() => 'SoleAdminDeletionBlocked($message)';
+}
+
 /// The history/auth/media REST seam (plan §B1; media is a later phase). No
 /// lifecycle. Riverpod + the repository depend on THIS, never on `dio`.
 abstract interface class ChatRestApi {
@@ -82,6 +93,13 @@ abstract interface class ChatRestApi {
   Future<String> refresh(String refreshToken);
 
   Future<AppUser> me();
+
+  /// Permanently delete the authenticated user's account (Apple 5.1.1(v)).
+  /// Succeeds silently (the gateway returns 204). Throws
+  /// [SoleAdminDeletionBlocked] on a 409 (sole admin of a channel) and
+  /// [Unauthorized] on a terminal auth rejection.
+  Future<void> deleteAccount();
+
   Future<List<Channel>> listChannels();
   /// A page of channel history (ascending). [before] pages older (scroll-up);
   /// [after] pages newer (reconnect catch-up). Mutually exclusive — the gateway

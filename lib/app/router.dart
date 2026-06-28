@@ -18,6 +18,7 @@ import '../features/auth/presentation/claim_handle_screen.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/chat/presentation/chat_screen.dart';
 import '../features/chat/presentation/splash_screen.dart';
+import '../features/settings/presentation/settings_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   // Bridge the auth AsyncValue into a Listenable so GoRouter re-runs `redirect`
@@ -72,6 +73,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: '/claim-handle', builder: (_, _) => const ClaimHandleScreen()),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
+      GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
     ],
   );
 });
