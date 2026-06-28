@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Local pre-push gate for aiko_chat_app.
+#
+# Zero-cost stand-in for the GitHub Actions CI (.github/workflows/ci.yml) that is
+# billing-blocked: Nick does not pay for Actions minutes. This hook enforces the
+# SAME analyze + test checks locally so red code never reaches origin — the named,
+# enforced merge gate for a solo-author repo where PRs are admin-merged.
+#
+# Install (one line, from repo root):
+#     git config core.hooksPath tool/git-hooks
+# Bypass for genuine emergencies:
+#     git push --no-verify
+#
+# Difference from ci.yml on purpose: no `flutter pub get`. CI runs it for a clean
+# checkout; locally deps are already resolved, so we skip it to keep the gate fast
+# and offline-friendly. analyze/test fail loudly if deps are actually missing.
+set -euo pipefail
+
+# pre-push gets "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin.
+# A push that only DELETES remote branches has the zero-sha for every local sha —
+# nothing to test, so let it through.
+ZERO="0000000000000000000000000000000000000000"
+only_deletes=true
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  if [ "$local_sha" != "$ZERO" ]; then
+    only_deletes=false
+  fi
+done
+if $only_deletes; then
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "▶ pre-push gate — mirrors .github/workflows/ci.yml (analyze + test)"
+
+echo "  • flutter analyze --no-fatal-infos"
+flutter analyze --no-fatal-infos
+
+echo "  • flutter test"
+flutter test
+
+echo "✓ pre-push gate passed — pushing."
