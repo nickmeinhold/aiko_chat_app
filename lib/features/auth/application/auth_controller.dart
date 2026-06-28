@@ -221,8 +221,18 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// error propagates to the caller for an inline message.
   Future<void> deleteAccount() async {
     await _rest.deleteAccount(); // throws on 409/terminal-401 → stays logged in
+    // Past this line the gateway has committed an IRREVERSIBLE delete (204): the
+    // operation has SUCCEEDED. Local teardown is best-effort cleanup, so a failure
+    // here must NEVER surface as "delete failed" (cage-match, Carnot). Tokens are
+    // cleared inside _teardownResources before the awaited disconnect, so the
+    // security-critical step still runs; a disconnect error only leaves an inert,
+    // auth-less socket the next launch rebuilds.
     state = const AsyncValue.data(null);
-    await _teardownResources();
+    try {
+      await _teardownResources();
+    } catch (_) {
+      // Swallowed — the account is already gone; nothing actionable for the user.
+    }
   }
 
   /// The idempotent terminal-logout both dead-session signals converge on
