@@ -5,6 +5,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
@@ -26,6 +27,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         children: [
+          const _SectionHeader('Safety'),
+          ListTile(
+            leading: const Icon(Icons.block),
+            title: const Text('Blocked users'),
+            subtitle: const Text("People you've blocked won't see your messages."),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/blocked'),
+          ),
           const _SectionHeader('Account'),
           ListTile(
             leading: Icon(Icons.delete_forever, color: theme.colorScheme.error),

@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../auth/data/social_auth_client.dart';
 import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/social_models.dart';
+import '../../moderation/domain/moderation_models.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
@@ -213,6 +214,28 @@ class GatewayRestApi implements ChatRestApi {
           nextAfter: data['next_after'] as String?,
         );
       });
+
+  @override
+  Future<void> blockUser(String userId) =>
+      _authedCall(() => _authed.post('/v1/users/$userId/block'));
+
+  @override
+  Future<void> unblockUser(String userId) =>
+      _authedCall(() => _authed.delete('/v1/users/$userId/block'));
+
+  @override
+  Future<List<BlockedUser>> listBlocks() => _authedCall(() async {
+        final r = await _authed.get('/v1/blocks');
+        final list = (_map(r.data)['blocks'] as List?) ?? const [];
+        return list
+            .map((e) => BlockedUser.fromJson((e as Map).cast<String, dynamic>()))
+            .toList();
+      });
+
+  @override
+  Future<void> reportMessage(String messageId, ReportReason reason) =>
+      _authedCall(() => _authed.post('/v1/messages/$messageId/report',
+          data: {'reason': reason.wire}));
 
   /// Run an authed request, translating a *terminal* auth rejection — a 401 that
   /// survived [AuthInterceptor]'s single-flight refresh-and-retry, or a 403 —

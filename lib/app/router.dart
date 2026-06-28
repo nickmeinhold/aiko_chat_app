@@ -18,6 +18,7 @@ import '../features/auth/presentation/claim_handle_screen.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/chat/presentation/chat_screen.dart';
 import '../features/chat/presentation/splash_screen.dart';
+import '../features/moderation/presentation/blocked_users_screen.dart';
 import '../features/settings/presentation/settings_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -74,6 +75,9 @@ final routerProvider = Provider<GoRouter>((ref) {
           path: '/claim-handle', builder: (_, _) => const ClaimHandleScreen()),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
+      GoRoute(
+          path: '/settings/blocked',
+          builder: (_, _) => const BlockedUsersScreen()),
     ],
   );
 });

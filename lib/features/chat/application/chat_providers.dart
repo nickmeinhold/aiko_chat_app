@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
+import '../../moderation/application/moderation_controller.dart';
 import '../data/chat_repository.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
@@ -70,8 +71,19 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
 /// The reactive, ordered message list for a channel. Awaits the repository, then
 /// forwards its cache-backed stream — each [MessageTile] watches the narrowest
 /// slice (this family entry) rather than the whole repo.
+/// CLIENT-SIDE BLOCK HIDE (#7): messages from a blocked user are filtered out
+/// here, the instant complement to the gateway's server-side hide. The gateway is
+/// the real boundary (it never delivers/returns a blocked user's NEW content), but
+/// already-cached rows from before the block would otherwise linger until the next
+/// reconnect; this filter removes them on the next frame. Watching
+/// [blockedUserIdsProvider] means a fresh block rebuilds this provider and
+/// re-filters immediately. A null `sender.userId` (external actor) is never in the
+/// set, so bot/LLM messages are always kept.
 final messagesProvider =
     StreamProvider.autoDispose.family<List<Message>, String>((ref, channelId) async* {
   final repo = await ref.watch(chatRepositoryProvider.future);
-  yield* repo.watchChannel(channelId);
+  final blocked = ref.watch(blockedUserIdsProvider);
+  yield* repo.watchChannel(channelId).map((msgs) => blocked.isEmpty
+      ? msgs
+      : msgs.where((m) => !blocked.contains(m.sender.userId)).toList());
 });

@@ -404,14 +404,20 @@ class ChatRepository {
       final page = await _rest.getHistory(channelId, after: cursor ?? '', limit: 50);
       if (_aborted(epoch)) return; // TOCTOU: re-check AFTER await, BEFORE write
       if (page.messages.isEmpty) {
-        // With a visible-only fence (deleted rows excluded), the fence row is
-        // guaranteed > cursor AND visible, so a non-empty page is guaranteed
-        // while cursor < fence. An empty page here is an INVARIANT VIOLATION, not
-        // a silent termination — blessing it would advance the watermark to a
-        // fence the cache never reached, masking real loss. Do NOT advance.
+        // An empty page while cursor < fence USED to be an invariant violation
+        // (assert). It no longer is: visibility can legitimately SHRINK between
+        // the fence read (at subscribe) and this paging — a moderation block (#7)
+        // or a soft-delete can hide the very row the fence pointed at, so the
+        // fence becomes unreachable by currently-visible rows. This is expected,
+        // not corruption. Handle it as a benign re-sync: surface it via telemetry
+        // (still observable — it IS unusual), then RETURN WITHOUT advancing the
+        // watermark. The next reconnect recomputes a FRESH per-viewer fence (now
+        // consistent with the shrunk visibility) and the loop converges — see the
+        // gateway's latest_ulid docstring (within-instant coupling) + claude-tasks
+        // #15. Not advancing means we never claim coverage we don't have, so a
+        // GENUINE gap (if one ever existed) still re-attempts every reconnect
+        // rather than being masked.
         _telemetry.historyGapBeforeFence(channelId, cursor, fence);
-        assert(false,
-            'empty history page while cursor ($cursor) < fence ($fence) — gap');
         return;
       }
       for (final m in page.messages) {
