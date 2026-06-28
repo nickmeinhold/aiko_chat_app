@@ -310,6 +310,31 @@ void main() {
     });
   });
 
+  group('#15 — visibility shrink (empty page before fence is benign)', () {
+    test('an unreachable fence does NOT assert/crash — telemetry only, no '
+        'watermark advance, no reconnect failure', () async {
+      // The fence points at 01D, but history returns an EMPTY page (the row the
+      // fence pointed at became hidden — a moderation block or soft-delete landed
+      // between the subscribe fence-read and this paging). Pre-#15 this tripped
+      // `assert(false)`, surfacing as a caught AssertionError in reconnectFailed.
+      // Post-#15 it's expected: observe via historyGap, return gracefully.
+      transport.fences = {_chan: '01D'};
+      // No page staged for after='' → FakeChatRestApi returns an empty page.
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+
+      // Observability kept: the gap was surfaced.
+      expect(spy.historyGaps, isNotEmpty,
+          reason: 'the unreachable fence is still surfaced via telemetry');
+      // The fix: NO assert fired, so the reconnect did not fail.
+      expect(spy.reconnectErrors, isEmpty,
+          reason: 'empty-page-before-fence must not assert (visibility can shrink)');
+      // Watermark NOT advanced — we never claim coverage we don't have, so the
+      // next reconnect (with a fresh, reachable fence) re-attempts and converges.
+      expect(await cache.historyContiguousThrough(_chan), isNull);
+    });
+  });
+
   group('outbox lifecycle', () {
     test('no-teleport — retry preserves createdAt + timeline position', () async {
       await repo.sendMessage(_chan, 'first');

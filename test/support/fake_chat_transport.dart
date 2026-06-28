@@ -8,6 +8,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 
 /// A [ChatTransport] faked at the INTERFACE level (the shipped fakes are at the
 /// `WebSocketChannel` level — too low for B4, design 04 test plan). Tests drive
@@ -154,6 +155,15 @@ class FakeChatRestApi implements ChatRestApi {
   Future<void> deleteAccount() => throw UnimplementedError();
   @override
   Future<List<Channel>> listChannels() => throw UnimplementedError();
+  @override
+  Future<void> blockUser(String userId) => throw UnimplementedError();
+  @override
+  Future<void> unblockUser(String userId) => throw UnimplementedError();
+  @override
+  Future<List<BlockedUser>> listBlocks() => throw UnimplementedError();
+  @override
+  Future<void> reportMessage(String messageId, ReportReason reason) =>
+      throw UnimplementedError();
   @override
   Future<SocialOutcome> socialSignIn({
     required SocialProvider provider,

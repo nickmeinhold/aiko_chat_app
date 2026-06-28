@@ -404,14 +404,29 @@ class ChatRepository {
       final page = await _rest.getHistory(channelId, after: cursor ?? '', limit: 50);
       if (_aborted(epoch)) return; // TOCTOU: re-check AFTER await, BEFORE write
       if (page.messages.isEmpty) {
-        // With a visible-only fence (deleted rows excluded), the fence row is
-        // guaranteed > cursor AND visible, so a non-empty page is guaranteed
-        // while cursor < fence. An empty page here is an INVARIANT VIOLATION, not
-        // a silent termination — blessing it would advance the watermark to a
-        // fence the cache never reached, masking real loss. Do NOT advance.
+        // An empty page while cursor < fence USED to be an invariant violation
+        // (assert). It no longer is: visibility can legitimately SHRINK between
+        // the fence read (at subscribe) and this paging — a moderation block (#7)
+        // or a soft-delete can hide the very row the fence pointed at, so the
+        // fence becomes unreachable by currently-visible rows. This is expected,
+        // not corruption. Handle it as a benign re-sync: surface it via telemetry
+        // (still observable — it IS unusual), then RETURN WITHOUT advancing the
+        // watermark. The next reconnect recomputes a FRESH per-viewer fence and
+        // the loop converges.
+        //
+        // CONVERGENCE CONTRACT (cage-match Carnot HIGH, cross-repo): the self-heal
+        // holds ONLY because the gateway's `latest_ulid` fence is per-viewer and
+        // applies the SAME visibility filter as `get_history` (soft-delete + block)
+        // — aiko_chat_gateway#22. So once a block/delete lands, the next subscribe's
+        // fence excludes the now-hidden row and is reachable. If the gateway ever
+        // regressed that (a fence over rows hidden from the viewer), this would
+        // refetch the same watermark every reconnect forever — a permanent
+        // reconnect-cycle retry rather than a hot loop. Repeated gaps across
+        // reconnects should therefore be treated as a sync FAULT, not noise
+        // (claude-tasks #16). Not advancing the watermark means we never claim
+        // coverage we don't have — a genuine gap re-attempts rather than being
+        // masked (it is now telemetried, not asserted).
         _telemetry.historyGapBeforeFence(channelId, cursor, fence);
-        assert(false,
-            'empty history page while cursor ($cursor) < fence ($fence) — gap');
         return;
       }
       for (final m in page.messages) {

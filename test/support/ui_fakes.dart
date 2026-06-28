@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
+import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 
 /// A full-surface [ChatRestApi] fake for the widget/app-shell tests (the shipped
 /// `FakeChatRestApi` only implements the B4 history slice). Each endpoint is
@@ -113,6 +116,48 @@ class FakeRestApi implements ChatRestApi {
   Future<HistoryPage> getHistory(String channelId,
           {String? before, String? after, int limit = 50}) async =>
       HistoryPage(channelId: channelId, messages: const []);
+
+  // --- moderation (#7) — functional fakes so widget tests can drive block/report.
+
+  /// Programmable: if set, the next block/unblock/report throws this.
+  Object? moderationThrows;
+
+  final List<BlockedUser> blocks = [];
+  final List<(String messageId, ReportReason reason)> reportCalls = [];
+
+  /// If set, `listBlocks` awaits this before returning — lets a test hold the
+  /// initial load in flight to probe the block/build clobber race.
+  Completer<void>? listBlocksGate;
+
+  @override
+  Future<void> blockUser(String userId) async {
+    if (moderationThrows != null) throw moderationThrows!;
+    if (blocks.any((b) => b.userId == userId)) return;
+    blocks.insert(
+        0,
+        BlockedUser(
+            userId: userId,
+            displayName: 'User $userId',
+            createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)));
+  }
+
+  @override
+  Future<void> unblockUser(String userId) async {
+    if (moderationThrows != null) throw moderationThrows!;
+    blocks.removeWhere((b) => b.userId == userId);
+  }
+
+  @override
+  Future<List<BlockedUser>> listBlocks() async {
+    if (listBlocksGate != null) await listBlocksGate!.future;
+    return List.unmodifiable(blocks);
+  }
+
+  @override
+  Future<void> reportMessage(String messageId, ReportReason reason) async {
+    if (moderationThrows != null) throw moderationThrows!;
+    reportCalls.add((messageId, reason));
+  }
 }
 
 /// A [SocialAuthClient] fake — returns a canned credential (or throws, e.g.

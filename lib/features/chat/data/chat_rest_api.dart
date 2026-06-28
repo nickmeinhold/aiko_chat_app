@@ -1,6 +1,7 @@
 import '../../auth/data/social_auth_client.dart';
 import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/social_models.dart';
+import '../../moderation/domain/moderation_models.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
 
@@ -106,4 +107,23 @@ abstract interface class ChatRestApi {
   /// uses `after` if both are given.
   Future<HistoryPage> getHistory(String channelId,
       {String? before, String? after, int limit = 50});
+
+  // --- moderation (UGC — Apple 1.2 / Google UGC, #7) -----------------------
+
+  /// Block [userId] for the current account (mutual: neither sees the other's
+  /// messages, nor may reply across the block). Idempotent at the gateway (a
+  /// re-block is a 204 no-op). [Unauthorized] on a terminal auth rejection.
+  Future<void> blockUser(String userId);
+
+  /// Remove the current account's block of [userId]. Idempotent (204 even if not
+  /// blocked).
+  Future<void> unblockUser(String userId);
+
+  /// The users the current account has blocked (most recent first) — backs the
+  /// Settings "Blocked users" list.
+  Future<List<BlockedUser>> listBlocks();
+
+  /// Report [messageId] as objectionable with [reason] (feeds the gateway's ops
+  /// queue behind the 24h-action commitment). Idempotent per (message, reporter).
+  Future<void> reportMessage(String messageId, ReportReason reason);
 }

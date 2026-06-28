@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
+import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
 import '../data/transport/chat_transport.dart';
 import '../domain/message.dart';
@@ -183,41 +184,50 @@ class MessageTile extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final bubbleColor = isMine ? scheme.primaryContainer : scheme.surfaceContainerHighest;
 
+    // Moderation affordance (#7): long-press ANOTHER human's message to
+    // report/block. Gated to a non-mine message with a real account behind it —
+    // you can't block yourself or an external actor (LLM/robot have no userId).
+    final canModerate = !isMine && message.sender.userId != null;
+
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-        constraints: const BoxConstraints(maxWidth: 320),
-        decoration: BoxDecoration(
-          color: bubbleColor,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment:
-              isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-          children: [
-            Text(
-              message.sender.displayLabel,
-              style: Theme.of(context).textTheme.labelSmall,
-            ),
-            const SizedBox(height: 2),
-            Text(message.body),
-            const SizedBox(height: 2),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _formatTime(message.createdAt),
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
-                if (isMine) ...[
-                  const SizedBox(width: 6),
-                  _DeliveryIndicator(message: message),
+      child: GestureDetector(
+        onLongPress:
+            canModerate ? () => showMessageActions(context, ref, message) : null,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+          constraints: const BoxConstraints(maxWidth: 320),
+          decoration: BoxDecoration(
+            color: bubbleColor,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment:
+                isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              Text(
+                message.sender.displayLabel,
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+              const SizedBox(height: 2),
+              Text(message.body),
+              const SizedBox(height: 2),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatTime(message.createdAt),
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                  if (isMine) ...[
+                    const SizedBox(width: 6),
+                    _DeliveryIndicator(message: message),
+                  ],
                 ],
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
