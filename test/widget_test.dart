@@ -16,9 +16,11 @@ import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show HandleTaken, SoleAdminDeletionBlocked;
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
+import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -34,6 +36,7 @@ ProviderContainer makeContainer({
   required FakeChatTransport transport,
   InMemoryTokenStore? store,
   FakeSocialAuthClient? social,
+  FakeEulaStore? eula,
 }) {
   final tokenStore = store ?? InMemoryTokenStore();
   late final ProviderContainer container;
@@ -42,6 +45,12 @@ ProviderContainer makeContainer({
     transportProvider.overrideWithValue(transport),
     // The real social client hits Apple/Google platform channels — fake it.
     socialAuthClientProvider.overrideWithValue(social ?? FakeSocialAuthClient()),
+    // EULA acceptance is faked at its store seam. Default ACCEPTED so existing
+    // tests reach login/chat unchanged; gate-specific tests pass accepted:false.
+    eulaStoreProvider.overrideWithValue(eula ?? FakeEulaStore(accepted: true)),
+    // Inject the (real) Terms text synchronously so no async asset read races
+    // pumpAndSettle. Loaded once from the bundled asset in setUpAll.
+    eulaTextProvider.overrideWith((ref) => _realEula),
     tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
       store: tokenStore,
       remoteRefresh: (_) async => 'access2',
@@ -74,7 +83,24 @@ Future<void> signIn(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// The real bundled Terms text, loaded once so widget tests inject it
+/// synchronously (deterministic) while still exercising the actual asset.
+String _realEula = '';
+
 void main() {
+  setUpAll(() async {
+    _realEula = await rootBundle.loadString('assets/legal/eula.md');
+  });
+
+  test('the bundled EULA asset carries the Apple 1.2 zero-tolerance clause',
+      () async {
+    final text = await rootBundle.loadString('assets/legal/eula.md');
+    expect(text, contains('no tolerance for objectionable content'));
+    expect(text, contains('24 hours')); // commitment to act
+    expect(text.toLowerCase(), contains('block')); // block mechanism named
+    expect(text.toLowerCase(), contains('report')); // report mechanism named
+  });
+
   testWidgets('logged out → login screen', (tester) async {
     final container = makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
     addTearDown(container.dispose);
@@ -378,6 +404,108 @@ void main() {
 
     // No login form — the stored tokens + me() restored the session.
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+  });
+
+  // --- EULA acceptance gate (Apple 1.2 / Google UGC) ------------------------
+
+  testWidgets('fresh install → EULA gate blocks the login screen',
+      (tester) async {
+    final container = makeContainer(
+      rest: FakeRestApi(),
+      transport: FakeChatTransport(),
+      eula: FakeEulaStore(accepted: false),
+    );
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+
+    // The Terms gate is up; login is NOT reachable behind it.
+    expect(find.widgetWithText(AppBar, 'Terms of Use'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsNothing);
+    expect(find.text('Accept & Continue'), findsOneWidget);
+    // The zero-tolerance clause Apple 1.2 looks for is present in the text.
+    expect(find.textContaining('no tolerance for objectionable content'),
+        findsOneWidget);
+  });
+
+  testWidgets('Accept is disabled until the user scrolls to the bottom',
+      (tester) async {
+    final container = makeContainer(
+      rest: FakeRestApi(),
+      transport: FakeChatTransport(),
+      eula: FakeEulaStore(accepted: false),
+    );
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+
+    FilledButton acceptButton() => tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Accept & Continue'));
+    expect(acceptButton().onPressed, isNull); // disabled before scrolling
+    expect(find.text('Scroll to the bottom to continue'), findsOneWidget);
+
+    await tester.drag(
+        find.byType(SingleChildScrollView), const Offset(0, -5000));
+    await tester.pumpAndSettle();
+
+    expect(acceptButton().onPressed, isNotNull); // enabled once read
+  });
+
+  testWidgets('accepting the EULA persists and reveals the login screen',
+      (tester) async {
+    final eula = FakeEulaStore(accepted: false);
+    final container = makeContainer(
+        rest: FakeRestApi(), transport: FakeChatTransport(), eula: eula);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await tester.drag(
+        find.byType(SingleChildScrollView), const Offset(0, -5000));
+    await tester.pumpAndSettle();
+    await tester
+        .tap(find.widgetWithText(FilledButton, 'Accept & Continue'));
+    await tester.pumpAndSettle();
+
+    expect(eula.accepted, isTrue); // persisted at the store seam
+    expect(eula.setCalls, 1);
+    // Gate cleared → the guard routes a logged-out device to login.
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Terms of Use'), findsNothing);
+  });
+
+  testWidgets('already-accepted device → no gate, straight to login',
+      (tester) async {
+    final container = makeContainer(
+      rest: FakeRestApi(),
+      transport: FakeChatTransport(),
+      eula: FakeEulaStore(accepted: true),
+    );
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+
+    expect(find.widgetWithText(AppBar, 'Terms of Use'), findsNothing);
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+  });
+
+  testWidgets('Settings exposes the Terms for re-reading (read-only)',
+      (tester) async {
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.tap(find.byIcon(Icons.settings));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Terms of Use & Community Guidelines'));
+    await tester.pumpAndSettle();
+
+    // The viewer shows the Terms but offers NO acceptance button.
+    expect(find.textContaining('no tolerance for objectionable content'),
+        findsOneWidget);
+    expect(find.text('Accept & Continue'), findsNothing);
   });
 
   // --- account deletion (Apple 5.1.1(v)) ------------------------------------

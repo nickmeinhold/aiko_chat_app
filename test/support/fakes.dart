@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/legal/data/eula_store.dart';
 import 'package:aiko_chat_app/services/secure_token_store.dart';
 import 'package:dio/dio.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -20,6 +21,24 @@ class InMemoryTokenStore extends SecureTokenStore {
   Future<void> clear() async => _tokens = null;
 
   AuthTokens? get current => _tokens;
+}
+
+/// In-memory EULA store: fakes the SharedPreferences-backed acceptance flag at
+/// the seam, so tests never touch the platform channel. Defaults to NOT
+/// accepted; `accepted: true` lets a test bypass the first-run gate.
+class FakeEulaStore extends EulaStore {
+  bool accepted;
+  int setCalls = 0;
+  FakeEulaStore({this.accepted = false});
+
+  @override
+  Future<bool> hasAccepted() async => accepted;
+
+  @override
+  Future<void> setAccepted() async {
+    accepted = true;
+    setCalls++;
+  }
 }
 
 /// Programmable dio adapter: routes each request through [handler].

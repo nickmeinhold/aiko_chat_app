@@ -50,6 +50,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 : null,
             onTap: _deleting ? null : _confirmAndDelete,
           ),
+          const _SectionHeader('Legal'),
+          ListTile(
+            leading: const Icon(Icons.description_outlined),
+            title: const Text('Terms of Use & Community Guidelines'),
+            subtitle: const Text('The terms you agreed to, including our '
+                'zero-tolerance policy.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/eula'),
+          ),
         ],
       ),
     );
