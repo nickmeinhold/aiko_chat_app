@@ -94,33 +94,50 @@ class AuthController extends AsyncNotifier<AppUser?> {
     }
   }
 
+  /// The shared ingress preamble for every "start a sign-in ceremony" entry
+  /// point (native, broker, passkey-authenticate, passkey-register). Ingress-only
+  /// AND single-flight — the guard rejects when:
+  ///   * a session is already live (`state.value != null`) — a stray call must
+  ///     not park a PendingHandle behind a live session (Carnot, #37); OR
+  ///   * a ceremony is already in flight (`state.isLoading`) — a second
+  ///     concurrent ingress would issue a SECOND gateway challenge before the
+  ///     first `finish` resolved, and for passkeys the start-of-ceremony
+  ///     `cancelCurrentAuthenticatorOperation()` would silently cancel the first
+  ///     sheet (mapped to a no-op restore), letting the LATER challenge win
+  ///     (Carnot, #38). The `value != null` guard alone left this open because a
+  ///     logged-out `AsyncLoading` has `value == null`.
+  ///
+  /// Centralised here so the guard CAN'T be forgotten on the next ingress added
+  /// (it already was, once). [ceremony] receives the captured prior state to
+  /// thread into a cancellation restore / [_applyOutcome].
+  Future<void> _ingress(
+      Future<AppUser?> Function(AppUser? prior) ceremony) async {
+    if (state.value != null || state.isLoading) return;
+    final prior = state.value;
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() => ceremony(prior));
+  }
+
   /// Sign in with a social [provider]. Drives the native SDK for a credential,
   /// hands the ID token to the gateway, then either logs straight in (known
   /// identity) or parks a [PendingHandle] (new identity) so the router shows the
   /// claim-handle screen. A user cancellation restores the prior state silently
   /// — no error banner.
-  Future<void> signInWith(SocialProvider provider) async {
-    // Social sign-in is ingress-only: ignore it when already authenticated, so a
-    // stray call can't park a PendingHandle behind a live session (Carnot).
-    if (state.value != null) return;
-    final prior = state.value;
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
-      final SocialCredential cred;
-      try {
-        cred = await _social.signIn(provider);
-      } on SocialSignInCancelled {
-        return prior; // user backed out — no-op, restore prior state
-      }
-      final outcome = await _rest.socialSignIn(
-        provider: provider,
-        idToken: cred.idToken,
-        rawNonce: cred.rawNonce,
-        name: cred.name,
-      );
-      return _applyOutcome(outcome, prior);
-    });
-  }
+  Future<void> signInWith(SocialProvider provider) => _ingress((prior) async {
+        final SocialCredential cred;
+        try {
+          cred = await _social.signIn(provider);
+        } on SocialSignInCancelled {
+          return prior; // user backed out — no-op, restore prior state
+        }
+        final outcome = await _rest.socialSignIn(
+          provider: provider,
+          idToken: cred.idToken,
+          rawNonce: cred.rawNonce,
+          name: cred.name,
+        );
+        return _applyOutcome(outcome, prior);
+      });
 
   /// Sign in via a gateway OAuth-BROKER provider (e.g. GitHub) identified by
   /// [slug]. Mirrors [signInWith] but the ingress is the system web-auth session
@@ -128,24 +145,17 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// flow, redeem the handoff at the gateway, then route on the SAME outcome
   /// (log in, or park a PendingHandle for /claim-handle). A user dismissal of the
   /// browser restores the prior state silently (no error banner).
-  Future<void> signInWithBroker(String slug) async {
-    // Ingress-only, same guard as signInWith: a stray call while authenticated
-    // must not park a PendingHandle behind a live session.
-    if (state.value != null) return;
-    final prior = state.value;
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
-      final BrokerHandoff handoff;
-      try {
-        handoff = await _broker.authenticate(slug);
-      } on SocialSignInCancelled {
-        return prior; // user closed the browser — no-op, restore prior state
-      }
-      final outcome =
-          await _rest.exchangeOAuth(handoff.code, handoff.verifier);
-      return _applyOutcome(outcome, prior);
-    });
-  }
+  Future<void> signInWithBroker(String slug) => _ingress((prior) async {
+        final BrokerHandoff handoff;
+        try {
+          handoff = await _broker.authenticate(slug);
+        } on SocialSignInCancelled {
+          return prior; // user closed the browser — no-op, restore prior state
+        }
+        final outcome =
+            await _rest.exchangeOAuth(handoff.code, handoff.verifier);
+        return _applyOutcome(outcome, prior);
+      });
 
   /// Sign in with an EXISTING passkey (WebAuthn). Mirrors [signInWithBroker] but
   /// the ingress is a gateway challenge + an on-device authenticator assertion:
@@ -155,23 +165,18 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// state silently (no error banner). A "no passkey on this device" error is a
   /// real [SocialSignInFailed] — surfaced, not swallowed — so the UI can nudge
   /// toward [registerWithPasskey].
-  Future<void> signInWithPasskey() async {
-    if (state.value != null) return; // ingress-only (same guard as the others)
-    final prior = state.value;
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
-      final challenge = await _rest.startPasskeyAuthentication();
-      final String assertion;
-      try {
-        assertion = await _passkey.authenticate(challenge.optionsJson);
-      } on SocialSignInCancelled {
-        return prior; // user dismissed the sheet — no-op, restore prior state
-      }
-      final outcome = await _rest.finishPasskeyAuthentication(
-          challenge.state, assertion);
-      return _applyOutcome(outcome, prior);
-    });
-  }
+  Future<void> signInWithPasskey() => _ingress((prior) async {
+        final challenge = await _rest.startPasskeyAuthentication();
+        final String assertion;
+        try {
+          assertion = await _passkey.authenticate(challenge.optionsJson);
+        } on SocialSignInCancelled {
+          return prior; // user dismissed the sheet — no-op, restore prior state
+        }
+        final outcome = await _rest.finishPasskeyAuthentication(
+            challenge.state, assertion);
+        return _applyOutcome(outcome, prior);
+      });
 
   /// Create a NEW passkey and account (first-passkey-creates-account). Mirrors
   /// [signInWithPasskey] with the registration ceremony: fetch creation options,
@@ -179,23 +184,18 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// gateway (which stores only the public key and mints the account). Routes on
   /// the SAME outcome — typically a [PendingHandle] so the new user claims a
   /// handle before landing in chat. Cancellation restores the prior state.
-  Future<void> registerWithPasskey() async {
-    if (state.value != null) return; // ingress-only
-    final prior = state.value;
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
-      final challenge = await _rest.startPasskeyRegistration();
-      final String attestation;
-      try {
-        attestation = await _passkey.register(challenge.optionsJson);
-      } on SocialSignInCancelled {
-        return prior; // user dismissed the sheet — no-op, restore prior state
-      }
-      final outcome = await _rest.finishPasskeyRegistration(
-          challenge.state, attestation);
-      return _applyOutcome(outcome, prior);
-    });
-  }
+  Future<void> registerWithPasskey() => _ingress((prior) async {
+        final challenge = await _rest.startPasskeyRegistration();
+        final String attestation;
+        try {
+          attestation = await _passkey.register(challenge.optionsJson);
+        } on SocialSignInCancelled {
+          return prior; // user dismissed the sheet — no-op, restore prior state
+        }
+        final outcome = await _rest.finishPasskeyRegistration(
+            challenge.state, attestation);
+        return _applyOutcome(outcome, prior);
+      });
 
   /// Apply a verified [outcome] (from native `/social` OR broker `/exchange` —
   /// the gateway's single identity door makes them identical here): a known

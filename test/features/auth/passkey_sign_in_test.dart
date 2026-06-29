@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
@@ -108,6 +110,51 @@ void main() {
       await c.read(authControllerProvider.notifier).signInWithPasskey();
       expect(passkey.authenticateCalls, callsAfterLogin,
           reason: 'no passkey flow is started while a session is live');
+    });
+
+    test(
+        'second ingress while the first is in flight is a no-op (single-flight)',
+        () async {
+      // Logged out, first ceremony parked inside the authenticator (sheet
+      // "open"): the controller is AsyncLoading with value == null. A second
+      // ingress here is the dangerous case — the `value != null` guard alone
+      // would let it pass, issue a SECOND challenge, and (via the
+      // start-of-ceremony cancelCurrentAuthenticatorOperation) silently cancel
+      // the first sheet, letting the later challenge win. The guard contract we
+      // assert is the ORDERING INVARIANT: while one ceremony is unresolved, no
+      // second ceremony may start — not merely the eventual outcome.
+      final rest = FakeRestApi();
+      final gate = Completer<void>();
+      final passkey =
+          FakePasskeyAuthClient(assertion: 'assert-json', gate: gate);
+      final c = makeContainer(rest: rest, passkey: passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      // First ingress: not awaited — it parks on the gate inside authenticate().
+      final first = c.read(authControllerProvider.notifier).signInWithPasskey();
+      await pumpEventQueue(); // let it reach the gate
+      expect(rest.passkeyAuthStartCalls, 1);
+      expect(passkey.authenticateCalls, 1);
+      expect(c.read(authControllerProvider).isLoading, isTrue);
+
+      // Second ingress while the first is still in flight: must be a no-op.
+      // Fire WITHOUT awaiting — if the guard is missing, this would start a
+      // second ceremony that parks on the SAME gate (hang), so we assert on the
+      // call counts after pumping rather than on the future completing.
+      unawaited(c.read(authControllerProvider.notifier).signInWithPasskey());
+      await pumpEventQueue();
+      expect(rest.passkeyAuthStartCalls, 1,
+          reason: 'no second challenge issued while one is in flight');
+      expect(passkey.authenticateCalls, 1,
+          reason: 'no second authenticator ceremony started');
+
+      // Release the first and let it complete cleanly.
+      gate.complete();
+      await first;
+      expect(rest.passkeyAuthFinishCalls, 1);
+      expect(c.read(authControllerProvider).value, isNotNull,
+          reason: 'the original ceremony still resolves to a login');
     });
   });
 

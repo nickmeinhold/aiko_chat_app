@@ -283,6 +283,7 @@ class FakePasskeyAuthClient implements PasskeyAuthClient {
     this.assertion = 'fake-assertion',
     this.registerThrows,
     this.authenticateThrows,
+    this.gate,
   });
 
   /// If set, the matching call throws this instead of returning a credential.
@@ -290,6 +291,11 @@ class FakePasskeyAuthClient implements PasskeyAuthClient {
   Object? authenticateThrows;
   String attestation;
   String assertion;
+
+  /// If set, [register]/[authenticate] park on this completer before resolving —
+  /// lets a test hold a ceremony in-flight (the platform sheet "open") to probe
+  /// the controller's single-flight guard against a concurrent second ingress.
+  Completer<void>? gate;
 
   int registerCalls = 0;
   int authenticateCalls = 0;
@@ -300,6 +306,7 @@ class FakePasskeyAuthClient implements PasskeyAuthClient {
   Future<String> register(String optionsJson) async {
     registerCalls++;
     lastRegisterOptions = optionsJson;
+    if (gate != null) await gate!.future;
     if (registerThrows != null) throw registerThrows!;
     return attestation;
   }
@@ -308,6 +315,7 @@ class FakePasskeyAuthClient implements PasskeyAuthClient {
   Future<String> authenticate(String optionsJson) async {
     authenticateCalls++;
     lastAuthenticateOptions = optionsJson;
+    if (gate != null) await gate!.future;
     if (authenticateThrows != null) throw authenticateThrows!;
     return assertion;
   }
