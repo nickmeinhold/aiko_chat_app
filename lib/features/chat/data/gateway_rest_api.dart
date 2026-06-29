@@ -66,7 +66,7 @@ class AuthInterceptor extends Interceptor {
 }
 
 class GatewayRestApi implements ChatRestApi {
-  /// Token-less client for unauthenticated endpoints (login/register/refresh).
+  /// Token-less client for unauthenticated endpoints (social/claim/refresh).
   final Dio _bare;
 
   /// Interceptor-wrapped client for authed endpoints (me/channels/history).
@@ -75,24 +75,6 @@ class GatewayRestApi implements ChatRestApi {
   GatewayRestApi({required Dio bare, required Dio authed})
       : _bare = bare,
         _authed = authed;
-
-  @override
-  Future<AuthSession> login(String username, String password) async {
-    final r = await _bare.post('/v1/auth/login',
-        data: {'username': username, 'password': password});
-    return AuthSession.fromJson(_map(r.data));
-  }
-
-  @override
-  Future<AuthSession> register(
-      String username, String displayName, String password) async {
-    final r = await _bare.post('/v1/auth/register', data: {
-      'username': username,
-      'display_name': displayName,
-      'password': password,
-    });
-    return AuthSession.fromJson(_map(r.data));
-  }
 
   @override
   Future<String> refresh(String refreshToken) async {

@@ -147,14 +147,6 @@ void main() {
       return GatewayRestApi(bare: bare, authed: authed);
     }
 
-    test('login parses AuthSession', () async {
-      final api = apiWith((_) => jsonBody(200,
-          '{"access_token":"a","refresh_token":"r","user":{"user_id":"u1","username":"alice","display_name":"Alice","aiko_username":"alice"}}'));
-      final s = await api.login('alice', 'pw');
-      expect(s.tokens.accessToken, 'a');
-      expect(s.user.username, 'alice');
-    });
-
     test('getHistory parses messages + both cursors', () async {
       final api = apiWith((_) => jsonBody(200,
           '{"channel_id":"c1","messages":[{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}],"next_before":"01J","next_after":"01K"}'));

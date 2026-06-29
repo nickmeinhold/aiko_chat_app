@@ -142,12 +142,6 @@ class FakeChatRestApi implements ChatRestApi {
   }
 
   @override
-  Future<AuthSession> login(String username, String password) =>
-      throw UnimplementedError();
-  @override
-  Future<AuthSession> register(String u, String d, String p) =>
-      throw UnimplementedError();
-  @override
   Future<String> refresh(String refreshToken) => throw UnimplementedError();
   @override
   Future<AppUser> me() => throw UnimplementedError();

@@ -14,7 +14,6 @@ class FakeRestApi implements ChatRestApi {
   FakeRestApi({
     AppUser? user,
     List<Channel>? channels,
-    this.loginThrows,
     this.meThrows,
   })  : user = user ?? defaultUser,
         channels = channels ?? const [defaultChannel];
@@ -31,9 +30,6 @@ class FakeRestApi implements ChatRestApi {
   AppUser user;
   List<Channel> channels;
 
-  /// If set, `login`/`register` throw this (e.g. `Unauthorized(401)`).
-  Object? loginThrows;
-
   /// If set, `me()` (cold-start restore) throws this.
   Object? meThrows;
 
@@ -47,7 +43,6 @@ class FakeRestApi implements ChatRestApi {
   /// If set, `deleteAccount` throws this (e.g. `SoleAdminDeletionBlocked`).
   Object? deleteThrows;
 
-  int loginCalls = 0;
   int meCalls = 0;
   int socialCalls = 0;
   int claimCalls = 0;
@@ -57,19 +52,6 @@ class FakeRestApi implements ChatRestApi {
         user: user,
         tokens: const AuthTokens(accessToken: 'access', refreshToken: 'refresh'),
       );
-
-  @override
-  Future<AuthSession> login(String username, String password) async {
-    loginCalls++;
-    if (loginThrows != null) throw loginThrows!;
-    return _session();
-  }
-
-  @override
-  Future<AuthSession> register(String u, String d, String p) async {
-    if (loginThrows != null) throw loginThrows!;
-    return _session();
-  }
 
   @override
   Future<String> refresh(String refreshToken) async => 'access2';

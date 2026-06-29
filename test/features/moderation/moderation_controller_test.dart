@@ -10,6 +10,8 @@ import 'dart:async';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
+import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart'
+    show SocialProvider;
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/moderation/application/moderation_controller.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
@@ -45,7 +47,7 @@ ProviderContainer _loggedInContainer(FakeRestApi rest) {
 Future<ProviderContainer> _loggedIn(FakeRestApi rest) async {
   final c = _loggedInContainer(rest);
   await c.read(authControllerProvider.future); // settle cold-start restore
-  await c.read(authControllerProvider.notifier).login('nick', 'pw');
+  await c.read(authControllerProvider.notifier).signInWith(SocialProvider.google);
   return c;
 }
 
@@ -118,7 +120,7 @@ void main() {
     final rest = FakeRestApi();
     final c = _loggedInContainer(rest);
     await c.read(authControllerProvider.future);
-    await c.read(authControllerProvider.notifier).login('nick', 'pw');
+    await c.read(authControllerProvider.notifier).signInWith(SocialProvider.google);
 
     // Hold the initial GET in flight, THEN start the build so it parks in loading.
     rest.listBlocksGate = Completer<void>();
