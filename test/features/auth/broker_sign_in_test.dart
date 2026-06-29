@@ -35,7 +35,7 @@ void main() {
 
   test('known identity → exchange handoff → logged in', () async {
     final rest = FakeRestApi();
-    final broker = FakeBrokerAuthClient(code: 'handoff-123');
+    final broker = FakeBrokerAuthClient(code: 'handoff-123', verifier: 'ver-abc');
     final c = makeContainer(rest: rest, broker: broker);
     addTearDown(c.dispose);
 
@@ -47,6 +47,8 @@ void main() {
     expect(broker.lastSlug, 'github', reason: 'drives the slug-specific flow');
     expect(broker.code, 'handoff-123');
     expect(rest.exchangeCalls, 1, reason: 'redeems the handoff at /exchange');
+    expect(rest.lastExchangeVerifier, 'ver-abc',
+        reason: 'the app-held verifier is presented at /exchange (cage-match #37)');
     expect(c.read(authControllerProvider).value, isNotNull,
         reason: 'known identity logs straight in');
   });

@@ -37,14 +37,22 @@ class AuthProviderInfo {
     required this.kind,
   });
 
-  factory AuthProviderInfo.fromJson(Map<String, dynamic> json) =>
-      AuthProviderInfo(
-        slug: json['slug'] as String,
-        displayName: json['display_name'] as String,
-        // Unknown/missing kinds fall back to broker — a future kind we don't
-        // recognise is more safely driven as a generic web flow than dropped.
-        kind: json['kind'] == 'native'
-            ? AuthProviderKind.native
-            : AuthProviderKind.broker,
-      );
+  /// Parse one advertised provider, or null if its `kind` isn't one this app
+  /// build understands. FAIL-CLOSED (cage-match Carnot P2): `kind` is a closed
+  /// set at the app↔gateway boundary, so an unrecognised future kind (`passkey`,
+  /// `saml`, `disabled`, …) must be DROPPED, not coerced into a broker flow the
+  /// app would then drive against `/oauth/{slug}/start` — behaviour that was
+  /// never negotiated. The caller filters out the nulls.
+  static AuthProviderInfo? tryParse(Map<String, dynamic> json) {
+    final kind = switch (json['kind']) {
+      'native' => AuthProviderKind.native,
+      'broker' => AuthProviderKind.broker,
+      _ => null,
+    };
+    if (kind == null) return null;
+    final slug = json['slug'];
+    final displayName = json['display_name'];
+    if (slug is! String || displayName is! String) return null;
+    return AuthProviderInfo(slug: slug, displayName: displayName, kind: kind);
+  }
 }

@@ -100,9 +100,12 @@ class FakeRestApi implements ChatRestApi {
     return authProviders;
   }
 
+  String? lastExchangeVerifier;
+
   @override
-  Future<SocialOutcome> exchangeOAuth(String code) async {
+  Future<SocialOutcome> exchangeOAuth(String code, String verifier) async {
     exchangeCalls++;
+    lastExchangeVerifier = verifier;
     return brokerOutcome ?? Authenticated(_session());
   }
 
@@ -204,20 +207,22 @@ class FakeSocialAuthClient implements SocialAuthClient {
 /// A [BrokerAuthClient] fake — returns a canned handoff code (or throws, e.g.
 /// [SocialSignInCancelled]) without opening a real web-auth session.
 class FakeBrokerAuthClient implements BrokerAuthClient {
-  FakeBrokerAuthClient({this.code = 'fake-handoff', this.throws});
+  FakeBrokerAuthClient(
+      {this.code = 'fake-handoff', this.verifier = 'fake-verifier', this.throws});
 
-  /// If set, [authenticate] throws this instead of returning a code.
+  /// If set, [authenticate] throws this instead of returning a handoff.
   Object? throws;
   String code;
+  String verifier;
 
   int authCalls = 0;
   String? lastSlug;
 
   @override
-  Future<String> authenticate(String slug) async {
+  Future<BrokerHandoff> authenticate(String slug) async {
     authCalls++;
     lastSlug = slug;
     if (throws != null) throw throws!;
-    return code;
+    return (code: code, verifier: verifier);
   }
 }

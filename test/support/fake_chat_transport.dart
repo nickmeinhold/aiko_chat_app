@@ -163,7 +163,8 @@ class FakeChatRestApi implements ChatRestApi {
   Future<List<AuthProviderInfo>> listAuthProviders() =>
       throw UnimplementedError();
   @override
-  Future<SocialOutcome> exchangeOAuth(String code) => throw UnimplementedError();
+  Future<SocialOutcome> exchangeOAuth(String code, String verifier) =>
+      throw UnimplementedError();
   @override
   Future<SocialOutcome> socialSignIn({
     required SocialProvider provider,

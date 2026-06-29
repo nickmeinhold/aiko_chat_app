@@ -82,11 +82,12 @@ abstract interface class ChatRestApi {
   Future<List<AuthProviderInfo>> listAuthProviders();
 
   /// Redeem a broker OAuth [code] (the single-use handoff captured from the
-  /// `aikochat://auth?code=…` callback) for a session. Returns the SAME shape as
-  /// [socialSignIn] — [Authenticated] (log straight in) or [PendingHandle] (new
-  /// identity must claim a handle) — because both funnel through the gateway's
-  /// single identity door.
-  Future<SocialOutcome> exchangeOAuth(String code);
+  /// `aikochat://auth?code=…` callback) for a session, presenting the app-held
+  /// [verifier] that binds the handoff to this app (cage-match #37 — a stolen
+  /// code is unredeemable without it). Returns the SAME shape as [socialSignIn]
+  /// — [Authenticated] or [PendingHandle] — because both funnel through the
+  /// gateway's single identity door.
+  Future<SocialOutcome> exchangeOAuth(String code, String verifier);
 
   /// Complete provisioning for a new social identity by claiming a [handle].
   /// [provisioningToken] comes from the [PendingHandle]. Throws [HandleTaken]

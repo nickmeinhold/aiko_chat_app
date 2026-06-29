@@ -15,6 +15,10 @@
 /// entitlement or hosted AASA/assetlinks, and auto-dismisses on the redirect.
 library;
 
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 
@@ -25,14 +29,37 @@ import 'social_auth_client.dart' show SocialSignInCancelled, SocialSignInFailed;
 /// and the Android manifest callback activity's `<data android:scheme>`.
 const String kAikoCallbackScheme = 'aikochat';
 
-/// Drives a gateway broker provider to a single-use handoff code.
+/// The host segment of the callback (`aikochat://auth`). Validated on the way
+/// back so only the advertised callback authority is accepted.
+const String _callbackHost = 'auth';
+
+/// The result of a broker web flow: the single-use handoff [code] PLUS the
+/// app-held [verifier] that must be presented at `/exchange`. The verifier never
+/// leaves the app, so a [code] intercepted via a hijacked custom scheme is
+/// useless without it (cage-match #37).
+typedef BrokerHandoff = ({String code, String verifier});
+
+/// Drives a gateway broker provider to a single-use handoff.
 abstract interface class BrokerAuthClient {
   /// Run the broker web flow for [slug] (e.g. `github`). Returns the handoff
-  /// code from the callback, or throws [SocialSignInCancelled] (user dismissed
-  /// the browser) / [SocialSignInFailed] (provider/transport error). The handoff
-  /// is single-use and short-lived — redeem it immediately via `/exchange`.
-  Future<String> authenticate(String slug);
+  /// (code + verifier), or throws [SocialSignInCancelled] (user dismissed the
+  /// browser) / [SocialSignInFailed] (provider/transport error). The handoff is
+  /// single-use and short-lived — redeem it immediately via `/exchange`.
+  Future<BrokerHandoff> authenticate(String slug);
 }
+
+/// Generate a high-entropy app verifier (32 random bytes, base64url-nopad).
+String _generateVerifier() {
+  final rnd = Random.secure();
+  final bytes = List<int>.generate(32, (_) => rnd.nextInt(256));
+  return base64Url.encode(bytes).replaceAll('=', '');
+}
+
+/// The S256 challenge for [verifier] — base64url(sha256(verifier)). MUST match
+/// the gateway's `pkce.app_challenge_for` (sha256 over the verifier's ASCII).
+String _challengeFor(String verifier) =>
+    base64Url.encode(sha256.convert(utf8.encode(verifier)).bytes)
+        .replaceAll('=', '');
 
 class WebAuthBrokerClient implements BrokerAuthClient {
   /// The gateway HTTP base (e.g. `https://chat.imagineering.cc`).
@@ -47,8 +74,14 @@ class WebAuthBrokerClient implements BrokerAuthClient {
   });
 
   @override
-  Future<String> authenticate(String slug) async {
-    final url = '$httpBaseUrl/v1/auth/oauth/$slug/start';
+  Future<BrokerHandoff> authenticate(String slug) async {
+    // Bind this flow to the app (cage-match #37): the challenge crosses the wire
+    // to /start; the verifier stays here and is presented only at /exchange.
+    final verifier = _generateVerifier();
+    final challenge = _challengeFor(verifier);
+    // challenge is base64url-nopad (URL-safe: -, _, no padding) → safe unescaped.
+    final url =
+        '$httpBaseUrl/v1/auth/oauth/$slug/start?app_challenge=$challenge';
     final String result;
     try {
       result = await FlutterWebAuth2.authenticate(
@@ -65,7 +98,16 @@ class WebAuthBrokerClient implements BrokerAuthClient {
       throw SocialSignInFailed('Broker: ${e.message ?? e.code}');
     }
 
-    final params = Uri.parse(result).queryParameters;
+    // Enforce the advertised callback authority (cage-match Carnot P2): only the
+    // exact aikochat://auth shape is accepted, not "any URL flutter_web_auth_2
+    // hands back". Reduces callback-confusion inside the auth session (it is NOT
+    // a fix for scheme hijack on its own — that's the verifier binding).
+    final uri = Uri.parse(result);
+    if (uri.scheme != callbackScheme || uri.host != _callbackHost) {
+      throw SocialSignInFailed(
+          'Broker: unexpected callback ${uri.scheme}://${uri.host}');
+    }
+    final params = uri.queryParameters;
     // The gateway returns EITHER ?code=<handoff> (success) OR ?error=<class>
     // (coarse, non-sensitive). Never a token in the URL (broker design).
     final error = params['error'];
@@ -76,6 +118,6 @@ class WebAuthBrokerClient implements BrokerAuthClient {
     if (code == null || code.isEmpty) {
       throw const SocialSignInFailed('Broker: callback had no handoff code');
     }
-    return code;
+    return (code: code, verifier: verifier);
   }
 }

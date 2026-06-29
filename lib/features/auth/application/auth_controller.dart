@@ -133,13 +133,14 @@ class AuthController extends AsyncNotifier<AppUser?> {
     final prior = state.value;
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      final String code;
+      final BrokerHandoff handoff;
       try {
-        code = await _broker.authenticate(slug);
+        handoff = await _broker.authenticate(slug);
       } on SocialSignInCancelled {
         return prior; // user closed the browser — no-op, restore prior state
       }
-      final outcome = await _rest.exchangeOAuth(code);
+      final outcome =
+          await _rest.exchangeOAuth(handoff.code, handoff.verifier);
       return _applyOutcome(outcome, prior);
     });
   }

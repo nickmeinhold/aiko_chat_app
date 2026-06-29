@@ -106,16 +106,20 @@ class GatewayRestApi implements ChatRestApi {
     final raw = (_map(r.data)['providers'] as List?) ?? const [];
     return raw
         .cast<Map>()
-        .map((e) => AuthProviderInfo.fromJson(e.cast<String, dynamic>()))
+        .map((e) => AuthProviderInfo.tryParse(e.cast<String, dynamic>()))
+        // Drop provider kinds this build doesn't understand (fail-closed).
+        .whereType<AuthProviderInfo>()
         .toList(growable: false);
   }
 
   @override
-  Future<SocialOutcome> exchangeOAuth(String code) async {
+  Future<SocialOutcome> exchangeOAuth(String code, String verifier) async {
     // Same single-door response shape as /social — known identity → tokens, new
     // identity → provisioning_token. Reuse the exact resolver so the broker and
-    // native paths can never diverge on how they read the outcome.
-    final r = await _bare.post('/v1/auth/oauth/exchange', data: {'code': code});
+    // native paths can never diverge on how they read the outcome. The
+    // app_verifier binds this redemption to the app that started the flow.
+    final r = await _bare.post('/v1/auth/oauth/exchange',
+        data: {'code': code, 'app_verifier': verifier});
     return _resolveOutcome(_map(r.data));
   }
 
