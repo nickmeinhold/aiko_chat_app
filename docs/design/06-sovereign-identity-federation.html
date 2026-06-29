@@ -68,6 +68,7 @@ replicate-and-resolve, and identity becomes portable, the thing Matrix has faile
   <li><a href="#federation">Federation = relay-and-verify, not replicate-and-resolve</a></li>
   <li><a href="#hard">The hard problems (honest map)</a></li>
   <li><a href="#present">What this asks of the present — one cheap principle</a></li>
+  <li><a href="#research">Prior art &amp; research threads (where the unbuilt parts live)</a></li>
 </ol>
 </nav>
 
@@ -194,7 +195,8 @@ answer. It must be designed before any real multi-gateway traffic, not after.
 unforgiving. Passkey sync (iCloud Keychain / Google Password Manager) mitigates device loss, and the identity-key /
 passkey split (§4) allows a recovery/rotation ceremony (re-authorize a new identity key from a recovered passkey) — but
 that ceremony is unbuilt and must be deliberate. Matrix at least lets a homeserver assist recovery; sovereign identity
-shifts that burden to the protocol.</li>
+shifts that burden to the protocol. <strong>This is the crack with the most existing research</strong> — see
+<a href="#research">§9</a>; threshold signatures arguably <em>dissolve</em> it rather than solve it.</li>
 <li><strong><span class="conf med">plausible</span> Durability.</strong> The single-home trade (§5) — solvable with
 backups, but it <em>is</em> a property surrendered, and a gateway operator's backup discipline becomes a user-facing
 reliability factor.</li>
@@ -212,6 +214,55 @@ retrofitted under a live user base is the migration from hell (it's the one thin
 protocol, the identity-key/passkey delegation ceremony, cross-gateway moderation, the recovery story, single-home backup
 tooling. Each is its own future design. <a href="05-communities-and-discovery.html">Design 05</a> is the near-term build;
 it adopts only the cheap principle above and ships independently of everything in this document.</p>
+
+<h2 id="research">9. Prior art &amp; research threads</h2>
+<p>The two unbuilt parts §7 worries about — <strong>recovery / key-loss</strong> and <strong>multi-device key
+management</strong> — are not greenfield. There is a deep, partly-shipping body of work, and pointing at it is more honest
+than the hand-wavy "recovery ceremony" §4 gestured at. The single reframe that matters: <strong>don't store one portable
+key and try to protect it — make the key never-whole and distributed.</strong></p>
+
+<h3>9.1 Splitting a key across devices / people</h3>
+<table>
+<tr><th>Thread</th><th>What it is</th><th>Relevance</th></tr>
+<tr><td><strong>Shamir's Secret Sharing</strong> (Shamir, 1979)</td><td><em>k-of-n</em> split of a secret; any <em>k</em>
+shares reconstruct it.</td><td>The naive answer. Fatal flaw for identity: the key must be <strong>reassembled on one
+device</strong> to use — a momentary single point of compromise. Good for cold backup, wrong for a live signing key.</td></tr>
+<tr><td><strong>Threshold signatures (TSS)</strong> — <strong>FROST</strong> (Komlo &amp; Goldberg, Schnorr),
+<strong>GG18/GG20</strong> (Gennaro–Goldfeder, ECDSA)</td><td>Each holder keeps a share; they <em>jointly emit a
+signature</em> via MPC. <strong>The key is never assembled — ever.</strong></td><td><strong class="conf med">The real
+answer.</strong> Nothing to steal at rest or in use; lose a device and the remaining <em>k</em> still sign, then re-share
+to a new one. Collapses recovery <em>and</em> multi-device into one mechanism.</td></tr>
+<tr><td><strong>Distributed Key Generation (DKG)</strong> — Pedersen; FROST-DKG</td><td>The key is <em>born</em> split;
+no whole key ever existed.</td><td>Removes the "dealer" trust problem — no one (not even the user's first device) ever
+held the whole key.</td></tr>
+<tr><td><strong>Verifiable / Proactive secret sharing</strong> — Feldman, Pedersen VSS; Herzberg et al.</td><td>Holders
+verify their share without trusting the dealer; shares are periodically <em>refreshed</em>.</td><td>A device compromised
+slowly over months only ever yields stale fragments. Hardens the "friends' phones" model against patient attackers.</td></tr>
+<tr><td><strong>Social-recovery wallets</strong> — Argent; Buterin's "guardians" essay (2021); ERC-4337 account
+abstraction</td><td>Trusted contacts ("guardians") authorize recovery of a lost key.</td><td>The productized, user-legible
+framing of "store pieces on people you trust." Shipping in crypto wallets today.</td></tr>
+<tr><td><strong>MPC custody products</strong> — ZenGo, Fireblocks, Coinbase WaaS, Web3Auth</td><td>Threshold signatures,
+productized.</td><td>Evidence this is engineering, not theory — though most split user↔server, not user↔friends.</td></tr>
+</table>
+
+<h3>9.2 Sovereign identity protocols (the closest spiritual sibling to this design)</h3>
+<ul class="tight">
+<li><strong>KERI</strong> (Key Event Receipt Infrastructure, Sam Smith) — <strong>the most relevant thread by far.</strong>
+Self-certifying, host-independent identifiers with built-in <em>key rotation</em> and <strong>witnesses</strong> — which
+are almost exactly this design's federation <em>vouch</em> primitive (<a href="#federation">§6</a>). If 06 has a sibling
+already in the wild, it's KERI.</li>
+<li><strong>W3C DIDs</strong> (<code>did:key</code>, <code>did:peer</code>) — the standardized envelope for the sovereign
+identifier the model assumes in <a href="#identity">§4</a>.</li>
+</ul>
+
+<blockquote class="danger">
+<strong><span class="conf low">thin</span> What none of this fixes: the sybil / moderation gate (§7).</strong> Threshold
+signatures and social recovery harden <em>custody</em> — loss, theft, portability, multi-device. They do nothing for
+<em>accountability</em>: a threshold key is still free to mint, so "split across friends' phones" makes <em>your</em>
+identity robust without making a <em>spammer's</em> identity scarce. That is a <strong>proof-of-personhood</strong> problem
+(Worldcoin, BrightID, Proof of Humanity — all contested), categorically separate from key storage, and it remains the
+viability gate.
+</blockquote>
 
 <p class="note">Provenance: this design fell out of a late-night session (2026-06-29) climbing from "what do we call the
 channel grouping?" through server → community → multi-gateway → federation → "we can do better than Matrix." It is kept as
