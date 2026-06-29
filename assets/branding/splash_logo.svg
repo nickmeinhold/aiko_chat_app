@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Logo scaled to ~50% and centered on a transparent canvas, so the
+       native splash renders it as a centered mark rather than full-bleed.
+       Sits on the #5E35B1 splash background. -->
+  <g transform="translate(256,238.5) scale(0.5)">
+    <!-- Chat bubble: rounded body + tail -->
+    <g fill="#FFFFFF">
+      <path d="M 360 640 L 470 660 L 326 806 Q 352 712 360 640 Z"/>
+      <rect x="248" y="288" width="528" height="396" rx="116" ry="116"/>
+    </g>
+    <!-- "A" mark -->
+    <g fill="none" stroke="#5E35B1" stroke-width="58" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 512 372 L 428 600"/>
+      <path d="M 512 372 L 596 600"/>
+      <path d="M 466 522 L 558 522"/>
+    </g>
+  </g>
+</svg>
