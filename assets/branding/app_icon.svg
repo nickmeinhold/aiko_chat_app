@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7E57C2"/>
+      <stop offset="1" stop-color="#4527A0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Full-bleed opaque background (Apple masks corners itself) -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Chat bubble: rounded body + tail at bottom-left -->
+  <g fill="#FFFFFF">
+    <path d="M 360 640
+             L 470 660
+             L 326 806
+             Q 352 712 360 640 Z"/>
+    <rect x="248" y="288" width="528" height="396" rx="116" ry="116"/>
+  </g>
+
+  <!-- "A" mark in brand purple -->
+  <g fill="none" stroke="#5E35B1" stroke-width="58" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 512 372 L 428 600"/>
+    <path d="M 512 372 L 596 600"/>
+    <path d="M 466 522 L 558 522"/>
+  </g>
+</svg>
