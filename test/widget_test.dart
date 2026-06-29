@@ -37,6 +37,7 @@ ProviderContainer makeContainer({
   InMemoryTokenStore? store,
   FakeSocialAuthClient? social,
   FakeEulaStore? eula,
+  String? eulaText,
 }) {
   final tokenStore = store ?? InMemoryTokenStore();
   late final ProviderContainer container;
@@ -49,8 +50,9 @@ ProviderContainer makeContainer({
     // tests reach login/chat unchanged; gate-specific tests pass accepted:false.
     eulaStoreProvider.overrideWithValue(eula ?? FakeEulaStore(accepted: true)),
     // Inject the (real) Terms text synchronously so no async asset read races
-    // pumpAndSettle. Loaded once from the bundled asset in setUpAll.
-    eulaTextProvider.overrideWith((ref) => _realEula),
+    // pumpAndSettle. Loaded once from the bundled asset in setUpAll; a test can
+    // pass a short string to exercise the no-scroll path.
+    eulaTextProvider.overrideWith((ref) => eulaText ?? _realEula),
     tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
       store: tokenStore,
       remoteRefresh: (_) async => 'access2',
@@ -471,6 +473,52 @@ void main() {
     // Gate cleared → the guard routes a logged-out device to login.
     expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
     expect(find.widgetWithText(AppBar, 'Terms of Use'), findsNothing);
+  });
+
+  testWidgets('a failed acceptance re-enables the button (no stuck spinner)',
+      (tester) async {
+    // Cage-match consensus (Maxwell/Kelvin/Carnot): a persist failure must not
+    // strand the user on a dead spinner behind a swallowed back button.
+    final eula = FakeEulaStore(accepted: false, throwOnAccept: true);
+    final container = makeContainer(
+        rest: FakeRestApi(), transport: FakeChatTransport(), eula: eula);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await tester.drag(
+        find.byType(SingleChildScrollView), const Offset(0, -5000));
+    await tester.pumpAndSettle();
+    await tester
+        .tap(find.widgetWithText(FilledButton, 'Accept & Continue'));
+    await tester.pumpAndSettle();
+
+    expect(eula.setCalls, 1); // tried to persist
+    expect(eula.accepted, isFalse); // and it failed
+    // Still on the gate, error surfaced, button re-enabled for a retry.
+    expect(find.widgetWithText(AppBar, 'Terms of Use'), findsOneWidget);
+    expect(find.textContaining('Could not save'), findsOneWidget);
+    final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Accept & Continue'));
+    expect(button.onPressed, isNotNull);
+  });
+
+  testWidgets('short Terms that fit the screen enable Accept without scrolling',
+      (tester) async {
+    final container = makeContainer(
+      rest: FakeRestApi(),
+      transport: FakeChatTransport(),
+      eula: FakeEulaStore(accepted: false),
+      eulaText: 'Aiko Chat — Terms\n\nBy continuing you accept the Terms.',
+    );
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+
+    // Nothing to scroll → the gate enables acceptance immediately.
+    final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Accept & Continue'));
+    expect(button.onPressed, isNotNull);
+    expect(find.text('Scroll to the bottom to continue'), findsNothing);
   });
 
   testWidgets('already-accepted device → no gate, straight to login',

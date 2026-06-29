@@ -28,16 +28,18 @@ class InMemoryTokenStore extends SecureTokenStore {
 /// accepted; `accepted: true` lets a test bypass the first-run gate.
 class FakeEulaStore extends EulaStore {
   bool accepted;
+  bool throwOnAccept;
   int setCalls = 0;
-  FakeEulaStore({this.accepted = false});
+  FakeEulaStore({this.accepted = false, this.throwOnAccept = false});
 
   @override
   Future<bool> hasAccepted() async => accepted;
 
   @override
   Future<void> setAccepted() async {
-    accepted = true;
     setCalls++;
+    if (throwOnAccept) throw Exception('persist failed');
+    accepted = true;
   }
 }
 

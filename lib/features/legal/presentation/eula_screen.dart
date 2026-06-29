@@ -50,8 +50,19 @@ class _EulaScreenState extends ConsumerState<EulaScreen> {
 
   Future<void> _accept() async {
     setState(() => _accepting = true);
-    // On success the route guard redirects past the gate — no manual nav.
-    await ref.read(eulaAcceptanceProvider.notifier).accept();
+    try {
+      // On success the route guard redirects past the gate (this screen
+      // unmounts), so there's no need to reset _accepting on the happy path.
+      await ref.read(eulaAcceptanceProvider.notifier).accept();
+    } catch (_) {
+      // A failed persist must NOT strand the user on a dead spinner behind a
+      // swallowed back button — re-enable the button and let them retry.
+      if (!mounted) return;
+      setState(() => _accepting = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Could not save your acceptance. Please try again.'),
+      ));
+    }
   }
 
   @override
@@ -68,24 +79,42 @@ class _EulaScreenState extends ConsumerState<EulaScreen> {
           Expanded(
             child: textAsync.when(
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, _) => const Center(
-                  child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text('Could not load the Terms. Please try again.'),
-              )),
-              data: (text) {
-                // Content that fits without scrolling can't reach the bottom by
-                // scrolling, so enable acceptance once we know it doesn't overflow.
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  if (_scroll.hasClients &&
-                      _scroll.position.maxScrollExtent == 0 &&
-                      !_atBottom) {
-                    setState(() => _atBottom = true);
+              error: (_, _) => Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Could not load the Terms.'),
+                      const SizedBox(height: 12),
+                      OutlinedButton(
+                        onPressed: () => ref.invalidate(eulaTextProvider),
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // Content that fits without scrolling can never reach the bottom,
+              // so a zero scroll-extent counts as "read". A
+              // ScrollMetricsNotification fires once layout settles the metrics
+              // (even with nothing to scroll) — cleaner than a per-build
+              // post-frame callback, and it keeps the side-effect out of build().
+              data: (text) => NotificationListener<ScrollMetricsNotification>(
+                onNotification: (n) {
+                  if (n.metrics.maxScrollExtent == 0 && !_atBottom) {
+                    // setState is illegal during notification dispatch (layout);
+                    // defer it one frame.
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted && !_atBottom) {
+                        setState(() => _atBottom = true);
+                      }
+                    });
                   }
-                });
-                return _EulaText(text: text, controller: _scroll);
-              },
+                  return false;
+                },
+                child: _EulaText(text: text, controller: _scroll),
+              ),
             ),
           ),
           if (widget.gate) _acceptBar(context),
