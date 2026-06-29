@@ -90,30 +90,6 @@ class AuthController extends AsyncNotifier<AppUser?> {
     }
   }
 
-  /// Log in with username/password. Adopts the returned tokens so the REST
-  /// interceptor and WSS connect can immediately use them, then publishes the
-  /// user (which trips the router guard → chat).
-  Future<void> login(String username, String password) async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
-      final session = await _rest.login(username, password);
-      await _tokens.setTokens(session.tokens);
-      return session.user;
-    });
-  }
-
-  /// Register a new account, then sign straight in (the gateway returns tokens
-  /// on register, same shape as login).
-  Future<void> register(
-      String username, String displayName, String password) async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
-      final session = await _rest.register(username, displayName, password);
-      await _tokens.setTokens(session.tokens);
-      return session.user;
-    });
-  }
-
   /// Sign in with a social [provider]. Drives the native SDK for a credential,
   /// hands the ID token to the gateway, then either logs straight in (known
   /// identity) or parks a [PendingHandle] (new identity) so the router shows the

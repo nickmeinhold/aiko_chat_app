@@ -63,10 +63,6 @@ class SoleAdminDeletionBlocked implements Exception {
 /// The history/auth/media REST seam (plan §B1; media is a later phase). No
 /// lifecycle. Riverpod + the repository depend on THIS, never on `dio`.
 abstract interface class ChatRestApi {
-  Future<AuthSession> login(String username, String password);
-  Future<AuthSession> register(
-      String username, String displayName, String password);
-
   /// Verify a provider ID token at the gateway. Returns [Authenticated] for a
   /// known identity (log straight in) or [PendingHandle] for a new one (which
   /// must then call [claimHandle]). [rawNonce] is the un-hashed nonce — the

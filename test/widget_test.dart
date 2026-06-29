@@ -77,11 +77,12 @@ Future<void> pumpApp(WidgetTester tester, ProviderContainer container) async {
   await tester.pumpAndSettle();
 }
 
-/// Drive the login form to the chat screen. Assumes a logged-out start.
+/// Drive social sign-in to the chat screen. Assumes a logged-out start.
+/// The [FakeRestApi] defaults to returning an [Authenticated] session and
+/// [FakeSocialAuthClient] returns a canned credential without hitting a
+/// platform channel, so tapping either social button immediately navigates to chat.
 Future<void> signIn(WidgetTester tester) async {
-  await tester.enterText(find.byType(TextField).at(0), 'nick');
-  await tester.enterText(find.byType(TextField).at(1), 'hunter2');
-  await tester.tap(find.byType(FilledButton));
+  await tester.tap(find.text('Continue with Google'));
   await tester.pumpAndSettle();
 }
 
@@ -103,17 +104,18 @@ void main() {
     expect(text.toLowerCase(), contains('report')); // report mechanism named
   });
 
-  testWidgets('logged out → login screen', (tester) async {
+  testWidgets('logged out → login screen shows social sign-in', (tester) async {
     final container = makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
 
     expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
-    expect(find.byType(TextField), findsNWidgets(2)); // username + password
+    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing); // no password fields
   });
 
-  testWidgets('login → chat screen shows the channel', (tester) async {
+  testWidgets('social sign-in → chat screen shows the channel', (tester) async {
     final rest = FakeRestApi();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
@@ -121,7 +123,7 @@ void main() {
     await pumpApp(tester, container);
     await signIn(tester);
 
-    expect(rest.loginCalls, 1);
+    expect(rest.socialCalls, 1);
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget); // channel name
     expect(find.text('No messages yet. Say hello!'), findsOneWidget);
   });
@@ -306,7 +308,7 @@ void main() {
 
   // --- social sign-in (#5) -------------------------------------------------
 
-  testWidgets('login screen offers the Google social button + divider',
+  testWidgets('login screen offers the Google social button (social-only)',
       (tester) async {
     final container = makeContainer(
         rest: FakeRestApi(), transport: FakeChatTransport());
@@ -316,7 +318,9 @@ void main() {
 
     expect(find.widgetWithText(OutlinedButton, 'Continue with Google'),
         findsOneWidget);
-    expect(find.text('or'), findsOneWidget); // social / password divider
+    // No "or" divider — password path removed.
+    expect(find.text('or'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
   });
 
   testWidgets('social sign-in with a known identity → straight to chat',
@@ -581,7 +585,7 @@ void main() {
     // The auth guard redirected to /login (no chat, no settings).
     expect(find.widgetWithText(AppBar, 'general'), findsNothing);
     expect(find.widgetWithText(AppBar, 'Settings'), findsNothing);
-    expect(find.byType(TextField), findsWidgets); // login form is back
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget); // login screen is back
   });
 
   testWidgets('a sole-admin 409 keeps the user logged in with a message',
@@ -611,11 +615,14 @@ void main() {
       () async {
     final rest = FakeRestApi()
       ..deleteThrows = const SoleAdminDeletionBlocked('nope');
+    final social = FakeSocialAuthClient();
     final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
+        makeContainer(rest: rest, transport: FakeChatTransport(), social: social);
     addTearDown(container.dispose);
     await container.read(authControllerProvider.future); // settle restore
-    await container.read(authControllerProvider.notifier).login('nick', 'pw');
+    await container
+        .read(authControllerProvider.notifier)
+        .signInWith(SocialProvider.google);
     expect(container.read(authControllerProvider).value, isNotNull);
 
     await expectLater(
