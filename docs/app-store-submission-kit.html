@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aiko Chat — App Store / TestFlight External Submission Kit</title>
+<style>
+  :root { --p:#5E35B1; --pl:#7E57C2; --bg:#faf9fc; --ink:#1c1c24; }
+  body { font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         color:#222; background:var(--bg); max-width:860px; margin:2rem auto; padding:0 1.2rem; }
+  h1 { color:var(--p); font-size:1.7rem; margin-bottom:.2rem; }
+  h2 { color:var(--p); margin-top:2rem; border-bottom:2px solid #ece7f5; padding-bottom:.3rem; }
+  .sub { color:#666; margin-top:0; }
+  .gate { background:#fff4f4; border:1px solid #f3c2c2; border-left:5px solid #d9534f;
+          border-radius:8px; padding:1rem 1.2rem; margin:1.5rem 0; }
+  .gate h2 { color:#b02a2a; border:none; margin-top:0; }
+  .ok { background:#f0faf2; border:1px solid #bfe3c6; border-left:5px solid #2e9e4a; border-radius:8px; padding:.8rem 1.2rem; }
+  .field { background:#fff; border:1px solid #e4ddf0; border-radius:8px; padding:.9rem 1.1rem; margin:.8rem 0; }
+  .field .label { font-weight:600; color:var(--p); font-size:.85rem; text-transform:uppercase; letter-spacing:.03em; }
+  code, pre { background:#f3f0fa; border-radius:5px; padding:.1rem .4rem; font-size:.92em; }
+  pre { padding:.8rem 1rem; overflow-x:auto; white-space:pre-wrap; }
+  details { margin:.6rem 0; }
+  summary { cursor:pointer; font-weight:600; color:var(--pl); }
+  table { border-collapse:collapse; width:100%; margin:.6rem 0; }
+  td,th { border:1px solid #e4ddf0; padding:.5rem .7rem; text-align:left; vertical-align:top; }
+  th { background:#f3f0fa; }
+</style>
+</head>
+<body>
+
+<h1>Aiko Chat — Submission Kit</h1>
+<p class="sub">Everything needed for TestFlight External Beta App Review (and, later, App Store review). Bundle <code>cc.imagineering.aikoChatApp</code> · App id <code>6785395468</code>. Build <strong>3</strong> (1.0.0+3) is the review candidate.</p>
+
+<div class="gate">
+  <h2>⚠️ The one gate before submitting</h2>
+  <p><strong>Verify Sign in with Apple works end-to-end on build 3 (a real device) against the live gateway — before hitting Submit.</strong></p>
+  <p>Aiko is now <strong>social-only</strong> (no username/password), so there is no demo account to hand Apple. The reviewer must sign in with <em>their own</em> Apple ID via Sign in with Apple. If SIWA is broken against <code>chat.imagineering.cc</code>, review is rejected with "could not log in." This is exactly your open tasks #1/#2/#3 (verify social nonce + gateway transform + native wiring). Install build 3 via Internal TestFlight, tap <strong>Sign in with Apple</strong>, confirm you reach the chat. Only then submit.</p>
+</div>
+
+<h2>1 · Export compliance / encryption</h2>
+<div class="ok">
+  <p>✅ Handled in code — <code>ITSAppUsesNonExemptEncryption = false</code> is now in <code>Info.plist</code> (app uses only standard HTTPS/TLS, which is exempt). Apple will no longer ask the per-build encryption question.</p>
+</div>
+<p>If ASC ever asks anyway: <em>"Does your app use encryption?"</em> → Yes → <em>"Does it qualify for any exemptions?"</em> → Yes (standard encryption via iOS / HTTPS).</p>
+
+<h2>2 · TestFlight → Test Information (app-level, fill once)</h2>
+
+<div class="field"><span class="label">Beta App Description</span>
+<pre>Aiko Chat is a real-time messaging app for joining topic channels and chatting with others. Sign in with Apple or Google, join a channel, and start talking. Includes user blocking and content reporting, plus full in-app account deletion.</pre></div>
+
+<div class="field"><span class="label">Feedback Email</span>
+<pre>nick.meinhold@gmail.com</pre></div>
+
+<div class="field"><span class="label">Privacy Policy URL</span>
+<pre>https://chat.imagineering.cc/privacy</pre></div>
+
+<div class="field"><span class="label">Marketing URL (optional)</span>
+<pre>https://chat.imagineering.cc</pre></div>
+
+<h2>3 · Build 3 → "What to Test"</h2>
+<div class="field"><span class="label">What to Test (per-build notes)</span>
+<pre>First run shows a EULA you must accept (scroll to the bottom).
+Then sign in with Apple or Google.
+
+Please test:
+• Sign in with Apple (creates an account automatically)
+• Join a channel and send / receive messages
+• Long-press a message → Report, or a user → Block
+• Settings → Delete Account (full account removal)</pre></div>
+
+<h2>4 · Beta App Review — Review Information</h2>
+<table>
+  <tr><th>Field</th><th>Value</th></tr>
+  <tr><td>Sign-in required?</td><td><strong>Yes</strong></td></tr>
+  <tr><td>Demo account</td><td>Leave blank — see the note below (social-only)</td></tr>
+  <tr><td>Contact first / last</td><td>Nick / Meinhold</td></tr>
+  <tr><td>Contact email</td><td>nick.meinhold@gmail.com</td></tr>
+  <tr><td>Contact phone</td><td><em>(your number)</em></td></tr>
+</table>
+
+<div class="field"><span class="label">Notes for Review (the important one)</span>
+<pre>This app uses social sign-in only (Sign in with Apple and Google) — there is
+no username/password, so no demo credentials are provided. To sign in, tap
+"Sign in with Apple" on the login screen and authenticate with any Apple ID;
+a Aiko account is created automatically.
+
+UGC compliance: a EULA must be accepted on first launch (zero tolerance for
+objectionable content). Users can block other users and report messages from
+a long-press menu. Account deletion is available in Settings → Delete Account.</pre></div>
+
+<h2>5 · Reference</h2>
+<details>
+  <summary>How to drive the build / upload yourself (Claude tooling)</summary>
+  <pre>flutter build ipa --dart-define-from-file=dart_defines/prod.json \
+    --export-options-plist ios/ExportOptions.plist
+python ~/.aiko-play-tools/asc_api.py upload --ipa build/ios/ipa/aiko_chat_app.ipa
+python ~/.aiko-play-tools/asc_api.py builds        # poll until state=VALID</pre>
+  <p>See memory <code>reference_ios_distribution_tooling.md</code>.</p>
+</details>
+<details>
+  <summary>Stale: the old "reviewer" demo account (task #19)</summary>
+  <p>The prod <code>reviewer</code> demo account predates the social-only pivot (#21/#31) and is now unusable for review (no password sign-in). The SIWA note above replaces it. Task #19 (remove the reviewer account) can proceed once review passes.</p>
+</details>
+
+</body>
+</html>

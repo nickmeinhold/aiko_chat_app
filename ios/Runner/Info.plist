@@ -80,5 +80,10 @@
 		</array>
 		<key>UIStatusBarHidden</key>
 		<false/>
+		<!-- App uses only standard HTTPS/TLS, which is exempt from export
+		     compliance. Declaring this avoids the per-build encryption
+		     question at upload/submission time. -->
+		<key>ITSAppUsesNonExemptEncryption</key>
+		<false/>
 	</dict>
 </plist>
