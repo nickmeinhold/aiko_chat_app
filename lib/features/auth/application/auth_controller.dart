@@ -25,6 +25,7 @@ import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../../chat/data/transport/chat_transport.dart';
 import '../data/broker_auth_client.dart';
+import '../data/passkey_auth_client.dart';
 import '../data/social_auth_client.dart';
 import '../domain/auth_models.dart';
 import '../domain/social_models.dart';
@@ -54,6 +55,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
   SocialAuthClient get _social => ref.read(socialAuthClientProvider);
   BrokerAuthClient get _broker => ref.read(brokerAuthClientProvider);
+  PasskeyAuthClient get _passkey => ref.read(passkeyAuthClientProvider);
 
   @override
   Future<AppUser?> build() async {
@@ -141,6 +143,56 @@ class AuthController extends AsyncNotifier<AppUser?> {
       }
       final outcome =
           await _rest.exchangeOAuth(handoff.code, handoff.verifier);
+      return _applyOutcome(outcome, prior);
+    });
+  }
+
+  /// Sign in with an EXISTING passkey (WebAuthn). Mirrors [signInWithBroker] but
+  /// the ingress is a gateway challenge + an on-device authenticator assertion:
+  /// fetch the request options, let the platform sign the challenge with a
+  /// discoverable credential (usernameless), then redeem the assertion. Routes on
+  /// the SAME outcome. A user dismissal of the system sheet restores the prior
+  /// state silently (no error banner). A "no passkey on this device" error is a
+  /// real [SocialSignInFailed] — surfaced, not swallowed — so the UI can nudge
+  /// toward [registerWithPasskey].
+  Future<void> signInWithPasskey() async {
+    if (state.value != null) return; // ingress-only (same guard as the others)
+    final prior = state.value;
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      final challenge = await _rest.startPasskeyAuthentication();
+      final String assertion;
+      try {
+        assertion = await _passkey.authenticate(challenge.optionsJson);
+      } on SocialSignInCancelled {
+        return prior; // user dismissed the sheet — no-op, restore prior state
+      }
+      final outcome = await _rest.finishPasskeyAuthentication(
+          challenge.state, assertion);
+      return _applyOutcome(outcome, prior);
+    });
+  }
+
+  /// Create a NEW passkey and account (first-passkey-creates-account). Mirrors
+  /// [signInWithPasskey] with the registration ceremony: fetch creation options,
+  /// let the platform mint a device-bound credential, then register it at the
+  /// gateway (which stores only the public key and mints the account). Routes on
+  /// the SAME outcome — typically a [PendingHandle] so the new user claims a
+  /// handle before landing in chat. Cancellation restores the prior state.
+  Future<void> registerWithPasskey() async {
+    if (state.value != null) return; // ingress-only
+    final prior = state.value;
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      final challenge = await _rest.startPasskeyRegistration();
+      final String attestation;
+      try {
+        attestation = await _passkey.register(challenge.optionsJson);
+      } on SocialSignInCancelled {
+        return prior; // user dismissed the sheet — no-op, restore prior state
+      }
+      final outcome = await _rest.finishPasskeyRegistration(
+          challenge.state, attestation);
       return _applyOutcome(outcome, prior);
     });
   }

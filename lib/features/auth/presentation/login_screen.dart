@@ -46,6 +46,10 @@ class LoginScreen extends ConsumerWidget {
         ref.read(authControllerProvider.notifier).signInWith(provider);
     void broker(String slug) =>
         ref.read(authControllerProvider.notifier).signInWithBroker(slug);
+    void passkeySignIn() =>
+        ref.read(authControllerProvider.notifier).signInWithPasskey();
+    void passkeyRegister() =>
+        ref.read(authControllerProvider.notifier).registerWithPasskey();
 
     // Build the button for one advertised provider, or null if it can't render
     // on this platform (e.g. an Apple native button on Android).
@@ -73,6 +77,29 @@ class LoginScreen extends ConsumerWidget {
             onPressed: busy ? null : () => broker(p.slug),
             icon: Icon(_brokerIcon(p.slug)),
             label: Text('Continue with ${p.displayName}'),
+          );
+        case AuthProviderKind.passkey:
+          // Passkeys need a platform authenticator (iOS AuthenticationServices /
+          // Android Credential Manager) — no web target ships, so hide there.
+          if (kIsWeb) return null;
+          // First-passkey-creates-account: ONE advertised entry drives BOTH a
+          // primary "sign in" (assert an existing/discoverable credential) and a
+          // secondary "create" (register a new passkey + account).
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilledButton.icon(
+                onPressed: busy ? null : passkeySignIn,
+                icon: const Icon(Icons.fingerprint),
+                label: const Text('Sign in with a passkey'),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: busy ? null : passkeyRegister,
+                child: const Text('New here? Create a passkey'),
+              ),
+            ],
           );
       }
     }

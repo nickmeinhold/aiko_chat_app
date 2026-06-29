@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:aiko_chat_app/features/auth/data/broker_auth_client.dart';
+import 'package:aiko_chat_app/features/auth/data/passkey_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_provider.dart';
@@ -107,6 +108,53 @@ class FakeRestApi implements ChatRestApi {
     exchangeCalls++;
     lastExchangeVerifier = verifier;
     return brokerOutcome ?? Authenticated(_session());
+  }
+
+  /// Programmable passkey outcomes. Default register: a new identity that must
+  /// claim a handle (first-passkey-creates-account). Default authenticate: a
+  /// known identity (log straight in). Override per-test.
+  SocialOutcome? passkeyRegisterOutcome;
+  SocialOutcome? passkeyAuthOutcome;
+
+  int passkeyRegisterStartCalls = 0;
+  int passkeyRegisterFinishCalls = 0;
+  int passkeyAuthStartCalls = 0;
+  int passkeyAuthFinishCalls = 0;
+  String? lastPasskeyRegisterState;
+  String? lastPasskeyRegisterCredential;
+  String? lastPasskeyAuthState;
+  String? lastPasskeyAuthCredential;
+
+  @override
+  Future<PasskeyChallenge> startPasskeyRegistration() async {
+    passkeyRegisterStartCalls++;
+    return (state: 'reg-state', optionsJson: '{"challenge":"reg-chal"}');
+  }
+
+  @override
+  Future<SocialOutcome> finishPasskeyRegistration(
+      String state, String credentialJson) async {
+    passkeyRegisterFinishCalls++;
+    lastPasskeyRegisterState = state;
+    lastPasskeyRegisterCredential = credentialJson;
+    return passkeyRegisterOutcome ??
+        const PendingHandle(
+            provisioningToken: 'passkey-prov', suggestedName: null);
+  }
+
+  @override
+  Future<PasskeyChallenge> startPasskeyAuthentication() async {
+    passkeyAuthStartCalls++;
+    return (state: 'auth-state', optionsJson: '{"challenge":"auth-chal"}');
+  }
+
+  @override
+  Future<SocialOutcome> finishPasskeyAuthentication(
+      String state, String credentialJson) async {
+    passkeyAuthFinishCalls++;
+    lastPasskeyAuthState = state;
+    lastPasskeyAuthCredential = credentialJson;
+    return passkeyAuthOutcome ?? Authenticated(_session());
   }
 
   @override
@@ -224,5 +272,43 @@ class FakeBrokerAuthClient implements BrokerAuthClient {
     lastSlug = slug;
     if (throws != null) throw throws!;
     return (code: code, verifier: verifier);
+  }
+}
+
+/// A [PasskeyAuthClient] fake — returns canned attestation/assertion JSON (or
+/// throws, e.g. [SocialSignInCancelled]) without touching a platform channel.
+class FakePasskeyAuthClient implements PasskeyAuthClient {
+  FakePasskeyAuthClient({
+    this.attestation = 'fake-attestation',
+    this.assertion = 'fake-assertion',
+    this.registerThrows,
+    this.authenticateThrows,
+  });
+
+  /// If set, the matching call throws this instead of returning a credential.
+  Object? registerThrows;
+  Object? authenticateThrows;
+  String attestation;
+  String assertion;
+
+  int registerCalls = 0;
+  int authenticateCalls = 0;
+  String? lastRegisterOptions;
+  String? lastAuthenticateOptions;
+
+  @override
+  Future<String> register(String optionsJson) async {
+    registerCalls++;
+    lastRegisterOptions = optionsJson;
+    if (registerThrows != null) throw registerThrows!;
+    return attestation;
+  }
+
+  @override
+  Future<String> authenticate(String optionsJson) async {
+    authenticateCalls++;
+    lastAuthenticateOptions = optionsJson;
+    if (authenticateThrows != null) throw authenticateThrows!;
+    return assertion;
   }
 }

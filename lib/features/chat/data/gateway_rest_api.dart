@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
 import '../../auth/data/social_auth_client.dart';
@@ -120,6 +122,54 @@ class GatewayRestApi implements ChatRestApi {
     // app_verifier binds this redemption to the app that started the flow.
     final r = await _bare.post('/v1/auth/oauth/exchange',
         data: {'code': code, 'app_verifier': verifier});
+    return _resolveOutcome(_map(r.data));
+  }
+
+  @override
+  Future<PasskeyChallenge> startPasskeyRegistration() =>
+      _passkeyStart('/v1/auth/passkey/register/start');
+
+  @override
+  Future<SocialOutcome> finishPasskeyRegistration(
+          String state, String credentialJson) =>
+      _passkeyFinish('/v1/auth/passkey/register/finish', state, credentialJson);
+
+  @override
+  Future<PasskeyChallenge> startPasskeyAuthentication() =>
+      _passkeyStart('/v1/auth/passkey/authenticate/start');
+
+  @override
+  Future<SocialOutcome> finishPasskeyAuthentication(
+          String state, String credentialJson) =>
+      _passkeyFinish(
+          '/v1/auth/passkey/authenticate/finish', state, credentialJson);
+
+  /// Begin a passkey ceremony: the gateway returns `{state, options}` where
+  /// `options` is the WebAuthn options object. We re-encode `options` to the
+  /// opaque JSON string the device authenticator consumes, and carry `state`
+  /// untouched to the `finish` call (server-side challenge binding).
+  Future<PasskeyChallenge> _passkeyStart(String path) async {
+    final r = await _bare.post(path);
+    final m = _map(r.data);
+    final options = m['options'];
+    final state = m['state'];
+    if (options is! Map || state is! String) {
+      throw const FormatException(
+          'passkey: start response missing state/options');
+    }
+    return (state: state, optionsJson: jsonEncode(options));
+  }
+
+  /// Complete a passkey ceremony: POST the device's response [credentialJson]
+  /// (WebAuthn JSON the authenticator produced) plus the binding [state], and
+  /// route the gateway's identity response through the SAME single-door resolver
+  /// as native/broker — passkeys can never diverge on how the outcome is read.
+  Future<SocialOutcome> _passkeyFinish(
+      String path, String state, String credentialJson) async {
+    final r = await _bare.post(path, data: {
+      'state': state,
+      'credential': jsonDecode(credentialJson),
+    });
     return _resolveOutcome(_map(r.data));
   }
 

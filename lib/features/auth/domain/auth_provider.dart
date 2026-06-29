@@ -1,8 +1,9 @@
 /// The sign-in providers the gateway advertises via `GET /v1/auth/providers`.
 ///
 /// Wire shape: `{"providers": [{"slug","display_name","kind"}]}` where `kind`
-/// is `native` (a compiled-in SDK flow — Apple/Google) or `broker` (the
-/// server-side OAuth2 code flow — GitHub and future Discord/MS/etc).
+/// is `native` (a compiled-in SDK flow — Apple/Google), `broker` (the
+/// server-side OAuth2 code flow — GitHub and future Discord/MS/etc), or
+/// `passkey` (a WebAuthn/FIDO2 flow — usernameless, no third party).
 ///
 /// This is what lets "add a broker provider" be a GATEWAY-only change: the app
 /// renders a generic button for any `broker` entry and drives the same web-auth
@@ -18,6 +19,11 @@ enum AuthProviderKind {
 
   /// The server-side OAuth2 code broker (GitHub, …) → web-auth → `/exchange`.
   broker,
+
+  /// A WebAuthn/FIDO2 passkey → device authenticator → `/passkey/*` (no third
+  /// party, no stored secret). Usernameless: one advertised entry drives both
+  /// "sign in with a passkey" and "create a passkey".
+  passkey,
 }
 
 /// One advertised sign-in option.
@@ -39,14 +45,15 @@ class AuthProviderInfo {
 
   /// Parse one advertised provider, or null if its `kind` isn't one this app
   /// build understands. FAIL-CLOSED (cage-match Carnot P2): `kind` is a closed
-  /// set at the app↔gateway boundary, so an unrecognised future kind (`passkey`,
-  /// `saml`, `disabled`, …) must be DROPPED, not coerced into a broker flow the
-  /// app would then drive against `/oauth/{slug}/start` — behaviour that was
-  /// never negotiated. The caller filters out the nulls.
+  /// set at the app↔gateway boundary, so an unrecognised future kind (`saml`,
+  /// `disabled`, …) must be DROPPED, not coerced into a flow the app would then
+  /// drive against the wrong endpoint — behaviour that was never negotiated. The
+  /// caller filters out the nulls.
   static AuthProviderInfo? tryParse(Map<String, dynamic> json) {
     final kind = switch (json['kind']) {
       'native' => AuthProviderKind.native,
       'broker' => AuthProviderKind.broker,
+      'passkey' => AuthProviderKind.passkey,
       _ => null,
     };
     if (kind == null) return null;

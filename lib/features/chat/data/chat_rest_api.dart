@@ -24,6 +24,14 @@ class HistoryPage {
       this.nextAfter});
 }
 
+/// A passkey ceremony's `start` response: the gateway's WebAuthn `options`
+/// (opaque JSON the device authenticator consumes) plus an opaque [state] token
+/// that binds the issued challenge server-side. The app round-trips [state]
+/// untouched to the matching `finish` call — the same server-side-nonce shape
+/// the broker uses, so a challenge can only be completed by the flow that
+/// started it.
+typedef PasskeyChallenge = ({String state, String optionsJson});
+
 /// Thrown by an authenticated REST call when the request is *terminally*
 /// rejected for auth reasons — a 401 that survived the interceptor's
 /// single-flight refresh-and-retry, or a 403. Distinct from a transient
@@ -88,6 +96,30 @@ abstract interface class ChatRestApi {
   /// — [Authenticated] or [PendingHandle] — because both funnel through the
   /// gateway's single identity door.
   Future<SocialOutcome> exchangeOAuth(String code, String verifier);
+
+  /// Begin passkey REGISTRATION (first-passkey-creates-account). Returns the
+  /// WebAuthn creation options + a binding [PasskeyChallenge.state]. No prior
+  /// session is required — the matching [finishPasskeyRegistration] mints the
+  /// account.
+  Future<PasskeyChallenge> startPasskeyRegistration();
+
+  /// Complete registration: hand back the device's attestation [credentialJson]
+  /// with the [state] from [startPasskeyRegistration]. Returns the SAME outcome
+  /// shape as [socialSignIn] / [exchangeOAuth] (single identity door) —
+  /// [Authenticated] for a straight-in mint, or [PendingHandle] when the gateway
+  /// still needs a handle.
+  Future<SocialOutcome> finishPasskeyRegistration(
+      String state, String credentialJson);
+
+  /// Begin passkey AUTHENTICATION (usernameless / discoverable credential).
+  /// Returns the WebAuthn request options + a binding [PasskeyChallenge.state].
+  Future<PasskeyChallenge> startPasskeyAuthentication();
+
+  /// Complete authentication: hand back the device's assertion [credentialJson]
+  /// with the [state] from [startPasskeyAuthentication]. Returns the shared
+  /// [SocialOutcome] (verified signature → tokens).
+  Future<SocialOutcome> finishPasskeyAuthentication(
+      String state, String credentialJson);
 
   /// Complete provisioning for a new social identity by claiming a [handle].
   /// [provisioningToken] comes from the [PendingHandle]. Throws [HandleTaken]

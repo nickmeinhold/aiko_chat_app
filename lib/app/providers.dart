@@ -19,6 +19,7 @@ import '../core/auth/token_provider.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/auth/data/broker_auth_client.dart';
 import '../features/auth/data/gateway_social_auth_client.dart';
+import '../features/auth/data/passkey_auth_client.dart';
 import '../features/auth/data/social_auth_client.dart';
 import '../features/auth/domain/auth_provider.dart';
 import '../features/chat/data/cache/cache_database.dart';
@@ -97,6 +98,13 @@ final socialAuthClientProvider = Provider<SocialAuthClient>(
 /// against the gateway's `/oauth/{slug}/start`. Tests override this with a fake.
 final brokerAuthClientProvider = Provider<BrokerAuthClient>(
   (ref) => WebAuthBrokerClient(httpBaseUrl: ref.watch(configProvider).httpBaseUrl),
+);
+
+/// The passkey (WebAuthn) sign-in seam — drives the on-device authenticator
+/// (iOS AuthenticationServices / Android Credential Manager). Stateless, so a
+/// plain singleton; tests override this with a fake.
+final passkeyAuthClientProvider = Provider<PasskeyAuthClient>(
+  (ref) => PlatformPasskeyAuthClient(),
 );
 
 /// The gateway's advertised sign-in providers (native + broker), for the dynamic
