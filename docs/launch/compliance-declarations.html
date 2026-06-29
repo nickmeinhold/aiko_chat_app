@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch compliance — declarations &amp; console checklist</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#5E35B1; --rule:#e2e2e2; --code-bg:#f6f8fa; --ok:#0b5; --warn:#b35900; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.8rem; margin:0 0 .3rem; }
+  h2 { font-size:1.3rem; margin:2.2rem 0 .5rem; padding-top:1rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.05rem; margin:1.4rem 0 .4rem; }
+  .sub { color:var(--muted); margin:.2rem 0 1.3rem; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th,td { text-align:left; padding:.5rem .65rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  code { font:13px ui-monospace,Menlo,monospace; background:var(--code-bg); padding:.12em .4em; border-radius:4px; }
+  a { color:var(--accent); }
+  blockquote { margin:1.1rem 0; padding:.8rem 1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.ok { background:#f0fbf4; border-left-color:var(--ok); }
+  .yes { color:var(--ok); font-weight:700; } .no { color:#c0392b; font-weight:700; }
+  .grounded { font-size:.85rem; color:var(--muted); }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.3rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; } nav.toc a { color:var(--accent); text-decoration:none; }
+  ul.check li { margin:.4rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Launch compliance — declarations &amp; console checklist</h1>
+<p class="sub">Task #1431 (+ the #1447 SHA-1 console op). Every declaration below is <strong>grounded in a code/keystore
+audit on 2026-06-30</strong>, not from memory — the lines marked <span class="grounded">grounded:</span> cite the source.
+Companion: the hosted <a href="../legal/privacy-policy.html">Privacy Policy</a>.</p>
+
+<blockquote class="ok">
+<strong>The headline finding that makes all of this easy:</strong> the app has <strong>no analytics, no crash-reporting,
+no advertising, and no third-party tracking SDK of any kind</strong>. <span class="grounded">grounded: <code>pubspec.yaml</code>
+dep audit — zero matches for firebase/analytics/crashlytics/sentry/ads/etc.</span> So both stores' forms reduce to two
+collected data classes (account identity + messages), no sharing, no tracking.
+</blockquote>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#audit">The data audit (the source of truth)</a></li>
+  <li><a href="#apple">Apple — App Privacy labels (App Store Connect)</a></li>
+  <li><a href="#play">Google — Data Safety form (Play Console)</a></li>
+  <li><a href="#export">Export compliance</a></li>
+  <li><a href="#sha1">#1447 — Play App Signing SHA-1 (unblocks Google sign-in)</a></li>
+  <li><a href="#checklist">Your console checklist</a></li>
+</ol>
+</nav>
+
+<h2 id="audit">1. The data audit (the source of truth)</h2>
+<table>
+<tr><th>Data</th><th>Collected?</th><th>Linked to identity?</th><th>Purpose</th><th>Grounded in</th></tr>
+<tr><td>Email address</td><td><span class="yes">Yes</span> (via sign-in)</td><td>Yes</td><td>App functionality / account</td><td class="grounded"><code>sign_in_with_apple</code>, <code>google_sign_in</code> deps + auth models</td></tr>
+<tr><td>Name (display name)</td><td><span class="yes">Yes</span></td><td>Yes</td><td>App functionality / account</td><td class="grounded">auth domain models; <code>senderLabel</code> in cache</td></tr>
+<tr><td>User ID (account id)</td><td><span class="yes">Yes</span></td><td>Yes</td><td>App functionality / account</td><td class="grounded"><code>senderUserId</code>, token subject</td></tr>
+<tr><td>Messages (in-app)</td><td><span class="yes">Yes</span></td><td>Yes</td><td>App functionality (delivery + history)</td><td class="grounded"><code>Messages</code> drift table: <code>body</code>, <code>channelId</code>, <code>createdAt</code></td></tr>
+<tr><td>Location / Contacts / Photos / Health / Financial</td><td><span class="no">No</span></td><td>—</td><td>—</td><td class="grounded">no such permissions/deps</td></tr>
+<tr><td>Advertising ID / cross-app tracking</td><td><span class="no">No</span></td><td>—</td><td>—</td><td class="grounded">no ad/tracking SDK</td></tr>
+<tr><td>Diagnostics / crash / analytics</td><td><span class="no">No</span></td><td>—</td><td>—</td><td class="grounded">no analytics/crash SDK</td></tr>
+</table>
+<p class="grounded">Transmission: HTTPS/WSS (TLS) only — <code>dio</code> + <code>web_socket_channel</code> to the first-party
+gateway. Local storage: <code>flutter_secure_storage</code> (tokens), <code>drift</code>/SQLite (message cache).</p>
+
+<h2 id="apple">2. Apple — App Privacy labels</h2>
+<p class="sub">App Store Connect → your app → <strong>App Privacy</strong> → Edit. Answer "Yes, we collect data".</p>
+<h3>Data Used to Track You</h3>
+<p><strong>None.</strong> Do not add any type here.</p>
+<h3>Data Linked to You</h3>
+<table>
+<tr><th>Apple data type</th><th>Purpose</th><th>Tracking?</th></tr>
+<tr><td>Contact Info → <strong>Email Address</strong></td><td>App Functionality</td><td>No</td></tr>
+<tr><td>Contact Info → <strong>Name</strong></td><td>App Functionality</td><td>No</td></tr>
+<tr><td>Identifiers → <strong>User ID</strong></td><td>App Functionality</td><td>No</td></tr>
+<tr><td>User Content → <strong>Other User Content</strong> (messages)</td><td>App Functionality</td><td>No</td></tr>
+</table>
+<h3>Data Not Linked to You</h3>
+<p><strong>None.</strong></p>
+<blockquote>For every type: purpose = <strong>App Functionality</strong> only; "Used for tracking" = <strong>No</strong>;
+"Linked to the user's identity" = <strong>Yes</strong>. Also set the Privacy Policy URL (§6) in App Store Connect.</blockquote>
+
+<h2 id="play">3. Google — Data Safety form</h2>
+<p class="sub">Play Console → your app → <strong>Policy → App content → Data safety</strong>.</p>
+<ul class="check">
+<li>Does your app collect or share any of the required user data types? → <strong>Yes (collect)</strong>.</li>
+<li>Is all collected data <strong>encrypted in transit</strong>? → <span class="yes">Yes</span>.</li>
+<li>Do you provide a way for users to request that their data be deleted? → <span class="yes">Yes</span>
+(in-app account deletion). <span class="grounded">grounded: task #8 shipped.</span></li>
+</ul>
+<table>
+<tr><th>Play data type</th><th>Collected</th><th>Shared</th><th>Purpose</th><th>Required/Optional</th></tr>
+<tr><td>Personal info → <strong>Email address</strong></td><td>Yes</td><td><span class="no">No</span></td><td>Account management, App functionality</td><td>Required</td></tr>
+<tr><td>Personal info → <strong>Name</strong></td><td>Yes</td><td><span class="no">No</span></td><td>Account management, App functionality</td><td>Required</td></tr>
+<tr><td>Personal info → <strong>User IDs</strong></td><td>Yes</td><td><span class="no">No</span></td><td>Account management, App functionality</td><td>Required</td></tr>
+<tr><td>Messages → <strong>Other in-app messages</strong></td><td>Yes</td><td><span class="no">No</span></td><td>App functionality</td><td>Required</td></tr>
+</table>
+<blockquote>"Shared" in Play's sense = transferred to a <em>third party</em>. The gateway is your own first-party server, and
+the sign-in providers act on the user's instruction to authenticate — so <strong>No sharing</strong> is the correct
+answer. Declare <em>no</em> App activity / App info-and-performance types (no analytics/crash SDK).</blockquote>
+
+<h2 id="export">4. Export compliance</h2>
+<blockquote class="ok"><strong>Already handled on iOS.</strong> <code>ITSAppUsesNonExemptEncryption</code> = <code>false</code>
+is set in <code>ios/Runner/Info.plist</code> — the app uses only standard/exempt encryption (HTTPS/TLS), so no
+per-build encryption question at upload. <span class="grounded">grounded: Info.plist line 86–87.</span> For Play, the
+standard US export declaration applies (HTTPS only); no special documentation needed.</blockquote>
+
+<h2 id="sha1">5. #1447 — Play App Signing SHA-1 (unblocks Google sign-in on the Play build)</h2>
+<p>Google Sign-In on the Play-delivered build fails with <code>DEVELOPER_ERROR (code 10)</code> because the OAuth Android
+client only knows the debug SHA-1. The installed build is re-signed by Play App Signing, so two fingerprints must be
+registered on the Android OAuth client.</p>
+<p><strong>Console:</strong> <a href="https://console.cloud.google.com/apis/credentials?project=588100172166">Google Cloud
+→ APIs &amp; Services → Credentials</a> (project <code>588100172166</code>) → open the Android OAuth client for package
+<code>cc.imagineering.aiko_chat_app</code> → add SHA-1 fingerprints.</p>
+<table>
+<tr><th>Fingerprint</th><th>SHA-1</th><th>Source</th></tr>
+<tr><td><strong>Upload key</strong></td><td><code>C8:35:EF:AB:C0:03:93:16:F9:C1:A6:8E:A9:98:51:74:46:87:5A:11</code></td><td class="grounded"><span class="yes">VERIFIED</span> 2026-06-30 against <code>~/keystores/aiko-upload-keystore.jks</code> alias <code>upload</code></td></tr>
+<tr><td><strong>Play App Signing key</strong></td><td><em>grab from Play Console</em></td><td>Play Console → your app → <strong>Test and release → Setup → App signing</strong> → "App signing key certificate" → copy SHA-1</td></tr>
+</table>
+<p>After registering both, re-test "Continue with Google" on the internal-track build. This is the prerequisite for
+closing the Google nonce-staleness verification tasks (#1, #2).</p>
+
+<h2 id="checklist">6. Your console checklist</h2>
+<ul class="check">
+<li>☐ <strong>Host the policy</strong> — publish <code>docs/legal/privacy-policy.html</code> at a stable URL on
+imagineering.cc (e.g. <code>https://imagineering.cc/aiko/privacy</code>) and confirm
+<a href="mailto:privacy@imagineering.cc">privacy@imagineering.cc</a> actually routes to you.</li>
+<li>☐ <strong>Apple</strong> — App Store Connect → App Privacy: enter §2 exactly; set the Privacy Policy URL.</li>
+<li>☐ <strong>Google</strong> — Play Console → Data safety: enter §3 exactly; set the Privacy Policy URL.</li>
+<li>☐ <strong>#1447</strong> — add both SHA-1s (§5) to the Android OAuth client; re-test Google sign-in on the Play build.</li>
+<li>☐ <strong>Verify-after</strong> — the labels must keep matching behaviour: if a future change adds an SDK or a new
+data type, this doc and both forms must be updated before release (a mismatch is a post-review takedown risk).</li>
+</ul>
+
+<p class="grounded">All "grounded:" citations refer to the state of the repo at branch
+<code>feat/launch-compliance-metadata</code>, 2026-06-30.</p>
+
+</body>
+</html>
