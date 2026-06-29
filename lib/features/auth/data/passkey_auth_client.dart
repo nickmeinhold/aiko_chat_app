@@ -13,16 +13,25 @@
 ///
 /// This client owns ONLY the on-device authenticator leg. The WebAuthn structure
 /// is opaque to it: the gateway issues `options` JSON, the platform authenticator
-/// (iOS `AuthenticationServices`, Android `Credential Manager`, via the `passkeys`
-/// package) turns it into an attestation/assertion, and this client hands the
-/// resulting JSON straight back for the gateway to verify. The package's
-/// `*.fromJsonString` / `*.toJsonString` already speak standard WebAuthn JSON, so
-/// there is no bespoke serialization here — only the platform call and the
-/// cancellation mapping.
+/// turns it into an attestation/assertion, and this client hands the resulting
+/// JSON straight back for the gateway to verify. The `*.fromJsonString` /
+/// `*.toJsonString` types already speak standard WebAuthn JSON, so there is no
+/// bespoke serialization — only the platform call and the cancellation mapping.
+///
+/// We drive [PasskeysPlatform.instance] (from `passkeys_platform_interface`)
+/// DIRECTLY rather than the `passkeys` umbrella package. The umbrella declares a
+/// vestigial `ua_client_hints` dependency that lacks macOS Swift Package Manager
+/// support and would force a CocoaPods fallback on the macOS target; the
+/// implementation packages (`passkeys_darwin`/`passkeys_android`) pull no such
+/// dep and self-register the platform instance via their `dartPluginClass`. The
+/// only behaviour we replicate from the umbrella's wrapper is the cancellation
+/// mapping (the rest — base64url pre-validation, the debug doctor — we don't
+/// need: the gateway issues valid options and we never run in debug-doctor mode).
 library;
 
-import 'package:passkeys/authenticator.dart';
-import 'package:passkeys/types.dart';
+import 'package:flutter/services.dart' show PlatformException;
+import 'package:passkeys_platform_interface/passkeys_platform_interface.dart';
+import 'package:passkeys_platform_interface/types/types.dart';
 
 import 'social_auth_client.dart' show SocialSignInCancelled, SocialSignInFailed;
 
@@ -43,39 +52,41 @@ abstract interface class PasskeyAuthClient {
   Future<String> authenticate(String optionsJson);
 }
 
-/// The real client, backed by the `passkeys` package's [PasskeyAuthenticator].
+/// The real client, backed by the federated [PasskeysPlatform] instance.
 class PlatformPasskeyAuthClient implements PasskeyAuthClient {
-  final PasskeyAuthenticator _authenticator;
-
-  PlatformPasskeyAuthClient({PasskeyAuthenticator? authenticator})
-      : _authenticator = authenticator ?? PasskeyAuthenticator();
+  PasskeysPlatform get _platform => PasskeysPlatform.instance;
 
   @override
   Future<String> register(String optionsJson) async {
     try {
+      await _platform.cancelCurrentAuthenticatorOperation();
       final request = RegisterRequestType.fromJsonString(optionsJson);
-      final response = await _authenticator.register(request);
+      final response = await _platform.register(request);
       return response.toJsonString();
-    } on PasskeyAuthCancelledException {
-      throw const SocialSignInCancelled();
-    } on AuthenticatorException catch (e) {
-      throw SocialSignInFailed('Passkey: ${e.runtimeType}');
+    } on PlatformException catch (e) {
+      throw _map(e);
     }
   }
 
   @override
   Future<String> authenticate(String optionsJson) async {
     try {
+      await _platform.cancelCurrentAuthenticatorOperation();
       final request = AuthenticateRequestType.fromJsonString(optionsJson);
-      final response = await _authenticator.authenticate(request);
+      final response = await _platform.authenticate(request);
       return response.toJsonString();
-    } on PasskeyAuthCancelledException {
-      throw const SocialSignInCancelled();
-    } on AuthenticatorException catch (e) {
-      // Includes NoCredentialsAvailableException (no passkey on this device) and
-      // DomainNotAssociatedException (AASA/entitlement mismatch) — both are real
-      // failures the UI surfaces, not silent cancellations.
-      throw SocialSignInFailed('Passkey: ${e.runtimeType}');
+    } on PlatformException catch (e) {
+      throw _map(e);
     }
   }
+
+  /// The platform authenticators surface a user dismissal as the
+  /// [PlatformException] code `cancelled` on BOTH iOS and Android — map it to
+  /// the SHARED silent cancellation so the controller restores prior state with
+  /// no error banner. Everything else (`no-credentials-available`,
+  /// `domain-not-associated`, `deviceNotSupported`, timeouts) is a real failure
+  /// the UI surfaces, so the user can be nudged toward registration.
+  Object _map(PlatformException e) => e.code == 'cancelled'
+      ? const SocialSignInCancelled()
+      : SocialSignInFailed('Passkey: ${e.code}');
 }
