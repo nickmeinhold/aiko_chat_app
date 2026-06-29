@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 06 — Sovereign-identity federation</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.thesis { background:#f3f0fb; border-left-color:#7d5fff; font-size:1.02rem; }
+  blockquote.danger { background:#fdf0ef; border-left-color:var(--blocker); }
+  .note { color:var(--muted); font-size:.9rem; }
+  .conf { font-weight:700; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; padding:.1em .5em;
+          border-radius:4px; color:#fff; }
+  .high { background:var(--accent); } .med { background:var(--warn); } .low { background:var(--blocker); }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.5rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  ul.tight li { margin:.25rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Design 06 — Sovereign-identity federation</h1>
+<p class="lead">A federation model that beats Matrix by <strong>subtraction</strong>: move the one piece of cleverness to
+<em>identity</em> (sovereign, key-rooted, owned by no gateway), and the rest of the system gets <em>simpler</em> than
+Matrix, not more complex — single-homed channels keep their total order, federation becomes relay-and-verify instead of
+replicate-and-resolve, and identity becomes portable, the thing Matrix has failed to solve for a decade.</p>
+
+<div class="scope">
+  <strong>Status:</strong> <em>vision</em>, v2 platform-tier — NOT a build spec and NOT on the launch path. Captured
+  2026-06-29 (task #29). Companion to <a href="05-communities-and-discovery.html">Design 05</a>, which is the near-term
+  community model built <em>federation-ready</em> so this stays possible.<br>
+  <strong>Confidence legend:</strong> <span class="conf high">solid</span> grounded in what's built ·
+  <span class="conf med">plausible</span> coherent but unvalidated · <span class="conf low">thin</span> genuinely
+  unsolved, where I'd bet but wouldn't trust me.
+</div>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#thesis">The thesis — better by subtraction</a></li>
+  <li><a href="#flaw">What Matrix gets wrong: server-bound identity</a></li>
+  <li><a href="#model">The three layers</a></li>
+  <li><a href="#identity">Identity — sovereign key, passkey-protected (the nuance that matters)</a></li>
+  <li><a href="#channels">Why channels stay single-homed (B4 survives)</a></li>
+  <li><a href="#federation">Federation = relay-and-verify, not replicate-and-resolve</a></li>
+  <li><a href="#hard">The hard problems (honest map)</a></li>
+  <li><a href="#present">What this asks of the present — one cheap principle</a></li>
+</ol>
+</nav>
+
+<h2 id="thesis">1. The thesis — better by subtraction</h2>
+<blockquote class="thesis">
+You don't beat Matrix by out-replicating it. You beat it by <strong>not replicating at all</strong> — putting the
+cleverness in sovereign identity, and letting everything underneath stay a single-master, totally-ordered, boringly
+simple system. Matrix is complex <em>because</em> it refused to make identity sovereign; fix that one thing and the
+complexity it was buying becomes unnecessary.
+</blockquote>
+
+<table>
+<tr><th>Dimension</th><th>Matrix</th><th>This design</th></tr>
+<tr><td>Identity unit</td><td><code>@user:server</code> — server-bound</td><td>sovereign keypair (passkey-protected) — gateway-independent</td></tr>
+<tr><td>Channel / room</td><td>replicated to every participating server</td><td>single-homed (one authoritative gateway)</td></tr>
+<tr><td>Ordering</td><td>partial-order DAG + state resolution</td><td>per-channel total order (ULID) — <strong>preserved</strong></td></tr>
+<tr><td>Federation op</td><td>replicate events + resolve state (multi-master)</td><td>relay signed message + verify (single-master per channel)</td></tr>
+<tr><td>Storage / room</td><td>O(participating servers) copies</td><td>one copy (the channel's home)</td></tr>
+<tr><td>Identity portability</td><td>unsolved ~a decade</td><td>native — the key <em>is</em> portable</td></tr>
+<tr><td>Durability</td><td>free (replication)</td><td>backup of a single-home log <span class="conf med">plausible</span></td></tr>
+<tr><td>Cross-server moderation</td><td>hard</td><td>hard — reopened, see §7 <span class="conf low">thin</span></td></tr>
+</table>
+<p>Two columns are worse for us (durability, moderation) and the rest are better. §7 is honest about the two worse ones.</p>
+
+<h2 id="flaw">2. What Matrix gets wrong: server-bound identity</h2>
+<p><span class="conf high">solid</span> In Matrix, <code>@alice:example.org</code> welds Alice's identity to a homeserver.
+If that server dies, vanishes, or de-platforms her, she loses her identity, her history, and her social graph. Account
+portability (moving <code>@alice</code> to another server with her rooms intact) has been an open proposal for years and
+remains unshipped. Every heavy piece of Matrix — the event-signing, the federation API, state resolution — exists to make
+a network of <em>servers-as-trust-units</em> agree. The server is the atom of trust, and that's the original sin.</p>
+
+<h2 id="model">3. The three layers</h2>
+<pre><code>  SOVEREIGN IDENTITY   a keypair you hold. Owned by no gateway. Verifiable everywhere.
+        │  (authenticates to / is vouched by)
+        ▼
+  GATEWAY DEPLOYMENT   a homeserver-equivalent. Hosts channels, relays federation.
+        │  (homes)
+        ▼
+  CHANNEL (single-homed)   one authoritative gateway sequences it with ULIDs.
+        ▲
+        │  (logical membership, by global ID, across gateways)
+  COMMUNITY   a federated overlay (Design 05's Community / a Matrix "Space"),
+              referencing channels homed on possibly-different gateways.</code></pre>
+<p>The app, as in Design 05, only ever talks to <strong>its own home gateway</strong> over one WSS connection. Federation
+is strictly gateway↔gateway; the client never multi-connects. A channel homed elsewhere is reached <em>through</em> the
+home gateway's relay.</p>
+
+<h2 id="identity">4. Identity — sovereign key, passkey-protected</h2>
+<blockquote class="invariant">
+<strong>The nuance that makes this honest, not hand-waving:</strong> a passkey is <em>not</em> the federated identity key,
+and can't be. Passkeys are deliberately <strong>domain-scoped</strong> (a credential for <code>chat.imagineering.cc</code>
+is, by design, unusable at any other origin — that's the phishing resistance). So a passkey can't directly be a
+cross-gateway identity. <span class="conf high">solid</span>
+</blockquote>
+<p><span class="conf med">plausible</span> The clean separation:</p>
+<ul class="tight">
+<li><strong>Sovereign identity key</strong> — a device-held keypair (secure enclave / DID-style, e.g. <code>did:key</code>).
+This is the portable identity. Gateways verify <em>its</em> signatures. It is the thing that is "you," everywhere.</li>
+<li><strong>Passkey</strong> — the device-side root that <em>protects and authorizes</em> the identity key: it
+authenticates you to a gateway and signs a delegation binding "this session / this gateway may act for identity key K."
+Passkeys become the <em>on-ramp and the guardian</em>, not the passport itself.</li>
+</ul>
+<p>This reframes the auth pivot (passkeys-primary, #21) as more than a login: it's the device-rooted base of a sovereign
+identity system. The passkey unlocks/authorizes the portable key; the portable key is what federates.</p>
+<details>
+<summary>Signed-message shape (sketch)</summary>
+<pre><code>// A message is signed by the sovereign identity key, relayed by gateways unchanged.
+{
+  "channel":   "&lt;global channel id&gt;",     // namespaced: id@homeGateway
+  "author":    "&lt;identity public key / did&gt;",
+  "ulid":      "&lt;assigned by the channel's HOME gateway&gt;",  // single sequencer
+  "body":      { ... },
+  "sig":       "&lt;identity-key signature over (channel, author, body, prev?)&gt;"
+}</code></pre>
+<p class="note">The home gateway assigns the ULID (preserving total order) and verifies <code>sig</code> against the
+author's identity key — which it learned either because the author is local, or via a federation vouch from the author's
+home gateway. No state resolution: one gateway sequences, everyone else relays + verifies.</p>
+</details>
+
+<h2 id="channels">5. Why channels stay single-homed (B4 survives)</h2>
+<p><span class="conf high">solid</span> This is the deliberate refusal that buys all the simplicity. Each channel has
+<strong>exactly one home gateway</strong> that sequences its messages with ULIDs. That means:</p>
+<ul class="tight">
+<li>The per-channel <strong>total order</strong> the entire <a href="04-b4-reconcile-engine.html">B4 reconcile engine</a>
+depends on — the reconnect fence (latest ULID), <code>before</code>/<code>after</code> cursor paging, the
+<code>historyContiguousThrough</code> watermark — is <strong>untouched</strong>. There is still one sequencer per channel;
+it just might not be <em>your</em> gateway.</li>
+<li>No DAG, no <code>prev_events</code> merge, no state resolution. The hardest 80% of Matrix simply does not exist here.</li>
+<li>The cost we accept (§7): a channel's history lives on its home gateway. If that gateway dies, the channel's history is
+at risk — recovered by <em>ordinary backup of a single-master log</em>, not by live multi-master replication.</li>
+</ul>
+<blockquote class="invariant">
+<strong>The load-bearing trade, stated plainly:</strong> we give up replication-based durability to keep total order and
+delete state resolution. For a chat product pre-scale, a backed-up single-home log is a <em>vastly</em> better
+cost/complexity point than a live consensus mesh. If a specific channel ever needs Matrix-grade survival, replication can
+be added as a later <em>opt-in</em> layer on top — it is not a foundation we must pour now.
+</blockquote>
+
+<h2 id="federation">6. Federation = relay-and-verify, not replicate-and-resolve</h2>
+<p><span class="conf med">plausible</span> Server-to-server reduces to two primitives, both far lighter than Matrix's
+federation API:</p>
+<ul class="tight">
+<li><strong>Vouch:</strong> gateway B asks gateway A "is this identity key really the holder you know as X?" — A answers with
+a signed assertion. (Replaces Matrix's user-resides-on-server coupling with a portable-key attestation.)</li>
+<li><strong>Relay:</strong> a message authored by a remote user for a channel homed on gateway H is forwarded to H, which
+verifies the identity-key signature, assigns the ULID, and fans out. Remote readers receive it via their home gateway
+relaying from H.</li>
+</ul>
+<p>There is no shared state to resolve because no two gateways are co-authoritative over the same channel. Conflict
+resolution — the thing that makes Matrix hard — is structurally absent.</p>
+
+<h2 id="hard">7. The hard problems (honest map)</h2>
+<p>Three cracks. I'd rather name them than sell around them; two are where I'd genuinely not trust my own optimism.</p>
+<blockquote class="danger">
+<strong><span class="conf low">thin</span> Cross-federation moderation is the scary one.</strong> Block + takedown
+(<a href="05-communities-and-discovery.html">#7</a>) is single-gateway today and clean. Sovereign identity means a user
+blocked on gateway A can present <em>the same key</em> on gateway B and appear in a shared community. Reputation,
+block-propagation, and takedown across mutually-distrusting deployments is <strong>unsolved-grade</strong> — Matrix
+struggles badly here too. This is the problem most likely to gate whether the whole vision is viable, and it has no cheap
+answer. It must be designed before any real multi-gateway traffic, not after.
+</blockquote>
+<ul class="tight">
+<li><strong><span class="conf med">plausible</span> Key loss = identity loss.</strong> Pure keypair identity is
+unforgiving. Passkey sync (iCloud Keychain / Google Password Manager) mitigates device loss, and the identity-key /
+passkey split (§4) allows a recovery/rotation ceremony (re-authorize a new identity key from a recovered passkey) — but
+that ceremony is unbuilt and must be deliberate. Matrix at least lets a homeserver assist recovery; sovereign identity
+shifts that burden to the protocol.</li>
+<li><strong><span class="conf med">plausible</span> Durability.</strong> The single-home trade (§5) — solvable with
+backups, but it <em>is</em> a property surrendered, and a gateway operator's backup discipline becomes a user-facing
+reliability factor.</li>
+</ul>
+
+<h2 id="present">8. What this asks of the present — one cheap principle</h2>
+<blockquote class="invariant">
+<strong>Keep identity gateway-independent, and namespace IDs globally — from day one.</strong> Passkeys already make
+identity a key rather than a server-address, so this is mostly "don't backslide into a flat, gateway-bound user table."
+Give users, channels, and communities <strong>globally namespaced IDs</strong> (carrying origin gateway) even while there
+is exactly one gateway. That single discipline keeps this entire future open at near-zero present cost; a flat ID space
+retrofitted under a live user base is the migration from hell (it's the one thing Matrix unambiguously got right early).
+</blockquote>
+<p><strong>Explicitly deferred</strong> (do not build pre-launch, do not let it touch the launch path): the vouch/relay
+protocol, the identity-key/passkey delegation ceremony, cross-gateway moderation, the recovery story, single-home backup
+tooling. Each is its own future design. <a href="05-communities-and-discovery.html">Design 05</a> is the near-term build;
+it adopts only the cheap principle above and ships independently of everything in this document.</p>
+
+<p class="note">Provenance: this design fell out of a late-night session (2026-06-29) climbing from "what do we call the
+channel grouping?" through server → community → multi-gateway → federation → "we can do better than Matrix." It is kept as
+a vision precisely so the ambition is captured without being mistaken for a near-term commitment.</p>
+
+</body>
+</html>
