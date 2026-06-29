@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 05 — Communities (nested servers) + discovery directory</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.decision { background:#f3f0fb; border-left-color:#7d5fff; }
+  .note { color:var(--muted); font-size:.9rem; }
+  .sev { font-weight:700; font-size:.78rem; letter-spacing:.03em; text-transform:uppercase; padding:.1em .5em;
+         border-radius:4px; color:#fff; }
+  .blocker { background:var(--blocker); } .major { background:var(--warn); }
+  .minor { background:#777; } .nit { background:#aaa; }
+  .gw { background:#1d76db; } .app { background:#0b5; }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  .tag { display:inline-block; font:12px ui-monospace,monospace; background:#eef; color:#338; padding:.1em .5em;
+         border-radius:4px; margin-right:.3em; }
+  ul.tight li { margin:.25rem 0; }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.5rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  .key { display:inline-block; font:11px ui-monospace,monospace; padding:.1em .5em; border-radius:4px; color:#fff; }
+</style>
+</head>
+<body>
+
+<h1>Design 05 — Communities (nested servers) + the discovery directory</h1>
+<p class="lead">Introduce a <strong>two-level hierarchy</strong> — a <code>Community</code> (a "server") owns
+<code>Channel</code>s — and build the discovery directory at the <em>community</em> level. This replaces the current
+flat channel model. The whole design is shaped so it ships <strong>incrementally</strong> and never bricks launch: the
+first phase is an invisible model migration, the directory lands later.</p>
+
+<div class="scope">
+  <strong>Status:</strong> design, not yet built. <strong>Decision:</strong> nested communities ("Option B"), chosen by
+  Nick 2026-06-29 over the flat-channels-with-tags alternative ("Option A"). Task #6.<br>
+  <strong>Legend:</strong> <span class="key gw">GATEWAY</span> peer-owned (aiko_chat_gateway) ·
+  <span class="key app">APP</span> this repo. The bulk of v1 is gateway data-model + endpoint work; the app side is a
+  rendering + navigation layer that cannot be built until the contract lands (same seam discipline as auth #38).
+</div>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#shape">The shape — and why the migration is the load-bearing part</a></li>
+  <li><a href="#model">Domain model — Community, Channel.communityId, two-level membership</a></li>
+  <li><a href="#discovery">Discovery operates at the community level</a></li>
+  <li><a href="#contract">The gateway contract (the handoff)</a></li>
+  <li><a href="#app">App architecture — navigation, providers, reconcile</a></li>
+  <li><a href="#phasing">Migration &amp; phasing — B1 invisible, B2 directory, B3 rich</a></li>
+  <li><a href="#visibility">Visibility &amp; concurrent-shrink (the teeth)</a></li>
+  <li><a href="#decisions">Decisions within B (recommendations)</a></li>
+  <li><a href="#open">Open questions for the gateway</a></li>
+</ol>
+</nav>
+
+<h2 id="shape">1. The shape — and why the migration is the load-bearing part</h2>
+<p>Today the model is <strong>flat</strong>: <code>GET /v1/channels</code> returns the channels you're already in, each
+carrying only <code>{id, name, kind, aiko_channel}</code>. There is no "server", no description, no member count, no
+discovery endpoint, no join. (See <a href="#open">§9</a> for the full gap list.)</p>
+
+<p>Option B nests that: a <code>Community</code> owns channels, membership is two-level (you join a <em>community</em>,
+which grants access to its channels), and the directory browses <em>communities</em>. The risk Option A was meant to
+avoid — that this is a months-long epic blocking launch — is neutralised by one move:</p>
+
+<blockquote class="decision">
+<strong>The default-community migration.</strong> Every existing channel is assigned to a single seeded community (call
+it <em>"Aiko"</em>). Every existing user is auto-joined to it. <strong>Phase B1 is therefore invisible</strong> — channels
+still render exactly as today, they just now <em>belong</em> to a community under the hood. No user loses a channel; no UI
+changes; launch is unaffected. The hierarchy becomes <em>visible</em> only in B2 when the directory + community navigation
+ship. This is how "B now" stops meaning "B blocks everything."
+</blockquote>
+
+<h2 id="model">2. Domain model</h2>
+
+<h3>2.1 The new <code>Community</code> type <span class="key app">APP</span></h3>
+<pre><code>/// A community ("server") — the top-level grouping that owns channels and
+/// membership. The discovery directory ranks and filters these, not channels.
+class Community {
+  final String id;
+  final String name;
+  final String? description;
+  final String? iconUrl;
+  final CommunityVisibility visibility; // public | unlisted | private
+  final int memberCount;
+  final String ownerId;
+  final CommunityCategory category;     // closed set — drives directory grouping
+  final String defaultChannelId;        // where a new member lands
+  final DateTime? lastActivityAt;       // coarse signal for ranking
+}
+
+enum CommunityVisibility { public, unlisted, private; /* fromWire fail-closed */ }
+enum CommunityCategory   { general, tech, gaming, art, music, education, social, other; }</code></pre>
+<p class="note">Closed sets are enums with fail-closed <code>fromWire</code> (an unknown future visibility/category is
+dropped or coerced to the safe default), matching the <code>AuthProviderKind</code> / <code>ChannelKind</code> pattern
+already in the codebase — never stringly-typed.</p>
+
+<h3>2.2 <code>Channel</code> gains a parent <span class="key app">APP</span> <span class="key gw">GATEWAY</span></h3>
+<pre><code>class Channel {
+  final String id;
+  final String name;
+  final ChannelKind kind;
+  final String? aikoChannel;
+  final String? communityId;   // NEW — the owning community. Null only for DMs.
+}</code></pre>
+<p>Wire (<code>GET /v1/channels</code> and the nested forms) adds <code>community_id</code>. Decoding stays lenient
+(absent ⇒ <code>null</code>), so a pre-migration gateway response still parses — important for the B1 rollout ordering.</p>
+
+<h3>2.3 Two-level membership</h3>
+<table>
+<tr><th>Level</th><th>Meaning</th><th>v1 rule</th></tr>
+<tr><td>Community membership</td><td>"I belong to this server"</td><td>Joining a community subscribes you to all its
+<em>public</em> channels (simple). Per-channel opt-in is a B3 concern.</td></tr>
+<tr><td>Channel subscription</td><td>The WSS subscribe set (already exists)</td><td>Derived: union of channels across
+my joined communities. The reconcile engine is unchanged below the derivation.</td></tr>
+</table>
+<p><strong>Roles/permissions are explicitly out of v1</strong> — owner + member only. A role system (Discord-style) is a
+whole subsystem; deferring it is what keeps B1/B2 tractable. See <a href="#decisions">§8</a>.</p>
+
+<h2 id="discovery">3. Discovery operates at the community level</h2>
+<p>This is the clean payoff of B: "server discovery" <em>is</em> community-level discovery, exactly like Discord's
+directory. The three sub-problems from the topology framing map cleanly:</p>
+<table>
+<tr><th>Sub-problem</th><th>v1 answer</th><th>Signal source</th></tr>
+<tr><td><strong>Taxonomy</strong> (grouping)</td><td><code>CommunityCategory</code> — a closed enum facet</td><td>New field on the community</td></tr>
+<tr><td><strong>Relevance</strong> (ranking)</td><td>Default: <code>lastActivityAt</code> recency + <code>memberCount</code>. Cheap proxies, no engagement model.</td><td>Coarse fields, no aggregation pipeline</td></tr>
+<tr><td><strong>Visibility</strong> (who sees what)</td><td>Only <code>public</code> communities listed; per-viewer block/takedown predicate applied. See <a href="#visibility">§7</a>.</td><td>Reuses moderation predicate</td></tr>
+</table>
+<blockquote>
+<strong>Cold-start is real.</strong> A brand-new directory has no engagement signal, so v1 ranking deliberately leans on
+recency + size. <strong>Not personalized in v1</strong> — the trigger to add personalization is "rank by overlap with the
+viewer's existing community memberships." Trending (join-rate / message-rate deltas) and featured (admin-curated) are B3:
+each needs a new gateway aggregation, so naming them as later keeps v1 shippable.
+</blockquote>
+
+<h2 id="contract">4. The gateway contract (the handoff) <span class="key gw">GATEWAY</span></h2>
+<p>This is what the app needs the gateway to expose. The app side is dormant until it lands.</p>
+
+<table>
+<tr><th>Method · path</th><th>Returns</th><th>Notes</th></tr>
+<tr><td><code>GET /v1/communities/discover?q=&amp;category=&amp;sort=&amp;cursor=</code></td><td>Paginated <strong>public</strong> communities (directory projection)</td><td>Cursor pagination like history. Applies the visibility predicate (§7).</td></tr>
+<tr><td><code>GET /v1/communities/{id}</code></td><td>Community detail + its visible channels</td><td>403/404 fail-closed if private &amp; non-member, or taken down.</td></tr>
+<tr><td><code>POST /v1/communities/{id}/join</code></td><td>Membership + the channels to subscribe</td><td><strong>Fail closed</strong> if the community went private/deleted since listing (§7).</td></tr>
+<tr><td><code>GET /v1/communities</code></td><td>The communities I'm in (+ their channels)</td><td>Replaces the role <code>GET /v1/channels</code> plays today.</td></tr>
+</table>
+
+<details>
+<summary>Directory projection — the community wire shape</summary>
+<pre><code>// GET /v1/communities/discover -> { communities: [...], next_cursor }
+{
+  "id":             "&lt;ulid&gt;",
+  "name":           "string",
+  "description":    "string|null",
+  "icon_url":       "string|null",
+  "visibility":     "public",            // only public appear in discover
+  "member_count":   1234,
+  "owner_id":       "&lt;user_id&gt;",
+  "category":       "tech",              // closed set
+  "default_channel_id": "&lt;channel_id&gt;",
+  "last_activity_at":   "&lt;iso8601|ulid&gt;"
+}</code></pre>
+<p class="note">The <code>join</code> response should hand back the channel set in the same shape
+<code>listChannels()</code> already returns, so the app can route it straight into the existing reconcile engine with no
+new decode path.</p>
+</details>
+
+<h2 id="app">5. App architecture <span class="key app">APP</span></h2>
+<ul class="tight">
+<li><strong>Domain:</strong> <code>Community</code> + <code>CommunityMembership</code>; <code>Channel.communityId</code>.</li>
+<li><strong>Data:</strong> <code>discoverCommunities()</code>, <code>getCommunity()</code>, <code>joinCommunity()</code>,
+<code>listMyCommunities()</code> on <code>ChatRestApi</code> (mirrors the existing method-per-endpoint style).</li>
+<li><strong>Providers:</strong> <code>myCommunitiesProvider</code> (replaces the role of <code>channelsProvider</code> as
+the subscription root), <code>communityChannelsProvider(id)</code>, <code>discoverCommunitiesProvider(query)</code>.</li>
+<li><strong>Reconcile:</strong> the subscribed-channel set becomes a <em>derivation</em> — union of channels across joined
+communities — fed into the unchanged B4 engine. The transport/cache primitives don't move; only where the channel-id list
+comes from changes.</li>
+<li><strong>Navigation:</strong> a community rail (left) → channel list (within) → chat. On mobile this is a two-level
+push; the current single-pane <code>ChatScreen</code> grows a parent layer rather than being rewritten.</li>
+</ul>
+
+<h2 id="phasing">6. Migration &amp; phasing</h2>
+<table>
+<tr><th>Phase</th><th>What ships</th><th>User-visible?</th></tr>
+<tr><td><strong>B1</strong> — model + migration</td><td><span class="key gw">GATEWAY</span> <code>Community</code> model,
+<code>community_id</code> on channels, seed the default "Aiko" community, auto-join all users, serialize
+<code>community_id</code>. <span class="key app">APP</span> add <code>communityId</code> to the lean <code>Channel</code>
+(lenient decode).</td><td><strong>No</strong> — channels render as today.</td></tr>
+<tr><td><strong>B2</strong> — directory + join</td><td><span class="key gw">GATEWAY</span> <code>discover</code> /
+<code>join</code> / <code>communities</code> endpoints + directory fields + visibility predicate. <span class="key app">APP</span>
+<code>Community</code> type, the data methods, the discovery screen, community navigation.</td><td><strong>Yes</strong> —
+the directory appears.</td></tr>
+<tr><td><strong>B3</strong> — rich</td><td>Roles/permissions, per-channel opt-in, invites/vanity links, trending +
+featured ranking, community creation UI.</td><td>Yes.</td></tr>
+</table>
+<blockquote class="invariant">
+<strong>Ordering invariant:</strong> B1 gateway serialization of <code>community_id</code> is safe to ship before the app
+reads it (lenient decode tolerates its absence <em>and</em> its presence). The default-community seed + auto-join must be a
+single migration so no channel is ever orphaned (a channel with a null <code>community_id</code> that isn't a DM is a
+migration bug, not a valid state — assert it server-side).
+</blockquote>
+
+<h2 id="visibility">7. Visibility &amp; concurrent-shrink (the teeth)</h2>
+<p>The directory is a <strong>fourth read path</strong> into the same visible-set as the reconnect fence, history paging,
+and fanout. Per the project's distributed-time invariant (<code>concept_visibility_consistency_distributed_time</code>),
+it must apply the <em>identical</em> visibility predicate the moderation work (#7) established — not-blocked
++ not-soft-deleted + not-private-to-this-viewer — now lifted to the community grain.</p>
+<blockquote class="invariant">
+<strong>Design-time question, not a cage-match catch:</strong> <em>what shrinks the discover set concurrently?</em>
+A community flipping <code>public → private</code>, the owner being blocked, a takedown — all between a viewer's
+<code>discover</code> list and their <code>join</code>. Therefore <code>join</code> <strong>fails closed</strong>: if the
+community is no longer visible to this viewer at join time, the gateway rejects (403/404) and the app shows "no longer
+available" rather than joining something that just went private. The directory listing is a snapshot; only <code>join</code>
+is the authoritative gate.
+</blockquote>
+<ul class="tight">
+<li><strong>Three visibilities:</strong> <code>public</code> (listed + joinable), <code>unlisted</code> (joinable by direct
+link, not listed), <code>private</code> (invite/member-only, not listed). Only <code>public</code> enters
+<code>discover</code>.</li>
+<li><strong>Client defense-in-depth:</strong> the app filters owner-blocked communities client-side too (mirroring the
+existing <code>blockedUserIdsProvider</code> message filter), so a block takes effect on the next frame without a reload —
+but the backend predicate is the source of truth.</li>
+</ul>
+
+<h2 id="decisions">8. Decisions within B (recommendations — flag to flip)</h2>
+<table>
+<tr><th>Question</th><th>Recommendation</th><th>Why</th></tr>
+<tr><td>DMs inside communities?</td><td><strong>No</strong> — DMs stay <code>community_id = null</code></td><td>A 1:1 DM isn't a server channel; nesting it complicates membership for no gain.</td></tr>
+<tr><td>Roles/permissions in v1?</td><td><strong>Defer to B3</strong> — owner + member only</td><td>Role systems are a subsystem; deferring keeps B1/B2 shippable.</td></tr>
+<tr><td>Join = all channels or opt-in?</td><td><strong>All public channels</strong> of the community</td><td>Simplest correct default; per-channel opt-in is additive later.</td></tr>
+<tr><td>Term: "server" vs "community"?</td><td><strong>"Community"</strong></td><td>Friendlier, less gamer-coded; "Aiko" is a social app, not a gaming one. (Flip if you want "server".)</td></tr>
+<tr><td>Community creation in v1?</td><td><strong>No</strong> — seeded/admin-created only for B2</td><td>User-generated communities multiply the moderation + spam surface; gate it behind validated discovery first.</td></tr>
+</table>
+
+<h2 id="open">9. Open questions for the gateway <span class="key gw">GATEWAY</span></h2>
+<ul class="tight">
+<li>Does the gateway model already have <em>any</em> community/grouping scaffolding (as it already had a latent
+<code>is_private</code>)? If so, B1 is partly done.</li>
+<li>Is <code>aiko_channel</code> (the bus mapping) per-channel or could it become per-community? Affects whether the bus
+topology mirrors the new hierarchy.</li>
+<li>Ranking source for <code>last_activity_at</code> — is there a cheap "last message ULID per channel" already (the
+reconnect fence suggests yes) that rolls up to a community?</li>
+<li>Moderation grain: can a <em>community</em> be taken down as a unit, or only individual channels/messages? The
+visibility predicate (§7) needs a community-level takedown flag.</li>
+</ul>
+
+<p class="note">Companion: this design's gateway half is handed off as a <code>project:aiko_chat_gateway</code> task. The
+app half (B1 <code>communityId</code> decode; B2 types + screen) is tracked under task #6 in this repo.</p>
+
+</body>
+</html>
