@@ -53,6 +53,15 @@ dependencies:
   crypto: ^3.0.7
   shared_preferences: ^2.3.2
   flutter_web_auth_2: ^5.0.3
+  # Passkeys via the federated implementation packages directly (NOT the
+  # `passkeys` umbrella) — the umbrella declares a vestigial `ua_client_hints`
+  # dep that lacks macOS Swift Package Manager support and forces a CocoaPods
+  # fallback on the macOS target. These three pull no such dep, keeping macOS
+  # pure-SPM. We call `PasskeysPlatform.instance` directly; the *_darwin/_android
+  # packages self-register it via their `dartPluginClass`.
+  passkeys_platform_interface: ^2.6.0
+  passkeys_darwin: ^0.4.0
+  passkeys_android: ^2.12.0
 
 dev_dependencies:
   flutter_test:
