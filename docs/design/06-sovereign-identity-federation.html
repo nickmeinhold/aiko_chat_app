@@ -190,6 +190,43 @@ block-propagation, and takedown across mutually-distrusting deployments is <stro
 struggles badly here too. This is the problem most likely to gate whether the whole vision is viable, and it has no cheap
 answer. It must be designed before any real multi-gateway traffic, not after.
 </blockquote>
+
+<h3>7.1 A candidate direction: accountability via staked vouching <span class="conf low">thin</span></h3>
+<p>The sybil/moderation gate has the same root in both <a href="05-communities-and-discovery.html">05</a> and here:
+a sovereign key is <strong>free to mint</strong>, so authenticity (this message came from holder-of-K) buys no
+<em>accountability</em> (K is a real, rate-limitable human). One direction worth researching turns the social-recovery
+graph (<a href="#research">§9</a>) into double duty: <strong>the guardians who hold your key shares also stake their
+standing on your conduct.</strong> Minting a key stays free; minting a key others will <em>federate with</em> costs your
+social graph's skin. Accountability then flows <em>backward through the vouch edges</em> — the accountable unit becomes
+"a key plus the reputation staked behind it," and that is the one cost a sybil farmer cannot fake at scale.</p>
+<p>This is not new ground — the lineage is old and, in one case, Nobel-validated:</p>
+<table>
+<tr><th>Precedent</th><th>Mechanism</th><th>Lesson</th></tr>
+<tr><td><strong>Frankpledge</strong> (medieval England)</td><td>A <em>tithing</em> of ~10 households was collectively
+liable for each member's conduct — produce the absconder or pay.</td><td>"Friends punished for your behaviour" ran
+English law for centuries; it localised an impossible monitoring problem. Also bred guilt-by-association abuse.</td></tr>
+<tr><td><strong>Suretyship / bail</strong></td><td>A third party forfeits a stake if you abscond.</td><td>The
+individualised form of the same primitive; still in use.</td></tr>
+<tr><td><strong>Grameen joint-liability lending</strong> (Yunus, Nobel 2006)</td><td>Group-liable microloans, no
+collateral — peer monitoring substitutes for a credit bureau.</td><td><strong>The empirical proof it can produce
+cooperation at scale</strong> rather than collapse. The reference with data.</td></tr>
+<tr><td><strong>Delegation-slashing</strong> (delegated PoS)</td><td>Delegators backing a misbehaving validator lose
+their delegated stake.</td><td>The cleanest production "backers punished for the principal" mechanism today.</td></tr>
+<tr><td><strong>DeSoc / Soulbound Tokens</strong> (Weyl, Ohlhaver, Buterin 2022)</td><td>Non-transferable reputation as
+collateral, recovery via community.</td><td>The most on-point modern paper; ties recovery guardians to a reputation
+graph. Pair with sybil-graph detection (SybilRank, EigenTrust) for the signal.</td></tr>
+</table>
+<blockquote class="danger">
+<strong><span class="conf low">thin</span> One design error from a social-credit system.</strong> Three failure modes
+must be designed against, not hoped away: <strong>(1) contagion griefing / guilt-by-association</strong> — a bad actor
+deliberately poisons their whole cluster (frankpledge's documented abuse); <strong>(2) chilling effect &amp; exclusion of
+the vulnerable</strong> — if vouching is risky, people vouch only for the already-safe, freezing out newcomers and thin
+networks (the mechanism that secures the core ossifies the boundary); <strong>(3) coercion &amp; collusion</strong> — a
+principal coerces vouchers, or a cluster colludes to defect together (Grameen fights this <em>structurally</em>: small
+groups + frequent repayment, not good intentions). The specific synthesis — recovery guardians <em>also</em> being
+slashable accountability sureties — appears genuinely under-deployed; treat it as a seam to invent in, with these three as
+the design's load-bearing constraints.</blockquote>
+
 <ul class="tight">
 <li><strong><span class="conf med">plausible</span> Key loss = identity loss.</strong> Pure keypair identity is
 unforgiving. Passkey sync (iCloud Keychain / Google Password Manager) mitigates device loss, and the identity-key /
