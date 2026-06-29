@@ -24,6 +24,7 @@ import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../../chat/data/transport/chat_transport.dart';
+import '../data/broker_auth_client.dart';
 import '../data/social_auth_client.dart';
 import '../domain/auth_models.dart';
 import '../domain/social_models.dart';
@@ -52,6 +53,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   ChatRestApi get _rest => ref.read(restApiProvider);
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
   SocialAuthClient get _social => ref.read(socialAuthClientProvider);
+  BrokerAuthClient get _broker => ref.read(brokerAuthClientProvider);
 
   @override
   Future<AppUser?> build() async {
@@ -114,17 +116,48 @@ class AuthController extends AsyncNotifier<AppUser?> {
         rawNonce: cred.rawNonce,
         name: cred.name,
       );
-      switch (outcome) {
-        case Authenticated(:final session):
-          await _tokens.setTokens(session.tokens);
-          return session.user;
-        case PendingHandle pending:
-          // Stay logged out; the pending state drives the router to
-          // /claim-handle, where claimHandle() completes the sign-in.
-          ref.read(pendingHandleProvider.notifier).set(pending);
-          return prior;
-      }
+      return _applyOutcome(outcome, prior);
     });
+  }
+
+  /// Sign in via a gateway OAuth-BROKER provider (e.g. GitHub) identified by
+  /// [slug]. Mirrors [signInWith] but the ingress is the system web-auth session
+  /// + a handoff exchange instead of a native SDK + id-token: run the browser
+  /// flow, redeem the handoff at the gateway, then route on the SAME outcome
+  /// (log in, or park a PendingHandle for /claim-handle). A user dismissal of the
+  /// browser restores the prior state silently (no error banner).
+  Future<void> signInWithBroker(String slug) async {
+    // Ingress-only, same guard as signInWith: a stray call while authenticated
+    // must not park a PendingHandle behind a live session.
+    if (state.value != null) return;
+    final prior = state.value;
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      final BrokerHandoff handoff;
+      try {
+        handoff = await _broker.authenticate(slug);
+      } on SocialSignInCancelled {
+        return prior; // user closed the browser — no-op, restore prior state
+      }
+      final outcome =
+          await _rest.exchangeOAuth(handoff.code, handoff.verifier);
+      return _applyOutcome(outcome, prior);
+    });
+  }
+
+  /// Apply a verified [outcome] (from native `/social` OR broker `/exchange` —
+  /// the gateway's single identity door makes them identical here): a known
+  /// identity adopts the tokens and publishes the user; a new identity parks the
+  /// [PendingHandle] (router → /claim-handle) and keeps the [prior] state.
+  Future<AppUser?> _applyOutcome(SocialOutcome outcome, AppUser? prior) async {
+    switch (outcome) {
+      case Authenticated(:final session):
+        await _tokens.setTokens(session.tokens);
+        return session.user;
+      case PendingHandle pending:
+        ref.read(pendingHandleProvider.notifier).set(pending);
+        return prior;
+    }
   }
 
   /// Complete a new social identity's sign-in by claiming a handle. Requires a

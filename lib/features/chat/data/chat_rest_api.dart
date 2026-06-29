@@ -1,5 +1,6 @@
 import '../../auth/data/social_auth_client.dart';
 import '../../auth/domain/auth_models.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../../auth/domain/social_models.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../domain/channel.dart';
@@ -75,6 +76,18 @@ abstract interface class ChatRestApi {
     required String rawNonce,
     String? name,
   });
+
+  /// The sign-in providers the gateway offers (native + broker), driving the
+  /// dynamic login UI. Empty when social sign-in is disabled at the gateway.
+  Future<List<AuthProviderInfo>> listAuthProviders();
+
+  /// Redeem a broker OAuth [code] (the single-use handoff captured from the
+  /// `aikochat://auth?code=…` callback) for a session, presenting the app-held
+  /// [verifier] that binds the handoff to this app (cage-match #37 — a stolen
+  /// code is unredeemable without it). Returns the SAME shape as [socialSignIn]
+  /// — [Authenticated] or [PendingHandle] — because both funnel through the
+  /// gateway's single identity door.
+  Future<SocialOutcome> exchangeOAuth(String code, String verifier);
 
   /// Complete provisioning for a new social identity by claiming a [handle].
   /// [provisioningToken] comes from the [PendingHandle]. Throws [HandleTaken]

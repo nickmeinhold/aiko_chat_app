@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../auth/data/social_auth_client.dart';
 import '../../auth/domain/auth_models.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../../auth/domain/social_models.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../../../core/auth/token_provider.dart';
@@ -96,16 +97,43 @@ class GatewayRestApi implements ChatRestApi {
       'nonce': rawNonce,
       if (name != null) 'name': name,
     });
-    final m = _map(r.data);
-    // Route on the PRIMARY signal — a provisioning_token (or explicit
-    // status:pending) — not the mere ABSENCE of an access_token, so a malformed
-    // authenticated response fails loudly instead of casting a null
-    // provisioning_token (cage-match consensus: Maxwell/Kelvin/Carnot).
+    return _resolveOutcome(_map(r.data));
+  }
+
+  @override
+  Future<List<AuthProviderInfo>> listAuthProviders() async {
+    final r = await _bare.get('/v1/auth/providers');
+    final raw = (_map(r.data)['providers'] as List?) ?? const [];
+    return raw
+        .cast<Map>()
+        .map((e) => AuthProviderInfo.tryParse(e.cast<String, dynamic>()))
+        // Drop provider kinds this build doesn't understand (fail-closed).
+        .whereType<AuthProviderInfo>()
+        .toList(growable: false);
+  }
+
+  @override
+  Future<SocialOutcome> exchangeOAuth(String code, String verifier) async {
+    // Same single-door response shape as /social — known identity → tokens, new
+    // identity → provisioning_token. Reuse the exact resolver so the broker and
+    // native paths can never diverge on how they read the outcome. The
+    // app_verifier binds this redemption to the app that started the flow.
+    final r = await _bare.post('/v1/auth/oauth/exchange',
+        data: {'code': code, 'app_verifier': verifier});
+    return _resolveOutcome(_map(r.data));
+  }
+
+  /// Resolve the gateway's identity response (from /social OR /oauth/exchange)
+  /// into a [SocialOutcome]. Route on the PRIMARY signal — a provisioning_token
+  /// (or explicit status:pending) — not the mere ABSENCE of an access_token, so a
+  /// malformed authenticated response fails loudly instead of casting a null
+  /// provisioning_token (cage-match consensus: Maxwell/Kelvin/Carnot).
+  SocialOutcome _resolveOutcome(Map<String, dynamic> m) {
     final ptok = m['provisioning_token'];
     if (m['status'] == 'pending' || ptok != null) {
       if (ptok is! String) {
         throw const FormatException(
-            'social: pending response missing provisioning_token');
+            'auth: pending response missing provisioning_token');
       }
       return PendingHandle(
         provisioningToken: ptok,
@@ -115,7 +143,7 @@ class GatewayRestApi implements ChatRestApi {
     }
     if (m['access_token'] == null) {
       throw const FormatException(
-          'social: response has neither access_token nor provisioning_token');
+          'auth: response has neither access_token nor provisioning_token');
     }
     return Authenticated(AuthSession.fromJson(m));
   }

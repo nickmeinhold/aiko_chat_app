@@ -36,6 +36,7 @@ ProviderContainer makeContainer({
   required FakeChatTransport transport,
   InMemoryTokenStore? store,
   FakeSocialAuthClient? social,
+  FakeBrokerAuthClient? broker,
   FakeEulaStore? eula,
   String? eulaText,
 }) {
@@ -46,6 +47,8 @@ ProviderContainer makeContainer({
     transportProvider.overrideWithValue(transport),
     // The real social client hits Apple/Google platform channels — fake it.
     socialAuthClientProvider.overrideWithValue(social ?? FakeSocialAuthClient()),
+    // The real broker client opens a system web-auth session — fake it.
+    brokerAuthClientProvider.overrideWithValue(broker ?? FakeBrokerAuthClient()),
     // EULA acceptance is faked at its store seam. Default ACCEPTED so existing
     // tests reach login/chat unchanged; gate-specific tests pass accepted:false.
     eulaStoreProvider.overrideWithValue(eula ?? FakeEulaStore(accepted: true)),
