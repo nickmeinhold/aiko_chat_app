@@ -23,7 +23,7 @@ We review reports of objectionable content and abusive behaviour and act on them
 We may suspend or terminate any account that violates these Terms, at our discretion and without prior notice. You may delete your own account at any time from the app's Settings screen.
 
 7. Privacy
-Your use of Aiko Chat is also governed by our Privacy Policy, which explains what information we collect, how we use it, and your choices. Please review it.
+Your use of Aiko Chat is also governed by our Privacy Policy, which explains what information we collect, how we use it, and your choices. You can read it at https://chat.imagineering.cc/privacy. Please review it.
 
 8. Disclaimer and limitation of liability
 Aiko Chat is provided "as is" and "as available", without warranties of any kind, express or implied. To the maximum extent permitted by law, we are not liable for any indirect, incidental, or consequential damages arising from your use of, or inability to use, the service.
