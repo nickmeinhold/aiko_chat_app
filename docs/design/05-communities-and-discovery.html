@@ -127,6 +127,15 @@ already in the codebase — never stringly-typed.</p>
 <p>Wire (<code>GET /v1/channels</code> and the nested forms) adds <code>community_id</code>. Decoding stays lenient
 (absent ⇒ <code>null</code>), so a pre-migration gateway response still parses — important for the B1 rollout ordering.</p>
 
+<blockquote class="invariant">
+<strong>IDs are globally namespaced from day one</strong> — the one cheap principle adopted from
+<a href="06-sovereign-identity-federation.html#present">Design 06 §8</a>. Community, channel, and user IDs carry their
+<em>origin gateway</em> (e.g. <code>id@homeGateway</code>) even while there is exactly one gateway. This costs almost
+nothing now — it's just "don't backslide into a flat, gateway-bound ID space" — and it is the single discipline that keeps
+the federation future (06) open without a from-hell migration later. The rest of 06 is deferred; <strong>this much</strong>
+is load-bearing for B1 and belongs in the model the moment <code>community_id</code> ships.
+</blockquote>
+
 <h3>2.3 Two-level membership</h3>
 <table>
 <tr><th>Level</th><th>Meaning</th><th>v1 rule</th></tr>
