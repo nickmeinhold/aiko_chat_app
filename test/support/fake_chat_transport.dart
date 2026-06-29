@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/auth_provider.dart';
 import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
@@ -158,6 +159,11 @@ class FakeChatRestApi implements ChatRestApi {
   @override
   Future<void> reportMessage(String messageId, ReportReason reason) =>
       throw UnimplementedError();
+  @override
+  Future<List<AuthProviderInfo>> listAuthProviders() =>
+      throw UnimplementedError();
+  @override
+  Future<SocialOutcome> exchangeOAuth(String code) => throw UnimplementedError();
   @override
   Future<SocialOutcome> socialSignIn({
     required SocialProvider provider,

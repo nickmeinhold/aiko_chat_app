@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:aiko_chat_app/features/auth/data/broker_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/auth_provider.dart';
 import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
@@ -72,6 +74,36 @@ class FakeRestApi implements ChatRestApi {
   }) async {
     socialCalls++;
     return socialOutcome ?? Authenticated(_session());
+  }
+
+  /// Programmable provider list for the login screen. Default mirrors the live
+  /// gateway: native Apple/Google + the GitHub broker.
+  List<AuthProviderInfo> authProviders = const [
+    AuthProviderInfo(
+        slug: 'apple', displayName: 'Apple', kind: AuthProviderKind.native),
+    AuthProviderInfo(
+        slug: 'google', displayName: 'Google', kind: AuthProviderKind.native),
+    AuthProviderInfo(
+        slug: 'github', displayName: 'GitHub', kind: AuthProviderKind.broker),
+  ];
+
+  /// Programmable result of `exchangeOAuth`. Default: a known identity (log
+  /// straight in). Set a [PendingHandle] to exercise the broker claim path.
+  SocialOutcome? brokerOutcome;
+
+  int providersCalls = 0;
+  int exchangeCalls = 0;
+
+  @override
+  Future<List<AuthProviderInfo>> listAuthProviders() async {
+    providersCalls++;
+    return authProviders;
+  }
+
+  @override
+  Future<SocialOutcome> exchangeOAuth(String code) async {
+    exchangeCalls++;
+    return brokerOutcome ?? Authenticated(_session());
   }
 
   @override
@@ -166,5 +198,26 @@ class FakeSocialAuthClient implements SocialAuthClient {
           rawNonce: 'fake-nonce',
           name: 'Fake Name',
         );
+  }
+}
+
+/// A [BrokerAuthClient] fake — returns a canned handoff code (or throws, e.g.
+/// [SocialSignInCancelled]) without opening a real web-auth session.
+class FakeBrokerAuthClient implements BrokerAuthClient {
+  FakeBrokerAuthClient({this.code = 'fake-handoff', this.throws});
+
+  /// If set, [authenticate] throws this instead of returning a code.
+  Object? throws;
+  String code;
+
+  int authCalls = 0;
+  String? lastSlug;
+
+  @override
+  Future<String> authenticate(String slug) async {
+    authCalls++;
+    lastSlug = slug;
+    if (throws != null) throw throws!;
+    return code;
   }
 }

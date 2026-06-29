@@ -17,8 +17,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/auth/token_provider.dart';
 import '../features/auth/application/auth_controller.dart';
+import '../features/auth/data/broker_auth_client.dart';
 import '../features/auth/data/gateway_social_auth_client.dart';
 import '../features/auth/data/social_auth_client.dart';
+import '../features/auth/domain/auth_provider.dart';
 import '../features/chat/data/cache/cache_database.dart';
 import '../features/chat/data/cache/drift_cache.dart';
 import '../features/chat/data/chat_rest_api.dart';
@@ -89,6 +91,19 @@ final tokenProviderProvider = Provider<DefaultTokenProvider>(
 /// a fake so the auth controller is exercised without a platform channel.
 final socialAuthClientProvider = Provider<SocialAuthClient>(
   (ref) => GatewaySocialAuthClient(),
+);
+
+/// The OAuth-broker sign-in seam (GitHub, …). Drives the system web-auth session
+/// against the gateway's `/oauth/{slug}/start`. Tests override this with a fake.
+final brokerAuthClientProvider = Provider<BrokerAuthClient>(
+  (ref) => WebAuthBrokerClient(httpBaseUrl: ref.watch(configProvider).httpBaseUrl),
+);
+
+/// The gateway's advertised sign-in providers (native + broker), for the dynamic
+/// login UI. A [FutureProvider] so the login screen can render loading/error
+/// states; `ref.invalidate` to retry a failed fetch.
+final authProvidersProvider = FutureProvider<List<AuthProviderInfo>>(
+  (ref) => ref.watch(restApiProvider).listAuthProviders(),
 );
 
 // --- realtime + cache ------------------------------------------------------

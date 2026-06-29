@@ -4,13 +4,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
+import '../../../app/providers.dart';
 import '../application/auth_controller.dart';
 import '../data/social_auth_client.dart';
+import '../domain/auth_provider.dart';
 
-/// Social sign-in screen (Apple + Google). Watches [authControllerProvider]:
-/// a spinner while the call is in flight, an inline error if it failed. On
-/// success the controller publishes the user and the router redirects to chat
-/// — this screen does no navigation itself.
+/// Social sign-in screen. The button list is driven by the gateway's
+/// `GET /v1/auth/providers` ([authProvidersProvider]): native providers
+/// (Apple/Google) render their platform-specific button (and only on supported
+/// platforms), while every `broker` provider (GitHub, …) renders a generic
+/// "Continue with X" that runs the web-auth broker flow by slug — so adding a
+/// broker provider is a gateway-only change, no app release.
+///
+/// Watches [authControllerProvider] for the in-flight spinner / error. On
+/// success the controller publishes the user and the router redirects to chat —
+/// this screen does no navigation itself.
 class LoginScreen extends ConsumerWidget {
   const LoginScreen({super.key});
 
@@ -32,10 +40,81 @@ class LoginScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     final busy = auth.isLoading;
+    final providers = ref.watch(authProvidersProvider);
 
-    void social(SocialProvider provider) {
-      ref.read(authControllerProvider.notifier).signInWith(provider);
+    void social(SocialProvider provider) =>
+        ref.read(authControllerProvider.notifier).signInWith(provider);
+    void broker(String slug) =>
+        ref.read(authControllerProvider.notifier).signInWithBroker(slug);
+
+    // Build the button for one advertised provider, or null if it can't render
+    // on this platform (e.g. an Apple native button on Android).
+    Widget? buttonFor(AuthProviderInfo p) {
+      switch (p.kind) {
+        case AuthProviderKind.native:
+          switch (p.slug) {
+            case 'apple':
+              if (!_appleAvailable) return null;
+              return SignInWithAppleButton(
+                onPressed: busy ? () {} : () => social(SocialProvider.apple),
+              );
+            case 'google':
+              if (!_googleAvailable) return null;
+              return OutlinedButton.icon(
+                onPressed: busy ? null : () => social(SocialProvider.google),
+                icon: const Icon(Icons.account_circle_outlined),
+                label: const Text('Continue with Google'),
+              );
+            default:
+              return null; // an unknown native provider has no compiled SDK
+          }
+        case AuthProviderKind.broker:
+          return OutlinedButton.icon(
+            onPressed: busy ? null : () => broker(p.slug),
+            icon: Icon(_brokerIcon(p.slug)),
+            label: Text('Continue with ${p.displayName}'),
+          );
+      }
     }
+
+    // If the providers fetch fails, fall back to the statically-known native
+    // buttons so sign-in still works (the fetch is best-effort chrome, not a
+    // hard dependency for Apple/Google).
+    List<Widget> nativeFallback() => [
+          if (_appleAvailable) ...[
+            SignInWithAppleButton(
+              onPressed: busy ? () {} : () => social(SocialProvider.apple),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (_googleAvailable)
+            OutlinedButton.icon(
+              onPressed: busy ? null : () => social(SocialProvider.google),
+              icon: const Icon(Icons.account_circle_outlined),
+              label: const Text('Continue with Google'),
+            ),
+        ];
+
+    final buttons = providers.when(
+      data: (list) {
+        final widgets = <Widget>[];
+        for (final p in list) {
+          final b = buttonFor(p);
+          if (b == null) continue;
+          if (widgets.isNotEmpty) widgets.add(const SizedBox(height: 12));
+          widgets.add(b);
+        }
+        // Defensive: if the gateway advertised nothing renderable, fall back.
+        return widgets.isEmpty ? nativeFallback() : widgets;
+      },
+      loading: () => const [
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ],
+      error: (_, _) => nativeFallback(),
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sign in')),
@@ -48,20 +127,7 @@ class LoginScreen extends ConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (_appleAvailable) ...[
-                  SignInWithAppleButton(
-                    onPressed: busy ? () {} : () => social(SocialProvider.apple),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (_googleAvailable) ...[
-                  OutlinedButton.icon(
-                    onPressed:
-                        busy ? null : () => social(SocialProvider.google),
-                    icon: const Icon(Icons.account_circle_outlined),
-                    label: const Text('Continue with Google'),
-                  ),
-                ],
+                ...buttons,
                 if (auth.hasError) ...[
                   const SizedBox(height: 16),
                   Text(
@@ -76,4 +142,11 @@ class LoginScreen extends ConsumerWidget {
       ),
     );
   }
+
+  /// A best-effort glyph per broker provider; generic fallback otherwise.
+  static IconData _brokerIcon(String slug) => switch (slug) {
+        'github' => Icons.code,
+        'discord' => Icons.forum_outlined,
+        _ => Icons.login,
+      };
 }
