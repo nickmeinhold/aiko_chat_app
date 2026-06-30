@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aiko Chat — Play Store listing copy</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#5E35B1; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:820px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.7rem; margin:0 0 .3rem; }
+  h2 { font-size:1.15rem; margin:2rem 0 .4rem; padding-top:1rem; border-top:1px solid var(--rule); }
+  .sub { color:var(--muted); margin:.2rem 0 1.3rem; }
+  .count { color:var(--muted); font-size:.85rem; font-weight:400; }
+  textarea, .field { width:100%; font:14px/1.5 ui-monospace,Menlo,monospace; background:var(--code-bg);
+            border:1px solid var(--rule); border-radius:8px; padding:.9rem 1rem; white-space:pre-wrap; }
+  blockquote { margin:1rem 0; padding:.8rem 1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; font-size:.95rem; }
+  a { color:var(--accent); }
+  .grounded { color:var(--muted); font-size:.85rem; }
+</style>
+</head>
+<body>
+
+<h1>Aiko Chat — Play Store listing copy</h1>
+<p class="sub">Paste-ready copy for the Play Console <strong>Main store listing</strong>. Grounded in the 2026-06-30
+audit: zero trackers/ads/analytics, so the privacy framing is true, not marketing.</p>
+
+<blockquote>
+<strong>Honest-claim guardrails baked into this copy:</strong> it does <em>not</em> claim end-to-end encryption
+(messages are TLS-encrypted in transit + stored server-side, not E2EE), does not promise features that aren't live,
+and frames "no tracking" — which the dep audit proves. Keep it that way; the listing is an attestation too.
+</blockquote>
+
+<h2>App name <span class="count">(max 30 chars)</span></h2>
+<div class="field">Aiko Chat</div>
+
+<h2>Short description <span class="count">(max 80 chars)</span></h2>
+<div class="field">Private messaging with no ads and no third-party tracking. Just your chats.</div>
+<p class="grounded">74 / 80 characters.</p>
+
+<h2>Full description <span class="count">(max 4000 chars)</span></h2>
+<div class="field">Aiko Chat is a clean, private messaging app built on one idea: your conversations are yours.
+
+No ads. No third-party trackers. No analytics SDKs quietly watching how you use the app. Aiko Chat collects only what it needs to work — your account and your messages — and nothing more.
+
+WHAT YOU GET
+• Fast, simple messaging organised into channels
+• Modern sign-in with Apple or Google — nothing new to remember
+• Block and report tools, so you stay in control of who you talk to
+• Delete your account and your data at any time, right from the app
+
+PRIVATE BY DEFAULT
+We don't show ads, we don't sell your data, and we don't embed third-party tracking or analytics. Your messages are encrypted in transit between the app and our servers. You can read exactly what we collect — and what we don't — in our privacy policy: https://imagineering.cc/aiko/privacy/
+
+Want your data gone? Delete your account in-app, or request deletion any time: https://imagineering.cc/aiko/delete-account/
+
+Aiko Chat is in active development and improving quickly. We'd love your feedback.</div>
+<p class="grounded">~1,050 / 4,000 characters. Trim/expand freely.</p>
+
+<h2>Other listing fields</h2>
+<ul>
+<li><strong>App icon</strong> (512×512 PNG): export from <code>assets/branding/app_icon_1024.png</code> (downscale to 512).</li>
+<li><strong>Feature graphic</strong> (1024×500 PNG): <strong>does not exist yet — must be created.</strong> The one real asset gap.</li>
+<li><strong>Phone screenshots</strong> (min 2, 16:9 or 9:16): <strong>blocked</strong> — capturing real in-app screens needs a working sign-in, currently gated by the Google gateway-exchange bug (task #2). Capture once that's fixed.</li>
+<li><strong>App category:</strong> Communication. <strong>Tags:</strong> messaging, chat.</li>
+<li><strong>Contact email:</strong> <a href="mailto:privacy@imagineering.cc">privacy@imagineering.cc</a> (confirm it routes).</li>
+<li><strong>Privacy policy URL:</strong> <code>https://imagineering.cc/aiko/privacy/</code></li>
+</ul>
+
+<blockquote>
+<strong>Two blockers between this copy and a complete listing:</strong> the <strong>feature graphic</strong> (needs
+designing) and <strong>screenshots</strong> (need a working sign-in → blocked on the gateway Google fix, task #2). The
+text + icon + URLs are ready now.
+</blockquote>
+
+</body>
+</html>
