@@ -309,20 +309,25 @@ class AuthController extends AsyncNotifier<AppUser?> {
 
     state = const AsyncValue.loading(); // block login (router → /splash)
     try {
-      await _teardownResources(); // clear tokens + disconnect the old socket
-    } catch (_) {
-      // Teardown is best-effort cleanup. A disconnect hiccup must NOT surface as
-      // "switch failed" — the switch still completes (config flips + logged out
-      // below), so swallow it like deleteAccount does. Only a PERSIST failure
-      // (thrown above, before any teardown) is a real switch failure.
+      // Tear down by hand (not the bundled _teardownResources) so the swallow is
+      // NARROW: clearing the old credentials is security-critical and must NOT be
+      // silently absorbed (Carnot) — a clear failure propagates to the picker's
+      // error UI. Only the disconnect is best-effort.
+      ref.read(pendingHandleProvider.notifier).clear();
+      await _tokens.clearTokens(); // security-critical: old credential gone first
+      try {
+        await ref.read(transportProvider).disconnect(); // best-effort cleanup
+      } catch (_) {
+        // A disconnect hiccup must NOT surface as "switch failed" — the socket is
+        // re-disconnected by the transport rebuild's onDispose below regardless.
+      }
     } finally {
       // Flip the live config to the new (already-persisted) gateway BEFORE
-      // publishing logged-out — in the `finally` so a teardown error (e.g. a
-      // throwing transport.disconnect after tokens were cleared) can't skip it
-      // and strand the user on /login against the OLD cached gateway (Carnot,
-      // the error-path twin of F1). The config flip is the load-bearing step;
-      // teardown is best-effort cleanup, and the provider rebuild from
-      // invalidate re-disconnects the old transport via its onDispose anyway.
+      // publishing logged-out — in the `finally` so even a propagating clear
+      // failure can't skip it and strand the app on /login against the OLD
+      // cached gateway (Carnot, the error-path twin of F1). The config flip is
+      // the load-bearing step; the rebuild from invalidate re-disconnects the
+      // old transport via its onDispose anyway.
       ref.invalidate(configProvider);
       state = const AsyncValue.data(null); // logged out, now on the new gateway
     }

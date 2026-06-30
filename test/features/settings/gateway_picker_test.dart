@@ -170,6 +170,45 @@ void main() {
       expect(container.read(authControllerProvider).value, isNull);
     });
 
+    test('a token-CLEAR failure is NOT silently swallowed (it propagates)',
+        () async {
+      // Carnot final re-review: the narrow swallow covers only the best-effort
+      // disconnect. A failure to clear the OLD credential is security-critical
+      // and must surface (→ picker error UI), not vanish. The config still flips
+      // in the finally so the app can't brick on /splash. RED-prove: widen the
+      // catch back to the whole teardown → this stops throwing.
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = _ThrowingClearStore(
+          const AuthTokens(accessToken: 'a', refreshToken: 'r'));
+      late final ProviderContainer container;
+      container = ProviderContainer(overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        secureTokenStoreProvider.overrideWithValue(store),
+        restApiProvider.overrideWithValue(FakeRestApi()),
+        transportProvider.overrideWithValue(FakeChatTransport()),
+        tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
+          store: store,
+          remoteRefresh: (_) async => 'a2',
+          onUnauthenticated: () => container.read(authEventsProvider).add(null),
+        )),
+      ]);
+      addTearDown(container.dispose);
+      await container.read(authControllerProvider.future);
+
+      await expectLater(
+        container
+            .read(authControllerProvider.notifier)
+            .switchGateway('http://localhost:8095'),
+        throwsA(isA<Exception>()),
+        reason: 'a token-clear failure surfaces instead of being swallowed',
+      );
+      // Even so, the config flipped (finally) and the app is logged out — no
+      // stuck-loading brick on /splash.
+      expect(container.read(configProvider).httpBaseUrl, 'http://localhost:8095');
+      expect(container.read(authControllerProvider).value, isNull);
+    });
+
     test('re-selecting the CURRENT gateway is a no-op (keeps the session)',
         () async {
       final h = await loggedInContainer();
@@ -271,4 +310,12 @@ class _ThrowingDisconnectTransport extends FakeChatTransport {
     await super.disconnect(); // increments disconnectCalls
     throw Exception('disconnect boom');
   }
+}
+
+/// A token store whose `clear` throws — to drive the security-critical
+/// token-clear failure path of `switchGateway` (Carnot final re-review).
+class _ThrowingClearStore extends InMemoryTokenStore {
+  _ThrowingClearStore(AuthTokens initial) : super(initial);
+  @override
+  Future<void> clear() async => throw Exception('keychain delete boom');
 }
