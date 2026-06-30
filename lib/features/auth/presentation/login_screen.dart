@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../../../app/providers.dart';
@@ -41,6 +42,10 @@ class LoginScreen extends ConsumerWidget {
     final auth = ref.watch(authControllerProvider);
     final busy = auth.isLoading;
     final providers = ref.watch(authProvidersProvider);
+    // Choosing a server is a PRE-LOGIN act (#35): surface the active gateway and
+    // a way to change it, so a user stranded on an unreachable server can switch
+    // away without reinstalling. The route is logged-out-reachable (see router).
+    final gatewayHost = _hostOf(ref.watch(configProvider).httpBaseUrl);
 
     void social(SocialProvider provider) =>
         ref.read(authControllerProvider.notifier).signInWith(provider);
@@ -162,12 +167,36 @@ class LoginScreen extends ConsumerWidget {
                     style: TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 ],
+                const SizedBox(height: 28),
+                Text(
+                  'Server: $gatewayHost',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
+                TextButton(
+                  onPressed:
+                      busy ? null : () => context.push('/settings/gateway'),
+                  child: const Text('Change server'),
+                ),
               ],
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// The host (with port, when present) of the active gateway for the login
+  /// footer — falls back to the full URL if it doesn't parse to a host. The port
+  /// is load-bearing: two gateways on the same host differing only by port (e.g.
+  /// Local `:8095` vs an emulator host) would otherwise be indistinguishable
+  /// here (Carnot, cage-match #53).
+  static String _hostOf(String httpBaseUrl) {
+    final uri = Uri.tryParse(httpBaseUrl);
+    final host = uri?.host;
+    if (host == null || host.isEmpty) return httpBaseUrl;
+    return uri!.hasPort ? '$host:${uri.port}' : host;
   }
 
   /// A best-effort glyph per broker provider; generic fallback otherwise.

@@ -127,6 +127,84 @@ void main() {
     expect(find.byType(TextField), findsNothing); // no password fields
   });
 
+  // --- #35: the gateway picker is a PRE-LOGIN act -------------------------
+
+  testWidgets('login screen surfaces the active server + a Change affordance',
+      (tester) async {
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+
+    // The footer names the host (not the full URL) of the active gateway.
+    final host = Uri.parse(container.read(configProvider).httpBaseUrl).host;
+    expect(find.text('Server: $host'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Change server'), findsOneWidget);
+  });
+
+  testWidgets('a LOGGED-OUT user can reach the gateway picker (no /login bounce)',
+      (tester) async {
+    // RED-prove: without `if (loc == "/settings/gateway") return null` in the
+    // router redirect, a logged-out push to /settings/gateway is bounced back
+    // to /login and the picker's "Server" AppBar never appears. A user stranded
+    // on a gateway they can't sign into must be able to switch away.
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Change server'));
+    await tester.pumpAndSettle();
+
+    // Reached the picker (its AppBar title is "Server"), not bounced to login.
+    expect(find.widgetWithText(AppBar, 'Server'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsNothing);
+    // And the picker's presets render (it functions while logged out).
+    expect(find.text('Production'), findsOneWidget);
+  });
+
+  testWidgets('a LOGGED-OUT switch re-points config and lands on the new '
+      "gateway's login (cage-match #53 consensus: switch-from-logged-out)",
+      (tester) async {
+    // Maxwell + Carnot both flagged the gap: the existing switchGateway tests
+    // run from a LOGGED-IN container. This pins the logged-out path end-to-end —
+    // there are no tokens to clear, so switchGateway parks at data(null) and the
+    // loading → /splash → /login redirect must land on the NEW gateway's login.
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await tester.tap(find.widgetWithText(TextButton, 'Change server'));
+    await tester.pumpAndSettle();
+
+    // Pick a different preset and confirm the switch.
+    await tester.tap(find.text('Local'));
+    await tester.pumpAndSettle();
+    expect(find.text('Switch server?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Switch'));
+    await tester.pumpAndSettle();
+    // switchGateway tears down + invalidates config on the real loop (clearTokens
+    // / disconnect), which the fake-async zone won't drive — let it complete, then
+    // settle the redirect (loading → /splash → /login on the new config).
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+
+    // Config re-pointed; still logged out; landed on the NEW gateway's login
+    // (the picker explicitly go()s to /login post-switch — see gateway_picker).
+    expect(container.read(configProvider).httpBaseUrl, 'http://localhost:8095');
+    expect(container.read(authControllerProvider).value, isNull);
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Server'), findsNothing); // left the picker
+    // The footer now names the NEW gateway, INCLUDING its port (Carnot): two
+    // gateways on the same host differing only by port must be distinguishable.
+    expect(find.text('Server: localhost:8095'), findsOneWidget);
+  });
+
   testWidgets('social sign-in → chat screen shows the channel', (tester) async {
     final rest = FakeRestApi();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());

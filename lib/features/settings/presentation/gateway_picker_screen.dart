@@ -9,6 +9,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
@@ -158,10 +159,9 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
     if (confirmed != true || !mounted) return;
 
     setState(() => _switching = true);
-    // switchGateway publishes `loading` (router → /splash) then logs the user
-    // out on the new gateway; this screen unmounts as part of that redirect, so
-    // the success path needs no manual navigation. A persistence failure throws
-    // BEFORE any teardown (session intact) — surface it and stay put.
+    // switchGateway publishes `loading` (router → /splash) then logs the user out
+    // on the new gateway. A persistence failure throws BEFORE any teardown
+    // (session intact) — surface it and stay put.
     try {
       await ref.read(authControllerProvider.notifier).switchGateway(url);
     } catch (e) {
@@ -172,6 +172,14 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
       );
       return;
     }
+    // Land deterministically on the new gateway's /login. We're now logged out,
+    // so /login is always correct. This is NOT redundant: since #35 made
+    // /settings/gateway reachable while logged out, the redirect treats it as a
+    // valid logged-out resting state — so without an explicit nav the picker
+    // stays on screen after the switch (the loading→/splash hop only moves us if
+    // a frame happens to pump mid-switch — a race we don't depend on). maybeOf
+    // keeps the bare-widget unit test (no GoRouter ancestor) a safe no-op.
+    if (mounted) GoRouter.maybeOf(context)?.go('/login');
     if (mounted) setState(() => _switching = false);
   }
 
