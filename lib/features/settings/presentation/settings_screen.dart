@@ -32,9 +32,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.dns_outlined),
             title: const Text('Server'),
-            subtitle: Text(
-              Uri.parse(ref.watch(configProvider).httpBaseUrl).host,
-            ),
+            subtitle: Text(_hostOf(ref.watch(configProvider).httpBaseUrl)),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/gateway'),
           ),
@@ -115,6 +113,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _deleteError(Object e) {
     if (e is SoleAdminDeletionBlocked) return e.message;
     return 'Could not delete your account. Please try again.';
+  }
+
+  /// The host for the Server tile subtitle, parsed defensively — a corrupt
+  /// persisted value (read directly in [GatewayConfigController.build]) must not
+  /// throw on the Settings screen. Falls back to the raw value.
+  static String _hostOf(String httpBaseUrl) {
+    final host = Uri.tryParse(httpBaseUrl)?.host;
+    return (host == null || host.isEmpty) ? httpBaseUrl : host;
   }
 }
 

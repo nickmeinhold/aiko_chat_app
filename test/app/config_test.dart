@@ -20,6 +20,14 @@ void main() {
       expect(GatewayConfig.normalized('https://chat.imagineering.cc/'),
           GatewayConfig.normalized('https://chat.imagineering.cc'));
     });
+
+    test('strips MULTIPLE trailing slashes (no needless-logout slip)', () {
+      // A single-slash strip would let `https://x//` slip the no-op guard and
+      // destroy a live session (Carnot F5).
+      expect(GatewayConfig.normalized('https://x//').httpBaseUrl, 'https://x');
+      expect(GatewayConfig.normalized('https://x///'),
+          GatewayConfig.normalized('https://x'));
+    });
   });
 
   group('GatewayConfig.fromEnvironment', () {

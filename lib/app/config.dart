@@ -32,8 +32,11 @@ class GatewayConfig {
   /// dart-define path funnel through here so a stored `https://x/` and a typed
   /// `https://x` resolve to the same gateway (and the no-op switch guard holds).
   factory GatewayConfig.normalized(String raw) {
-    var base = raw.trim();
-    if (base.endsWith('/')) base = base.substring(0, base.length - 1);
+    // Strip ALL trailing slashes (not just one) so `https://x//` and `https://x`
+    // resolve to the same gateway — the no-op switch guard compares these, and a
+    // single-slash strip would let `https://x//` slip past as a "different"
+    // gateway and needlessly destroy a live session (Carnot).
+    final base = raw.trim().replaceAll(RegExp(r'/+$'), '');
     return GatewayConfig(httpBaseUrl: base);
   }
 

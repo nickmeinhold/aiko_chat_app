@@ -48,7 +48,8 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Text(
                 'Choose which server Aiko Chat connects to. Switching signs you '
-                'out — your sign-in only works on the server that issued it.',
+                'out, because your sign-in only works on the server that issued '
+                'it.',
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
@@ -157,11 +158,26 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
     if (confirmed != true || !mounted) return;
 
     setState(() => _switching = true);
-    // switchGateway logs the user out; the router's auth guard then redirects to
-    // /login on the new gateway. This screen unmounts as part of that redirect,
-    // so there's no manual navigation here.
-    await ref.read(authControllerProvider.notifier).switchGateway(url);
+    // switchGateway publishes `loading` (router → /splash) then logs the user
+    // out on the new gateway; this screen unmounts as part of that redirect, so
+    // the success path needs no manual navigation. A persistence failure throws
+    // BEFORE any teardown (session intact) — surface it and stay put.
+    try {
+      await ref.read(authControllerProvider.notifier).switchGateway(url);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _switching = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_switchError(e))),
+      );
+      return;
+    }
     if (mounted) setState(() => _switching = false);
+  }
+
+  String _switchError(Object e) {
+    if (e is GatewaySwitchFailed) return e.message;
+    return 'Could not switch servers. Please try again.';
   }
 }
 

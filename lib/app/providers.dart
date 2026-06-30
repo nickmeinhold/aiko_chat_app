@@ -47,8 +47,14 @@ final sharedPreferencesProvider = Provider<SharedPreferences>(
   ),
 );
 
-/// The persistence key for the user's chosen gateway base URL.
-const _kGatewayBaseUrlKey = 'aiko_gateway_base_url';
+/// The persistence key for the user's chosen gateway base URL. Public so the
+/// switch ceremony ([AuthController.switchGateway]) can write it — but exposing
+/// the *key* is not a mutation door: there is deliberately NO public setter on
+/// [GatewayConfigController], so the gateway can only change via the ceremony
+/// (which first tears the session down). Closing that bypass at compile time
+/// (Kelvin + Carnot consensus) — documentation doesn't compile, so we removed
+/// the public mutator instead.
+const gatewayBaseUrlPrefKey = 'aiko_gateway_base_url';
 
 /// Where the gateway lives — a RUNTIME-mutable, persisted value (the #4 picker).
 ///
@@ -62,32 +68,24 @@ final configProvider =
   GatewayConfigController.new,
 );
 
-/// Owns the gateway selection: resolves the initial value and persists changes.
+/// Owns the gateway selection: resolves the value from persistence + environment.
 ///
 /// Resolution order in [build]: a persisted choice wins; otherwise fall back to
-/// [GatewayConfig.fromEnvironment] (`--dart-define` → hardcoded prod). The actual
-/// switch is NOT performed here — [AuthController.switchGateway] orchestrates the
-/// session teardown (JWTs are gateway-specific) before calling [setGateway], so
-/// the security-critical token-clear can't be bypassed by a direct setter call.
+/// [GatewayConfig.fromEnvironment] (`--dart-define` → hardcoded prod). There is
+/// deliberately NO public mutator — the gateway changes ONLY via
+/// [AuthController.switchGateway], which writes [gatewayBaseUrlPrefKey] and then
+/// `ref.invalidate`s this provider to re-derive from the new persisted value.
+/// That makes the session teardown impossible to bypass: you cannot move the
+/// live config without going through the ceremony that first clears the tokens.
 class GatewayConfigController extends Notifier<GatewayConfig> {
   @override
   GatewayConfig build() {
     final prefs = ref.watch(sharedPreferencesProvider);
-    final persisted = prefs.getString(_kGatewayBaseUrlKey);
+    final persisted = prefs.getString(gatewayBaseUrlPrefKey);
     if (persisted != null && persisted.trim().isNotEmpty) {
       return GatewayConfig.normalized(persisted);
     }
     return GatewayConfig.fromEnvironment();
-  }
-
-  /// Persist and adopt [httpBaseUrl] as the active gateway. Internal to the
-  /// switch ceremony — see [AuthController.switchGateway].
-  Future<void> setGateway(String httpBaseUrl) async {
-    final next = GatewayConfig.normalized(httpBaseUrl);
-    await ref
-        .read(sharedPreferencesProvider)
-        .setString(_kGatewayBaseUrlKey, next.httpBaseUrl);
-    state = next;
   }
 }
 

@@ -106,6 +106,31 @@ void main() {
       expect(h.prefs.getString(_kKey), 'http://localhost:8095');
     });
 
+    test('publishes loading BEFORE logged-out, so login is blocked mid-switch',
+        () async {
+      // Carnot F1: a plain logout() publishes data(null) before teardown +
+      // config-flip, exposing a window where the router lands on /login against
+      // the OLD gateway. The switch must instead pass through `loading` (router
+      // → /splash) until the config has flipped. RED-prove: revert switchGateway
+      // to `await logout()` and the loading state never appears → this fails.
+      final h = await loggedInContainer();
+      addTearDown(h.container.dispose);
+
+      final sawLoading = <bool>[];
+      h.container.listen(authControllerProvider,
+          (_, next) => sawLoading.add(next.isLoading), fireImmediately: false);
+
+      await h.container
+          .read(authControllerProvider.notifier)
+          .switchGateway('http://localhost:8095');
+
+      expect(sawLoading.contains(true), isTrue,
+          reason: 'switch parked auth in loading → router /splash, login blocked');
+      expect(sawLoading.last, isFalse,
+          reason: 'settles at a concrete logged-out state, not stuck loading');
+      expect(h.container.read(authControllerProvider).value, isNull);
+    });
+
     test('re-selecting the CURRENT gateway is a no-op (keeps the session)',
         () async {
       final h = await loggedInContainer();

@@ -276,21 +276,44 @@ class AuthController extends AsyncNotifier<AppUser?> {
 
   /// Re-point the app at a different gateway (the #4 picker). JWTs are minted by
   /// and only valid at the gateway that issued them, so a switch is a SESSION
-  /// boundary: tear the current session down (clear tokens, disconnect the old
-  /// socket) BEFORE flipping [configProvider] — otherwise the next REST/WSS call
-  /// fires the old gateway's now-foreign token at the new host. We log out first
-  /// so by the time backend/transport rebuild against the new base, there is no
-  /// stale credential to leak; the router's auth guard then lands on /login and
-  /// the user re-authenticates against the new gateway.
+  /// boundary. The ordering is load-bearing (Carnot):
   ///
-  /// Re-selecting the CURRENT gateway is a no-op — guarded on the normalized
-  /// base URL so it never needlessly nukes a live session (and `https://x/` vs
-  /// `https://x` are treated as the same gateway).
+  ///   1. No-op guard — re-selecting the CURRENT gateway never nukes a live
+  ///      session (normalized, so `https://x/` == `https://x`).
+  ///   2. Persist FIRST. If the write fails we abort with the session fully
+  ///      intact — a failed switch must not strand the user logged-out (Carnot
+  ///      F2). Writing the pref does NOT move the live config: [configProvider]
+  ///      is cached and only re-reads on invalidate (step 4).
+  ///   3. Publish `loading` BEFORE any teardown. This is the fix for the window
+  ///      Carnot caught: if we published `data(null)` first (as a plain
+  ///      `logout()` does), the router would land on /login against the OLD
+  ///      gateway while teardown was still in flight, and a sign-in there would
+  ///      mint a token the about-to-switch gateway can't honour. `loading` parks
+  ///      the router on /splash, so login is impossible mid-switch.
+  ///   4. Tear down (clear tokens + disconnect) → THEN `invalidate` so the live
+  ///      config flips only AFTER the old credential is gone. Tokens-before-flip
+  ///      is preserved.
+  ///   5. `finally` publishes logged-out exactly once, so a teardown error can
+  ///      never leave the app bricked on /splash.
   Future<void> switchGateway(String httpBaseUrl) async {
     final next = GatewayConfig.normalized(httpBaseUrl).httpBaseUrl;
     if (next == ref.read(configProvider).httpBaseUrl) return;
-    await logout();
-    await ref.read(configProvider.notifier).setGateway(next);
+
+    final persisted = await ref
+        .read(sharedPreferencesProvider)
+        .setString(gatewayBaseUrlPrefKey, next);
+    if (!persisted) {
+      // Session untouched — surfaced to the picker for an inline error.
+      throw const GatewaySwitchFailed('Could not save the server selection.');
+    }
+
+    state = const AsyncValue.loading(); // block login (router → /splash)
+    try {
+      await _teardownResources(); // clear tokens + disconnect the old socket
+      ref.invalidate(configProvider); // flip live config to the new gateway
+    } finally {
+      state = const AsyncValue.data(null); // logged out, now on the new gateway
+    }
   }
 
   /// Permanently delete the account (Apple 5.1.1(v)). Unlike [logout], which
@@ -326,4 +349,14 @@ class AuthController extends AsyncNotifier<AppUser?> {
     state = const AsyncValue.data(null);
     unawaited(_teardownResources());
   }
+}
+
+/// Thrown by [AuthController.switchGateway] when the chosen gateway could not be
+/// persisted — raised BEFORE any session teardown, so the current session is
+/// untouched and the picker can surface an inline error and stay put.
+class GatewaySwitchFailed implements Exception {
+  final String message;
+  const GatewaySwitchFailed(this.message);
+  @override
+  String toString() => message;
 }
