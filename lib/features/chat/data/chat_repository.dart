@@ -99,6 +99,14 @@ class ChatRepository {
   Stream<List<Message>> watchChannel(String channelId) =>
       _cache.watchChannel(channelId);
 
+  /// TEST-ONLY read access to the injected telemetry sink. Exists so a
+  /// provider-wiring test can assert the production graph injects a REAL sink
+  /// (never the silent [_NoopTelemetry] default) — the #16 regression that
+  /// shipped precisely because no test could observe the repo's actual
+  /// collaborator (the provider-default test pins the provider, not the
+  /// consumption edge). Not for production use.
+  ChatTelemetry get debugTelemetry => _telemetry;
+
   // --- B-live: wire the streams ONCE -----------------------------------------
 
   void start() {
