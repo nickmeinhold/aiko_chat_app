@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Store compliance — exact console click-paths (Aiko Chat)</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --apple:#000; --play:#0f9d58; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:880px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.85rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.06rem; margin:1.5rem 0 .4rem; }
+  .lead { font-size:1.05rem; }
+  .scope { color:var(--muted); font-size:.95rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  a { color:#06c; }
+  a.deep { display:inline-block; font-weight:600; background:#eef4ff; border:1px solid #cfe0ff; padding:.35rem .7rem;
+           border-radius:6px; text-decoration:none; margin:.3rem 0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  ol.steps { padding-left:1.3rem; } ol.steps li { margin:.55rem 0; }
+  .ans { font-weight:700; color:var(--accent); }
+  .no { font-weight:700; color:#c0392b; }
+  blockquote { margin:1.1rem 0; padding:.8rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; font-size:.95rem; }
+  blockquote.ok { background:#f0fbf4; border-left-color:var(--accent); }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:.9rem 1.3rem; margin:1.3rem 0; font-size:.95rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  .pill { display:inline-block; font:11px ui-monospace,monospace; padding:.12em .55em; border-radius:4px; color:#fff; }
+  .pa { background:var(--apple); } .pg { background:var(--play); }
+  .miss { color:var(--warn); font-weight:600; }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.4rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Store compliance — exact console click-paths</h1>
+<p class="lead">The two console gates for launch: <strong>Apple App Privacy</strong> labels and <strong>Google Play Data
+Safety</strong>. The audited <em>values</em> live in <a href="compliance-declarations.html">compliance-declarations.html</a>;
+this doc is the <strong>screen-by-screen sequence</strong> to enter them. Open this on a second screen and click along.</p>
+
+<div class="scope">
+  <strong>One fact drives every answer:</strong> the app collects exactly <strong>4 data types</strong> — email, name,
+  user ID, message content — all <em>collected, never shared with third parties, never used for tracking</em>, all linked to
+  the user, all encrypted in transit (HTTPS/WSS), with in-app account deletion. That's it. No analytics, no ads, no crash
+  SDK, no location/contacts/photos. If a screen offers a type not in that list of four, the answer is <span class="no">leave
+  it off</span>.
+</div>
+
+<nav class="toc">
+<strong>Contents</strong> &nbsp;·&nbsp;
+<a href="#apple">1. Apple — App Privacy</a> &nbsp;·&nbsp;
+<a href="#play">2. Google — Data Safety</a> &nbsp;·&nbsp;
+<a href="#after">3. After both</a>
+</nav>
+
+<h2 id="apple">1. Apple — App Privacy <span class="pill pa">App Store Connect</span></h2>
+<a class="deep" href="https://appstoreconnect.apple.com/apps/6785395468/distribution/privacy">→ Open App Privacy (Aiko Chat, id 6785395468)</a>
+<p class="note">If that deep-link doesn't land on the page: <a href="https://appstoreconnect.apple.com">appstoreconnect.apple.com</a>
+→ <strong>Apps</strong> → <strong>Aiko Chat</strong> → left sidebar <strong>App Privacy</strong> → <strong>Get Started</strong>
+(first time) or <strong>Edit</strong> (next to "Data Types").</p>
+
+<ol class="steps">
+<li><strong>Data collection question:</strong> "Do you or your third-party partners collect data from this app?" →
+<span class="ans">Yes, we collect data from this app</span>.</li>
+<li><strong>Select data types.</strong> Tick exactly these four; leave every other box unticked:
+<table>
+<tr><th>Apple category → type</th><th>Tick</th></tr>
+<tr><td>Contact Info → <strong>Email Address</strong></td><td class="ans">✓</td></tr>
+<tr><td>Contact Info → <strong>Name</strong></td><td class="ans">✓</td></tr>
+<tr><td>Identifiers → <strong>User ID</strong></td><td class="ans">✓</td></tr>
+<tr><td>User Content → <strong>Other User Content</strong> &nbsp;<span class="note">(this is the messages bucket)</span></td><td class="ans">✓</td></tr>
+</table>
+Click <strong>Save</strong> → <strong>Next</strong>.</li>
+<li><strong>For EACH of the four types, Apple asks three questions. Same answers every time:</strong>
+<table>
+<tr><th>Question</th><th>Answer (all four types)</th></tr>
+<tr><td>How is this data used? (purposes)</td><td><span class="ans">App Functionality</span> — and nothing else</td></tr>
+<tr><td>Is this data linked to the user's identity?</td><td><span class="ans">Yes</span></td></tr>
+<tr><td>Is this data used for tracking?</td><td><span class="no">No</span></td></tr>
+</table>
+</li>
+<li><strong>"Data Used to Track You"</strong> and <strong>"Data Not Linked to You"</strong> sections → <span class="no">None</span>. Add nothing.</li>
+<li><strong>Privacy Policy URL</strong> (same App Privacy page, or App Information): set to
+<code>https://imagineering.cc/aiko/privacy/</code> <span class="ok">(live, verified 200)</span>.</li>
+<li><strong>Publish.</strong> Apple's labels publish with the next app version / can be published from this page. Click
+<strong>Publish</strong> when prompted.</li>
+</ol>
+
+<blockquote>The "Other User Content" type is the one people miss — messages are User Content, not an "identifier". Purpose is
+<strong>App Functionality</strong> (delivery + history), never "Analytics" or "Product Personalization".</blockquote>
+
+<h2 id="play">2. Google — Data Safety <span class="pill pg">Play Console</span></h2>
+<a class="deep" href="https://play.google.com/console">→ Open Play Console</a>
+<p class="note"><span class="miss">Deep-link needs your numeric developer + app IDs (I don't have them), so this lands on
+the console home.</span> Navigate: select <strong>Aiko Chat</strong> (<code>cc.imagineering.aiko_chat_app</code>) → left nav
+<strong>Policy and programs</strong> → <strong>App content</strong> → find <strong>Data safety</strong> →
+<strong>Start</strong> (or <strong>Manage</strong> to edit).</p>
+
+<p>Play's Data Safety is a multi-screen wizard. In order:</p>
+
+<h3>Screen — Overview</h3>
+<ol class="steps"><li>Read, click <strong>Next</strong>.</li></ol>
+
+<h3>Screen — Data collection and security</h3>
+<table>
+<tr><th>Question</th><th>Answer</th></tr>
+<tr><td>Does your app collect or share any of the required user data types?</td><td><span class="ans">Yes</span></td></tr>
+<tr><td>Is all of the user data collected by your app encrypted in transit?</td><td><span class="ans">Yes</span></td></tr>
+<tr><td>Do you provide a way for users to request that their data be deleted?</td><td><span class="ans">Yes</span> — then, if asked how: users can <strong>request deletion AND delete their account</strong> in-app. Deletion URL: <code>https://imagineering.cc/aiko/delete-account/</code> <span class="ok">(live)</span>.</td></tr>
+</table>
+<p>Click <strong>Next</strong>.</p>
+
+<h3>Screen — Data types</h3>
+<p>A grid of categories. Tick exactly these; leave everything else (Location, Financial, Health, Photos and videos, Audio,
+Files, Calendar, Contacts, App activity, Web browsing, App info and performance, Device or other IDs) <span class="no">off</span>:</p>
+<table>
+<tr><th>Play category → type</th><th>Tick</th></tr>
+<tr><td>Personal info → <strong>Email address</strong></td><td class="ans">✓</td></tr>
+<tr><td>Personal info → <strong>Name</strong></td><td class="ans">✓</td></tr>
+<tr><td>Personal info → <strong>User IDs</strong></td><td class="ans">✓</td></tr>
+<tr><td>Messages → <strong>Other in-app messages</strong></td><td class="ans">✓</td></tr>
+</table>
+<p>Click <strong>Next</strong>.</p>
+
+<h3>Screen — per-type detail (Play asks the same set for each of the four)</h3>
+<table>
+<tr><th>Question</th><th>Email / Name / User IDs</th><th>Messages</th></tr>
+<tr><td>Is this data collected, shared, or both?</td><td><span class="ans">Collected</span> (collected ✓, shared <span class="no">✗</span>)</td><td><span class="ans">Collected</span> (shared <span class="no">✗</span>)</td></tr>
+<tr><td>Is this data processed ephemerally?</td><td><span class="no">No</span> (it's stored)</td><td><span class="no">No</span></td></tr>
+<tr><td>Is this data required, or can users choose?</td><td><span class="ans">Required</span></td><td><span class="ans">Required</span></td></tr>
+<tr><td>Why is this data collected? (purposes — tick all that apply)</td><td><span class="ans">Account management</span> + <span class="ans">App functionality</span></td><td><span class="ans">App functionality</span> only</td></tr>
+</table>
+<blockquote>"Shared" in Play's sense = transferred to a <strong>third party</strong>. The gateway is your own first-party server,
+and the sign-in providers act on the user's instruction to authenticate — so <span class="no">No sharing</span> is correct for
+all four. Do not tick any App activity / App info-and-performance type (no analytics or crash SDK exists).</blockquote>
+
+<h3>Screen — Review &amp; submit</h3>
+<ol class="steps">
+<li>Review the summary; it should list exactly the four types above, all "Collected, not shared".</li>
+<li>Also set the <strong>Privacy Policy URL</strong> (Store presence → Main store listing, or the Data safety form if it asks):
+<code>https://imagineering.cc/aiko/privacy/</code>.</li>
+<li><strong>Submit.</strong></li>
+</ol>
+
+<h2 id="after">3. After both</h2>
+<ol class="steps">
+<li><strong>Tick the checklist</strong> in <a href="compliance-declarations.html#checklist">compliance-declarations §6</a>:
+Apple ☑, Google ☑ (policy hosting is already done — live + verified).</li>
+<li><strong>Still open (separate task, not this one):</strong> <span class="pill pg">#1447</span> — add both Android SHA-1s to
+the OAuth client to fix Google sign-in <code>DEVELOPER_ERROR</code> on the Play build. That gates the Play <em>screenshots</em>,
+not the Data Safety form. Path + the verified upload SHA-1 are in
+<a href="compliance-declarations.html#sha1">compliance-declarations §5</a>; you still need to grab the Play App Signing
+key SHA-1 from Play Console → Test and release → Setup → App signing.</li>
+</ol>
+
+<blockquote class="ok"><strong>Why these answers are safe to submit:</strong> every value here is grounded in the 2026-06-30 code
+audit (<a href="compliance-declarations.html">compliance-declarations.html</a>) — the deps, the drift schema, the absence of
+any ad/analytics SDK. A label that overstates (declaring a type you don't collect) or understates (omitting one you do) is a
+post-review takedown risk; these four match what the bytes actually do.</blockquote>
+
+</body>
+</html>

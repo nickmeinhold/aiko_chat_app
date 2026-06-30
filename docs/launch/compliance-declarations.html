@@ -127,11 +127,14 @@ closing the Google nonce-staleness verification tasks (#1, #2).</p>
 
 <h2 id="checklist">6. Your console checklist</h2>
 <ul class="check">
-<li>☐ <strong>Host the policy</strong> — publish <code>docs/legal/privacy-policy.html</code> at a stable URL on
-imagineering.cc (e.g. <code>https://imagineering.cc/aiko/privacy</code>) and confirm
-<a href="mailto:privacy@imagineering.cc">privacy@imagineering.cc</a> actually routes to you.</li>
-<li>☐ <strong>Apple</strong> — App Store Connect → App Privacy: enter §2 exactly; set the Privacy Policy URL.</li>
-<li>☐ <strong>Google</strong> — Play Console → Data safety: enter §3 exactly; set the Privacy Policy URL.</li>
+<li>☑ <strong>Host the policy</strong> — <span class="grounded">DONE: live at <code>https://imagineering.cc/aiko/privacy/</code>
++ <code>https://imagineering.cc/aiko/delete-account/</code> (both 200, byte-identical to the repo, verified 2026-06-30). The
+§5/§6 deletion claim is now truthful — the gateway DELETE /v1/account message-row cascade is confirmed done.</span> Still
+confirm <a href="mailto:privacy@imagineering.cc">privacy@imagineering.cc</a> routes to you.</li>
+<li>☐ <strong>Apple</strong> — App Store Connect → App Privacy: enter §2 exactly; set the Privacy Policy URL.
+<span class="grounded">Exact click-path: <a href="console-compliance-clickpath.html#apple">console-compliance-clickpath §1</a>.</span></li>
+<li>☐ <strong>Google</strong> — Play Console → Data safety: enter §3 exactly; set the Privacy Policy URL.
+<span class="grounded">Exact click-path: <a href="console-compliance-clickpath.html#play">console-compliance-clickpath §2</a>.</span></li>
 <li>☐ <strong>#1447</strong> — add both SHA-1s (§5) to the Android OAuth client; re-test Google sign-in on the Play build.</li>
 <li>☐ <strong>Verify-after</strong> — the labels must keep matching behaviour: if a future change adds an SDK or a new
 data type, this doc and both forms must be updated before release (a mismatch is a post-review takedown risk).</li>
