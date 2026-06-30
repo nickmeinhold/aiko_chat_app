@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 07 — Notifications (federation-ready)</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  a { color:#06c; }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.thesis { background:#f3f0fb; border-left-color:#7d5fff; font-size:1.02rem; }
+  blockquote.danger { background:#fdf0ef; border-left-color:var(--blocker); }
+  .note { color:var(--muted); font-size:.9rem; }
+  .conf { font-weight:700; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; padding:.1em .5em;
+          border-radius:4px; color:#fff; }
+  .high { background:var(--accent); } .med { background:var(--warn); } .low { background:var(--blocker); }
+  .key { display:inline-block; font:11px ui-monospace,monospace; padding:.12em .55em; border-radius:4px; color:#fff; }
+  .app { background:#0b5; } .gw { background:#1d76db; } .relay { background:#7d5fff; }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.5rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  ul.tight li { margin:.25rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Design 07 — Notifications (federation-ready)</h1>
+<p class="lead">Push notifications are the one place the federation thesis (<a href="06-sovereign-identity-federation.html">Design
+06</a>: <em>better by subtraction</em>) hits a wall subtraction can't remove: <strong>the mobile platforms weld push to a
+single app identity</strong>. You cannot decentralise your way around APNs. The answer — proven at scale by Matrix/Element —
+is to accept exactly <em>one</em> deliberately-centralised component (a push relay) and keep everything else federated. This
+doc is the model, the Element teardown it's grounded in, and the one cheap principle to adopt now so launch-simple
+notifications never need a federation rewrite.</p>
+
+<div class="scope">
+  <strong>Status:</strong> design. The launch slice (§2, single gateway) is buildable now; the federation slice is
+  <em>federation-ready structure</em>, not a v1 build. Companion to <a href="05-communities-and-discovery.html">05</a>
+  (communities) and <a href="06-sovereign-identity-federation.html">06</a> (federation). Captured 2026-06-30.<br>
+  <strong>Grounded fact:</strong> the app has <em>zero</em> push infrastructure today (no <code>firebase_messaging</code>, no
+  APNs entitlement, no <code>aps-environment</code>) — this is greenfield, so the cheap principle costs ~nothing now.<br>
+  <strong>Legend:</strong> <span class="key app">APP</span> client · <span class="key gw">GATEWAY</span> home gateway ·
+  <span class="key relay">RELAY</span> the push gateway (new component). Confidence: <span class="conf high">solid</span>
+  grounded · <span class="conf med">plausible</span> coherent-unvalidated · <span class="conf low">thin</span> genuinely open.
+</div>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#thesis">The thesis — the one wall subtraction can't remove</a></li>
+  <li><a href="#today">What's true today — greenfield + one gateway</a></li>
+  <li><a href="#collision">The collision — push is welded to app identity</a></li>
+  <li><a href="#topology">The relay topology already contains it</a></li>
+  <li><a href="#relay">The push relay (the Sygnal pattern)</a></li>
+  <li><a href="#element">How Element does it (the reference teardown)</a></li>
+  <li><a href="#ios">The iOS wall &amp; the Android escape</a></li>
+  <li><a href="#identity">The sovereign-identity twist — device registry</a></li>
+  <li><a href="#privacy">Privacy — notify without leaking content</a></li>
+  <li><a href="#phasing">Phasing &amp; the one cheap principle</a></li>
+  <li><a href="#hard">The hard problems (honest map)</a></li>
+  <li><a href="#refs">Prior art &amp; references</a></li>
+</ol>
+</nav>
+
+<h2 id="thesis">1. The thesis — the one wall subtraction can't remove</h2>
+<blockquote class="thesis">
+Everywhere else, federation gets <em>simpler</em> by moving cleverness to identity (06). Notifications are the exception:
+APNs and FCM bind push delivery to <strong>one app identity</strong> — one bundle id, one signing key, owned by the app
+vendor. No amount of sovereign-key cleverness changes that a third-party gateway physically <em>cannot</em> push to your app.
+So the design move here is not "decentralise it" — it's <strong>quarantine the centralisation</strong>: one small relay
+component holds the platform credentials, everything else stays federated, and you copy the pattern the most mature federated
+chat on earth already proved.
+</blockquote>
+
+<h2 id="today">2. What's true today — greenfield + one gateway</h2>
+<p><span class="conf high">solid</span> Verified 2026-06-30: there is <strong>no notification code</strong> in the app (no
+messaging dep, no APNs entitlement). And there is exactly <strong>one gateway</strong> (<code>chat.imagineering.cc</code>),
+to which the app is compile-time bound. So two things follow:</p>
+<ul class="tight">
+<li><strong>Launch notifications are trivially easy.</strong> One gateway → wire APNs/FCM straight from it. None of the
+federation complexity below bites until there is a <em>second</em> gateway.</li>
+<li><strong>It's the cheapest possible moment to adopt the federation-ready shape</strong> (§10) — there is no migration,
+because there is nothing built. This is the 06 §8 lesson (namespace globally from day one) applied to push.</li>
+</ul>
+
+<h2 id="collision">3. The collision — push is welded to app identity</h2>
+<p><span class="conf high">solid</span> To deliver a push to the Aiko app on a device you need <strong>both</strong>:</p>
+<ol>
+<li>the device's <strong>push token</strong> (APNs device token / FCM registration token), and</li>
+<li>the <strong>app's signing credentials</strong> — one APNs auth key + one FCM project, both welded to the single bundle id
+<code>cc.imagineering.aikoChatApp</code> / <code>cc.imagineering.aiko_chat_app</code>, both owned by the vendor's store
+accounts.</li>
+</ol>
+<blockquote class="danger">
+<strong>A third-party gateway operator has neither.</strong> They don't hold your users' device tokens (those live at each
+user's <em>home</em> gateway), and they certainly don't hold your app's APNs key. So a federated peer gateway
+<strong>cannot</strong> push to the Aiko app. And you cannot fix this by handing every operator your APNs key — that key can
+notify (and therefore spoof/phish/spam) <em>every</em> Aiko user on earth. Push credentials are an unshareable, vendor-bound
+secret. This is the wall.
+</blockquote>
+
+<h2 id="topology">4. The relay topology already contains it</h2>
+<p><span class="conf high">solid</span> The 06 model's client rule is the thing that keeps this tractable:
+<em>"the app only ever talks to its own <strong>home</strong> gateway over one WSS connection; a channel homed elsewhere is
+reached <strong>through</strong> the home gateway's relay"</em> (06 §3). Therefore:</p>
+<ul class="tight">
+<li>The user's <strong>home gateway is the single notification origin.</strong> A message in a channel homed on a remote
+gateway is relayed to the user's home gateway (06 §6 relay-and-verify); the home gateway then decides whether to notify and
+triggers the push. Only home gateways notify — never every channel-home gateway.</li>
+<li>So push fan-out follows the same single-home discipline B4 already depends on. There is exactly one party responsible for
+notifying you: your home gateway. No coordination, no duplicate pushes from N gateways.</li>
+</ul>
+<p>This contains the problem to: <em>"home gateways — some of which are third-party — need to cause a push to the Aiko
+app."</em> Which §3 just said they can't do directly. Hence the relay.</p>
+
+<h2 id="relay">5. The push relay (the Sygnal pattern) <span class="key relay">RELAY</span></h2>
+<p><span class="conf high">solid</span> Split the job in two. The <strong>home gateway</strong> decides <em>who/what</em> to
+notify (it knows the user's notify preferences and holds their device registry). A separate <strong>push relay</strong> holds
+the platform credentials and does the <em>actual send</em>. The vendor (Aiko) runs exactly one relay; every gateway — yours or
+a third party's — calls it.</p>
+<pre><code>  message on a channel (home gateway H, or relayed in from a peer)
+        │
+        ▼
+  HOME GATEWAY        evaluate notify rules for the user; look up their device pushkeys
+        │  POST /push/notify  { pushkey, app_id, event_ref, counts, [content?] }
+        ▼
+  PUSH RELAY          holds the APNs key + FCM project; builds + signs the platform push
+        │  APNs / FCM
+        ▼
+  DEVICE              wakes; (optionally) fetches the event from its home gateway; renders</code></pre>
+<blockquote class="invariant">
+<strong>What is and isn't centralised.</strong> The relay re-centralises <em>only the platform-credential-holding and the
+send</em>. It does <strong>not</strong> hold accounts, channels, history, or identity — those stay federated across gateways.
+Notify <em>logic</em> (rules, mute, mentions) stays on each home gateway. The relay is a dumb, stateless-ish fan-out box that
+turns a <code>notify</code> request into an APNs/FCM call. That is the smallest centralised surface that the platform wall
+forces — and no smaller is possible for the official app on iOS (§7).
+</blockquote>
+<details>
+<summary>Wire shapes (modelled on Matrix's push API — copy, don't invent)</summary>
+<pre><code>// 1) The app registers a "pusher" with its HOME gateway on startup / token refresh.
+//    (Matrix: POST /_matrix/client/v3/pushers/set)
+POST /v1/pushers/set
+{
+  "pushkey":     "&lt;APNs device token | FCM token | UnifiedPush endpoint&gt;",
+  "app_id":      "cc.imagineering.aikoChatApp.ios",   // platform-specific
+  "kind":        "http",
+  "push_relay":  "https://push.imagineering.cc",       // the vendor relay URL
+  "device_id":   "&lt;this device&gt;",
+  "append":      true,                                  // keep other devices' pushers
+  "data":        { "format": "event_id_only" }          // privacy mode, see §9
+}
+
+// 2) The home gateway, on a notify-worthy event, calls the relay.
+//    (Matrix: POST /_matrix/push/v1/notify)
+POST https://push.imagineering.cc/v1/notify
+{
+  "notification": {
+    "event_id":   "&lt;ulid&gt;",
+    "channel_id": "&lt;global id: id@homeGateway&gt;",
+    "counts":     { "unread": 3 },
+    "devices":    [ { "app_id": "...", "pushkey": "...", "data": {"format":"event_id_only"} } ]
+    // content (sender, body) included ONLY if the pusher did not request event_id_only
+  }
+}</code></pre>
+</details>
+
+<h2 id="element">6. How Element does it (the reference teardown)</h2>
+<p><span class="conf med">plausible</span> on exact endpoint versions; <span class="conf high">solid</span> on the
+architecture. Element is the flagship Matrix client and solved this exact problem — its design <em>is</em> the prior art.
+Three components: the <strong>homeserver</strong> (Synapse) decides who/what; <strong>Sygnal</strong> (the push gateway)
+holds the app credentials and sends; <strong>Element</strong> registers a pusher and renders.</p>
+<ol class="steps">
+<li><strong>Pusher registration.</strong> Element gets a platform token (APNs / FCM / UnifiedPush), then
+<code>POST /_matrix/client/v3/pushers/set</code> to its homeserver with the pushkey + the <em>push-gateway URL</em> to use.</li>
+<li><strong>Push rules.</strong> On a new event the <em>homeserver</em> evaluates the user's push rules (mentions, keywords,
+per-room mute) and decides whether to notify. Notification logic is per-homeserver — decentralised.</li>
+<li><strong>Homeserver → Sygnal.</strong> If notifying, the homeserver POSTs <code>/_matrix/push/v1/notify</code> to the push
+gateway with the pushkey + event reference (+ optionally content).</li>
+<li><strong>Sygnal → APNs/FCM.</strong> Sygnal holds <em>Element's</em> APNs key + FCM project and sends a usually-silent
+push.</li>
+<li><strong>Device fetch + decrypt.</strong> iOS wakes a <strong>Notification Service Extension</strong>; Android a background
+service. It calls <em>back to the homeserver</em> to fetch the event, decrypts it locally (E2EE), and posts the real
+notification. Content never had to pass through Sygnal.</li>
+</ol>
+<blockquote class="danger">
+<strong>The punchline that answers the whole question: Sygnal holds <em>Element's</em> credentials, not the homeserver's.</strong>
+Run a fully sovereign, self-hosted Synapse and want it to notify the <em>official Element app</em>? Your homeserver POSTs to
+<strong>matrix.org's / Element's</strong> Sygnal — the only push gateway on earth holding Element's APNs key. Your server is
+sovereign; your <em>push</em> still routes through the app vendor's central relay. <strong>Sovereignty stops at the push
+gateway.</strong> The most mature federated chat in existence makes exactly this compromise — accepting one central relay
+rather than fighting an unwinnable fight with APNs. The only full escape is shipping your own app (own bundle id, own Sygnal),
+which is precisely what Aiko is.</blockquote>
+
+<h2 id="ios">7. The iOS wall &amp; the Android escape <span class="key app">APP</span></h2>
+<table>
+<tr><th>Platform</th><th>Decentralised push possible?</th><th>Mechanism</th></tr>
+<tr><td><strong>Android</strong></td><td><span class="conf high">Yes</span></td><td><strong>UnifiedPush</strong>: the user
+picks their own push <em>distributor</em> (self-hosted <code>ntfy</code>, etc.), bypassing both FCM <em>and</em> the vendor
+relay. Element's F-Droid build supports it. Aligns with the sovereignty ethos.</td></tr>
+<tr><td><strong>iOS</strong></td><td><span class="conf low">No</span></td><td>Apple welds push to APNs + the app entitlement.
+No UnifiedPush equivalent exists or can exist. iPhone users <strong>must</strong> route through the central relay, full
+stop.</td></tr>
+</table>
+<p>So the honest shape: the sovereignty story has an <strong>iOS-shaped asterisk</strong>. Android can be fully decentralised
+(UnifiedPush) for users who want it; iOS cannot. This is not an Aiko failing — it is a platform constraint that binds Element
+and every other federated client identically. Name it as a <em>named tradeoff</em>, support UnifiedPush on Android as the
+purity option, and run the central relay for everyone else.</p>
+
+<h2 id="identity">8. The sovereign-identity twist — device registry <span class="key gw">GATEWAY</span></h2>
+<p><span class="conf med">plausible</span> Push is <strong>device-bound</strong> (a token identifies a device); 06 identity
+is <strong>key-bound</strong> (portable, multi-device). So the home gateway must keep a <strong>per-identity device
+registry</strong>: which devices does this sovereign identity have, and what is each one's current pushkey? On a notify, it
+fans out to all of the identity's registered devices (each pusher, like Matrix). Implications:</p>
+<ul class="tight">
+<li>Device registration is keyed by <strong>(sovereign identity, device)</strong>, not by gateway-local user row — the same
+day-one discipline as global IDs (06 §8). A device's pusher moves with the identity if the user re-homes.</li>
+<li>Token rotation (APNs/FCM tokens expire) → the app re-registers its pusher; the relay reports failed/expired pushkeys back
+so the home gateway prunes them (Matrix does this — "rejected" pushkeys in the notify response).</li>
+</ul>
+
+<h2 id="privacy">9. Privacy — notify without leaking content</h2>
+<p><span class="conf high">solid</span> A central relay is a metadata chokepoint, so minimise what flows through it. Adopt
+Matrix's <code>event_id_only</code> mode as the <em>default</em>:</p>
+<ul class="tight">
+<li>The <code>notify</code> to the relay carries only <strong>event reference + counts + pushkey</strong> — no sender, no body.</li>
+<li>The push wakes the app; the app fetches the event from <em>its own home gateway</em> and renders the real notification
+(iOS NSE / Android service). <strong>Message content never transits the relay.</strong></li>
+<li>This also future-proofs E2EE: if bodies are ever end-to-end encrypted, the relay (and the home gateway) can't read them
+anyway — the device decrypts.</li>
+</ul>
+<p class="note">Residual the relay still sees: <em>that</em> a given pushkey is being notified, and when (timing/volume
+metadata). Unavoidable for any push relay; documented, not hidden.</p>
+
+<h2 id="phasing">10. Phasing &amp; the one cheap principle</h2>
+<table>
+<tr><th>Phase</th><th>What ships</th><th>Federation cost later</th></tr>
+<tr><td><strong>N1 — launch</strong> (one gateway)</td><td><span class="key app">APP</span> APNs/FCM token + register pusher
+with the gateway; NSE/background handler that fetches+renders. <span class="key gw">GATEWAY</span> notify-rule eval + a
+<code>notify</code> call. The "relay" can be an <em>in-process function</em> on the one gateway — but behind a relay-shaped
+interface.</td><td>—</td></tr>
+<tr><td><strong>N2 — extract the relay</strong></td><td>Lift the APNs/FCM send into a <span class="key relay">RELAY</span>
+standalone service (<code>push.imagineering.cc</code>); the gateway calls it over HTTP instead of in-process. No app change.</td><td>Low — same interface.</td></tr>
+<tr><td><strong>N3 — federation-ready</strong></td><td>Third-party gateways point their <code>notify</code> at the same
+vendor relay; device registry keyed by sovereign identity; UnifiedPush option on Android.</td><td>Low — the seam already
+exists.</td></tr>
+</table>
+<blockquote class="invariant">
+<strong>The one cheap principle (06 §8, one layer up):</strong> at launch, shape notifications as
+<em>app → home gateway (pushkey + relay URL) → relay → device</em>, with the APNs/FCM send behind a <strong>separable
+relay interface</strong> even if that "relay" is just an in-process call on the single gateway. Key the device registry to
+<strong>sovereign identity + device</strong>, not a gateway-local user row. That costs ~nothing now and means federation
+never forces a notification rewrite — you just point peer gateways at the same relay. Same discipline as global IDs; the
+expensive thing is retrofitting a flat, gateway-bound push table under a live user base.
+</blockquote>
+
+<h2 id="hard">11. The hard problems (honest map)</h2>
+<ul class="tight">
+<li><strong><span class="conf low">thin</span> The central relay is a single point of control/failure.</strong> A "sovereign"
+network with one mandatory vendor relay is a real philosophical compromise — and an availability one (relay down → no iOS
+pushes network-wide). Mitigate with redundancy + UnifiedPush-on-Android, but iOS has no escape. Accept and name it (Element
+does).</li>
+<li><strong><span class="conf med">plausible</span> Trust between peer gateway and relay.</strong> A third-party home gateway
+calls the vendor relay with "notify pushkey X." A malicious/compromised gateway could spam-notify its own users, or probe
+pushkeys. The relay must authenticate calling gateways and rate-limit per gateway — and a gateway can only ever reach the
+pushkeys <em>it</em> was given (its own users'), never enumerate others'. Blast-radius design, pre-federation.</li>
+<li><strong><span class="conf med">plausible</span> Notify-rule placement across a relayed channel.</strong> When a message
+is relayed in from a peer gateway, the <em>home</em> gateway evaluates notify rules — but does it have enough context
+(mentions of the user, the user's mute state for that remote channel)? The relay-and-verify payload (06 §6) must carry enough
+for the home gateway to run rules locally. Solvable; needs the federation message shape to include it.</li>
+<li><strong><span class="conf med">plausible</span> Metadata at the chokepoint (§9).</strong> Content is kept off the relay,
+but timing/volume per pushkey is visible to it. Inherent; documented.</li>
+</ul>
+
+<h2 id="refs">12. Prior art &amp; references</h2>
+<ul class="tight">
+<li><strong>Matrix push gateway API</strong> — the <code>/_matrix/push/v1/notify</code> contract and the
+<code>pushers/set</code> client API. The shapes in §5 are modelled directly on it.
+(<a href="https://spec.matrix.org/latest/push-gateway-api/">spec.matrix.org/latest/push-gateway-api</a>)</li>
+<li><strong>Sygnal</strong> — Matrix.org's reference push gateway; the concrete "vendor runs one relay holding the app's
+APNs/FCM creds" implementation. (<a href="https://github.com/matrix-org/sygnal">github.com/matrix-org/sygnal</a>)</li>
+<li><strong>UnifiedPush</strong> — the decentralised push standard (Android); the §7 escape hatch.
+(<a href="https://unifiedpush.org/">unifiedpush.org</a>)</li>
+<li><strong>APNs</strong> token-based provider auth + <strong>FCM</strong> HTTP v1 — the platform send the relay performs.</li>
+<li><strong>Push rules</strong> — Matrix's per-user notify-decision model evaluated server-side; the reference for §5's
+"home gateway decides who/what."</li>
+</ul>
+
+<p class="note">Companion: this design's relay is a new <span class="key relay">RELAY</span> service (vendor-run, peer to the
+gateways) — a <code>project:aiko_chat_gateway</code>-adjacent build, handed off like 05/06's gateway halves. The app half (N1:
+token + pusher registration + NSE/background render) is the only launch-path piece, and it is small. Everything beyond N1 is
+federation-ready structure, not a launch commitment.</p>
+
+</body>
+</html>
