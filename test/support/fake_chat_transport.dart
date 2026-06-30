@@ -203,6 +203,7 @@ class SpyTelemetry extends ChatTelemetry {
   final List<(String, String)> orphans = [];
   final List<Object> reconnectErrors = [];
   final List<(String, String?, String)> historyGaps = [];
+  final List<(String, String?, String, int)> historySyncFaults = [];
   final List<Object> inboundWriteErrors = [];
 
   @override
@@ -214,6 +215,10 @@ class SpyTelemetry extends ChatTelemetry {
   @override
   void historyGapBeforeFence(String channelId, String? cursor, String fence) =>
       historyGaps.add((channelId, cursor, fence));
+  @override
+  void historySyncFault(
+          String channelId, String? cursor, String fence, int streak) =>
+      historySyncFaults.add((channelId, cursor, fence, streak));
   @override
   void inboundWriteFailed(Object error, StackTrace stack) =>
       inboundWriteErrors.add(error);
