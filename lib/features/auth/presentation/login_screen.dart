@@ -187,11 +187,16 @@ class LoginScreen extends ConsumerWidget {
     );
   }
 
-  /// The host of the active gateway for the login footer — falls back to the
-  /// full URL if it doesn't parse to a host.
+  /// The host (with port, when present) of the active gateway for the login
+  /// footer — falls back to the full URL if it doesn't parse to a host. The port
+  /// is load-bearing: two gateways on the same host differing only by port (e.g.
+  /// Local `:8095` vs an emulator host) would otherwise be indistinguishable
+  /// here (Carnot, cage-match #53).
   static String _hostOf(String httpBaseUrl) {
-    final host = Uri.tryParse(httpBaseUrl)?.host;
-    return (host == null || host.isEmpty) ? httpBaseUrl : host;
+    final uri = Uri.tryParse(httpBaseUrl);
+    final host = uri?.host;
+    if (host == null || host.isEmpty) return httpBaseUrl;
+    return uri!.hasPort ? '$host:${uri.port}' : host;
   }
 
   /// A best-effort glyph per broker provider; generic fallback otherwise.
