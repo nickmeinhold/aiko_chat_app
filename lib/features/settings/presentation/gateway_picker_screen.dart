@@ -1,10 +1,12 @@
 /// The gateway picker (#4) — choose which server the app talks to.
 ///
-/// Lists the built-in presets ([kGatewayPresets]) plus a custom-URL field, marks
-/// the active gateway, and routes a selection through
-/// [AuthController.switchGateway] — which signs the user out first, because JWTs
-/// are gateway-specific. The list is rendered from `List<ServerEntry>` so P2 can
-/// swap the preset source for the live discovery directory with no UI rework.
+/// Lists the available gateways plus a custom-URL field, marks the active
+/// gateway, and routes a selection through [AuthController.switchGateway] — which
+/// signs the user out first, because JWTs are gateway-specific. The list source
+/// is the live discovery directory ([gatewayDirectoryProvider], #36) merged over
+/// the bundled seed presets ([kGatewayPresets]): the seed renders instantly and
+/// is the fallback while the directory loads / on error / when it's unset, so the
+/// screen is never blocked on the network.
 library;
 
 import 'package:flutter/material.dart';
@@ -14,6 +16,8 @@ import 'package:go_router/go_router.dart';
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
+import '../application/gateway_directory_provider.dart';
+import '../data/gateway_directory_client.dart';
 import '../domain/server_entry.dart';
 
 class GatewayPickerScreen extends ConsumerStatefulWidget {
@@ -38,6 +42,17 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final current = ref.watch(configProvider).httpBaseUrl;
+    // Seed-first: render the bundled presets immediately, upgrade to the merged
+    // directory list once it loads. Loading/error/unset all fall back to seed —
+    // a slow or absent directory never blocks the screen.
+    final servers = ref.watch(gatewayDirectoryProvider).maybeWhen(
+          data: (directory) => mergeDirectory(
+            directory,
+            kGatewayPresets,
+            normalize: (url) => GatewayConfig.normalized(url).httpBaseUrl,
+          ),
+          orElse: () => kGatewayPresets,
+        );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Server')),
@@ -56,7 +71,7 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
               ),
             ),
             const _SectionHeader('Servers'),
-            for (final entry in kGatewayPresets)
+            for (final entry in servers)
               _ServerTile(
                 label: entry.label,
                 url: entry.httpBaseUrl,
