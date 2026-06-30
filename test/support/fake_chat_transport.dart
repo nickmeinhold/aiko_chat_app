@@ -206,6 +206,10 @@ class SpyTelemetry extends ChatTelemetry {
   final List<(String, String?, String, int)> historySyncFaults = [];
   final List<Object> inboundWriteErrors = [];
 
+  /// Backpressure transitions (#9): `(engaged, depth)` in order. `engaged:true`
+  /// = inbound paused at the high-water mark; `false` = resumed at low-water.
+  final List<(bool, int)> backpressure = [];
+
   @override
   void orphanAck(String clientMsgId, String serverUlid) =>
       orphans.add((clientMsgId, serverUlid));
@@ -222,4 +226,7 @@ class SpyTelemetry extends ChatTelemetry {
   @override
   void inboundWriteFailed(Object error, StackTrace stack) =>
       inboundWriteErrors.add(error);
+  @override
+  void inboundBackpressure({required bool engaged, required int depth}) =>
+      backpressure.add((engaged, depth));
 }
