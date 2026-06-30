@@ -23,6 +23,7 @@ import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/fake_chat_transport.dart';
 import 'support/fakes.dart';
@@ -43,6 +44,9 @@ ProviderContainer makeContainer({
   final tokenStore = store ?? InMemoryTokenStore();
   late final ProviderContainer container;
   container = ProviderContainer(overrides: [
+    // The Settings Server tile + the config layer read SharedPreferences; inject
+    // the in-memory instance loaded in setUpAll so configProvider resolves.
+    sharedPreferencesProvider.overrideWithValue(_prefs),
     restApiProvider.overrideWithValue(rest),
     transportProvider.overrideWithValue(transport),
     // The real social client hits Apple/Google platform channels — fake it.
@@ -93,9 +97,14 @@ Future<void> signIn(WidgetTester tester) async {
 /// synchronously (deterministic) while still exercising the actual asset.
 String _realEula = '';
 
+/// In-memory SharedPreferences for the config layer (the Settings Server tile).
+late SharedPreferences _prefs;
+
 void main() {
   setUpAll(() async {
     _realEula = await rootBundle.loadString('assets/legal/eula.md');
+    SharedPreferences.setMockInitialValues({});
+    _prefs = await SharedPreferences.getInstance();
   });
 
   test('the bundled EULA asset carries the Apple 1.2 zero-tolerance clause',

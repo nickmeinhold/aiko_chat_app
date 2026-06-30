@@ -20,6 +20,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/config.dart';
 import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
@@ -271,6 +272,25 @@ class AuthController extends AsyncNotifier<AppUser?> {
   Future<void> logout() async {
     state = const AsyncValue.data(null);
     await _teardownResources();
+  }
+
+  /// Re-point the app at a different gateway (the #4 picker). JWTs are minted by
+  /// and only valid at the gateway that issued them, so a switch is a SESSION
+  /// boundary: tear the current session down (clear tokens, disconnect the old
+  /// socket) BEFORE flipping [configProvider] — otherwise the next REST/WSS call
+  /// fires the old gateway's now-foreign token at the new host. We log out first
+  /// so by the time backend/transport rebuild against the new base, there is no
+  /// stale credential to leak; the router's auth guard then lands on /login and
+  /// the user re-authenticates against the new gateway.
+  ///
+  /// Re-selecting the CURRENT gateway is a no-op — guarded on the normalized
+  /// base URL so it never needlessly nukes a live session (and `https://x/` vs
+  /// `https://x` are treated as the same gateway).
+  Future<void> switchGateway(String httpBaseUrl) async {
+    final next = GatewayConfig.normalized(httpBaseUrl).httpBaseUrl;
+    if (next == ref.read(configProvider).httpBaseUrl) return;
+    await logout();
+    await ref.read(configProvider.notifier).setGateway(next);
   }
 
   /// Permanently delete the account (Apple 5.1.1(v)). Unlike [logout], which

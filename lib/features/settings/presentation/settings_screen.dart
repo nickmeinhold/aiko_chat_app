@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
 
@@ -27,6 +28,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         children: [
+          const _SectionHeader('Server'),
+          ListTile(
+            leading: const Icon(Icons.dns_outlined),
+            title: const Text('Server'),
+            subtitle: Text(
+              Uri.parse(ref.watch(configProvider).httpBaseUrl).host,
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/gateway'),
+          ),
           const _SectionHeader('Safety'),
           ListTile(
             leading: const Icon(Icons.block),

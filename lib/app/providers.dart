@@ -14,6 +14,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/auth/token_provider.dart';
 import '../features/auth/application/auth_controller.dart';
@@ -33,10 +34,62 @@ import 'config.dart';
 
 // --- config ----------------------------------------------------------------
 
-/// Where the gateway lives (from `--dart-define`). Overridable in tests/dev.
-final configProvider = Provider<GatewayConfig>(
-  (ref) => GatewayConfig.fromEnvironment(),
+/// The platform key-value store, loaded once in `main()` (it's async to obtain)
+/// and injected here so [GatewayConfigController.build] can read the persisted
+/// gateway synchronously. A throwing default means a `main()` that forgot the
+/// override fails loudly at first read rather than silently losing persistence.
+/// Tests that build [configProvider] override this with an in-memory instance
+/// (`SharedPreferences.setMockInitialValues({})`).
+final sharedPreferencesProvider = Provider<SharedPreferences>(
+  (ref) => throw UnimplementedError(
+    'sharedPreferencesProvider must be overridden in main() with the loaded '
+    'SharedPreferences instance (see lib/main.dart).',
+  ),
 );
+
+/// The persistence key for the user's chosen gateway base URL.
+const _kGatewayBaseUrlKey = 'aiko_gateway_base_url';
+
+/// Where the gateway lives — a RUNTIME-mutable, persisted value (the #4 picker).
+///
+/// `ref.watch(configProvider)` stays synchronous (a [Notifier]'s `build` is
+/// sync), so [backendProvider] and [transportProvider] are untouched: changing
+/// the gateway flips this state, and the REST backend + WSS transport rebuild
+/// automatically against the new host (transport's `onDispose` disconnects the
+/// old socket cleanly).
+final configProvider =
+    NotifierProvider<GatewayConfigController, GatewayConfig>(
+  GatewayConfigController.new,
+);
+
+/// Owns the gateway selection: resolves the initial value and persists changes.
+///
+/// Resolution order in [build]: a persisted choice wins; otherwise fall back to
+/// [GatewayConfig.fromEnvironment] (`--dart-define` → hardcoded prod). The actual
+/// switch is NOT performed here — [AuthController.switchGateway] orchestrates the
+/// session teardown (JWTs are gateway-specific) before calling [setGateway], so
+/// the security-critical token-clear can't be bypassed by a direct setter call.
+class GatewayConfigController extends Notifier<GatewayConfig> {
+  @override
+  GatewayConfig build() {
+    final prefs = ref.watch(sharedPreferencesProvider);
+    final persisted = prefs.getString(_kGatewayBaseUrlKey);
+    if (persisted != null && persisted.trim().isNotEmpty) {
+      return GatewayConfig.normalized(persisted);
+    }
+    return GatewayConfig.fromEnvironment();
+  }
+
+  /// Persist and adopt [httpBaseUrl] as the active gateway. Internal to the
+  /// switch ceremony — see [AuthController.switchGateway].
+  Future<void> setGateway(String httpBaseUrl) async {
+    final next = GatewayConfig.normalized(httpBaseUrl);
+    await ref
+        .read(sharedPreferencesProvider)
+        .setString(_kGatewayBaseUrlKey, next.httpBaseUrl);
+    state = next;
+  }
+}
 
 // --- credentials -----------------------------------------------------------
 
