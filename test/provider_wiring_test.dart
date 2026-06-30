@@ -33,6 +33,7 @@ import 'package:aiko_chat_app/features/chat/data/transport/gateway_transport.dar
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/fake_chat_transport.dart';
 import 'support/fakes.dart';
@@ -119,7 +120,16 @@ void main() {
     // class — a seam quietly rewired to a STUB impl — by pinning each provider to
     // its real production type. Only the deepest leaves (token store, auth) are
     // faked so construction stays offline.
+    late SharedPreferences prefs;
+    setUpAll(() async {
+      // The real transport/rest build configProvider, which reads
+      // SharedPreferences; inject an in-memory instance so they resolve offline.
+      SharedPreferences.setMockInitialValues({});
+      prefs = await SharedPreferences.getInstance();
+    });
+
     ProviderContainer leafContainer() => ProviderContainer(overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
           authControllerProvider.overrideWith(() => _FixedAuthController(null)),
           secureTokenStoreProvider.overrideWithValue(InMemoryTokenStore()),
         ]);

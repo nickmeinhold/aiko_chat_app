@@ -20,6 +20,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/config.dart';
 import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
@@ -273,6 +274,65 @@ class AuthController extends AsyncNotifier<AppUser?> {
     await _teardownResources();
   }
 
+  /// Re-point the app at a different gateway (the #4 picker). JWTs are minted by
+  /// and only valid at the gateway that issued them, so a switch is a SESSION
+  /// boundary. The ordering is load-bearing (Carnot):
+  ///
+  ///   1. No-op guard — re-selecting the CURRENT gateway never nukes a live
+  ///      session (normalized, so `https://x/` == `https://x`).
+  ///   2. Persist FIRST. If the write fails we abort with the session fully
+  ///      intact — a failed switch must not strand the user logged-out (Carnot
+  ///      F2). Writing the pref does NOT move the live config: [configProvider]
+  ///      is cached and only re-reads on invalidate (step 4).
+  ///   3. Publish `loading` BEFORE any teardown. This is the fix for the window
+  ///      Carnot caught: if we published `data(null)` first (as a plain
+  ///      `logout()` does), the router would land on /login against the OLD
+  ///      gateway while teardown was still in flight, and a sign-in there would
+  ///      mint a token the about-to-switch gateway can't honour. `loading` parks
+  ///      the router on /splash, so login is impossible mid-switch.
+  ///   4. Tear down (clear tokens + disconnect) → THEN `invalidate` so the live
+  ///      config flips only AFTER the old credential is gone. Tokens-before-flip
+  ///      is preserved.
+  ///   5. `finally` publishes logged-out exactly once, so a teardown error can
+  ///      never leave the app bricked on /splash.
+  Future<void> switchGateway(String httpBaseUrl) async {
+    final next = GatewayConfig.normalized(httpBaseUrl).httpBaseUrl;
+    if (next == ref.read(configProvider).httpBaseUrl) return;
+
+    final persisted = await ref
+        .read(sharedPreferencesProvider)
+        .setString(gatewayBaseUrlPrefKey, next);
+    if (!persisted) {
+      // Session untouched — surfaced to the picker for an inline error.
+      throw const GatewaySwitchFailed('Could not save the server selection.');
+    }
+
+    state = const AsyncValue.loading(); // block login (router → /splash)
+    try {
+      // Tear down by hand (not the bundled _teardownResources) so the swallow is
+      // NARROW: clearing the old credentials is security-critical and must NOT be
+      // silently absorbed (Carnot) — a clear failure propagates to the picker's
+      // error UI. Only the disconnect is best-effort.
+      ref.read(pendingHandleProvider.notifier).clear();
+      await _tokens.clearTokens(); // security-critical: old credential gone first
+      try {
+        await ref.read(transportProvider).disconnect(); // best-effort cleanup
+      } catch (_) {
+        // A disconnect hiccup must NOT surface as "switch failed" — the socket is
+        // re-disconnected by the transport rebuild's onDispose below regardless.
+      }
+    } finally {
+      // Flip the live config to the new (already-persisted) gateway BEFORE
+      // publishing logged-out — in the `finally` so even a propagating clear
+      // failure can't skip it and strand the app on /login against the OLD
+      // cached gateway (Carnot, the error-path twin of F1). The config flip is
+      // the load-bearing step; the rebuild from invalidate re-disconnects the
+      // old transport via its onDispose anyway.
+      ref.invalidate(configProvider);
+      state = const AsyncValue.data(null); // logged out, now on the new gateway
+    }
+  }
+
   /// Permanently delete the account (Apple 5.1.1(v)). Unlike [logout], which
   /// cannot fail and so flips to logged-out immediately, this calls the gateway
   /// FIRST and only tears down on success — a failure (e.g. [SoleAdminDeletion
@@ -306,4 +366,14 @@ class AuthController extends AsyncNotifier<AppUser?> {
     state = const AsyncValue.data(null);
     unawaited(_teardownResources());
   }
+}
+
+/// Thrown by [AuthController.switchGateway] when the chosen gateway could not be
+/// persisted — raised BEFORE any session teardown, so the current session is
+/// untouched and the picker can surface an inline error and stay put.
+class GatewaySwitchFailed implements Exception {
+  final String message;
+  const GatewaySwitchFailed(this.message);
+  @override
+  String toString() => message;
 }

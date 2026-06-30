@@ -1,10 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app/providers.dart';
 import 'app/router.dart';
 
-void main() {
-  runApp(const ProviderScope(child: AikoChatApp()));
+Future<void> main() async {
+  // The picker (#4) persists the chosen gateway; SharedPreferences is async to
+  // obtain, so load it once here and inject it so `configProvider` can resolve
+  // the persisted value synchronously at first build.
+  WidgetsFlutterBinding.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
+  runApp(
+    ProviderScope(
+      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      child: const AikoChatApp(),
+    ),
+  );
 }
 
 class AikoChatApp extends ConsumerWidget {

@@ -14,6 +14,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/auth/token_provider.dart';
 import '../features/auth/application/auth_controller.dart';
@@ -33,10 +34,60 @@ import 'config.dart';
 
 // --- config ----------------------------------------------------------------
 
-/// Where the gateway lives (from `--dart-define`). Overridable in tests/dev.
-final configProvider = Provider<GatewayConfig>(
-  (ref) => GatewayConfig.fromEnvironment(),
+/// The platform key-value store, loaded once in `main()` (it's async to obtain)
+/// and injected here so [GatewayConfigController.build] can read the persisted
+/// gateway synchronously. A throwing default means a `main()` that forgot the
+/// override fails loudly at first read rather than silently losing persistence.
+/// Tests that build [configProvider] override this with an in-memory instance
+/// (`SharedPreferences.setMockInitialValues({})`).
+final sharedPreferencesProvider = Provider<SharedPreferences>(
+  (ref) => throw UnimplementedError(
+    'sharedPreferencesProvider must be overridden in main() with the loaded '
+    'SharedPreferences instance (see lib/main.dart).',
+  ),
 );
+
+/// The persistence key for the user's chosen gateway base URL. Public so the
+/// switch ceremony ([AuthController.switchGateway]) can write it — but exposing
+/// the *key* is not a mutation door: there is deliberately NO public setter on
+/// [GatewayConfigController], so the gateway can only change via the ceremony
+/// (which first tears the session down). Closing that bypass at compile time
+/// (Kelvin + Carnot consensus) — documentation doesn't compile, so we removed
+/// the public mutator instead.
+const gatewayBaseUrlPrefKey = 'aiko_gateway_base_url';
+
+/// Where the gateway lives — a RUNTIME-mutable, persisted value (the #4 picker).
+///
+/// `ref.watch(configProvider)` stays synchronous (a [Notifier]'s `build` is
+/// sync), so [backendProvider] and [transportProvider] are untouched: changing
+/// the gateway flips this state, and the REST backend + WSS transport rebuild
+/// automatically against the new host (transport's `onDispose` disconnects the
+/// old socket cleanly).
+final configProvider =
+    NotifierProvider<GatewayConfigController, GatewayConfig>(
+  GatewayConfigController.new,
+);
+
+/// Owns the gateway selection: resolves the value from persistence + environment.
+///
+/// Resolution order in [build]: a persisted choice wins; otherwise fall back to
+/// [GatewayConfig.fromEnvironment] (`--dart-define` → hardcoded prod). There is
+/// deliberately NO public mutator — the gateway changes ONLY via
+/// [AuthController.switchGateway], which writes [gatewayBaseUrlPrefKey] and then
+/// `ref.invalidate`s this provider to re-derive from the new persisted value.
+/// That makes the session teardown impossible to bypass: you cannot move the
+/// live config without going through the ceremony that first clears the tokens.
+class GatewayConfigController extends Notifier<GatewayConfig> {
+  @override
+  GatewayConfig build() {
+    final prefs = ref.watch(sharedPreferencesProvider);
+    final persisted = prefs.getString(gatewayBaseUrlPrefKey);
+    if (persisted != null && persisted.trim().isNotEmpty) {
+      return GatewayConfig.normalized(persisted);
+    }
+    return GatewayConfig.fromEnvironment();
+  }
+}
 
 // --- credentials -----------------------------------------------------------
 
