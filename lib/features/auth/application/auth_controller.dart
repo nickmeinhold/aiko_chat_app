@@ -310,8 +310,20 @@ class AuthController extends AsyncNotifier<AppUser?> {
     state = const AsyncValue.loading(); // block login (router → /splash)
     try {
       await _teardownResources(); // clear tokens + disconnect the old socket
-      ref.invalidate(configProvider); // flip live config to the new gateway
+    } catch (_) {
+      // Teardown is best-effort cleanup. A disconnect hiccup must NOT surface as
+      // "switch failed" — the switch still completes (config flips + logged out
+      // below), so swallow it like deleteAccount does. Only a PERSIST failure
+      // (thrown above, before any teardown) is a real switch failure.
     } finally {
+      // Flip the live config to the new (already-persisted) gateway BEFORE
+      // publishing logged-out — in the `finally` so a teardown error (e.g. a
+      // throwing transport.disconnect after tokens were cleared) can't skip it
+      // and strand the user on /login against the OLD cached gateway (Carnot,
+      // the error-path twin of F1). The config flip is the load-bearing step;
+      // teardown is best-effort cleanup, and the provider rebuild from
+      // invalidate re-disconnects the old transport via its onDispose anyway.
+      ref.invalidate(configProvider);
       state = const AsyncValue.data(null); // logged out, now on the new gateway
     }
   }

@@ -131,6 +131,45 @@ void main() {
       expect(h.container.read(authControllerProvider).value, isNull);
     });
 
+    test('a teardown failure still flips config to the new gateway (no '
+        'old-gateway login window on the error path)', () async {
+      // Carnot re-review: if _teardownResources throws (e.g. transport.disconnect
+      // after tokens are cleared), the config flip must STILL happen — otherwise
+      // the app lands on /login against the OLD cached gateway while the new one
+      // is already persisted. RED-prove: move `ref.invalidate` out of the finally
+      // (into the try, before teardown can throw) → this fails.
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = InMemoryTokenStore(
+          const AuthTokens(accessToken: 'a', refreshToken: 'r'));
+      final transport = _ThrowingDisconnectTransport();
+      late final ProviderContainer container;
+      container = ProviderContainer(overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        secureTokenStoreProvider.overrideWithValue(store),
+        restApiProvider.overrideWithValue(FakeRestApi()),
+        transportProvider.overrideWithValue(transport),
+        tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
+          store: store,
+          remoteRefresh: (_) async => 'a2',
+          onUnauthenticated: () => container.read(authEventsProvider).add(null),
+        )),
+      ]);
+      addTearDown(container.dispose);
+      await container.read(authControllerProvider.future);
+
+      // Does not throw (teardown error swallowed — the switch still completed).
+      await container
+          .read(authControllerProvider.notifier)
+          .switchGateway('http://localhost:8095');
+
+      expect(transport.disconnectCalls, greaterThanOrEqualTo(1),
+          reason: 'teardown was attempted');
+      expect(container.read(configProvider).httpBaseUrl, 'http://localhost:8095',
+          reason: 'config flipped to the new gateway despite teardown error');
+      expect(container.read(authControllerProvider).value, isNull);
+    });
+
     test('re-selecting the CURRENT gateway is a no-op (keeps the session)',
         () async {
       final h = await loggedInContainer();
@@ -222,4 +261,14 @@ void main() {
           container.read(configProvider).httpBaseUrl, kDefaultGatewayBaseUrl);
     });
   });
+}
+
+/// A transport whose `disconnect` throws AFTER recording the attempt — to drive
+/// the teardown-error path of `switchGateway` (Carnot re-review).
+class _ThrowingDisconnectTransport extends FakeChatTransport {
+  @override
+  Future<void> disconnect() async {
+    await super.disconnect(); // increments disconnectCalls
+    throw Exception('disconnect boom');
+  }
 }
