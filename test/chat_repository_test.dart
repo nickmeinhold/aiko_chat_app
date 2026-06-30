@@ -371,7 +371,8 @@ void main() {
       expect(spy.historySyncFaults, hasLength(1),
           reason: 'stuck at one watermark across 3 reconnects = genuinely '
               'unreachable fence, not a transient shrink');
-      expect(spy.historySyncFaults.single.$4, 3,
+      final (_, _, _, faultStreak) = spy.historySyncFaults.single;
+      expect(faultStreak, 3,
           reason: 'the streak count is surfaced for diagnosis');
       expect(spy.historyGaps, hasLength(2),
           reason: 'escalation REPLACES the benign signal on that reconnect');

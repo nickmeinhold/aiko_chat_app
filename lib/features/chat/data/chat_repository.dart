@@ -27,13 +27,19 @@ abstract class ChatTelemetry {
   void historyGapBeforeFence(String channelId, String? cursor, String fence) {}
 
   /// An empty-page-before-fence gap that has PERSISTED at the same watermark
-  /// across [streak] consecutive reconnects (#16). A single occurrence is a
-  /// benign visibility shrink (`historyGapBeforeFence`); a streak that survives
-  /// the threshold means the fence is genuinely unreachable — a real history gap
-  /// or a regressed per-viewer fence-visibility invariant (aiko_chat_gateway#22).
-  /// LOUD by contract: restores the failure visibility #15's benign downgrade
-  /// removed for true gaps. Production should escalate (surface "history may be
-  /// incomplete" / force a full resync), not just log.
+  /// across [streak] consecutive history-sync attempts (#16). A single
+  /// occurrence is a benign visibility shrink (`historyGapBeforeFence`); a
+  /// streak that survives the threshold means the fence is genuinely unreachable
+  /// — a real history gap or a regressed per-viewer fence-visibility invariant
+  /// (aiko_chat_gateway#22). LOUD by contract: restores the failure visibility
+  /// #15's benign downgrade removed for true gaps.
+  ///
+  /// [streak] counts SYNC ATTEMPTS (reconnect runs of the choreography), not
+  /// wall-clock reconnects — coalesced `connected` events resolve to one run.
+  /// Fires once per attempt WHILE the gap persists (the signal reflects ongoing
+  /// state), so any destructive remediation a consumer wires (e.g. a forced full
+  /// resync) MUST debounce. Production should escalate (surface "history may be
+  /// incomplete" / force a resync), not just log — see [LoggingChatTelemetry].
   void historySyncFault(
       String channelId, String? cursor, String fence, int streak) {}
 

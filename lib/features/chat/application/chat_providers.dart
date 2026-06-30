@@ -15,6 +15,7 @@ import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
 import '../../moderation/application/moderation_controller.dart';
 import '../data/chat_repository.dart';
+import '../data/logging_chat_telemetry.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
 
@@ -59,6 +60,11 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     rest: ref.watch(restApiProvider),
     me: user,
     subscribedChannelIds: channels.map((c) => c.id).toList(),
+    // Wire the REAL telemetry sink so the reconcile engine's must-be-seen
+    // events (orphan ack, reconnect failure, the #16 sync fault) actually
+    // surface — without this the repo falls back to the silent _NoopTelemetry
+    // and every signal is swallowed in the shipped app (cage-match Carnot HIGH).
+    telemetry: const LoggingChatTelemetry(),
     newTempId: () => _uuid.v4(),
   );
   ref.onDispose(repo.dispose); // tear down on logout/rebuild — no leaked subs
