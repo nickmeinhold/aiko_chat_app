@@ -45,13 +45,13 @@ class LoggingChatTelemetry extends ChatTelemetry {
   @override
   void historySyncFault(
           String channelId, String? cursor, String fence, int streak) =>
-      // The loud #16 signal: a fence unreachable across [streak] reconnects is
-      // no longer a benign shrink. Logged at SEVERE so it surfaces distinctly
-      // from the INFO-level benign gap. NOTE: fires once per reconnect WHILE the
-      // gap persists (the signal reflects ongoing state) — any destructive
+      // The loud #16 signal: a fence unreachable across [streak] sync attempts
+      // is no longer a benign shrink. Logged at SEVERE so it surfaces distinctly
+      // from the INFO-level benign gap. NOTE: fires once per sync attempt WHILE
+      // the gap persists (the signal reflects ongoing state) — any destructive
       // remediation a consumer wires (e.g. a forced full resync) MUST debounce.
       developer.log(
-        'SYNC FAULT — fence unreachable across $streak reconnects: '
+        'SYNC FAULT — fence unreachable across $streak sync attempts: '
         'channel=$channelId cursor=$cursor fence=$fence. History may be '
         'incomplete; a full resync may be required.',
         name: _name,

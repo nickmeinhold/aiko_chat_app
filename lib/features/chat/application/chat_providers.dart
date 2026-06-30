@@ -45,6 +45,15 @@ final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
 /// authenticated [AppUser] (for optimistic "me" rendering) and the fixed
 /// subscription set (from [channelsProvider]); it then wires streams once and
 /// opens the socket (whose `connected` event drives subscribe→drain→history).
+/// The reconcile engine's telemetry sink, injectable so tests (or a future
+/// Crashlytics/Sentry sink) can override it. Defaults to the REAL
+/// [LoggingChatTelemetry] — never the silent `_NoopTelemetry` — so the
+/// must-be-seen signals are surfaced in the shipped app. Making this a first-
+/// class dependency (rather than an inline arg) is what lets a unit test pin
+/// that production wires a non-no-op sink (cage-match Carnot, PR #45).
+final chatTelemetryProvider =
+    Provider<ChatTelemetry>((ref) => const LoggingChatTelemetry());
+
 final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) {
@@ -60,11 +69,12 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     rest: ref.watch(restApiProvider),
     me: user,
     subscribedChannelIds: channels.map((c) => c.id).toList(),
-    // Wire the REAL telemetry sink so the reconcile engine's must-be-seen
-    // events (orphan ack, reconnect failure, the #16 sync fault) actually
-    // surface — without this the repo falls back to the silent _NoopTelemetry
-    // and every signal is swallowed in the shipped app (cage-match Carnot HIGH).
-    telemetry: const LoggingChatTelemetry(),
+    // Wire the REAL telemetry sink (via [chatTelemetryProvider]) so the
+    // reconcile engine's must-be-seen events (orphan ack, reconnect failure, the
+    // #16 sync fault) actually surface — without this the repo falls back to the
+    // silent _NoopTelemetry default and every signal is swallowed in the shipped
+    // app (cage-match Carnot HIGH, PR #45).
+    telemetry: ref.watch(chatTelemetryProvider),
     newTempId: () => _uuid.v4(),
   );
   ref.onDispose(repo.dispose); // tear down on logout/rebuild — no leaked subs
