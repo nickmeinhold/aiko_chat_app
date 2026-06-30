@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 08 — The phone is the self, not the server</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.thesis { background:#f3f0fb; border-left-color:#7d5fff; font-size:1.02rem; }
+  blockquote.danger { background:#fdf0ef; border-left-color:var(--blocker); }
+  .note { color:var(--muted); font-size:.9rem; }
+  .conf { font-weight:700; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; padding:.1em .5em;
+          border-radius:4px; color:#fff; }
+  .high { background:var(--accent); } .med { background:var(--warn); } .low { background:var(--blocker); }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.5rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  ul.tight li { margin:.25rem 0; }
+  .ladder { background:var(--code-bg); border-radius:8px; padding:.6rem 1rem; margin:1rem 0; font-size:.95rem; }
+  .ladder div { padding:.35rem 0; border-bottom:1px solid var(--rule); }
+  .ladder div:last-child { border-bottom:none; }
+  .ok { color:var(--accent); font-weight:700; } .no { color:var(--blocker); font-weight:700; }
+</style>
+</head>
+<body>
+
+<h1>Design 08 — The phone is the self, not the server</h1>
+<p class="lead">"Make phones the servers so we don't need a server" is the right <em>instinct</em> aimed at the wrong
+<em>node</em>. A daily-driver iPhone cannot be a server — the OS and the network forbid it — but it can be the one thing a
+server can never be: <strong>you</strong>. This design splits the three jobs a server does across two nodes — the phone
+carries <em>identity and live presence</em>, an always-on node carries <em>durability and reachability</em> — and shows
+why aiko's single-home total order makes that split <em>cleaner</em> than Briar, Tox, or SimpleX manage, instead of
+forcing the multi-master mess that "every phone is a server" actually implies.</p>
+
+<div class="scope">
+  <strong>Status:</strong> <em>vision / exploration</em>, v2 platform-tier — NOT a build spec, NOT on the launch path.
+  Captured 2026-06-30 (task #38) from the question <em>"should we make phones servers so we don't even need a server?"</em>
+  Completes the federation set: companion to <a href="06-sovereign-identity-federation.html">Design 06</a> (sovereign
+  identity — the layer this design puts <em>on the phone</em>), <a href="04-b4-reconcile-engine.html">Design 04</a> (the
+  B4 reconcile engine this design <em>reuses</em> instead of replacing), and <a
+  href="07-notifications-federation-ready.html">Design 07</a> (the push relay that turns out to be the <em>doorbell</em>
+  the whole thing depends on).<br>
+  <strong>Confidence legend:</strong> <span class="conf high">solid</span> grounded in what's built or in settled
+  network reality · <span class="conf med">plausible</span> coherent but unvalidated · <span class="conf low">thin</span>
+  genuinely unsolved, where I'd bet but wouldn't trust me.
+</div>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#thesis">The thesis — the phone was never the server</a></li>
+  <li><a href="#wall">Why the daily phone can't be a server (the iOS wall)</a></li>
+  <li><a href="#paradox">"If phones can't be servers, how is P2P possible?"</a></li>
+  <li><a href="#split">The reframe — three jobs, two nodes</a></li>
+  <li><a href="#authority">The load-bearing rule — one ordering authority, always (B4 survives)</a></li>
+  <li><a href="#ladder">The delivery ladder — direct, blind-relay, mailbox</a></li>
+  <li><a href="#appliance">The escape hatch — a phone <em>can</em> be a server, just not <em>that</em> phone</a></li>
+  <li><a href="#hard">The hard problems (honest map)</a></li>
+  <li><a href="#present">What this asks of the present — cheap principles</a></li>
+  <li><a href="#research">Prior art &amp; research threads</a></li>
+</ol>
+</nav>
+
+<h2 id="thesis">1. The thesis — the phone was never the server</h2>
+<blockquote class="thesis">
+The dream is "no server." The achievable, and actually <em>better</em>, version is: <strong>no server that knows who you
+are, and no server you depend on for durability.</strong> You get there not by making the phone host your channels — the
+OS won't allow it and it would drag Matrix's multi-master complexity back in — but by moving <em>identity</em> onto the
+phone and leaving <em>durability</em> on a node that is good at being awake. The phone holds the self; the node holds the
+waiting.
+</blockquote>
+
+<p>"Every phone is a server" sounds like maximal sovereignty, but follow it one step: if your channel lives on your phone,
+then your phone is the <em>ordering authority</em> for that channel. When it sleeps — which on iOS is nearly always — the
+channel freezes; no one can post. When it's lost, the history is gone unless it was replicated; and replication across
+phones is exactly the multi-master, state-resolution problem aiko <a href="06-sovereign-identity-federation.html">deleted
+to beat Matrix</a> (<a href="04-b4-reconcile-engine.html">Design 04 §</a> keeps a <em>single</em> total order precisely so
+there is nothing to merge). So the pure idea doesn't just hit an OS wall — it quietly rebuilds the thing we set out to
+avoid. The reframe keeps the win and drops the wall.</p>
+
+<h2 id="wall">2. Why the daily phone can't be a server (the iOS wall)</h2>
+<p>A server's defining job is to <strong>accept an unsolicited inbound connection from a stranger while you are asleep</strong>.
+Hold that sentence up against an iPhone and it fails three ways at once:</p>
+
+<table>
+<tr><th>A server needs…</th><th>The daily iPhone</th><th>Why</th></tr>
+<tr><td>A stable, dialable public address</td><td><span class="no">✗</span></td><td>Carrier-grade NAT (CGNAT) puts
+millions of phones behind one IP with no inbound port. There is nothing for a stranger to dial.</td></tr>
+<tr><td>To be awake and listening 24/7</td><td><span class="no">✗</span></td><td>iOS suspends a backgrounded app within
+~seconds and closes its sockets. There is no supported "keep a listening server socket alive in the background" API; <a
+href="https://developer.apple.com/documentation/pushkit">PushKit</a> VoIP sockets are tightly policed and rejected if
+abused for general networking.</td></tr>
+<tr><td>To hold a message for an offline recipient</td><td><span class="no">✗</span></td><td>Store-and-forward <em>is</em>
+always-on durability. A phone that's off can't hold anything for anyone.</td></tr>
+</table>
+
+<p>Android is more permissive — a foreground service plus <code>WorkManager</code> can keep a process alive — but it costs
+a permanent notification, fights Doze and OEM task-killers, and drains the battery, all to be <em>unreachable half the time
+anyway</em>. And aiko is iOS-first (TestFlight). The iOS row alone is decisive: <strong>on the primary platform a
+daily-phone-hosted, externally-reachable channel is not throttled or degraded, it is impossible.</strong></p>
+
+<h2 id="paradox">3. "If phones can't be servers, how is P2P possible?"</h2>
+<p>This is the sharp question, and the apparent contradiction dissolves on one distinction: <strong>a server accepts
+inbound from strangers while you sleep; a P2P peer makes <em>outbound</em> connections while it's awake.</strong> A phone
+is perfectly capable of the second — NAT and iOS both permit outbound. The whole game is built on that asymmetry.</p>
+
+<table>
+<tr><th>The network capability</th><th>iPhone?</th><th>Why</th></tr>
+<tr><td>Make an <strong>outbound</strong> connection</td><td><span class="ok">✓</span></td><td>NAT and iOS both permit it
+— it's how every app talks to anything.</td></tr>
+<tr><td>Accept <strong>unsolicited inbound</strong></td><td><span class="no">✗</span></td><td>No public address; the OS
+kills background listeners. (This is §2.)</td></tr>
+<tr><td>Two awake peers form a <strong>direct</strong> link</td><td><span class="ok">✓</span> <span class="note">brokered</span></td><td>Both
+dial <em>out</em> to a shared rendezvous, learn each other's public-facing address, and punch matching holes through their
+NATs (ICE / UDP hole-punching).</td></tr>
+<tr><td>Get <strong>woken</strong> to start that</td><td><span class="ok">✓</span> <span class="note">via push</span></td><td>APNs
+is the one channel iOS keeps alive when the app is dead — the doorbell that rings in a dark house (<a
+href="07-notifications-federation-ready.html">Design 07</a>).</td></tr>
+</table>
+
+<p><strong>How two NAT'd phones reach each other.</strong> Neither can dial the other directly. Instead both reach
+<em>outward</em> to a cheap, stateless coordinator — a <a href="https://www.rfc-editor.org/rfc/rfc8489">STUN</a> server —
+which reflects back each phone's public-facing <code>ip:port</code>. The two then fire packets at each other at the same
+moment, and because each NAT now has an outbound mapping open, the inbound packets are let through. This is <a
+href="https://www.rfc-editor.org/rfc/rfc8445">ICE</a> (Interactive Connectivity Establishment), the exact machinery inside
+WebRTC and every video-call app. Once the hole is open the link is genuinely peer-to-peer; the bytes touch no server. But
+it was <em>introduced</em> by a doorman who saw two outbound knocks and held nothing.</p>
+
+<p><strong>The iOS wake problem.</strong> Even "both online" is hard when the recipient's app is suspended. How does B's
+phone know to wake and start hole-punching? A <strong>push</strong>. The sender (or the rendezvous) sends an APNs push;
+iOS wakes the app for a few seconds; it dials out, punches the hole, and messages flow. This is why <a
+href="07-notifications-federation-ready.html">Design 07</a> turns out to be load-bearing for <em>any</em> P2P story — not a
+nicety, the ignition.</p>
+
+<blockquote class="invariant">
+<strong>The honest claim.</strong> "P2P with zero infrastructure" was never quite true. There is always a stateless
+<em>matchmaker</em> (STUN), sometimes a blind <em>relay</em> (TURN, when hole-punching fails), and for a recipient who is
+truly offline, a <em>mailbox</em> (store-and-forward). What you can honestly eliminate is the server that <strong>knows who
+you are</strong> and the server you <strong>depend on for durability</strong> — not every server in the path.
+</blockquote>
+
+<h2 id="split">4. The reframe — three jobs, two nodes</h2>
+<p>Unbundle what "a server" actually does for a chat, and it's three separable jobs. The pure-phone idea fails because it
+asks the worst-suited node to do all three. Split them by which node is <em>good</em> at each:</p>
+
+<table>
+<tr><th>Job</th><th>Best node</th><th>Why</th></tr>
+<tr><td><strong>Identity</strong> — who you are, your signing key, your reputation</td><td>The phone <span class="note">(secure
+enclave / passkey)</span></td><td>The key should live where the human and the biometric are. <a
+href="06-sovereign-identity-federation.html">Design 06</a> already makes identity a sovereign keypair, gateway-independent.
+Putting it on the phone is the natural home, not a new idea.</td></tr>
+<tr><td><strong>Live presence</strong> — "I am here now," the low-latency direct link</td><td>The phone</td><td>Presence is
+inherently about the device a human is holding. When both peers are awake, the phone can carry the conversation directly
+(§3).</td></tr>
+<tr><td><strong>Durability + reachability</strong> — hold the channel's order, hold messages for offline peers, answer at
+3am</td><td>An always-on node</td><td>This is the one job a phone is structurally bad at and a tiny VPS / Pi / dedicated
+appliance is trivially good at. It is the <em>only</em> reason a server exists.</td></tr>
+</table>
+
+<p>So the architecture is: <strong>the phone is the root of identity and the endpoint of the live link; an always-on node
+is the durability and reachability layer.</strong> Crucially, "an always-on node" does <em>not</em> mean "a company's
+server" — under <a href="06-sovereign-identity-federation.html">Design 06</a> + the <a
+href="05-communities-and-discovery.html">islands</a> work it can be your own $5 VPS, a peer's island, or a dedicated device
+in your home (§7). Sovereignty comes from <em>identity portability + a cheap self-hostable node</em>, which is already the
+roadmap — not from fighting the iOS sandbox.</p>
+
+<h2 id="authority">5. The load-bearing rule — one ordering authority, always</h2>
+<blockquote class="invariant">
+<strong>Direct phone-to-phone delivery is an <em>optimistic accelerator</em>, never a second master.</strong> The always-on
+node remains the sole ordering authority for the channel. A message sent over a direct link is the <em>same</em> optimistic
+send aiko already does — it gets its real, total-order ULID when the authority sees it, and the existing <a
+href="04-b4-reconcile-engine.html">B4 reconcile engine</a> sequences it on reconnect. No new consistency model. No merge.
+</blockquote>
+
+<p>This is the single rule that keeps the whole design from collapsing into Matrix. Naively, a direct A→B exchange while
+both are offline-from-the-island produces messages with no authoritative order — and the temptation is to let the phones
+order them, i.e. make every phone a master. <strong>Don't.</strong> aiko already has the right primitive: the app sends
+optimistically (renders the bubble immediately) and the gateway assigns the canonical ULID; <a
+href="04-b4-reconcile-engine.html">B4</a> reconciles the optimistic view against the authoritative log on reconnect. A
+direct link is just that same optimistic path with an <em>earlier hop</em> — B sees the message sooner, but neither phone
+is the authority. When either reconnects to the island, the message is submitted, ordered, and B4 does what it already
+does.</p>
+
+<p>This is the <em>exact</em> parallel to <a href="06-sovereign-identity-federation.html#channels">Design 06's "channels
+stay single-homed."</a> 06 keeps one authority per channel across <em>gateways</em>; 08 keeps one authority per channel
+across the <em>phone fast-path</em>. Same invariant, different axis. It is why the hybrid is <em>more</em> aiko than the
+pure version, not a compromise of it.</p>
+
+<details>
+<summary>The one consistency subtlety worth naming</summary>
+<p>If A→B direct succeeds but A never reaches the island (A's phone dies right after), B holds a message the authority has
+never seen. Two clean options, both already in aiko's vocabulary: <strong>(a)</strong> treat B's copy as still-optimistic
+(a "pending" bubble) until the authority confirms it — identical to today's unacked-send state; or <strong>(b)</strong> let
+B <em>relay</em> the message to the island on A's behalf (B becomes a courier, not an authority — the ULID is still minted
+by the island). Option (b) is strictly better for delivery and costs nothing in the ordering model, because the island
+still assigns order. <span class="conf med">plausible</span> — the courier path needs a signature check so B can't forge
+A's message, but A's <a href="06-sovereign-identity-federation.html">sovereign key</a> already signs it, so the island
+verifies origin regardless of who carried it.</p>
+</details>
+
+<h2 id="ladder">6. The delivery ladder — direct, blind-relay, mailbox</h2>
+<p>Every "serverless" messenger is really a <em>gradient</em> of fallbacks, and being explicit about the rungs is what
+keeps the privacy claims honest. From most-private/least-available to most-available/least-private:</p>
+
+<div class="ladder">
+<div><span class="ok">⓪</span> <strong>Local mesh — no internet at all</strong> — peers in physical radio range talk over
+<em>local</em> transports that never touch the WAN: same-LAN (mDNS/Bonjour when the router's up but the uplink is down),
+peer-to-peer Wi-Fi + Bluetooth (iOS <a href="https://developer.apple.com/documentation/multipeerconnectivity">MultipeerConnectivity</a>,
+Android Wi-Fi Direct), or sneakernet (QR, removable storage, à la Briar). Zero infrastructure, zero internet. The
+catch: only reaches who's <em>near you</em>, and there's no global order until someone reconnects. <span class="conf med">plausible</span> — see §6.1.</div>
+<div><span class="ok">①</span> <strong>Direct P2P</strong> — both peers awake, hole-punch succeeds. The link is end-to-end;
+<em>no server sees the content or the metadata</em>. Covers the large majority of NAT pairs. <span class="conf high">solid</span></div>
+<div><span class="med">②</span> <strong>Blind relay (TURN)</strong> — both awake, but hole-punch fails (symmetric NAT,
+some CGNAT). A <a href="https://www.rfc-editor.org/rfc/rfc8656">TURN</a> server forwards the packets. With E2EE it sees
+only ciphertext + the fact that two opaque endpoints are talking. <span class="conf high">solid</span> — this is standard
+WebRTC fallback; ~10–20% of connections need it.</div>
+<div><span class="no">③</span> <strong>Mailbox (store-and-forward)</strong> — the recipient is <em>offline</em>; no direct
+path exists. An always-on node holds the (E2EE) message until they wake. This is unambiguously a server, and it is the rung
+the pure-phone dream cannot avoid. In aiko it is the <strong>island</strong> — which is also the ordering authority (§5),
+so the mailbox and the order-keeper are the same node. <span class="conf high">solid</span></div>
+</div>
+
+<p>The design's job is to <strong>ride as high on this ladder as conditions allow, transparently</strong>: local mesh when
+there's no internet, direct when both are present online, blind-relay when the network is hostile, mailbox when the other
+side is dark — and to make the privacy cost of each rung legible rather than hidden. Note the elegant collapse at the
+bottom: because aiko channels are single-homed (§5), rung ③'s mailbox <em>is</em> the channel's authority, so there is no
+separate "sync server" to run. <a href="https://simplex.chat/docs/simplex.html">SimpleX</a> needs disposable queue servers
+<em>and</em> the relay topology; aiko's mailbox falls out of the island it already has.</p>
+
+<h3 id="offline">6.1 When the internet goes down — and why aiko recovers cleaner than Briar</h3>
+<p>"Internet down" almost never means "all networking dead" — it means the <em>WAN uplink</em> is gone while local radios
+still work. Rung ⓪ is the whole off-grid story, and it matters for the cases people actually reach for a resilient
+messenger: protests, disasters, festivals, censorship, plain dead-zones. Three sub-cases, increasingly austere:</p>
+<ul class="tight">
+<li><strong>LAN survives, WAN doesn't</strong> (ISP outage, captive network). Phones on the same Wi-Fi find each other via
+mDNS and talk directly. Common and almost free.</li>
+<li><strong>No router at all.</strong> Ad-hoc peer-to-peer Wi-Fi + Bluetooth via <a
+href="https://developer.apple.com/documentation/multipeerconnectivity">MultipeerConnectivity</a> (iOS) / Wi-Fi Direct
+(Android) — the AirDrop / FireChat substrate. Tens of metres, no infrastructure.</li>
+<li><strong>Never in range at the same time.</strong> <strong>Custody transfer</strong> (the <a
+href="https://www.rfc-editor.org/rfc/rfc9171">DTN Bundle Protocol</a> term): a mutual peer who moves between you physically
+<em>carries</em> the message — store-carry-forward, a human mule. Safe because the message is signed by the sender's <a
+href="06-sovereign-identity-federation.html">sovereign key</a> (§5/§9), so the courier can relay but not forge.</li>
+</ul>
+<p>And here is the punchline — the §5 invariant pays off hardest exactly here. A local-mesh message is <em>still</em> just
+an optimistic send (§5): it renders immediately for whoever's in range, and the instant <em>any</em> participant
+re-touches the island, it gets its canonical ULID and <a href="04-b4-reconcile-engine.html">B4</a> slots it into the one
+true order — no merge, no conflict, no lost sequence.</p>
+<blockquote class="invariant">
+<a href="https://briarproject.org/how-it-works/">Briar</a> is the gold standard for the blackout itself, but it is
+<em>pairwise sync forever</em> — there is no global authority, so there is no clean "the net came back, now everything
+converges" moment. aiko's local-mesh messages have a <strong>home to go to</strong>. So aiko aims for Briar's offline
+resilience <em>plus</em> a clean online convergence: mesh while dark, and when the lights return, every message that
+travelled hand-to-hand snaps into a single total order as if nothing was ever offline. That convergence is the thing
+single-home + B4 buys that a pure-P2P design structurally cannot.
+</blockquote>
+<p class="note"><span class="conf med">plausible</span> — the radios and frameworks are real and shipping (Multipeer,
+Wi-Fi Direct, BLE), and the convergence model is just B4 applied to an earlier hop; what's unvalidated is the iOS
+background/battery envelope for sustained mesh (§8) and the courier UX. The honest limit stays physics: rung ⓪ reaches
+only who is <em>near</em>, and gives no global order until <em>someone</em> bridges back to the authority. You cannot
+message the far side of the world with no internet — no design can.</p>
+
+<h2 id="appliance">7. The escape hatch — a phone <em>can</em> be a server, just not <em>that</em> phone</h2>
+<p>The §2 wall is about the <em>daily-driver</em> phone — the one in your pocket, suspended and roaming. A
+<strong>dedicated</strong> device is a different animal:</p>
+<ul class="tight">
+<li><strong>An old phone as a home appliance</strong> — flashed, plugged in, on home Wi-Fi, app kept foreground/awake. No
+CGNAT problem on a home connection with a forwarded port or an outbound tunnel; no battery problem on a charger; no
+suspension if it's the foreground app. This is "a small server that happens to be a phone," and it is the <em>cheapest
+sovereignty a non-technical user can get</em>: don't buy a VPS, repurpose the drawer phone.</li>
+<li><strong>A Raspberry Pi / NAS / homelab box</strong> — the conventional always-on node.</li>
+<li><strong>A $5 VPS</strong> — exactly what <a href="05-communities-and-discovery.html">island #2 (enspyr.co)</a> is.</li>
+</ul>
+<p>All three are served by the <em>same</em> islands packaging — a small single binary plus its own broker (the <a
+href="05-communities-and-discovery.html">island template</a>). So "phone as server" is not wrong, it's <em>mis-scoped</em>:
+the moment you make it a <em>dedicated</em> node, it stops being a phone-in-your-pocket problem and becomes a
+deployment-target the roadmap already covers. The interesting, novel work is entirely in §§5–6 — the phone <em>fast-path</em>
+— not in hosting-on-a-phone.</p>
+
+<h2 id="hard">8. The hard problems (honest map)</h2>
+<table>
+<tr><th>Problem</th><th>Severity</th><th>The honest state</th></tr>
+<tr><td><strong>NAT traversal still needs a TURN relay</strong></td><td><span class="conf high">solid</span></td><td>Not a
+flaw, a fact: symmetric NATs can't be hole-punched, so a fraction of connections must relay. A server is in the path for
+those — blind (ciphertext-only) but present. "Zero servers" is false at the network layer; "zero servers that know you" is
+the real target.</td></tr>
+<tr><td><strong>Rendezvous / discovery</strong></td><td><span class="conf med">plausible</span></td><td>To hole-punch, A
+must signal B (offer/answer + ICE candidates) <em>before</em> the direct link exists. That signalling rides the island
+(it's already the authority + mailbox) or a push. So the island is the rendezvous — fine, but it means a fully
+island-less direct connection needs an out-of-band channel (QR, local mDNS on the same LAN, BLE) à la <a
+href="https://briarproject.org/how-it-works/">Briar</a>.</td></tr>
+<tr><td><strong>The both-ends-dark gap</strong></td><td><span class="conf high">solid</span></td><td>If the recipient is
+truly off (dead battery, no network, push undeliverable), <em>only</em> rung ③ works. There is no P2P magic that delivers
+to a powered-off phone. Store-and-forward is mandatory; the question is only <em>whose</em> node holds it.</td></tr>
+<tr><td><strong>Battery &amp; wake economics</strong></td><td><span class="conf med">plausible</span></td><td>Each
+push-to-hole-punch cycle spins the radio and CPU. Fine for a foreground conversation; punishing if every message wakes the
+app. Likely policy: direct path only while the app is foreground or recently-active; fall to mailbox otherwise. Measured,
+not assumed.</td></tr>
+<tr><td><strong>iOS background execution budget</strong></td><td><span class="conf med">plausible</span></td><td>A push
+buys only seconds of runtime. Enough to fetch from the mailbox; probably <em>not</em> enough to reliably complete an ICE
+negotiation + sustained transfer in the background. So background delivery realistically = mailbox; direct = foreground.
+This narrows where rung ① actually applies more than the romance suggests.</td></tr>
+<tr><td><strong>Metadata at the relay</strong></td><td><span class="conf med">plausible</span></td><td>Even a blind
+TURN/mailbox sees <em>that</em> two endpoints communicate and when. SimpleX's answer — <a
+href="https://simplex.chat/docs/simplex.html">disposable per-queue identifiers, no user IDs</a> — is the bar to study if
+metadata-minimization becomes a goal. aiko's island knows far more than SimpleX's queue server by design (it's the
+authority), so aiko trades metadata-privacy for ordering-simplicity. A named tradeoff, not a free lunch.</td></tr>
+<tr><td><strong>Sybil / abuse — unchanged</strong></td><td><span class="conf low">thin</span></td><td>Same gate as <a
+href="06-sovereign-identity-federation.html#hard">Design 06 §7</a>: a sovereign key on a phone is free to mint, so the
+fast-path does nothing for spam/abuse accountability. Proof-of-personhood remains the viability gate, orthogonal to all of
+this.</td></tr>
+</table>
+
+<h2 id="present">9. What this asks of the present — cheap principles</h2>
+<p>Like 06, the value of writing 08 now is a short list of <em>near-free</em> things that keep it possible, and the
+discipline to do nothing else yet (it is not on the launch path):</p>
+<ul class="tight">
+<li><strong>Keep identity on the device and gateway-independent.</strong> <a
+href="06-sovereign-identity-federation.html">Design 06</a> + passkeys already do this. The phone-as-self model is free as
+long as the signing key never becomes gateway-bound. Catastrophic to retrofit; already true.</li>
+<li><strong>Keep the island the single ordering authority (§5).</strong> Don't add any "phone orders messages" path, ever —
+even as an optimization. Optimistic-send + B4 is the whole story; a second master is the one thing that forecloses this
+design.</li>
+<li><strong>Treat the push relay (Design 07) as ignition, not garnish.</strong> When notifications get built, the
+wake-the-app-to-connect capability is the same primitive the fast-path will need. Build it so a push can carry a "peer
+wants to connect" signal, not only "you have a message."</li>
+<li><strong>Sign messages with the sovereign key from day one.</strong> Origin-verifiability (§5 courier path) needs the
+message signed by the sender's key regardless of who carries it. If messages are signed anyway (06), the courier and direct
+paths are unlocked for free.</li>
+</ul>
+
+<h2 id="research">10. Prior art &amp; research threads</h2>
+<p>This is a well-trodden gradient; pointing at who sits where on the §6 ladder is more honest than claiming novelty. The
+novelty in 08 is narrow and real: <strong>reusing a single-home total-ordering authority (B4) as both the mailbox and the
+reconciler, so the phone fast-path needs no new consistency model.</strong> Everyone below pays, in some form, the
+multi-master tax 08 dodges.</p>
+
+<table>
+<tr><th>System</th><th>Where it sits</th><th>What to take / avoid</th></tr>
+<tr><td><strong><a href="https://briarproject.org/how-it-works/">Briar</a></strong> (Bramble protocol suite)</td><td>Rungs
+①+③. Direct sync over Bluetooth / Wi-Fi / Tor when both online; <a href="https://briarproject.org/">Briar
+Mailbox</a> for store-and-forward. Explicitly <em>delay-tolerant</em>.</td><td><strong>Take:</strong> the mailbox-as-separate-always-on-node
+pattern, and out-of-band rendezvous (QR, local radio) for island-less direct. <strong>Note:</strong> Briar has no global
+order — it's pairwise sync — so it never needs B4, but also can't offer aiko's channel semantics.</td></tr>
+<tr><td><strong><a href="https://simplex.chat/docs/simplex.html">SimpleX</a></strong> (SMP — simplex messaging
+protocol)</td><td>Rung ③, maximal-privacy variant. Disposable, unidirectional queues on redundant relays; <a
+href="https://simplex.chat/">no user identifiers of any kind</a>; messages held then deleted.</td><td><strong>Take:</strong>
+the metadata-minimization bar (per-queue pairwise IDs, rotated). <strong>Avoid for aiko:</strong> it has no
+single-home authority, so it pays with relay topology + queue management aiko's island makes unnecessary. The privacy/ordering
+tradeoff is the mirror image of aiko's.</td></tr>
+<tr><td><strong>Tox / <a href="https://jami.net">Jami</a></strong></td><td>Rungs ①+②. DHT for peer discovery + TURN-like
+relays for traversal failure. Jami uses standard ICE/TURN.</td><td><strong>Take:</strong> the WebRTC/ICE stack is the
+proven traversal layer — don't reinvent it. <strong>Note:</strong> DHT discovery is heavy on a phone; aiko has an island
+to be the rendezvous instead.</td></tr>
+<tr><td><strong>Matrix P2P / <a href="https://matrix.org/blog/2021/03/01/how-we-are-trying-to-keep-matrix-p2p-ish/">Pinecone</a></strong></td><td>Rungs
+①+②ish, experimental. Matrix's own attempt to run the homeserver <em>on the phone</em> over an overlay network.</td><td><strong>The
+cautionary tale.</strong> This is literally "phone is the server," and it drags Matrix's full replication + state-resolution
+onto the device — heavy, battery-hungry, still experimental years on. It is the concrete thing §1/§5 say <em>not</em> to
+do.</td></tr>
+<tr><td><strong>Secure Scuttlebutt</strong></td><td>Rungs ①+③ via gossip. Append-only per-feed logs synced opportunistically;
+"pub" servers relay for peers who never meet.</td><td><strong>Take:</strong> the per-feed single-writer log is spiritually
+close to single-home total order. <strong>Note:</strong> SSB's pubs are de-facto servers — more evidence the relay always
+returns.</td></tr>
+<tr><td><strong>The traversal RFCs</strong></td><td>The substrate under rungs ①+②.</td><td><a
+href="https://www.rfc-editor.org/rfc/rfc8445">ICE (8445)</a>, <a href="https://www.rfc-editor.org/rfc/rfc8489">STUN
+(8489)</a>, <a href="https://www.rfc-editor.org/rfc/rfc8656">TURN (8656)</a>; <a
+href="https://github.com/libp2p/specs/blob/master/relay/DCUtR.md">libp2p DCUtR</a> for modern hole-punching.
+<strong>Take:</strong> all of it, off the shelf, via WebRTC.</td></tr>
+<tr><td><strong><a href="https://www.rfc-editor.org/rfc/rfc9171">Delay-Tolerant Networking</a></strong> (Bundle
+Protocol)</td><td>The formal theory of rung ③.</td><td><strong>Take:</strong> the vocabulary — "custody transfer,"
+store-carry-forward — is exactly the §5 courier path, with decades of design behind it.</td></tr>
+</table>
+
+<blockquote class="danger">
+<strong><span class="conf low">thin</span> The line not to cross.</strong> The gravity of this whole area pulls toward
+"let the phones order their own messages so they're truly independent." Every system above that gave in (Matrix P2P most
+literally) paid for it in complexity. 08's entire claim to being <em>simpler</em> than the alternatives rests on
+<strong>never</strong> crossing it: the island stays the one authority (§5), the phone stays the self. Cross that line and
+you haven't built Design 08 — you've rebuilt Matrix on a battery.
+</blockquote>
+
+<p class="note">Provenance: this design fell out of a fast back-and-forth on 2026-06-30 — "should we make phones servers so
+we don't even need a server?" → the iOS wall → "then how is P2P even possible?" → the matchmaker/relay/mailbox ladder. Kept
+as a vision so the ambition is captured without being mistaken for a near-term commitment. The phone holds the self; the
+island holds the waiting.</p>
+
+</body>
+</html>
