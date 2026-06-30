@@ -64,7 +64,12 @@ class PlatformPasskeyAuthClient implements PasskeyAuthClient {
       final response = await _platform.register(request);
       return response.toJsonString();
     } on PlatformException catch (e) {
-      throw _map(e);
+      _throwMapped(e);
+    } catch (e) {
+      // The contract promises SocialSignInFailed for any real failure. A
+      // non-PlatformException (e.g. fromJsonString choking on malformed options,
+      // or a package-internal error) must not propagate raw to the UI.
+      throw SocialSignInFailed('Passkey: $e');
     }
   }
 
@@ -76,7 +81,9 @@ class PlatformPasskeyAuthClient implements PasskeyAuthClient {
       final response = await _platform.authenticate(request);
       return response.toJsonString();
     } on PlatformException catch (e) {
-      throw _map(e);
+      _throwMapped(e);
+    } catch (e) {
+      throw SocialSignInFailed('Passkey: $e');
     }
   }
 
@@ -86,7 +93,7 @@ class PlatformPasskeyAuthClient implements PasskeyAuthClient {
   /// no error banner. Everything else (`no-credentials-available`,
   /// `domain-not-associated`, `deviceNotSupported`, timeouts) is a real failure
   /// the UI surfaces, so the user can be nudged toward registration.
-  Object _map(PlatformException e) => e.code == 'cancelled'
+  Never _throwMapped(PlatformException e) => throw (e.code == 'cancelled'
       ? const SocialSignInCancelled()
-      : SocialSignInFailed('Passkey: ${e.code}');
+      : SocialSignInFailed('Passkey: ${e.code}'));
 }

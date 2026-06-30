@@ -166,9 +166,20 @@ class GatewayRestApi implements ChatRestApi {
   /// as native/broker — passkeys can never diverge on how the outcome is read.
   Future<SocialOutcome> _passkeyFinish(
       String path, String state, String credentialJson) async {
+    final Object? credential;
+    try {
+      credential = jsonDecode(credentialJson);
+    } on FormatException catch (e) {
+      // The authenticator's own toJsonString is the producer, so a decode
+      // failure here is client-plumbing corruption, not a server rejection.
+      // Tag it (like the start path) so it doesn't read as a generic auth fail.
+      throw FormatException(
+          'passkey: finish received malformed credential JSON from the '
+          'authenticator: ${e.message}');
+    }
     final r = await _bare.post(path, data: {
       'state': state,
-      'credential': jsonDecode(credentialJson),
+      'credential': credential,
     });
     return _resolveOutcome(_map(r.data));
   }
