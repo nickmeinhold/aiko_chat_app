@@ -127,6 +127,45 @@ void main() {
     expect(find.byType(TextField), findsNothing); // no password fields
   });
 
+  // --- #35: the gateway picker is a PRE-LOGIN act -------------------------
+
+  testWidgets('login screen surfaces the active server + a Change affordance',
+      (tester) async {
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+
+    // The footer names the host (not the full URL) of the active gateway.
+    final host = Uri.parse(container.read(configProvider).httpBaseUrl).host;
+    expect(find.text('Server: $host'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Change server'), findsOneWidget);
+  });
+
+  testWidgets('a LOGGED-OUT user can reach the gateway picker (no /login bounce)',
+      (tester) async {
+    // RED-prove: without `if (loc == "/settings/gateway") return null` in the
+    // router redirect, a logged-out push to /settings/gateway is bounced back
+    // to /login and the picker's "Server" AppBar never appears. A user stranded
+    // on a gateway they can't sign into must be able to switch away.
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Change server'));
+    await tester.pumpAndSettle();
+
+    // Reached the picker (its AppBar title is "Server"), not bounced to login.
+    expect(find.widgetWithText(AppBar, 'Server'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Sign in'), findsNothing);
+    // And the picker's presets render (it functions while logged out).
+    expect(find.text('Production'), findsOneWidget);
+  });
+
   testWidgets('social sign-in → chat screen shows the channel', (tester) async {
     final rest = FakeRestApi();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());

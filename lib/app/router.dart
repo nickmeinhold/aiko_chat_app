@@ -85,6 +85,15 @@ final routerProvider = Provider<GoRouter>((ref) {
             : null;
       }
 
+      // The gateway picker is a PRE-LOGIN act (#35): choosing a server precedes
+      // having an account on it. A user stranded on a gateway they can't sign
+      // into (down, wrong URL, registration closed) must be able to switch away
+      // without reinstalling — so it stays reachable while logged out, ahead of
+      // both the login and claim-handle gates. switchGateway clears the
+      // pending-handle + tokens, so a switch from here lands cleanly on the new
+      // gateway's /login (via the loading → /splash → /login redirect).
+      if (loc == '/settings/gateway') return null;
+
       // Logged out: a pending social identity must claim a handle first;
       // otherwise the login screen.
       if (pendingHandle) return loc == '/claim-handle' ? null : '/claim-handle';
