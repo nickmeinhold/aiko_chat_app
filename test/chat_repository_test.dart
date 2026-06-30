@@ -335,6 +335,74 @@ void main() {
     });
   });
 
+  group('#16 — a fence stuck unreachable across reconnects escalates', () {
+    // One full reconnect cycle. The repo starts disconnected, so the FIRST cycle
+    // is a plain connect (matching the other reconnect tests); later cycles lead
+    // with a disconnect to bump the epoch and trigger a fresh run.
+    var connectedOnce = false;
+    Future<void> reconnectCycle() async {
+      if (connectedOnce) {
+        transport.emitConn(ConnectionState.disconnected);
+        await pump();
+      }
+      connectedOnce = true;
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+    }
+
+    test('benign for the first reconnects, then a LOUD sync fault once the gap '
+        'persists at the same watermark (threshold = 3)', () async {
+      transport.fences = {_chan: '01D'};
+      // No page staged for after='' → every reconnect pages an empty page while
+      // the fence (01D) is unreachable. The watermark never advances, so each
+      // reconnect stalls at the SAME cursor (null) — a persisting gap.
+
+      // The first two are benign one-off visibility-shrink gaps.
+      await reconnectCycle();
+      await reconnectCycle();
+      expect(spy.historyGaps, hasLength(2),
+          reason: 'below threshold — each is a benign gap, not yet a fault');
+      expect(spy.historySyncFaults, isEmpty,
+          reason: 'not stuck long enough to be a real gap');
+
+      // The third reconnect at the same unchanged watermark crosses the
+      // threshold → escalate to a loud sync fault.
+      await reconnectCycle();
+      expect(spy.historySyncFaults, hasLength(1),
+          reason: 'stuck at one watermark across 3 reconnects = genuinely '
+              'unreachable fence, not a transient shrink');
+      expect(spy.historySyncFaults.single.$4, 3,
+          reason: 'the streak count is surfaced for diagnosis');
+      expect(spy.historyGaps, hasLength(2),
+          reason: 'escalation REPLACES the benign signal on that reconnect');
+      expect(await cache.historyContiguousThrough(_chan), isNull,
+          reason: 'still never claim coverage we lack');
+    });
+
+    test('a gap whose stall watermark MOVES does not escalate — only an '
+        'UNCHANGED watermark counts toward the fault', () async {
+      transport.fences = {_chan: '01D'};
+      // Two reconnects stuck at the start (cursor=null) → streak(null)=2.
+      await reconnectCycle();
+      await reconnectCycle();
+      expect(spy.historySyncFaults, isEmpty);
+
+      // Third reconnect: a page is now reachable, so paging advances the stall
+      // cursor from null to 01A before hitting the (still-empty) next page. The
+      // stall watermark MOVED, so the streak restarts at 1 — NOT 3 — even though
+      // it is the third consecutive gap overall.
+      rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+      await reconnectCycle();
+
+      expect(spy.historySyncFaults, isEmpty,
+          reason: 'the stall watermark moved (null → 01A): a fresh gap, not a '
+              'stuck one — the streak is keyed on the watermark, not raw count');
+      expect(spy.historyGaps, hasLength(3),
+          reason: 'still a benign gap at the new cursor');
+    });
+  });
+
   group('outbox lifecycle', () {
     test('no-teleport — retry preserves createdAt + timeline position', () async {
       await repo.sendMessage(_chan, 'first');

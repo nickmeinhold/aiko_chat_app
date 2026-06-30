@@ -26,6 +26,17 @@ abstract class ChatTelemetry {
   void reconnectFailed(Object error, StackTrace stack) {}
   void historyGapBeforeFence(String channelId, String? cursor, String fence) {}
 
+  /// An empty-page-before-fence gap that has PERSISTED at the same watermark
+  /// across [streak] consecutive reconnects (#16). A single occurrence is a
+  /// benign visibility shrink (`historyGapBeforeFence`); a streak that survives
+  /// the threshold means the fence is genuinely unreachable — a real history gap
+  /// or a regressed per-viewer fence-visibility invariant (aiko_chat_gateway#22).
+  /// LOUD by contract: restores the failure visibility #15's benign downgrade
+  /// removed for true gaps. Production should escalate (surface "history may be
+  /// incomplete" / force a full resync), not just log.
+  void historySyncFault(
+      String channelId, String? cursor, String fence, int streak) {}
+
   /// An inbound (W3) cache write threw. Surfaced so a failed upsert is OWNED
   /// (observed) rather than leaking as an unhandled async error from the stream
   /// handler.
@@ -387,6 +398,15 @@ class ChatRepository {
     await _awaitAcksOrTimeout(waiting);
   }
 
+  /// #16 — per-channel streak of empty-page-before-fence gaps at an UNCHANGED
+  /// watermark. Survives reconnects (the repo outlives them), so a gap that
+  /// keeps recurring at the SAME stall cursor across reconnects is detectable.
+  /// Reset when the channel fully syncs (gap healed) or the stall cursor moves
+  /// (visibility still settling — benign). Reaching [_historyGapFaultThreshold]
+  /// escalates a benign gap to a loud sync fault.
+  final Map<String, ({String? cursor, int count})> _historyGapStreaks = {};
+  static const int _historyGapFaultThreshold = 3;
+
   Future<void> _fetchDeltaHistory(
       int epoch, String channelId, String fence) async {
     // The loop + progress guards below compare ids lexicographically; that is
@@ -426,7 +446,24 @@ class ChatRepository {
         // (claude-tasks #16). Not advancing the watermark means we never claim
         // coverage we don't have — a genuine gap re-attempts rather than being
         // masked (it is now telemetried, not asserted).
-        _telemetry.historyGapBeforeFence(channelId, cursor, fence);
+        // #16 — distinguish a benign one-off visibility shrink from a GENUINELY
+        // unreachable fence (real history loss, or a regressed per-viewer fence
+        // invariant). Count consecutive gaps at the SAME stall cursor: a fresh
+        // cursor (visibility still settling) resets the streak via the equality
+        // check; a clean sync resets it at loop completion. A streak that
+        // survives the threshold across reconnects is no longer "expected".
+        final prev = _historyGapStreaks[channelId];
+        final streak =
+            (prev != null && prev.cursor == cursor) ? prev.count + 1 : 1;
+        _historyGapStreaks[channelId] = (cursor: cursor, count: streak);
+        if (streak >= _historyGapFaultThreshold) {
+          // ESCALATE: the gap is stuck at one watermark across N reconnects, so
+          // it is not a transient shrink. Surface it LOUD (restores the failure
+          // visibility #15's benign downgrade removed for true gaps).
+          _telemetry.historySyncFault(channelId, cursor, fence, streak);
+        } else {
+          _telemetry.historyGapBeforeFence(channelId, cursor, fence);
+        }
         return;
       }
       for (final m in page.messages) {
@@ -453,6 +490,9 @@ class ChatRepository {
       cursor = newCursor;
     }
     if (_aborted(epoch)) return;
+    // Synced clean through the fence → any prior empty-page-before-fence streak
+    // for this channel has healed; clear it so a future gap counts from 1 (#16).
+    _historyGapStreaks.remove(channelId);
     // History now covers everything ≤ fence; live owns everything > fence. The
     // pager is the SINGLE writer of this watermark (round-4 invariant).
     await _cache.advanceHistoryContiguous(channelId, fence);
