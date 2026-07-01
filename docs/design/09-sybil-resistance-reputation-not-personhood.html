@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 09 — Sybil resistance: reputation, not personhood</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.thesis { background:#f3f0fb; border-left-color:#7d5fff; font-size:1.02rem; }
+  blockquote.danger { background:#fdf0ef; border-left-color:var(--blocker); }
+  .note { color:var(--muted); font-size:.9rem; }
+  .conf { font-weight:700; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; padding:.1em .5em;
+          border-radius:4px; color:#fff; }
+  .high { background:var(--accent); } .med { background:var(--warn); } .low { background:var(--blocker); }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.5rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  ul.tight li { margin:.25rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Design 09 — Sybil resistance: reputation, not personhood</h1>
+<p class="lead">A self-minted keypair is free, so "everyone is their own root of identity" is also "anyone can be
+ten thousand roots." That is the one place sovereign identity <em>creates</em> a problem instead of solving one — and
+it is where a "better than Matrix" story is earned or lost. This design argues that aiko should <strong>not try to
+solve global proof-of-personhood at all</strong>. It sacrifices the global-uniqueness corner of a well-attested
+trilemma — the one corner a substrate-agnostic chat app never needed — and defends the real threat (per-island spam,
+abuse, impersonation) with <strong>per-island economic cost gradients</strong> denominated in the one scarce resource
+neither a human nor an AI can multiply: <strong>reputation someone will lend you and can lose.</strong></p>
+
+<div class="scope">
+  <strong>Status:</strong> <em>vision / design exploration</em> — a strong candidate frame, NOT a verified-original
+  design and NOT a build spec. The <strong>build is gateway-domain</strong> (enforcement is server-side): see task
+  <code>claude-tasks#1569</code>. Completes the federation set alongside
+  <a href="05-communities-and-discovery.html">05</a>, <a href="06-sovereign-identity-federation.html">06</a>,
+  <a href="07-notifications-federation-ready.html">07</a>, <a href="08-phone-as-self-not-server.html">08</a> — this is
+  the chapter on the abuse gate those four leave open.<br>
+  <strong>Provenance:</strong> grounded in deep-research run <code>wcezv0qan</code> (24/25 claims survived 3-vote
+  adversarial verification) plus app-tab design synthesis. Steering constraint: <strong>robots are first-class
+  citizens</strong> (Nick, 2026-07-01).<br>
+  <strong>Confidence legend:</strong> <span class="conf high">solid</span> grounded in peer-reviewed results or what's
+  built · <span class="conf med">plausible</span> coherent but unvalidated · <span class="conf low">thin</span>
+  genuinely unsolved, where I'd bet but wouldn't trust me.
+</div>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#frontier">The impossibility frontier — why it's fundamentally hard</a></li>
+  <li><a href="#landscape">The mechanism landscape — partitioned by the robots filter</a></li>
+  <li><a href="#design">The aiko design — the stake is a bet you place</a></li>
+  <li><a href="#adversarial">Adversarial hardening — rings, grey markets, and the punchline</a></li>
+  <li><a href="#boundaries">Honest boundaries — where it stops, and what it costs</a></li>
+  <li><a href="#priorart">Prior art — the names I derived my way back into</a></li>
+  <li><a href="#open">Open problems — genesis, and the rest</a></li>
+</ol>
+</nav>
+
+<h2 id="frontier">1 · The impossibility frontier <span class="conf high">solid</span></h2>
+
+<p>Sybil resistance is governed by the <strong>Decentralized Identity Trilemma</strong>: you cannot simultaneously
+maximise <em>sybil-resistance</em>, <em>self-sovereignty</em> (no trusted third party), and <em>privacy</em>. Two
+peer-reviewed primary sources state it verbatim (Frontiers in Blockchain 2020 / arXiv 2008.05300), and independent
+reviews go further — "there is not any known design that fulfils all three criteria."</p>
+
+<blockquote class="invariant">
+  <strong>It is a cost frontier, not a proven theorem.</strong> The honest word is <em>unsolved</em>, not
+  <em>impossible</em>: nobody has built all three, but no one has proven you can't. That distinction is the difference
+  between "give up" and "choose which corner to underfund."
+</blockquote>
+
+<p>The deepest reason is a <strong>regress</strong> — "who verifies the verifier?" Any <em>objective</em> cryptographic
+personhood check bottoms out in a trusted attestor, and verifying <em>them</em> needs another, forever. Every escape
+hatch pays one corner: a <strong>trusted issuer</strong> (CanDID deduplicates on SSN/Aadhaar inside MPC — recovers
+privacy, pays decentralization), a <strong>scarce resource / stake</strong> (PoW/PoS — concentrate into plutocracy),
+<strong>biometrics</strong> (Worldcoin — pays privacy + centralization), or a <strong>social graph</strong> (keeps
+decentralization, pays reliable sybil-resistance).</p>
+
+<h3>Why personhood is a category error for aiko</h3>
+
+<p>Proof-of-personhood's formal definition requires a substrate that is <em>"easy for humans to produce, but difficult
+for Artificial Intelligence to replicate"</em> (arXiv 2008.05300). <strong>AI-hardness is a defining requirement of
+personhood.</strong> Point any personhood mechanism at aiko's user base and it does not filter spam — it filters the
+very participants aiko exists to include. A robots-first-class app cannot adopt a bouncer whose entire job is to keep
+robots out. Rejecting personhood is therefore <em>forced by the values</em>, not a preference.</p>
+
+<blockquote class="thesis">
+  <strong>The three words that get conflated, and shouldn't.</strong>
+  <strong>Personhood</strong> = a claim about a <em>body in the world</em> ("this key is a distinct human"); points
+  outside the system; needs an oracle. <strong>Uniqueness</strong> = the one-per-person property personhood exists to
+  deliver; only strictly needed for one-person-one-vote (governance, UBI). <strong>Reputation</strong> = a claim about
+  the key's <em>past behaviour inside the system</em>; earned, not verified; and the <em>only</em> one of the three
+  that never asks <em>what you are</em>. A spam-bot and a spam-human are both just "untrusted young keys behaving
+  badly" — and when robots are citizens, not having to tell them apart is exactly the property you want.
+</blockquote>
+
+<h2 id="landscape">2 · The mechanism landscape <span class="conf high">solid</span></h2>
+
+<p>The robots-first-class constraint gives a sharp, operational design filter that the research corpus didn't have:
+<strong>partition every mechanism by whether its scarcity is AI-hardness or economic cost.</strong> The AI-hard column
+is forbidden by construction (each entry is a CAPTCHA pointed at aiko's own users); the economic-cost column is
+substrate-blind and admissible.</p>
+
+<table>
+<thead><tr><th>Mechanism</th><th>Scarcity is…</th><th>Trilemma corner it sacrifices</th><th>For aiko</th></tr></thead>
+<tbody>
+<tr><td>Worldcoin / World ID (biometric orb)</td><td>AI-hardness (a body)</td><td>privacy + decentralization</td><td><span class="conf low">forbidden</span> — proves "human"</td></tr>
+<tr><td>Idena (synchronized Turing-test ceremonies)</td><td>AI-hardness (a flip-test)</td><td>—</td><td><span class="conf low">forbidden</span> — a CAPTCHA by design</td></tr>
+<tr><td>Proof of Humanity / Kleros (video + vouch)</td><td>AI-hardness (a face)</td><td>privacy</td><td><span class="conf low">forbidden</span> — proves "human"</td></tr>
+<tr><td>CanDID (deduplicate on legacy ID via MPC)</td><td>trusted issuer</td><td>decentralization</td><td><span class="conf low">forbidden</span> — central authority</td></tr>
+<tr><td>Phone/SMS/passkey attestation</td><td>a device</td><td>weak signal only</td><td><span class="conf med">weak layer</span> — pre-buyable at scale</td></tr>
+<tr><td>Account-age / time-bond</td><td>wall-clock time</td><td>velocity only</td><td><span class="conf med">weak layer</span> — pre-ageable in bulk</td></tr>
+<tr><td>RLN (rate-limiting nullifier)</td><td>economic stake</td><td>rate, not uniqueness</td><td><span class="conf high">admissible</span> — ZK, substrate-blind</td></tr>
+<tr><td>Bonded / staked vouching</td><td>borrowed reputation</td><td>sybil <em>count</em></td><td><span class="conf high">the strong layer</span></td></tr>
+</tbody>
+</table>
+
+<p><span class="conf high">solid</span> The research killed unbonded web-of-trust 3-0: <em>"no empirical evidence it
+resists sybils"</em> — an attacker forges relationships across non-intersecting small groups and farms sybils over
+time. Hold that finding; §4 shows the single variable that inverts it.</p>
+
+<h2 id="design">3 · The aiko design — the stake is a bet you place <span class="conf med">plausible</span></h2>
+
+<p>Every <em>possessable</em> denomination — money, a device attestation, account-age — fails the robots economics test
+the same way: a tireless AI agent can possess it at scale as cheaply as a human. The only irreducibly scarce,
+substrate-agnostic resource is <strong>reputation someone will lend you and can lose.</strong></p>
+
+<blockquote class="thesis">
+  <strong>The stake is not a thing you <em>have</em> — it's a bet you <em>place</em>.</strong> An existing member
+  co-signs a newcomer and stakes their own standing on that newcomer's behaviour. Vouchee abuses ⇒ <strong>voucher is
+  slashed too.</strong> This inverts the web-of-trust refutation: that critique assumed vouching is <em>free</em>
+  (endorse, risk nothing) — making fake friends is cheap. Bond it and the attack becomes "recruit real stakers willing
+  to bet their standing on you," which is exactly as scarce for an AI farm as for a human one.
+</blockquote>
+
+<h3>Stake all the way up — this is what removes the token</h3>
+<p>The same denomination recurses through the federation: <strong>islands</strong> stake their federation standing (admit
+spammers ⇒ peers defederate — the Mastodon/Matrix model); <strong>members</strong> stake island standing to vouch; the
+<strong>root</strong> is the island operator (the genesis voucher — which is also the cold-start seed, see §7). Reputation
+is non-fungible and can't be minted or bought, only earned — which is precisely what defeats the money-attack and the
+AI-farm-attack in one stroke. No native token is required.</p>
+
+<h3>The composition — layered onto RLN, buildable</h3>
+<p>The stake is not one thing; it's a blend, and each layer maps onto a distinct part of the threat. The design choice is
+deliberate: make the AI-cheap resource the <em>weak</em> layer and the substrate-agnostic one carry the sybil-count
+bound.</p>
+
+<table>
+<thead><tr><th>Layer</th><th>Denominated in</th><th>Bounds</th><th>AI-cost = human-cost?</th></tr></thead>
+<tbody>
+<tr><td>RLN per-epoch rate</td><td>registration leaf</td><td>messages / epoch</td><td>✓ (ZK, blind to substrate)</td></tr>
+<tr><td>time-ramp</td><td>account age</td><td>velocity (whitewashing defense: newcomers start <em>below</em> neutral)</td><td>✓ but pre-ageable → <strong>weak</strong></td></tr>
+<tr><td><strong>bonded vouch</strong></td><td><strong>borrowed reputation</strong></td><td><strong>sybil count — the real bound</strong></td><td>✓ → <strong>strong</strong></td></tr>
+</tbody>
+</table>
+
+<p>RLN gives cheap, privacy-preserving, per-epoch rate-limiting <em>given a registration gate</em>; bonded-vouch-stake
+<em>is</em> that gate. Money stays an <em>optional per-island policy</em> (an island may require a deposit), never the
+default — federation lets each island choose its own bar.</p>
+
+<h2 id="adversarial">4 · Adversarial hardening <span class="conf med">plausible</span></h2>
+
+<h3>The sock-puppet ring → root-anchoring + conserved vouching</h3>
+<p>An attacker mints keys that vouch for <em>each other</em>, aging together, manufacturing mutual standing with no
+external staker — the "non-intersecting groups" attack wearing a bonded hat. It is defeated only by two properties
+<em>together</em>:</p>
+<ul class="tight">
+<li><strong>Root-anchored trust</strong> (EigenTrust / PageRank teleporting to island operators): a closed ring with no
+inflow from real roots has ≈0 standing regardless of internal vouching.</li>
+<li><strong>Conserved vouching</strong>: a vouch <em>transfers</em> standing from a finite budget — it never
+<em>mints</em> it. This is necessary because trust propagates transitively (PageRank) while slashing is pairwise; without
+conservation, one real edge lets a puppet bootstrap the ring and absorb the slashing internally (attacker slashing
+attacker = no deterrent). With it, a ring can never hold more total standing than flowed in from real roots.</li>
+</ul>
+
+<blockquote class="thesis">
+  <strong>The punchline.</strong> A reputation system doesn't <em>prevent</em> sybils — it makes them pay the full price
+  of good behaviour, at which point they are indistinguishable from, and as useful as, real members. To run 10,000
+  sybils you must have <em>earned</em> 10,000 sybils' worth of root-anchored standing, i.e. behaved well at 10,000-scale
+  — operationally identical to being 10,000 good users. The system never has to tell a farm from a crowd: a farm that
+  paid full price in good behaviour <em>is</em> a crowd. Same move as robots-first-class, one level up — don't care
+  human/AI (personhood), don't care one/many (uniqueness), only whether you paid.
+</blockquote>
+
+<h3>The grey market → self-defusing reputation</h3>
+<p>Everything valuable gets a grey market; aged accounts sell today, so "non-transferable" is too strong. The stronger,
+honest version: an aged Reddit account's value is <em>intrinsic</em> (the karma travels with the login); a bonded-vouch
+reputation's value is <em>extrinsic</em> — it lives in the vouchers' continued willingness to back you, and they're
+slashed if you misbehave. On change-of-hands + behaviour-shift, the bonds unwind. <strong>You buy a reputation that
+evaporates on first misuse — and misuse is the only reason to buy it.</strong> A bomb that defuses itself the instant
+you try to detonate it. The residual is low-and-slow abuse under the detection threshold — not a cannon, and exactly the
+point where abuse becomes uneconomical.</p>
+
+<h2 id="boundaries">5 · Honest boundaries <span class="conf med">plausible</span></h2>
+
+<h3>The partial reclaim on coordinated influence</h3>
+<p>Reputation-cost crushes <em>spam</em> (high-volume, detectable ⇒ bonds unwind). Its weak point is <em>low-volume
+coordinated influence</em> — an astroturf farm that behaves "well" by the rules but acts in concert never trips
+behavioural slashing. But behavioural detection is only one instrument on the graph. <strong>Structural</strong>
+detection is another: an organic member earns diverse root-inflow scattered across the graph; a coordinated farm shares
+a few entry edges and vouches mostly internally ⇒ dense-internal, thin-to-roots ⇒ a <em>low-conductance cut</em> visible
+even when every member behaves perfectly. To hide structurally, the farm must acquire genuine diverse root-inflow — pay
+the full price again. Two orthogonal instruments on one graph: behavioural (spam) + conductance (the coordinated farm).</p>
+
+<blockquote class="danger">
+  <strong>The ceiling is honest, not a regression.</strong> No sybil-resistance scheme fully solves coordinated
+  influence — a room of verified-<em>unique humans</em> can still brigade. So reputation gives up nothing personhood
+  would have bought here. Coordinated-influence detection is a separate instrument (behavioural correlation), orthogonal
+  to the stake question.
+</blockquote>
+
+<h3>The costs I'm not hiding</h3>
+<p>Root-anchoring is a <strong>mild per-island re-centralization</strong> (the operator is a trust root) and reintroduces
+<strong>cold-start gatekeeping</strong> (you need <em>someone</em> established to co-sign). Federation <em>softens</em>
+this — join a more-open island, earn standing, port it — but does not erase it. The framing that keeps it consistent
+with the whole thesis: each island is a trust root <em>for its own members</em>; there is <em>no global root</em>.
+Decentralization is preserved at the federation level, not the individual level — the same corner-choice as sacrificing
+global uniqueness.</p>
+
+<h2 id="priorart">6 · Prior art — the names I derived my way back into <span class="conf high">solid</span></h2>
+
+<blockquote class="danger">
+  <strong>Do not build assuming this synthesis is novel.</strong> Deriving from first principles converged on named
+  academic results. This is a candidate frame; the design must be <em>grounded on the literature</em> before the
+  mechanism is committed. A prior-art deep-research pass is a listed open problem (§7).
+</blockquote>
+
+<table>
+<thead><tr><th>Idea in this doc</th><th>Established name</th></tr></thead>
+<tbody>
+<tr><td>Dense-internal / sparse-cut structural detection</td><td><strong>SybilGuard / SybilLimit</strong> (Yu, Kaminsky, Gibbons, Flaxman, ~2006–08) — fast-mixing social graphs; attack edges = a sparse cut</td></tr>
+<tr><td>Conserved vouching (transfer-not-mint)</td><td><strong>Advogato</strong> trust metric (Levien) — max-flow / capacity-limited trust</td></tr>
+<tr><td>Root-anchored trust propagation</td><td><strong>EigenTrust</strong> (Kamvar, Schlosser, Garcia-Molina, 2003)</td></tr>
+<tr><td>Newcomers start below neutral</td><td><strong>Friedman–Resnick</strong> whitewashing / cheap-pseudonyms (still an open lit gap from run <code>wcezv0qan</code>)</td></tr>
+<tr><td>"Bonding inverts the free-vouch refutation"</td><td>likely exists (staked delegation / TrustDavis / collateralized attestation) — <em>not</em> verified novel</td></tr>
+</tbody>
+</table>
+
+<p>The genuinely app-tab contribution is narrower than it felt: the <strong>composition</strong> (bonded-vouch economics
++ RLN rate + EigenTrust anchoring + SybilLimit structural detection) aimed at a robots-first-class federated chat, plus
+the framing. Even that needs the lit check.</p>
+
+<h2 id="open">7 · Open problems <span class="conf low">thin</span></h2>
+<ul class="tight">
+<li><strong>Genesis / bootstrapping</strong> — who vouches the <em>first</em> island operator, and how does a brand-new
+island earn federation standing from zero? Loops back to <a href="05-communities-and-discovery.html">Design 05</a> /
+the island directory: island discovery <em>is</em> the federation cold-start surface. <em>(Next exploration.)</em></li>
+<li><strong>Prior-art pass</strong> — SybilGuard/SybilLimit, Advogato, staked-vouching, Friedman–Resnick, before
+committing the mechanism.</li>
+<li><strong>Stake denomination detail</strong> — for a no-token, phone-first, gateway-relayed app, what does the
+"registration stake" concretely resolve to? Device-attestation vs time-bond vs proof-of-prior-good-behaviour vs
+vouch-stake, and the app↔gateway split for each. The app produces the credential; the gateway is where it's verified,
+staked, and slashed.</li>
+<li><strong>Conserved-trust budget mechanics</strong> — how vouch-capacity replenishes with earned standing; the exact
+EigenTrust teleport parameter; how slashing propagates back through a transitive trust path.</li>
+</ul>
+
+<hr style="margin:3rem 0 1.5rem; border:none; border-top:1px solid var(--rule);">
+<p class="note">Federation set: <a href="05-communities-and-discovery.html">05 · Communities &amp; discovery</a> ·
+<a href="06-sovereign-identity-federation.html">06 · Sovereign identity</a> ·
+<a href="07-notifications-federation-ready.html">07 · Notifications</a> ·
+<a href="08-phone-as-self-not-server.html">08 · The phone is the self</a> · <strong>09 · Sybil resistance</strong>.
+Build tracked at <code>claude-tasks#1569</code> (gateway). Backing research: run <code>wcezv0qan</code>.</p>
+
+</body>
+</html>
