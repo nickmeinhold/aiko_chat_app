@@ -47,6 +47,17 @@ abstract class ChatTelemetry {
   /// (observed) rather than leaking as an unhandled async error from the stream
   /// handler.
   void inboundWriteFailed(Object error, StackTrace stack) {}
+
+  /// Inbound backpressure engaged/released (#9 — the named-tradeoff threshold
+  /// deferred from #33). [engaged] is true when the inbound FIFO crossed the
+  /// high-water mark and the three inbound subscriptions were PAUSED; false when
+  /// it drained to the low-water mark and resumed. [depth] is the in-flight unit
+  /// count at the transition. A sustained engaged state is the canary that
+  /// inbound throughput has outrun the cache writer — exactly the condition #33
+  /// judged acceptable-for-now and deferred. Production should treat a frequent
+  /// or sticky engagement as a signal to investigate (a flood, a wedged writer),
+  /// not just log it — see [LoggingChatTelemetry].
+  void inboundBackpressure({required bool engaged, required int depth}) {}
 }
 
 class _NoopTelemetry extends ChatTelemetry {
@@ -64,6 +75,14 @@ class ChatRepository {
   final ChatTelemetry _telemetry;
   final Duration _ackTimeout;
   final Duration _disposeDrainTimeout;
+
+  /// Inbound backpressure water marks (#9). At [_inboundHighWater] in-flight
+  /// units the three inbound subscriptions PAUSE; they resume once drained to
+  /// [_inboundLowWater]. The gap is hysteresis — it stops pause/resume thrash
+  /// when the depth hovers at the threshold.
+  final int _inboundHighWater;
+  final int _inboundLowWater;
+
   final String Function() _newTempId;
 
   ChatRepository({
@@ -75,8 +94,12 @@ class ChatRepository {
     ChatTelemetry telemetry = const _NoopTelemetry(),
     Duration ackTimeout = const Duration(seconds: 3),
     Duration disposeDrainTimeout = const Duration(seconds: 5),
+    int inboundHighWater = 256,
+    int inboundLowWater = 64,
     required String Function() newTempId,
-  })  : _cache = cache,
+  })  : assert(inboundHighWater > inboundLowWater && inboundLowWater >= 0,
+            'low-water must be below high-water (hysteresis), both non-negative'),
+        _cache = cache,
         _transport = transport,
         _rest = rest,
         _me = me,
@@ -84,6 +107,8 @@ class ChatRepository {
         _telemetry = telemetry,
         _ackTimeout = ackTimeout,
         _disposeDrainTimeout = disposeDrainTimeout,
+        _inboundHighWater = inboundHighWater,
+        _inboundLowWater = inboundLowWater,
         _newTempId = newTempId;
 
   final List<StreamSubscription<dynamic>> _subs = [];
@@ -128,11 +153,18 @@ class ChatRepository {
     // guarded; its own writes go through the cache via drain/history), not a
     // simple inbound mutation, and it must be able to bump the epoch to cancel
     // in-flight work without waiting behind the queue.
-    _subs.add(_transport.acks.listen((a) => _enqueueInbound(() => _onAck(a)))); // W2
-    _subs.add(_transport.messages
-        .listen((m) => _enqueueInbound(() => _onMessage(m)))); // W3
-    _subs.add(_transport.errors
-        .listen((e) => _enqueueInbound(() => _onError(e)))); // W4
+    // The three inbound subscriptions are held separately (_inboundSubs) so the
+    // backpressure valve can pause/resume exactly them — and NEVER connectionState
+    // (the reconnect coordinator must keep flowing to bump the epoch even while
+    // inbound is paused). They are also in _subs so dispose() cancels everything.
+    final ackSub =
+        _transport.acks.listen((a) => _enqueueInbound(() => _onAck(a))); // W2
+    final msgSub = _transport.messages
+        .listen((m) => _enqueueInbound(() => _onMessage(m))); // W3
+    final errSub = _transport.errors
+        .listen((e) => _enqueueInbound(() => _onError(e))); // W4
+    _inboundSubs.addAll([ackSub, msgSub, errSub]);
+    _subs.addAll([ackSub, msgSub, errSub]);
     _subs.add(_transport.connectionState.listen(_onConnState)); // reconnect
   }
 
@@ -147,7 +179,20 @@ class ChatRepository {
   /// completion before the next starts.
   Future<void> _inboundTail = Future<void>.value();
 
+  /// The three inbound subscriptions (ack/message/error) — the only ones the
+  /// backpressure valve pauses. connectionState is deliberately excluded.
+  final List<StreamSubscription<dynamic>> _inboundSubs = [];
+
+  /// In-flight inbound units: incremented at enqueue (when a transport event is
+  /// delivered), decremented when that unit settles. The queue's depth.
+  int _inboundDepth = 0;
+
+  /// Whether the inbound subscriptions are currently paused for backpressure.
+  bool _inboundPaused = false;
+
   void _enqueueInbound(Future<void> Function() unit) {
+    _inboundDepth++;
+    _maybePauseInbound();
     _inboundTail = _inboundTail.then((_) {
       if (_disposed) return null; // drop queued work for a torn-down session
       return unit();
@@ -170,7 +215,44 @@ class ChatRepository {
       } else {
         _telemetry.inboundWriteFailed(e, st);
       }
+    }).whenComplete(() {
+      // Decrement AFTER the unit settles (success or observed failure), then let
+      // a drained queue release backpressure. `whenComplete` runs for both paths
+      // because `catchError` already returns normally, so the count can never
+      // leak. The next enqueued unit chains onto THIS future, so the resume
+      // decision is made on the freshest depth before more work starts.
+      _inboundDepth--;
+      _maybeResumeInbound();
     });
+  }
+
+  /// Engage backpressure: at/above the high-water mark, pause the three inbound
+  /// subscriptions so the slowdown propagates toward the transport instead of
+  /// piling unbounded `.then` units (and their captured events) onto the FIFO.
+  /// Idempotent via [_inboundPaused]; a no-op once disposed (teardown cancels the
+  /// subs, and pausing a cancelled subscription is meaningless).
+  void _maybePauseInbound() {
+    if (_inboundPaused || _disposed) return;
+    if (_inboundDepth < _inboundHighWater) return;
+    _inboundPaused = true;
+    for (final s in _inboundSubs) {
+      s.pause();
+    }
+    _telemetry.inboundBackpressure(engaged: true, depth: _inboundDepth);
+  }
+
+  /// Release backpressure: once the queue has drained to the low-water mark,
+  /// resume the inbound subscriptions (their buffered events deliver and re-enter
+  /// the FIFO, idempotently). Skipped during teardown — dispose() cancels the
+  /// subs, and resuming a cancelled subscription would throw.
+  void _maybeResumeInbound() {
+    if (!_inboundPaused || _disposed) return;
+    if (_inboundDepth > _inboundLowWater) return;
+    _inboundPaused = false;
+    for (final s in _inboundSubs) {
+      s.resume();
+    }
+    _telemetry.inboundBackpressure(engaged: false, depth: _inboundDepth);
   }
 
   Future<void> dispose() async {
@@ -181,6 +263,9 @@ class ChatRepository {
       await s.cancel();
     }
     _subs.clear();
+    // The inbound subs were cancelled via _subs above; drop our pause/resume
+    // refs so the valve never touches a dead subscription during the drain.
+    _inboundSubs.clear();
     // Drain the inbound FIFO so a unit that was mid-flight when dispose() began
     // finishes (its writes are guarded benign by _disposed) before we return —
     // no inbound mutation outlives dispose(). Queued-but-unstarted units are

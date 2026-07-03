@@ -66,4 +66,18 @@ class LoggingChatTelemetry extends ChatTelemetry {
         error: error,
         stackTrace: stack,
       );
+
+  @override
+  void inboundBackpressure({required bool engaged, required int depth}) =>
+      // #9: engaging is WARNING (the deferred-#33 threshold was hit — inbound
+      // outran the writer); releasing is INFO (recovered). Neither is an error
+      // on its own, but a frequent/sticky engage warrants investigation.
+      developer.log(
+        engaged
+            ? 'inbound backpressure ENGAGED at depth=$depth (inbound paused — '
+                'throughput outran the cache writer)'
+            : 'inbound backpressure released at depth=$depth (inbound resumed)',
+        name: _name,
+        level: engaged ? 900 : 800,
+      );
 }
