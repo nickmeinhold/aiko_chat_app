@@ -163,7 +163,7 @@ class LoginScreen extends ConsumerWidget {
                 if (auth.hasError) ...[
                   const SizedBox(height: 16),
                   Text(
-                    'Something went wrong. Please try again.',
+                    _authErrorText(auth.error, gatewayHost),
                     style: TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 ],
@@ -205,4 +205,36 @@ class LoginScreen extends ConsumerWidget {
         'discord' => Icons.forum_outlined,
         _ => Icons.login,
       };
+
+  /// Human-readable, actionable text for an auth failure. The controller records
+  /// the thrown exception verbatim (`AsyncValue.guard`), so the specific reason
+  /// is available here — surface it instead of a blanket "something went wrong".
+  ///
+  /// Passkey failures arrive as `SocialSignInFailed('Passkey: <code>')` (see
+  /// [PlatformPasskeyAuthClient]); the documented codes get tailored guidance.
+  /// Anything unmapped falls through to its RAW text so a new failure mode is
+  /// never invisible — the generic message is only the last resort for an empty
+  /// error, which is what made this screen blind in the first place.
+  static String _authErrorText(Object? error, String host) {
+    final raw =
+        error is SocialSignInFailed ? error.message : (error?.toString() ?? '');
+    final lower = raw.toLowerCase();
+    if (raw.contains('no-credentials-available')) {
+      return 'No passkey found on this device. '
+          'Tap "New here? Create a passkey" below to make one.';
+    }
+    if (raw.contains('domain-not-associated')) {
+      return "Passkeys aren't linked to $host yet, so sign-in can't complete. "
+          "(The server's domain association is still pending.)";
+    }
+    if (raw.contains('deviceNotSupported') || lower.contains('not supported')) {
+      return "This device doesn't support passkeys.";
+    }
+    if (lower.contains('timeout') || lower.contains('timed out')) {
+      return 'The request timed out. Please try again.';
+    }
+    return raw.isEmpty
+        ? 'Something went wrong. Please try again.'
+        : 'Sign-in failed: $raw';
+  }
 }
