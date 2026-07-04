@@ -60,7 +60,13 @@ final knownGatewaysProvider =
 
 class KnownGatewaysNotifier extends Notifier<List<ServerEntry>> {
   @override
-  List<ServerEntry> build() => _merge(const []);
+  List<ServerEntry> build() =>
+      // Load the persisted ever-seen set on FIRST build — not just after a
+      // discovery this session. This is the whole point of persistence: if the
+      // current bootstrap gateway is DOWN (the SPOF case this feature exists to
+      // solve), discovery throws and remember() never fires, so a previously-seen
+      // island must still seed the picker from disk to be reachable at all.
+      _merge(ref.watch(gatewaySeedStoreProvider).load());
 
   /// Union [discovered] into the known set + persist, then publish the merged
   /// list. Idempotent: re-remembering already-known islands is a no-op write of

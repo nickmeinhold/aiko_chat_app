@@ -24,6 +24,7 @@ import 'package:aiko_chat_app/app/config.dart';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
 import 'package:aiko_chat_app/features/settings/data/gateway_directory_client.dart';
+import 'package:aiko_chat_app/features/settings/data/gateway_seed_store.dart';
 import 'package:aiko_chat_app/features/settings/domain/server_entry.dart';
 import 'package:aiko_chat_app/features/settings/presentation/gateway_picker_screen.dart';
 import 'package:dio/dio.dart';
@@ -202,6 +203,31 @@ void main() {
       addTearDown(container.dispose);
       await expectLater(
           container.read(gatewayDirectoryProvider.future), throwsException);
+    });
+
+    test('a persisted island seeds the known set on COLD load (no discovery) — '
+        'survives a down bootstrap gateway', () async {
+      // Previous session persisted an island; THIS session the gateway is down,
+      // so discovery never fires. The persisted island must STILL be reachable
+      // from disk — otherwise persistence is useless in the exact SPOF case.
+      SharedPreferences.setMockInitialValues({
+        gatewayBaseUrlPrefKey: 'https://chat.imagineering.cc',
+        kKnownGatewaysPrefKey: jsonEncode([
+          {'base_url': 'https://chat.seen-before.example', 'display_name': 'Seen Before'},
+        ]),
+      });
+      final prefs = await SharedPreferences.getInstance();
+      final container = ProviderContainer(overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+      ]);
+      addTearDown(container.dispose);
+
+      // Read the known set directly — NO gatewayDirectoryProvider touched.
+      expect(
+          container
+              .read(knownGatewaysProvider)
+              .map((e) => _norm(e.httpBaseUrl)),
+          contains(_norm('https://chat.seen-before.example')));
     });
 
     test('a freshly-discovered island is remembered into the known set + '
