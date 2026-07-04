@@ -1,16 +1,21 @@
 // Gateway/island directory (#36): the live-directory source that swaps the
-// hardcoded seed list in the picker.
+// hardcoded seed list in the picker, now WITHOUT a single point of failure.
 //
 // What these pin:
 //  - tolerant parsing — the wire casing isn't pinned (Python/SQLite gateway), so
-//    snake_case AND camelCase resolve; a urlless entry is skipped, not crashed;
-//  - the unset-URL short-circuit — no endpoint published yet ⇒ [] with NO
-//    network (the current launch state: seed-only);
-//  - merge/dedup — directory wins over seed on the same normalized URL and comes
-//    first; seed-only entries (Local/emulator) survive;
+//    snake_case AND camelCase resolve; a urlless/junk entry is skipped, not
+//    crashed (the directory is attacker-influenceable);
+//  - NO discovery SPOF — the provider discovers from the CURRENTLY-SELECTED
+//    gateway (`<base>/v1/gateways`), not a fixed origin, and re-composes that URL
+//    from whatever gateway is active;
+//  - merge/dedup — directory wins over the known seed set on the same normalized
+//    URL and comes first; seed-only entries (Local/emulator) survive;
 //  - graceful fallback — a fetch error surfaces as AsyncError so the picker shows
-//    the seed presets;
+//    the known set;
 //  - the picker renders directory entries when the directory has them.
+//
+// The GROWING persisted seed set (discovered islands remembered across launches)
+// is pinned separately in gateway_seed_store_test.dart.
 
 import 'dart:convert';
 import 'dart:typed_data';
@@ -77,14 +82,7 @@ void main() {
     });
   });
 
-  group('GatewayDirectoryClient.fetch', () {
-    test('an unset URL short-circuits to [] with NO network', () async {
-      // A Dio whose adapter would EXPLODE if touched — proves no request fires.
-      final dio = Dio()..httpClientAdapter = _ExplodingAdapter();
-      final client = GatewayDirectoryClient(dio: dio, url: '');
-      expect(await client.fetch(), isEmpty);
-    });
-
+  group('GatewayDirectoryClient.fetchFrom', () {
     test('parses a bare JSON array, skipping malformed entries', () async {
       final dio = Dio()
         ..httpClientAdapter = _CannedAdapter(jsonEncode([
@@ -92,9 +90,8 @@ void main() {
           {'name': 'broken — no url'},
           {'name': 'Enspyr', 'base_url': 'https://enspyr.co'},
         ]));
-      final client =
-          GatewayDirectoryClient(dio: dio, url: 'https://dir.example/list');
-      final out = await client.fetch();
+      final client = GatewayDirectoryClient(dio: dio);
+      final out = await client.fetchFrom('https://dir.example/v1/gateways');
       expect(out.map((e) => e.httpBaseUrl),
           ['https://chat.imagineering.cc', 'https://enspyr.co']);
     });
@@ -106,24 +103,22 @@ void main() {
             {'name': 'Enspyr', 'base_url': 'https://enspyr.co'}
           ]
         }));
-      final client =
-          GatewayDirectoryClient(dio: dio, url: 'https://dir.example/list');
-      final out = await client.fetch();
+      final client = GatewayDirectoryClient(dio: dio);
+      final out = await client.fetchFrom('https://dir.example/v1/gateways');
       expect(out.single.httpBaseUrl, 'https://enspyr.co');
     });
 
     test('an unrecognised shape yields [] (not a crash)', () async {
       final dio = Dio()..httpClientAdapter = _CannedAdapter(jsonEncode(42));
-      final client =
-          GatewayDirectoryClient(dio: dio, url: 'https://dir.example/list');
-      expect(await client.fetch(), isEmpty);
+      final client = GatewayDirectoryClient(dio: dio);
+      expect(await client.fetchFrom('https://dir.example/v1/gateways'), isEmpty);
     });
 
     test('a network error propagates (caller falls back to seed)', () async {
       final dio = Dio()..httpClientAdapter = _ExplodingAdapter();
-      final client =
-          GatewayDirectoryClient(dio: dio, url: 'https://dir.example/list');
-      expect(client.fetch(), throwsA(isA<DioException>()));
+      final client = GatewayDirectoryClient(dio: dio);
+      expect(client.fetchFrom('https://dir.example/v1/gateways'),
+          throwsA(isA<DioException>()));
     });
   });
 
@@ -132,7 +127,9 @@ void main() {
       const directory = [
         // Same gateway as the seed Production, but with a trailing slash —
         // normalization must dedupe it against the preset.
-        ServerEntry(label: 'Imagineering', httpBaseUrl: 'https://chat.imagineering.cc/'),
+        ServerEntry(
+            label: 'Imagineering',
+            httpBaseUrl: 'https://chat.imagineering.cc/'),
         ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://enspyr.co'),
       ];
       final merged = mergeDirectory(directory, kGatewayPresets, normalize: _norm);
@@ -143,7 +140,9 @@ void main() {
       expect(urls.sublist(0, 2),
           [_norm('https://chat.imagineering.cc'), _norm('https://enspyr.co')]);
       // Production appears exactly once (deduped against the directory).
-      expect(urls.where((u) => u == _norm('https://chat.imagineering.cc')).length, 1);
+      expect(
+          urls.where((u) => u == _norm('https://chat.imagineering.cc')).length,
+          1);
       // Dev-only seed entries the directory never mentions survive.
       expect(urls, contains(_norm('http://localhost:8095')));
       expect(urls, contains(_norm('http://10.0.2.2:8095')));
@@ -156,31 +155,87 @@ void main() {
   });
 
   group('gatewayDirectoryProvider', () {
-    test('returns the client entries', () async {
-      final container = ProviderContainer(overrides: [
-        gatewayDirectoryClientProvider
-            .overrideWithValue(_FakeClient(const [
-          ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://enspyr.co'),
-        ])),
+    Future<ProviderContainer> makeContainer(
+      _FakeClient client, {
+      String gatewayBaseUrl = 'https://chat.imagineering.cc',
+    }) async {
+      SharedPreferences.setMockInitialValues(
+          {gatewayBaseUrlPrefKey: gatewayBaseUrl});
+      final prefs = await SharedPreferences.getInstance();
+      return ProviderContainer(
+        retry: (_, _) => null,
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+          gatewayDirectoryClientProvider.overrideWithValue(client),
+        ],
+      );
+    }
+
+    test('discovers from the CURRENT gateway (composes <base>/v1/gateways)',
+        () async {
+      final client = _FakeClient(const [
+        ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://enspyr.co'),
       ]);
+      final container =
+          await makeContainer(client, gatewayBaseUrl: 'https://chat.enspyr.co/');
       addTearDown(container.dispose);
+
       final out = await container.read(gatewayDirectoryProvider.future);
       expect(out.single.label, 'Enspyr');
+      // The SPOF-removal invariant: the URL is derived from the SELECTED gateway
+      // (normalized, trailing slash stripped), NOT a fixed origin.
+      expect(client.lastUrl, 'https://chat.enspyr.co/v1/gateways');
+    });
+
+    test('re-composes the URL against a different active gateway', () async {
+      final client = _FakeClient(const []);
+      final container = await makeContainer(client,
+          gatewayBaseUrl: 'https://chat.imagineering.cc');
+      addTearDown(container.dispose);
+
+      await container.read(gatewayDirectoryProvider.future);
+      expect(client.lastUrl, 'https://chat.imagineering.cc/v1/gateways');
     });
 
     test('surfaces an AsyncError on a client failure', () async {
-      // retry disabled: Riverpod 3 otherwise re-runs a failed provider on a
-      // backoff timer, so `.future` would never settle to the error here.
-      final container = ProviderContainer(
-        retry: (_, _) => null,
-        overrides: [
-          gatewayDirectoryClientProvider
-              .overrideWithValue(_FakeClient.throwing()),
-        ],
-      );
+      final container = await makeContainer(_FakeClient.throwing());
       addTearDown(container.dispose);
       await expectLater(
           container.read(gatewayDirectoryProvider.future), throwsException);
+    });
+
+    test('a freshly-discovered island is remembered into the known set + '
+        'persisted (the DHT grow loop)', () async {
+      // A brand-new island the app has never seen and that isn't a bundled seed.
+      final client = _FakeClient(const [
+        ServerEntry(
+            label: 'New Island', httpBaseUrl: 'https://chat.newisland.example'),
+      ]);
+      final container = await makeContainer(client);
+      addTearDown(container.dispose);
+      // Materialize the known set BEFORE discovery so the notifier is alive to
+      // receive the remember() (a NotifierProvider is lazy).
+      expect(
+          container
+              .read(knownGatewaysProvider)
+              .map((e) => _norm(e.httpBaseUrl)),
+          isNot(contains(_norm('https://chat.newisland.example'))));
+
+      await container.read(gatewayDirectoryProvider.future);
+      await pumpEventQueue(); // let the fire-and-forget remember() settle
+
+      // GROW: the known set (what the picker seeds from) now includes it.
+      expect(
+          container
+              .read(knownGatewaysProvider)
+              .map((e) => _norm(e.httpBaseUrl)),
+          contains(_norm('https://chat.newisland.example')));
+      // PERSIST: a fresh store over the same prefs sees it → survives a restart.
+      expect(
+          container.read(gatewaySeedStoreProvider).load().map(
+                (e) => _norm(e.httpBaseUrl),
+              ),
+          contains(_norm('https://chat.newisland.example')));
     });
   });
 
@@ -222,7 +277,7 @@ void main() {
       expect(find.text('Local'), findsOneWidget); // dev seed survives
     });
 
-    testWidgets('falls back to the seed presets on a directory error',
+    testWidgets('falls back to the known seed set on a directory error',
         (tester) async {
       final container = await pump(
         tester,
@@ -230,8 +285,9 @@ void main() {
       );
       addTearDown(container.dispose);
 
-      // No directory tile, but every seed preset still renders — never blocked.
+      // No directory tile, but every bundled seed still renders — never blocked.
       expect(find.text('Production'), findsOneWidget);
+      expect(find.text('Enspyr'), findsOneWidget); // second real seed
       expect(find.text('Local'), findsOneWidget);
       expect(find.text('Android emulator'), findsOneWidget);
     });
@@ -256,8 +312,7 @@ class _CannedAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-/// A Dio adapter that throws if hit — proves the unset-URL path fires no request,
-/// and drives the network-error path.
+/// A Dio adapter that throws if hit — drives the network-error path.
 class _ExplodingAdapter implements HttpClientAdapter {
   @override
   Future<ResponseBody> fetch(RequestOptions options,
@@ -269,7 +324,8 @@ class _ExplodingAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-/// A directory client with canned output — for provider-level tests.
+/// A directory client with canned output — for provider-level tests. Records the
+/// URL it was asked to fetch so the URL-composition invariant can be asserted.
 class _FakeClient implements GatewayDirectoryClient {
   _FakeClient(this._entries) : _throws = false;
   _FakeClient.throwing()
@@ -277,9 +333,11 @@ class _FakeClient implements GatewayDirectoryClient {
         _throws = true;
   final List<ServerEntry> _entries;
   final bool _throws;
+  String? lastUrl;
 
   @override
-  Future<List<ServerEntry>> fetch() async {
+  Future<List<ServerEntry>> fetchFrom(String directoryUrl) async {
+    lastUrl = directoryUrl;
     if (_throws) throw Exception('directory down');
     return _entries;
   }

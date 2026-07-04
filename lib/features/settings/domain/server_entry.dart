@@ -80,16 +80,40 @@ class ServerEntry {
     }
     return null;
   }
+
+  /// Serialize for local persistence (the "islands I've met" seed store, #36).
+  /// Deliberately written in the SAME snake_case wire shape [tryFromJson] reads,
+  /// so a stored entry is re-hydrated through the exact same validating parser —
+  /// a persisted base URL is attacker-influenceable (it came from a directory
+  /// response) and must clear the same http(s)+host bar as a freshly-fetched one.
+  Map<String, dynamic> toJson() => {
+        'base_url': httpBaseUrl,
+        'display_name': label,
+        if (id != null) 'id': id,
+        if (description != null) 'description': description,
+        if (region != null) 'region': region,
+      };
 }
 
-/// The built-in presets — the always-present seed source for the picker list,
+/// The built-in seeds — the always-present bootstrap source for the picker list,
 /// AND the seed-first fallback when the live directory is unreachable/unset (#36).
+///
+/// MULTIPLE real internet islands are bundled (not just one), so bootstrap
+/// discovery survives any single one being down — the irreducible chicken-egg
+/// of a federated network (cf. BitTorrent DHT bootstrap nodes, a Mastodon
+/// server pick). Every island serves the FULL peer directory from `/v1/gateways`,
+/// so reaching ANY one of these teaches the app about all the others; the
+/// ever-seen set is then persisted and grows (see the seed store), so these are
+/// only the cold-start floor, not the ceiling.
+///
 /// Production is first so the common case (point at the live server) is one tap.
 /// Local and the Android-emulator loopback cover dev against a gateway on the
-/// host machine — entries no remote directory will ever advertise, so they stay
-/// bundled here regardless of what the directory returns.
+/// host machine — entries no remote directory advertises, so they stay bundled
+/// regardless of what the directory returns (the merge dedups any overlap on the
+/// normalized base URL, so bundling an island the directory also lists is safe).
 const kGatewayPresets = <ServerEntry>[
   ServerEntry(label: 'Production', httpBaseUrl: 'https://chat.imagineering.cc'),
+  ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co'),
   ServerEntry(label: 'Local', httpBaseUrl: 'http://localhost:8095'),
   ServerEntry(
       label: 'Android emulator', httpBaseUrl: 'http://10.0.2.2:8095'),
