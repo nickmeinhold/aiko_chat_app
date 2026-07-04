@@ -1,27 +1,27 @@
 /// Fetches the live gateway/island directory (#36) — the layer ABOVE per-gateway
 /// community discovery: "which independent operators exist to connect to?".
 ///
-/// This is deliberately CROSS-GATEWAY: the directory lives at a well-known origin
-/// (Design 05 §10 / handoff #1548 Phase 2), NOT at whichever gateway the app is
-/// currently pointed at. So it uses its own bare [Dio] — no auth interceptor, no
-/// bearer token — and never rides `restApiProvider` (which is bound to the
-/// selected gateway and would re-fetch against the wrong host after a switch).
+/// Every island serves the FULL known-peer set from `/v1/gateways`, so there is
+/// NO privileged "directory host": the app discovers from whichever gateway it is
+/// currently pointed at (see [gatewayDirectoryProvider]), and reaching any one
+/// island teaches it about all the others. Removing the old single fixed origin
+/// is the point — a hardcoded directory URL re-introduced a discovery SPOF even
+/// though the gateway side had none. Still deliberately CROSS-GATEWAY-shaped: its
+/// own bare [Dio] (no auth interceptor / bearer), never `restApiProvider`.
 ///
-/// The endpoint URL is not published yet (the gateway tab owns standing it up —
-/// #1548 cross-tab item 1). Until it is, [kGatewayDirectoryUrl] is empty and
-/// [fetch] short-circuits to an empty list with ZERO network — the picker then
-/// renders the bundled seed presets, which is the correct launch behavior. The
-/// moment the gateway publishes the path, this becomes a one-line default change
-/// (or a `--dart-define=GATEWAY_DIRECTORY_URL` override).
+/// [kGatewayDirectoryUrl] remains as an OPTIONAL build-time override (dev/staging
+/// can pin a fixed directory); when empty (the shipped default) the provider
+/// composes `<current gateway>/v1/gateways`.
 library;
 
 import 'package:dio/dio.dart';
 
 import '../domain/server_entry.dart';
 
-/// The well-known directory origin. Empty = "not published yet" → seed-only.
-/// Overridable at build time so a dev/staging directory can be pointed at
-/// without a code change.
+/// Optional fixed directory origin (`--dart-define=GATEWAY_DIRECTORY_URL`). Empty
+/// = the shipped default: discover from the currently-selected gateway instead of
+/// any fixed host. An override is a dev/staging convenience, NOT the production
+/// path — pinning it back to one host would re-create the SPOF this removed.
 const kGatewayDirectoryUrl = String.fromEnvironment(
   'GATEWAY_DIRECTORY_URL',
   defaultValue: '',
@@ -29,22 +29,19 @@ const kGatewayDirectoryUrl = String.fromEnvironment(
 
 class GatewayDirectoryClient {
   final Dio _dio;
-  final String _url;
 
-  // Private-named initializing formals: callers pass `dio:` / `url:` (Dart
-  // strips the leading underscore for the external parameter name).
-  GatewayDirectoryClient(
-      {required this._dio, this._url = kGatewayDirectoryUrl});
+  // Private-named initializing formal: callers pass `dio:` (Dart strips the
+  // leading underscore for the external parameter name).
+  GatewayDirectoryClient({required this._dio});
 
-  /// Fetch + tolerantly parse the directory. Returns the parseable entries
-  /// (skipping any malformed one) — or `[]` when the URL is unset (no network).
+  /// Fetch + tolerantly parse the directory at [directoryUrl]. Returns the
+  /// parseable entries (skipping any malformed one).
   ///
   /// Does NOT swallow network/HTTP errors: a real failure throws so the caller's
   /// [FutureProvider] surfaces it as an `AsyncError`, and the picker falls back
-  /// to the seed list. (Unset-URL is not a failure — it's "nothing to fetch".)
-  Future<List<ServerEntry>> fetch() async {
-    if (_url.trim().isEmpty) return const [];
-    final res = await _dio.get<dynamic>(_url);
+  /// to the seed list.
+  Future<List<ServerEntry>> fetchFrom(String directoryUrl) async {
+    final res = await _dio.get<dynamic>(directoryUrl);
     return _parse(res.data);
   }
 

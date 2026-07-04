@@ -16,6 +16,7 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
 import 'package:aiko_chat_app/features/settings/presentation/gateway_picker_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -247,6 +248,10 @@ void main() {
           remoteRefresh: (_) async => 'a2',
           onUnauthenticated: () => container.read(authEventsProvider).add(null),
         )),
+        // No live directory here — these tests exercise the picker/switch flow,
+        // not discovery. An empty result makes the screen render the known seed
+        // set and fires no real network (which would leak a pending timer).
+        gatewayDirectoryProvider.overrideWith((ref) async => const []),
       ]);
       await container.read(authControllerProvider.future);
       await tester.pumpWidget(UncontrolledProviderScope(

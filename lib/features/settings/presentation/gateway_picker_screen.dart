@@ -3,10 +3,11 @@
 /// Lists the available gateways plus a custom-URL field, marks the active
 /// gateway, and routes a selection through [AuthController.switchGateway] — which
 /// signs the user out first, because JWTs are gateway-specific. The list source
-/// is the live discovery directory ([gatewayDirectoryProvider], #36) merged over
-/// the bundled seed presets ([kGatewayPresets]): the seed renders instantly and
-/// is the fallback while the directory loads / on error / when it's unset, so the
-/// screen is never blocked on the network.
+/// is the live directory fetched from the CURRENT gateway ([gatewayDirectoryProvider],
+/// #36) merged over the known-islands seed set ([knownGatewaysProvider] = bundled
+/// presets ∪ the persisted ever-seen set): the known set renders instantly and is
+/// the fallback while the directory loads / on error, so the screen is never
+/// blocked on the network — and discovery has no single point of failure.
 library;
 
 import 'package:flutter/material.dart';
@@ -18,7 +19,6 @@ import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../application/gateway_directory_provider.dart';
 import '../data/gateway_directory_client.dart';
-import '../domain/server_entry.dart';
 
 class GatewayPickerScreen extends ConsumerStatefulWidget {
   const GatewayPickerScreen({super.key});
@@ -42,16 +42,17 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final current = ref.watch(configProvider).httpBaseUrl;
-    // Seed-first: render the bundled presets immediately, upgrade to the merged
-    // directory list once it loads. Loading/error/unset all fall back to seed —
-    // a slow or absent directory never blocks the screen.
+    // Seed-first: render the known set (presets ∪ ever-seen) immediately, upgrade
+    // to the merged live directory once it loads. Loading/error all fall back to
+    // the known set — a slow or absent directory never blocks the screen.
+    final known = ref.watch(knownGatewaysProvider);
     final servers = ref.watch(gatewayDirectoryProvider).maybeWhen(
           data: (directory) => mergeDirectory(
             directory,
-            kGatewayPresets,
+            known,
             normalize: (url) => GatewayConfig.normalized(url).httpBaseUrl,
           ),
-          orElse: () => kGatewayPresets,
+          orElse: () => known,
         );
 
     return Scaffold(

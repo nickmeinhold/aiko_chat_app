@@ -17,6 +17,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show HandleTaken, SoleAdminDeletionBlocked;
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
+import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
@@ -70,6 +71,11 @@ ProviderContainer makeContainer({
     // they exercise the UI wiring, not on-disk persistence (that's covered by
     // cache_persistence_test.dart).
     cacheProvider.overrideWith((ref) => DriftCache(NativeDatabase.memory())),
+    // The gateway picker discovers from the live gateway (#36). App-shell tests
+    // exercise navigation/UI, not discovery — stub it empty so no real network
+    // fires (which would leak a pending timer past widget disposal). The picker
+    // then renders the bundled seed set.
+    gatewayDirectoryProvider.overrideWith((ref) async => const []),
   ]);
   return container;
 }
