@@ -123,7 +123,7 @@ assume self-echo.)</span>
 <p>B4's reconnect re-sends un-acked outbox rows. "Un-acked" includes <em>the message arrived; only the ack was
 lost</em>. If a re-send minted a second server ULID, history would later pull both — the worst failure, sneaking in
 <em>below</em> invariant U (the cache can't see a duplicate the server created). So B4 rests on the gateway being
-idempotent. <span class="verified">Confirmed by reading <code>aiko_chat_gateway</code>:</span></p>
+idempotent. <span class="verified">Confirmed by reading <code>aiko-chat-island</code>:</span></p>
 <ul class="tight">
 <li><code>messages_service.py:45-46</code> — a resent <code>(channel_id, client_msg_id)</code> returns <code>(existing, False)</code>: the <strong>same row, same ULID</strong>.</li>
 <li><code>models.py:59</code> — backed by a DB <code>UniqueConstraint("channel_id", "client_msg_id")</code>: enforced at storage, not just app logic.</li>

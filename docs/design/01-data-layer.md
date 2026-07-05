@@ -10,7 +10,7 @@ Reviewed-as-one because the wire↔domain *mapping* is the bug surface; the type
 ## Source of truth (gateway, verified by reading the running code)
 
 The gateway's `/v1` contract is **frozen** (plan §A1). Phase 1 frames, byte-exact from
-`aiko_chat_gateway/src/aiko_gateway/realtime/envelopes.py` + `domain/messages_service.py`
+`aiko-chat-island/src/aiko_gateway/realtime/envelopes.py` + `domain/messages_service.py`
 + `rest/auth.py`:
 
 **Client → server (WSS):**

@@ -1,6 +1,6 @@
 name: CI
 
-# Minimal CI floor for aiko-chat-app (task #22). Runs on every PR and on push to
+# Minimal CI floor for aiko_chat_app (task #22). Runs on every PR and on push to
 # main: analyze (errors/warnings fatal; the 16 pre-existing `prefer_initializing_formals`
 # infos are kept VISIBLE but non-blocking — see below) + the full test suite.
 #

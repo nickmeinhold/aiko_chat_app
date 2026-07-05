@@ -31,7 +31,7 @@ abstract class ChatTelemetry {
   /// occurrence is a benign visibility shrink (`historyGapBeforeFence`); a
   /// streak that survives the threshold means the fence is genuinely unreachable
   /// — a real history gap or a regressed per-viewer fence-visibility invariant
-  /// (aiko_chat_gateway#22). LOUD by contract: restores the failure visibility
+  /// (aiko-chat-island#22). LOUD by contract: restores the failure visibility
   /// #15's benign downgrade removed for true gaps.
   ///
   /// [streak] counts SYNC ATTEMPTS (reconnect runs of the choreography), not
@@ -536,7 +536,7 @@ class ChatRepository {
         // CONVERGENCE CONTRACT (cage-match Carnot HIGH, cross-repo): the self-heal
         // holds ONLY because the gateway's `latest_ulid` fence is per-viewer and
         // applies the SAME visibility filter as `get_history` (soft-delete + block)
-        // — aiko_chat_gateway#22. So once a block/delete lands, the next subscribe's
+        // — aiko-chat-island#22. So once a block/delete lands, the next subscribe's
         // fence excludes the now-hidden row and is reachable. If the gateway ever
         // regressed that (a fence over rows hidden from the viewer), this would
         // refetch the same watermark every reconnect forever — a permanent

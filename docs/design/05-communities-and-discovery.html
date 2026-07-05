@@ -55,7 +55,7 @@ first phase is an invisible model migration, the directory lands later.</p>
 <div class="scope">
   <strong>Status:</strong> design, not yet built. <strong>Decision:</strong> nested communities ("Option B"), chosen by
   Nick 2026-06-29 over the flat-channels-with-tags alternative ("Option A"). Task #6.<br>
-  <strong>Legend:</strong> <span class="key gw">GATEWAY</span> peer-owned (aiko_chat_gateway) ·
+  <strong>Legend:</strong> <span class="key gw">GATEWAY</span> peer-owned (aiko-chat-island) ·
   <span class="key app">APP</span> this repo. The bulk of v1 is gateway data-model + endpoint work; the app side is a
   rendering + navigation layer that cannot be built until the contract lands (same seam discipline as auth #38).
 </div>
@@ -315,7 +315,7 @@ ordered page the engine returns. <strong>The app never re-ranks</strong>; it gro
 seam is what lets every B3 ranking upgrade ship as a gateway change alone.
 </blockquote>
 
-<p class="note">Companion: this design's gateway half is handed off as a <code>project:aiko_chat_gateway</code> task. The
+<p class="note">Companion: this design's gateway half is handed off as a <code>project:aiko-chat-island</code> task. The
 app half (B1 <code>communityId</code> decode; B2 types + screen) is tracked under task #6 in this repo.</p>
 
 </body>
