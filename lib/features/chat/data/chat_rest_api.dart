@@ -59,8 +59,10 @@ class HandleTaken implements Exception {
 }
 
 /// Thrown by [ChatRestApi.addPasskey] when the gateway rejects the credential as
-/// already registered (409) — a given passkey can be linked once. The settings
-/// UI surfaces this as "already on your account" rather than a generic failure.
+/// already registered (409) — a given passkey can be linked once. The 409 means
+/// the credential is registered to THIS or another account, so the settings UI
+/// surfaces it as a neutral "already registered" (never asserting it's on the
+/// current account) rather than a generic failure.
 class PasskeyAlreadyRegistered implements Exception {
   const PasskeyAlreadyRegistered();
   @override
