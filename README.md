@@ -1,6 +1,6 @@
-# aiko_chat_app
+# aiko-chat-app
 
-Aiko Chat — mobile app (Flutter, Riverpod). Talks to the aiko_chat_gateway WSS+REST contract.
+Aiko Chat — mobile app (Flutter, Riverpod). Talks to the aiko-chat-island WSS+REST contract.
 
 ## Getting Started
 
