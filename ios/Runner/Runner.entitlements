@@ -9,6 +9,7 @@
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>webcredentials:chat.imagineering.cc</string>
+		<string>webcredentials:chat.enspyr.co</string>
 	</array>
 </dict>
 </plist>
