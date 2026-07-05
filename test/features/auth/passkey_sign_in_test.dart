@@ -7,6 +7,8 @@ import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_provider.dart';
 import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
+    show PasskeyAlreadyRegistered;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -231,6 +233,101 @@ void main() {
       await c.read(authControllerProvider.notifier).registerWithPasskey();
       expect(passkey.registerCalls, callsAfterLogin,
           reason: 'no registration is started while a session is live');
+    });
+  });
+
+  group('add passkey (link to existing account)', () {
+    // Seed tokens so cold-start restore logs the user in — the live-session
+    // precondition for linking.
+    ProviderContainer signedIn(FakeRestApi rest, FakePasskeyAuthClient passkey) =>
+        makeContainer(
+          rest: rest,
+          passkey: passkey,
+          store: InMemoryTokenStore(const AuthTokens(
+              accessToken: 'access', refreshToken: 'refresh')),
+        );
+
+    test('links via the AUTHED add endpoint without disturbing the session',
+        () async {
+      final rest = FakeRestApi();
+      final passkey = FakePasskeyAuthClient(attestation: 'attest-json');
+      final c = signedIn(rest, passkey);
+      addTearDown(c.dispose);
+      expect(await c.read(authControllerProvider.future), isNotNull,
+          reason: 'precondition: signed in');
+
+      final added = await c
+          .read(authControllerProvider.notifier)
+          .addPasskeyToCurrentAccount();
+
+      expect(added, isTrue);
+      expect(rest.passkeyRegisterStartCalls, 1,
+          reason: 'reuses the identity-agnostic register-start challenge');
+      expect(passkey.registerCalls, 1);
+      expect(rest.addPasskeyCalls, 1,
+          reason: 'finishes via the authed add endpoint');
+      expect(rest.lastAddPasskeyState, 'reg-state');
+      expect(rest.lastAddPasskeyCredential, 'attest-json');
+      expect(rest.passkeyRegisterFinishCalls, 0,
+          reason: 'must NOT use the account-minting register/finish');
+      final st = c.read(authControllerProvider);
+      expect(st.value, isNotNull,
+          reason: 'still signed in — no logout/loading bounce');
+      expect(st.isLoading, isFalse,
+          reason: 'the global auth state machine is untouched');
+    });
+
+    test('user dismisses the sheet → false, credential not sent, still signed in',
+        () async {
+      final rest = FakeRestApi();
+      final passkey = FakePasskeyAuthClient(
+          registerThrows: const SocialSignInCancelled());
+      final c = signedIn(rest, passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      final added = await c
+          .read(authControllerProvider.notifier)
+          .addPasskeyToCurrentAccount();
+
+      expect(added, isFalse, reason: 'cancellation is not a successful add');
+      expect(rest.addPasskeyCalls, 0);
+      expect(c.read(authControllerProvider).value, isNotNull);
+    });
+
+    test('throws when no session is live (link requires an account)', () async {
+      final rest = FakeRestApi();
+      final passkey = FakePasskeyAuthClient();
+      final c = makeContainer(rest: rest, passkey: passkey); // no token → out
+      addTearDown(c.dispose);
+      expect(await c.read(authControllerProvider.future), isNull,
+          reason: 'precondition: logged out');
+
+      await expectLater(
+        c.read(authControllerProvider.notifier).addPasskeyToCurrentAccount(),
+        throwsA(isA<StateError>()),
+      );
+      expect(passkey.registerCalls, 0,
+          reason: 'no ceremony started without a session');
+    });
+
+    test('a 409 already-registered propagates and leaves the session intact',
+        () async {
+      final rest = FakeRestApi()
+        ..addPasskeyThrows = const PasskeyAlreadyRegistered();
+      final passkey = FakePasskeyAuthClient(attestation: 'attest-json');
+      final c = signedIn(rest, passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await expectLater(
+        c.read(authControllerProvider.notifier).addPasskeyToCurrentAccount(),
+        throwsA(isA<PasskeyAlreadyRegistered>()),
+      );
+      expect(c.read(authControllerProvider).value, isNotNull,
+          reason: 'a failed link must not log the user out');
+      expect(c.read(authControllerProvider).hasError, isFalse,
+          reason: 'the error is surfaced to the caller, not the auth state');
     });
   });
 

@@ -58,6 +58,15 @@ class HandleTaken implements Exception {
   String toString() => 'HandleTaken';
 }
 
+/// Thrown by [ChatRestApi.addPasskey] when the gateway rejects the credential as
+/// already registered (409) — a given passkey can be linked once. The settings
+/// UI surfaces this as "already on your account" rather than a generic failure.
+class PasskeyAlreadyRegistered implements Exception {
+  const PasskeyAlreadyRegistered();
+  @override
+  String toString() => 'PasskeyAlreadyRegistered';
+}
+
 /// Thrown by [ChatRestApi.deleteAccount] when the gateway refuses the deletion
 /// because the user is the sole admin of one or more channels (409). The
 /// settings UI surfaces [message] so the user knows which channels to hand over
@@ -120,6 +129,23 @@ abstract interface class ChatRestApi {
   /// [SocialOutcome] (verified signature → tokens).
   Future<SocialOutcome> finishPasskeyAuthentication(
       String state, String credentialJson);
+
+  /// Link a NEW passkey to the CURRENTLY authenticated account (add-to-existing,
+  /// #1727). Unlike [finishPasskeyRegistration] — which MINTS a new account and
+  /// then needs a handle claim — this runs against the live session's bearer: the
+  /// gateway reads the caller's identity from the token and stores the fresh
+  /// credential against THAT user (no new account, no claim). It reuses
+  /// [startPasskeyRegistration] for the identity-agnostic creation challenge;
+  /// only the finish differs.
+  ///
+  /// Returns the (unchanged) [AppUser] — the gateway echoes a BARE user view with
+  /// NO tokens, because the caller is already authenticated. So this does NOT
+  /// share the [SocialOutcome] resolver the other finishes use (that resolver
+  /// requires an access_token or provisioning_token and would throw on the bare
+  /// body). Throws [PasskeyAlreadyRegistered] on a 409 (this credential is already
+  /// registered — to this or another account) and [Unauthorized] on a terminal
+  /// auth rejection.
+  Future<AppUser> addPasskey(String state, String credentialJson);
 
   /// Complete provisioning for a new social identity by claiming a [handle].
   /// [provisioningToken] comes from the [PendingHandle]. Throws [HandleTaken]

@@ -180,6 +180,9 @@ class FakeChatRestApi implements ChatRestApi {
           String state, String credentialJson) =>
       throw UnimplementedError();
   @override
+  Future<AppUser> addPasskey(String state, String credentialJson) =>
+      throw UnimplementedError();
+  @override
   Future<SocialOutcome> socialSignIn({
     required SocialProvider provider,
     required String idToken,

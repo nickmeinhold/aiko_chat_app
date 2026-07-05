@@ -198,6 +198,41 @@ class AuthController extends AsyncNotifier<AppUser?> {
         return _applyOutcome(outcome, prior);
       });
 
+  /// Add a passkey to the CURRENTLY signed-in account (link-to-existing, #1727).
+  /// This is the recovery path for a user who ALREADY has an account (typically
+  /// via social sign-in) and wants passkey sign-in: routing them through
+  /// [registerWithPasskey] would try to mint a SECOND account and — on a handle
+  /// collision with their own account — orphan the device credential (the exact
+  /// passkey-401 bug this closes).
+  ///
+  /// It deliberately does NOT go through [_ingress]: that guard REJECTS a live
+  /// session (`state.value != null`), which is precisely the precondition here.
+  /// It also does NOT touch the logged-in [state] — linking a passkey doesn't
+  /// change who is signed in, and flipping to `loading` would bounce the router
+  /// to /splash. The caller (Settings) awaits this with its own local spinner and
+  /// surfaces the outcome. A sheet dismissal is a silent no-op; a real
+  /// authenticator/gateway failure ([PasskeyAlreadyRegistered], [Unauthorized],
+  /// [SocialSignInFailed]) propagates to the caller and leaves the session
+  /// untouched (a failed link must not log the user out).
+  ///
+  /// Returns `true` when a passkey was linked, `false` when the user dismissed
+  /// the system sheet — so the caller shows a success confirmation ONLY on a real
+  /// add, never on a silent cancellation.
+  Future<bool> addPasskeyToCurrentAccount() async {
+    if (state.value == null) {
+      throw StateError('addPasskeyToCurrentAccount requires a signed-in user');
+    }
+    final challenge = await _rest.startPasskeyRegistration();
+    final String attestation;
+    try {
+      attestation = await _passkey.register(challenge.optionsJson);
+    } on SocialSignInCancelled {
+      return false; // user dismissed the system sheet — no-op, session untouched
+    }
+    await _rest.addPasskey(challenge.state, attestation);
+    return true;
+  }
+
   /// Apply a verified [outcome] (from native `/social` OR broker `/exchange` —
   /// the gateway's single identity door makes them identical here): a known
   /// identity adopts the tokens and publishes the user; a new identity parks the

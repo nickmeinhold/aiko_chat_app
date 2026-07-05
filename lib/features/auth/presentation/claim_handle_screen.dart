@@ -115,7 +115,10 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
 
   /// Surface a taken handle inline; keep raw transport detail out of the UI.
   String _friendlyError(Object error) {
-    if (error is HandleTaken) return 'That handle is taken — try another.';
+    if (error is HandleTaken) {
+      return "That handle is taken — try another. If it's already yours, sign in "
+          'with your existing account, then add a passkey from Settings.';
+    }
     return 'Something went wrong. Please try again.';
   }
 }

@@ -144,6 +144,37 @@ class GatewayRestApi implements ChatRestApi {
       _passkeyFinish(
           '/v1/auth/passkey/authenticate/finish', state, credentialJson);
 
+  @override
+  Future<AppUser> addPasskey(String state, String credentialJson) async {
+    // Decode the authenticator's JSON up front (outside the authed call) so a
+    // client-plumbing corruption reads as a FormatException, not an auth error —
+    // same contract as `_passkeyFinish`.
+    final Object? credential;
+    try {
+      credential = jsonDecode(credentialJson);
+    } on FormatException catch (e) {
+      throw FormatException(
+          'passkey: add received malformed credential JSON from the '
+          'authenticator: ${e.message}');
+    }
+    // Runs on the AUTHED client: the bearer IS the identity the credential links
+    // to — that is the whole distinction from register/finish (which mints a new
+    // account). `_authedCall` maps a terminal 401/403 → Unauthorized.
+    return _authedCall(() async {
+      try {
+        final r = await _authed.post('/v1/auth/passkey/add/finish',
+            data: {'state': state, 'credential': credential});
+        // The add endpoint returns a BARE user view (no tokens — the caller is
+        // already authenticated), so it deliberately bypasses `_resolveOutcome`
+        // (which requires a token/provisioning_token and would throw here).
+        return AppUser.fromJson(_map(r.data));
+      } on DioException catch (e) {
+        if (e.response?.statusCode == 409) throw const PasskeyAlreadyRegistered();
+        rethrow; // terminal 401/403 mapped by _authedCall; else propagate
+      }
+    });
+  }
+
   /// Begin a passkey ceremony: the gateway returns `{state, options}` where
   /// `options` is the WebAuthn options object. We re-encode `options` to the
   /// opaque JSON string the device authenticator consumes, and carry `state`
