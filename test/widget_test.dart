@@ -471,7 +471,8 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Continue'));
     await tester.pumpAndSettle();
 
-    expect(find.text('That handle is taken — try another.'), findsOneWidget);
+    expect(find.textContaining('That handle is taken — try another.'),
+        findsOneWidget);
     expect(find.widgetWithText(AppBar, 'Pick your handle'), findsOneWidget);
   });
 

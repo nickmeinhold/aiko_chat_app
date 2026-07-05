@@ -157,6 +157,21 @@ class FakeRestApi implements ChatRestApi {
     return passkeyAuthOutcome ?? Authenticated(_session());
   }
 
+  /// If set, `addPasskey` throws this (e.g. `PasskeyAlreadyRegistered`).
+  Object? addPasskeyThrows;
+  int addPasskeyCalls = 0;
+  String? lastAddPasskeyState;
+  String? lastAddPasskeyCredential;
+
+  @override
+  Future<AppUser> addPasskey(String state, String credentialJson) async {
+    addPasskeyCalls++;
+    lastAddPasskeyState = state;
+    lastAddPasskeyCredential = credentialJson;
+    if (addPasskeyThrows != null) throw addPasskeyThrows!;
+    return user;
+  }
+
   @override
   Future<AuthSession> claimHandle({
     required String provisioningToken,

@@ -91,4 +91,58 @@ void main() {
       );
     });
   });
+
+  group('addPasskey (link to existing account)', () {
+    // The load-bearing regression: add/finish returns a BARE user view with NO
+    // access_token/provisioning_token. If addPasskey routed through the shared
+    // `_resolveOutcome` (like the other finishes), this would throw
+    // "neither access_token nor provisioning_token". It must parse an AppUser.
+    test('a bare user response (no tokens) → AppUser, not a resolver throw',
+        () async {
+      final api = apiWith((_) => jsonBody(200,
+          '{"user_id":"u9","username":"nick","display_name":"Nick","aiko_username":"nick"}'));
+      final u = await api.addPasskey('st8', '{"id":"cred"}');
+      expect(u.userId, 'u9');
+      expect(u.username, 'nick');
+    });
+
+    test('posts state + decoded credential to /v1/auth/passkey/add/finish',
+        () async {
+      RequestOptions? captured;
+      final api = apiWith((opts) {
+        captured = opts;
+        return jsonBody(200,
+            '{"user_id":"u","username":"x","display_name":"X","aiko_username":"x"}');
+      });
+      await api.addPasskey('st8', '{"id":"cred-1"}');
+      expect(captured!.path, '/v1/auth/passkey/add/finish');
+      final body = captured!.data as Map;
+      expect(body['state'], 'st8');
+      expect(body['credential'], {'id': 'cred-1'},
+          reason: 'the authenticator JSON is decoded, not double-encoded');
+    });
+
+    test('409 → PasskeyAlreadyRegistered', () async {
+      final api =
+          apiWith((_) => jsonBody(409, '{"detail":"passkey already registered"}'));
+      expect(
+        () => api.addPasskey('st', '{"id":"c"}'),
+        throwsA(isA<PasskeyAlreadyRegistered>()),
+      );
+    });
+
+    test('terminal 401 → Unauthorized (shares the authed-call mapping)',
+        () async {
+      final api = apiWith((_) => jsonBody(401, '{"detail":"nope"}'));
+      expect(() => api.addPasskey('st', '{"id":"c"}'),
+          throwsA(isA<Unauthorized>()));
+    });
+
+    test('malformed authenticator JSON → FormatException (client plumbing)',
+        () async {
+      final api = apiWith((_) => jsonBody(200, '{"user_id":"u"}'));
+      expect(() => api.addPasskey('st', 'not-json'),
+          throwsA(isA<FormatException>()));
+    });
+  });
 }

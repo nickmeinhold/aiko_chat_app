@@ -20,6 +20,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _deleting = false;
+  bool _addingPasskey = false;
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +44,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             subtitle: const Text("People you've blocked won't see your messages."),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/blocked'),
+          ),
+          const _SectionHeader('Sign-in'),
+          ListTile(
+            leading: const Icon(Icons.key_outlined),
+            title: const Text('Add a passkey'),
+            subtitle: const Text(
+                'Sign in next time with Face ID, Touch ID, or your device PIN.'),
+            enabled: !_addingPasskey,
+            trailing: _addingPasskey
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.chevron_right),
+            onTap: _addingPasskey ? null : _addPasskey,
           ),
           const _SectionHeader('Account'),
           ListTile(
@@ -72,6 +88,38 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
     );
   }
+
+  /// Link a new passkey to the signed-in account (#1727). Settings is only
+  /// reachable while authenticated, so the controller's live-session precondition
+  /// holds. A sheet dismissal returns silently (the controller swallows it); a
+  /// real failure surfaces inline via a snackbar without disturbing the session.
+  Future<void> _addPasskey() async {
+    setState(() => _addingPasskey = true);
+    String? message; // null → user cancelled the sheet: no snackbar, no noise
+    try {
+      final added = await ref
+          .read(authControllerProvider.notifier)
+          .addPasskeyToCurrentAccount();
+      if (added) message = 'Passkey added. You can now sign in with it.';
+    } catch (e) {
+      message = _addPasskeyError(e);
+    }
+    if (!mounted) return;
+    setState(() => _addingPasskey = false);
+    if (message != null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  // Neutral 409 copy: the gateway's "already registered" (409) can mean this OR
+  // another account, so it must not assert the credential is on *this* one.
+  String _addPasskeyError(Object e) => switch (e) {
+        PasskeyAlreadyRegistered() => 'That passkey is already registered. Try '
+            'signing in with it, or use a different passkey.',
+        Unauthorized() => 'Your session has expired. Please sign in again.',
+        _ => 'Could not add a passkey. Please try again.',
+      };
 
   Future<void> _confirmAndDelete() async {
     final confirmed = await showDialog<bool>(
