@@ -112,15 +112,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  String _addPasskeyError(Object e) {
-    if (e is PasskeyAlreadyRegistered) {
-      return 'That passkey is already on your account.';
-    }
-    if (e is Unauthorized) {
-      return 'Your session has expired. Please sign in again.';
-    }
-    return 'Could not add a passkey. Please try again.';
-  }
+  // Neutral 409 copy: the gateway's "already registered" (409) can mean this OR
+  // another account, so it must not assert the credential is on *this* one.
+  String _addPasskeyError(Object e) => switch (e) {
+        PasskeyAlreadyRegistered() => 'That passkey is already registered. Try '
+            'signing in with it, or use a different passkey.',
+        Unauthorized() => 'Your session has expired. Please sign in again.',
+        _ => 'Could not add a passkey. Please try again.',
+      };
 
   Future<void> _confirmAndDelete() async {
     final confirmed = await showDialog<bool>(

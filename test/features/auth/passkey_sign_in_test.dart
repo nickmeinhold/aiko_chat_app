@@ -311,6 +311,44 @@ void main() {
           reason: 'no ceremony started without a session');
     });
 
+    test('a second concurrent link is a no-op (controller single-flight)',
+        () async {
+      // Assert the ORDERING INVARIANT, not just the outcome: while one link
+      // ceremony is unresolved (sheet "open"), a second must NOT issue a second
+      // gateway challenge — which would trip the authenticator's
+      // cancelCurrentAuthenticatorOperation and cancel the first sheet.
+      final rest = FakeRestApi();
+      final gate = Completer<void>();
+      final passkey =
+          FakePasskeyAuthClient(attestation: 'attest-json', gate: gate);
+      final c = signedIn(rest, passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      // First link: not awaited — it parks on the gate inside register().
+      final first = c
+          .read(authControllerProvider.notifier)
+          .addPasskeyToCurrentAccount();
+      await pumpEventQueue();
+      expect(rest.passkeyRegisterStartCalls, 1);
+      expect(passkey.registerCalls, 1);
+
+      // Second link while the first is in flight → short-circuits, no ceremony.
+      final second = await c
+          .read(authControllerProvider.notifier)
+          .addPasskeyToCurrentAccount();
+      expect(second, isFalse, reason: 'a concurrent link is a no-op');
+      expect(rest.passkeyRegisterStartCalls, 1,
+          reason: 'no second challenge issued while one is in flight');
+      expect(passkey.registerCalls, 1,
+          reason: 'no second authenticator ceremony started');
+
+      // Release the first: it completes as a real add.
+      gate.complete();
+      expect(await first, isTrue);
+      expect(rest.addPasskeyCalls, 1);
+    });
+
     test('a 409 already-registered propagates and leaves the session intact',
         () async {
       final rest = FakeRestApi()

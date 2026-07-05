@@ -216,21 +216,38 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// untouched (a failed link must not log the user out).
   ///
   /// Returns `true` when a passkey was linked, `false` when the user dismissed
-  /// the system sheet — so the caller shows a success confirmation ONLY on a real
-  /// add, never on a silent cancellation.
+  /// the system sheet (or a link is already in flight) — so the caller shows a
+  /// success confirmation ONLY on a real add, never on a silent cancellation.
+  ///
+  /// Single-flight is enforced HERE, not by the caller: the same failure mode the
+  /// [_ingress] guard documents applies to this ceremony too — a second concurrent
+  /// `register` issues a second gateway challenge and the platform authenticator's
+  /// start-of-ceremony `cancelCurrentAuthenticatorOperation()` silently cancels the
+  /// first sheet (mapped to a no-op), letting the later challenge win. A widget's
+  /// local disable-flag only covers one screen instance; the invariant belongs on
+  /// the controller, where every passkey ceremony is coordinated. `_addingPasskey`
+  /// is checked-and-set synchronously (no await between), so a second call in the
+  /// same event-loop turn short-circuits before issuing a challenge.
+  bool _addingPasskey = false;
   Future<bool> addPasskeyToCurrentAccount() async {
     if (state.value == null) {
       throw StateError('addPasskeyToCurrentAccount requires a signed-in user');
     }
-    final challenge = await _rest.startPasskeyRegistration();
-    final String attestation;
+    if (_addingPasskey) return false; // a link is already in flight — no 2nd sheet
+    _addingPasskey = true;
     try {
-      attestation = await _passkey.register(challenge.optionsJson);
-    } on SocialSignInCancelled {
-      return false; // user dismissed the system sheet — no-op, session untouched
+      final challenge = await _rest.startPasskeyRegistration();
+      final String attestation;
+      try {
+        attestation = await _passkey.register(challenge.optionsJson);
+      } on SocialSignInCancelled {
+        return false; // user dismissed the sheet — no-op, session untouched
+      }
+      await _rest.addPasskey(challenge.state, attestation);
+      return true;
+    } finally {
+      _addingPasskey = false;
     }
-    await _rest.addPasskey(challenge.state, attestation);
-    return true;
   }
 
   /// Apply a verified [outcome] (from native `/social` OR broker `/exchange` —
