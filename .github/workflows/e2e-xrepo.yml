@@ -1,6 +1,6 @@
 name: e2e cross-repo suback
 
-# Capability gate for Change B (task #34): boots the REAL aiko_chat_gateway and
+# Capability gate for Change B (task #34): boots the REAL aiko-chat-island and
 # drives the REAL app transport codec against it over a live WebSocket + reconnect
 # (e2e/cross_repo_suback_test.dart). This is the one job that proves the two halves
 # of the wire contract actually agree — every other check is per-repo against fakes.
@@ -15,7 +15,7 @@ name: e2e cross-repo suback
 # branch: an upstream change that breaks the contract SHOULD turn this red.
 #
 # PREREQUISITE (one-time): a repo secret `GATEWAY_CHECKOUT_TOKEN` — a token with
-# read (contents) access to the PRIVATE nickmeinhold/aiko_chat_gateway. The
+# read (contents) access to the PRIVATE nickmeinhold/aiko-chat-island. The
 # default GITHUB_TOKEN only reaches THIS repo. Until the secret exists this job
 # fails at the gateway checkout step (loudly, by design).
 on:
@@ -43,7 +43,7 @@ jobs:
           TOKEN: ${{ secrets.GATEWAY_CHECKOUT_TOKEN }}
         run: |
           if [ -z "$TOKEN" ]; then
-            echo "::error::Missing repo secret GATEWAY_CHECKOUT_TOKEN (read access to the private nickmeinhold/aiko_chat_gateway). Add it at Settings -> Secrets and variables -> Actions. See task #34 / PR #9."
+            echo "::error::Missing repo secret GATEWAY_CHECKOUT_TOKEN (read access to the private nickmeinhold/aiko-chat-island). Add it at Settings -> Secrets and variables -> Actions. See task #34 / PR #9."
             exit 1
           fi
           echo "GATEWAY_CHECKOUT_TOKEN present."
@@ -51,7 +51,7 @@ jobs:
       - name: Checkout gateway (private)
         uses: actions/checkout@v7
         with:
-          repository: nickmeinhold/aiko_chat_gateway
+          repository: nickmeinhold/aiko-chat-island
           token: ${{ secrets.GATEWAY_CHECKOUT_TOKEN }}
           path: gateway
 

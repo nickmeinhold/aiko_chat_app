@@ -64,7 +64,7 @@ are a single bug surface; the table columns alone are trivial.</p>
 
 <h2>Source of truth — the gateway wire, re-verified by reading the running code</h2>
 <p>The schema is shaped by what <code>ws.py</code> <em>actually does</em> on the wire — <span class="verified">read, not assumed</span>
-(<code>aiko_chat_gateway/.../realtime/ws.py:66-89</code>):</p>
+(<code>aiko-chat-island/.../realtime/ws.py:66-89</code>):</p>
 <ol>
   <li><strong>Ack precedes fanout, on one connection.</strong> <code>_handle_send</code> sends the
   <code>ack</code> (line 82) <em>then</em> <code>hub.fanout</code>s the <code>message_frame</code> (line 89).

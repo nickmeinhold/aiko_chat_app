@@ -7,7 +7,7 @@ library;
 /// to each other. Every other test in this repo runs the app's transport against
 /// a *fake* server (transport_seam_test.dart) or the gateway against *fake* bus
 /// input (gateway tests). Here the **real** [GatewayTransport] envelope codec
-/// drives a **real** `aiko_chat_gateway` (booted as a uvicorn subprocess) over a
+/// drives a **real** `aiko-chat-island` (booted as a uvicorn subprocess) over a
 /// real WebSocket, through a real reconnect — promoting Change B (username +
 /// timestamp on the wire) from "merged + per-repo verified" to capability-verified.
 ///
@@ -32,9 +32,9 @@ library;
 /// the non-`integration_test` dir name avoids the on-device driver dependency.
 /// Run explicitly:
 ///   flutter test e2e/cross_repo_suback_test.dart
-/// It needs a sibling `aiko_chat_gateway` checkout with an installed venv. Override
+/// It needs a sibling `aiko-chat-island` checkout with an installed venv. Override
 /// the defaults with env vars:
-///   AIKO_GATEWAY_DIR     (default: ../aiko_chat_gateway relative to this repo)
+///   AIKO_GATEWAY_DIR     (default: ../aiko-chat-island relative to this repo)
 ///   AIKO_GATEWAY_PYTHON  (default: `AIKO_GATEWAY_DIR`/.venv/bin/python)
 /// If the gateway can't be located/booted the test FAILS (it's a capability gate,
 /// not an optional nicety) with a message naming what to set up.
@@ -226,7 +226,7 @@ class _Inbox<T> {
   }
 }
 
-/// A uvicorn-hosted `aiko_chat_gateway` for the duration of the test: no MQTT
+/// A uvicorn-hosted `aiko-chat-island` for the duration of the test: no MQTT
 /// broker (the bus degrades to a no-op), a throwaway file-backed sqlite DB.
 class _Gateway {
   final Process _proc;
@@ -392,11 +392,11 @@ class _Gateway {
         ? Directory(override)
         // Default: sibling of this app repo. `flutter test` runs with cwd at the
         // app repo root.
-        : Directory('${Directory.current.path}/../aiko_chat_gateway');
+        : Directory('${Directory.current.path}/../aiko-chat-island');
     final resolved = dir.absolute.path;
     if (!Directory('$resolved/src/aiko_gateway').existsSync()) {
       throw StateError(
-          'aiko_chat_gateway not found at $resolved. Set AIKO_GATEWAY_DIR to '
+          'aiko-chat-island not found at $resolved. Set AIKO_GATEWAY_DIR to '
           'point at a checkout (expected <dir>/src/aiko_gateway to exist).');
     }
     return resolved;

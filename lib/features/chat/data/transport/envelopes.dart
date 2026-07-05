@@ -2,7 +2,7 @@
 /// contract (plan §A1). ALL wire knowledge lives here so a contract change
 /// touches one file.
 ///
-/// Phase 1 frames (verified against aiko_chat_gateway/realtime/envelopes.py):
+/// Phase 1 frames (verified against aiko-chat-island/realtime/envelopes.py):
 ///   client -> server: subscribe {channel_ids}, send {client_msg_id, channel_id, body, reply_to?}
 ///   server -> client: ack {client_msg_id, msg_id, created_at}, message {msg}, error {code, detail, ref_client_msg_id?}
 library;
