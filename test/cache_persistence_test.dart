@@ -12,6 +12,7 @@ import 'dart:io';
 import 'package:aiko_chat_app/features/chat/data/cache/cache_database.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -31,6 +32,8 @@ Message server(String ulid, String channel, String body,
     );
 
 void main() {
+  driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+
   late Directory tmp;
   setUp(() => tmp = Directory.systemTemp.createTempSync('aiko_cache_test'));
   tearDown(() => tmp.deleteSync(recursive: true));

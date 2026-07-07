@@ -83,10 +83,20 @@ class SoleAdminDeletionBlocked implements Exception {
 /// The history/auth/media REST seam (plan §B1; media is a later phase). No
 /// lifecycle. Riverpod + the repository depend on THIS, never on `dio`.
 abstract interface class ChatRestApi {
+  /// Fetch a fresh, server-issued single-use nonce (pre-auth) for a social
+  /// sign-in. The gateway records it so it can be marked consumed on `/social`
+  /// — defeating replay of a captured request. The caller threads this nonce
+  /// through the provider SDK (Apple hashes it, Google echoes it) and submits
+  /// the SAME raw value to [socialSignIn].
+  Future<String> fetchNonce();
+
   /// Verify a provider ID token at the gateway. Returns [Authenticated] for a
   /// known identity (log straight in) or [PendingHandle] for a new one (which
-  /// must then call [claimHandle]). [rawNonce] is the un-hashed nonce — the
-  /// gateway checks the token's `nonce` claim against `sha256(rawNonce)`.
+  /// must then call [claimHandle]). [rawNonce] is the un-hashed, server-issued
+  /// nonce (from [fetchNonce]) — the gateway applies the provider-specific
+  /// transform before comparing against the token's `nonce` claim: `sha256(rawNonce)`
+  /// for Apple (which echoes the hash), the raw value for Google (which echoes
+  /// it verbatim).
   /// [name] forwards the provider's display name (Apple only sends it on the
   /// first sign-in, so it may be null).
   Future<SocialOutcome> socialSignIn({

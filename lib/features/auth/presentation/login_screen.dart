@@ -88,21 +88,22 @@ class LoginScreen extends ConsumerWidget {
           // Android Credential Manager) — no web target ships, so hide there.
           if (kIsWeb) return null;
           // First-passkey-creates-account: ONE advertised entry drives BOTH a
-          // primary "sign in" (assert an existing/discoverable credential) and a
-          // secondary "create" (register a new passkey + account).
+          // primary "create" (register a new passkey + account) and a secondary
+          // "sign in" (for an existing/discoverable credential). The "create"
+          // is prominent to guide new users, as "sign in" will fail for them.
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               FilledButton.icon(
-                onPressed: busy ? null : passkeySignIn,
+                onPressed: busy ? null : passkeyRegister,
                 icon: const Icon(Icons.fingerprint),
-                label: const Text('Sign in with a passkey'),
+                label: const Text('Create a passkey'),
               ),
               const SizedBox(height: 8),
               TextButton(
-                onPressed: busy ? null : passkeyRegister,
-                child: const Text('New here? Create a passkey'),
+                onPressed: busy ? null : passkeySignIn,
+                child: const Text('Already have a passkey? Sign in'),
               ),
             ],
           );

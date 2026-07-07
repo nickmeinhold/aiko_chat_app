@@ -12,23 +12,20 @@ enum SocialProvider { apple, google }
 /// A provider credential captured on-device, ready to hand to the gateway.
 ///
 /// [idToken] is the provider's OIDC ID token (a JWT) — the gateway verifies it
-/// against the provider's JWKS. [rawNonce] is the UN-hashed nonce we generated;
-/// what the provider embeds in the token's `nonce` claim is provider-specific
-/// (Apple embeds `sha256(rawNonce)`, Google embeds it verbatim), so we always
-/// send the gateway the RAW nonce and it applies the per-provider transform
-/// before comparing — defeats replay. [name] is the display name
-/// the provider returned — Apple supplies it ONLY on the very first sign-in, so
-/// it may be null on every subsequent one (the gateway must persist it then).
+/// against the provider's JWKS. The nonce is NOT carried here: the controller
+/// owns the server-issued nonce (it fetches it, passes it into [signIn] for the
+/// per-provider SDK transform, and submits its OWN copy to the gateway), so the
+/// credential never round-trips it back. [name] is the display name the provider
+/// returned — Apple supplies it ONLY on the very first sign-in, so it may be
+/// null on every subsequent one (the gateway must persist it then).
 class SocialCredential {
   final SocialProvider provider;
   final String idToken;
-  final String rawNonce;
   final String? name;
 
   const SocialCredential({
     required this.provider,
     required this.idToken,
-    required this.rawNonce,
     this.name,
   });
 }
@@ -52,7 +49,12 @@ class SocialSignInFailed implements Exception {
 
 /// Drives a native provider flow to a verified [SocialCredential].
 abstract interface class SocialAuthClient {
-  /// Run the [provider] sign-in flow. Returns a credential, or throws
-  /// [SocialSignInCancelled] (user backed out) / [SocialSignInFailed].
-  Future<SocialCredential> signIn(SocialProvider provider);
+  /// Run the [provider] sign-in flow, binding the token to the server-issued
+  /// [rawNonce] (Apple embeds `sha256(rawNonce)`, Google embeds it verbatim).
+  /// Returns a credential, or throws [SocialSignInCancelled] (user backed out)
+  /// / [SocialSignInFailed].
+  Future<SocialCredential> signIn(
+    SocialProvider provider, {
+    required String rawNonce,
+  });
 }

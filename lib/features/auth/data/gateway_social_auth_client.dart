@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -29,13 +28,16 @@ class GatewaySocialAuthClient implements SocialAuthClient {
       String.fromEnvironment('GOOGLE_IOS_CLIENT_ID');
 
   @override
-  Future<SocialCredential> signIn(SocialProvider provider) => switch (provider) {
-        SocialProvider.apple => _apple(),
-        SocialProvider.google => _google(),
+  Future<SocialCredential> signIn(
+    SocialProvider provider, {
+    required String rawNonce,
+  }) =>
+      switch (provider) {
+        SocialProvider.apple => _apple(rawNonce),
+        SocialProvider.google => _google(rawNonce),
       };
 
-  Future<SocialCredential> _apple() async {
-    final rawNonce = _newNonce();
+  Future<SocialCredential> _apple(String rawNonce) async {
     final hashedNonce = sha256.convert(utf8.encode(rawNonce)).toString();
     try {
       final cred = await SignInWithApple.getAppleIDCredential(
@@ -57,7 +59,6 @@ class GatewaySocialAuthClient implements SocialAuthClient {
       return SocialCredential(
         provider: SocialProvider.apple,
         idToken: idToken,
-        rawNonce: rawNonce,
         name: name.isEmpty ? null : name,
       );
     } on SignInWithAppleAuthorizationException catch (e) {
@@ -68,8 +69,7 @@ class GatewaySocialAuthClient implements SocialAuthClient {
     }
   }
 
-  Future<SocialCredential> _google() async {
-    final rawNonce = _newNonce();
+  Future<SocialCredential> _google(String rawNonce) async {
     try {
       await GoogleSignIn.instance.initialize(
         clientId: _googleIosClientId.isEmpty ? null : _googleIosClientId,
@@ -85,7 +85,6 @@ class GatewaySocialAuthClient implements SocialAuthClient {
       return SocialCredential(
         provider: SocialProvider.google,
         idToken: idToken,
-        rawNonce: rawNonce,
         name: account.displayName,
       );
     } on GoogleSignInException catch (e) {
@@ -94,12 +93,5 @@ class GatewaySocialAuthClient implements SocialAuthClient {
       }
       throw SocialSignInFailed('Google sign-in failed (${e.code.name})');
     }
-  }
-
-  /// A fresh 256-bit URL-safe nonce per sign-in (replay defence).
-  static String _newNonce() {
-    final rnd = Random.secure();
-    final bytes = List<int>.generate(32, (_) => rnd.nextInt(256));
-    return base64Url.encode(bytes).replaceAll('=', '');
   }
 }

@@ -143,6 +143,8 @@ class FakeChatRestApi implements ChatRestApi {
   }
 
   @override
+  Future<String> fetchNonce() => throw UnimplementedError();
+  @override
   Future<String> refresh(String refreshToken) => throw UnimplementedError();
   @override
   Future<AppUser> me() => throw UnimplementedError();

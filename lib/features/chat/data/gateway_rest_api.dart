@@ -87,6 +87,12 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
+  Future<String> fetchNonce() async {
+    final r = await _bare.post('/v1/auth/nonce');
+    return _map(r.data)['nonce'] as String;
+  }
+
+  @override
   Future<SocialOutcome> socialSignIn({
     required SocialProvider provider,
     required String idToken,

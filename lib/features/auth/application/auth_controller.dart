@@ -125,16 +125,22 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// claim-handle screen. A user cancellation restores the prior state silently
   /// — no error banner.
   Future<void> signInWith(SocialProvider provider) => _ingress((prior) async {
+        // Fetch a server-issued single-use nonce FIRST, then bind the provider
+        // token to it. The controller owns this nonce end-to-end: it threads it
+        // into the SDK flow AND submits its own copy to /social — so a captured
+        // request can't be replayed, and a buggy client can't swap in a nonce
+        // the gateway never issued.
+        final rawNonce = await _rest.fetchNonce();
         final SocialCredential cred;
         try {
-          cred = await _social.signIn(provider);
+          cred = await _social.signIn(provider, rawNonce: rawNonce);
         } on SocialSignInCancelled {
           return prior; // user backed out — no-op, restore prior state
         }
         final outcome = await _rest.socialSignIn(
           provider: provider,
           idToken: cred.idToken,
-          rawNonce: cred.rawNonce,
+          rawNonce: rawNonce,
           name: cred.name,
         );
         return _applyOutcome(outcome, prior);

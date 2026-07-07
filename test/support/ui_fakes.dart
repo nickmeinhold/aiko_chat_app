@@ -51,6 +51,14 @@ class FakeRestApi implements ChatRestApi {
   int claimCalls = 0;
   int deleteCalls = 0;
 
+  /// The nonce `fetchNonce` hands back (simulating a server-issued value).
+  String nonceToIssue = 'server-nonce';
+  int fetchNonceCalls = 0;
+
+  /// The `rawNonce` the controller submitted to `socialSignIn` — asserted to be
+  /// the SAME server-issued nonce that `fetchNonce` returned (single source).
+  String? lastSocialNonce;
+
   AuthSession _session() => AuthSession(
         user: user,
         tokens: const AuthTokens(accessToken: 'access', refreshToken: 'refresh'),
@@ -67,6 +75,12 @@ class FakeRestApi implements ChatRestApi {
   }
 
   @override
+  Future<String> fetchNonce() async {
+    fetchNonceCalls++;
+    return nonceToIssue;
+  }
+
+  @override
   Future<SocialOutcome> socialSignIn({
     required SocialProvider provider,
     required String idToken,
@@ -74,6 +88,7 @@ class FakeRestApi implements ChatRestApi {
     String? name,
   }) async {
     socialCalls++;
+    lastSocialNonce = rawNonce;
     return socialOutcome ?? Authenticated(_session());
   }
 
@@ -252,16 +267,23 @@ class FakeSocialAuthClient implements SocialAuthClient {
   int signInCalls = 0;
   SocialProvider? lastProvider;
 
+  /// The server-issued nonce the controller threaded into [signIn] — asserted to
+  /// be the value from `fetchNonce` (not a client-minted one).
+  String? lastRawNonce;
+
   @override
-  Future<SocialCredential> signIn(SocialProvider provider) async {
+  Future<SocialCredential> signIn(
+    SocialProvider provider, {
+    required String rawNonce,
+  }) async {
     signInCalls++;
     lastProvider = provider;
+    lastRawNonce = rawNonce;
     if (throws != null) throw throws!;
     return credential ??
         SocialCredential(
           provider: provider,
           idToken: 'fake-id-token',
-          rawNonce: 'fake-nonce',
           name: 'Fake Name',
         );
   }
