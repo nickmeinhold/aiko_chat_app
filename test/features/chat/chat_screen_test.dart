@@ -1,12 +1,10 @@
 import 'package:aiko_chat_app/app/providers.dart';
-import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/fake_chat_transport.dart';
-import '../../support/fakes.dart';
 import '../../support/test_helpers.dart';
 
 void main() {

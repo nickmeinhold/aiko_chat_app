@@ -1,16 +1,11 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
-import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
-import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
-import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
-import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
 import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
-import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

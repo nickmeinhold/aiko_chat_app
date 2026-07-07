@@ -4,7 +4,6 @@ import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/fake_chat_transport.dart';

@@ -1,12 +1,10 @@
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
-import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show SoleAdminDeletionBlocked;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/fake_chat_transport.dart';
-import '../../support/fakes.dart';
 import '../../support/test_helpers.dart';
 
 void main() {
