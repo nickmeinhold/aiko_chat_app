@@ -93,8 +93,10 @@ abstract interface class ChatRestApi {
   /// Verify a provider ID token at the gateway. Returns [Authenticated] for a
   /// known identity (log straight in) or [PendingHandle] for a new one (which
   /// must then call [claimHandle]). [rawNonce] is the un-hashed, server-issued
-  /// nonce (from [fetchNonce]) — the gateway checks the token's `nonce` claim
-  /// against `sha256(rawNonce)`.
+  /// nonce (from [fetchNonce]) — the gateway applies the provider-specific
+  /// transform before comparing against the token's `nonce` claim: `sha256(rawNonce)`
+  /// for Apple (which echoes the hash), the raw value for Google (which echoes
+  /// it verbatim).
   /// [name] forwards the provider's display name (Apple only sends it on the
   /// first sign-in, so it may be null).
   Future<SocialOutcome> socialSignIn({

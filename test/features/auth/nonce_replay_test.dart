@@ -109,7 +109,11 @@ void main() {
           .read(authControllerProvider.notifier)
           .signInWith(SocialProvider.apple);
 
-      // Still logged out (clean restore), and nothing was submitted to /social.
+      // The full unused-nonce path: the server nonce WAS fetched and threaded
+      // into the SDK, the user then cancelled, and nothing reached /social.
+      expect(rest.fetchNonceCalls, 1, reason: 'nonce fetched before the sheet');
+      expect(social.lastRawNonce, 'server-nonce-ABC',
+          reason: 'the issued nonce reached the SDK before cancellation');
       expect(await c.read(authControllerProvider.future), isNull);
       expect(rest.socialCalls, 0, reason: 'cancelled flow never hits /social');
     });
