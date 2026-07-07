@@ -19,6 +19,7 @@
 /// a "resolves the real impl, not a stub" check.
 library;
 
+import 'package:drift/drift.dart';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
@@ -74,6 +75,8 @@ ProviderContainer _repoGraphContainer({ChatTelemetry? telemetryOverride}) {
 }
 
 void main() {
+  driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+
   group('chatRepositoryProvider telemetry wiring (#16 regression class)', () {
     test(
         'injects the sink from chatTelemetryProvider — the CONSUMPTION edge, not '
