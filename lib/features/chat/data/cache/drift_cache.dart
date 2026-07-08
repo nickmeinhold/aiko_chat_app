@@ -11,9 +11,12 @@
 ///   W4 markFailed · W5 retry · W6 delete (Phase 2, unsupported here).
 library;
 
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../../domain/message.dart';
+import '../../domain/message_signing.dart';
 import '../../domain/ulid.dart';
 
 part 'drift_cache.g.dart';
@@ -61,6 +64,18 @@ class Messages extends Table {
 
   TextColumn get deliveryState => text()();
 
+  /// Sovereign message signature (sovereign-message-signing, schema v3). All
+  /// nullable: pre-feature rows and inbound rows have none. LOCAL verifiable
+  /// history only — NOT emitted on the wire yet (gated on gateway carriage). See
+  /// `docs/crucible/sovereign-message-signing/SIGNING-SPEC.md`.
+  TextColumn get sig => text().nullable()(); // base64 raw-64 Ed25519
+  TextColumn get senderPubkey => text().nullable()(); // base64 raw-32 key
+  /// The SIGNED compose time — persisted separately from [createdAt] because ack
+  /// reconciliation overwrites createdAt with server time, which would break
+  /// verification of the signed bytes.
+  IntColumn get signedAtMs => integer().nullable()();
+  IntColumn get keyVersion => integer().nullable()();
+
   @override
   Set<Column> get primaryKey => {clientTempId};
 }
@@ -99,7 +114,7 @@ class DriftCache extends _$DriftCache {
   DriftCache(super.e);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -107,6 +122,14 @@ class DriftCache extends _$DriftCache {
         onUpgrade: (m, from, to) async {
           // v1 -> v2: the reconnect resume watermark (design 04 round 4).
           if (from < 2) await m.createTable(syncMeta);
+          // v2 -> v3: sovereign message-signing columns (all nullable — existing
+          // rows keep NULLs). LOCAL verifiable history; not on the wire yet.
+          if (from < 3) {
+            await m.addColumn(messages, messages.sig);
+            await m.addColumn(messages, messages.senderPubkey);
+            await m.addColumn(messages, messages.signedAtMs);
+            await m.addColumn(messages, messages.keyVersion);
+          }
         },
       );
 
@@ -163,10 +186,23 @@ class DriftCache extends _$DriftCache {
   /// inside the transaction (restart-durable, never an in-memory counter).
   /// The caller supplies the clamped [Message.createdAt] and `deliveryState =
   /// sending`. MUST be committed before the wire send.
-  Future<void> insertOptimistic(Message optimistic) async {
+  Future<void> insertOptimistic(Message optimistic,
+      {MessageSignature? signature}) async {
     await transaction(() async {
       final seq = await _nextLocalSeq();
-      await into(messages).insert(_fromDomain(optimistic, localSeq: seq));
+      var row = _fromDomain(optimistic, localSeq: seq);
+      if (signature != null) {
+        // Sovereign signature persisted in the SAME txn as the optimistic row,
+        // so the commit-before-wire invariant covers it too. base64 for text
+        // columns; LOCAL history only (not on the wire).
+        row = row.copyWith(
+          sig: Value(base64Encode(signature.sig)),
+          senderPubkey: Value(base64Encode(signature.rawPublicKey)),
+          signedAtMs: Value(signature.signedAtMs),
+          keyVersion: Value(signature.keyVersion),
+        );
+      }
+      await into(messages).insert(row);
     });
   }
 

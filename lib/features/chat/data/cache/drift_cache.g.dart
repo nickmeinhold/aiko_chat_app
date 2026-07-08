@@ -139,6 +139,48 @@ class $MessagesTable extends Messages
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _sigMeta = const VerificationMeta('sig');
+  @override
+  late final GeneratedColumn<String> sig = GeneratedColumn<String>(
+    'sig',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _senderPubkeyMeta = const VerificationMeta(
+    'senderPubkey',
+  );
+  @override
+  late final GeneratedColumn<String> senderPubkey = GeneratedColumn<String>(
+    'sender_pubkey',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _signedAtMsMeta = const VerificationMeta(
+    'signedAtMs',
+  );
+  @override
+  late final GeneratedColumn<int> signedAtMs = GeneratedColumn<int>(
+    'signed_at_ms',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _keyVersionMeta = const VerificationMeta(
+    'keyVersion',
+  );
+  @override
+  late final GeneratedColumn<int> keyVersion = GeneratedColumn<int>(
+    'key_version',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     clientTempId,
@@ -153,6 +195,10 @@ class $MessagesTable extends Messages
     createdAt,
     localSeq,
     deliveryState,
+    sig,
+    senderPubkey,
+    signedAtMs,
+    keyVersion,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -264,6 +310,36 @@ class $MessagesTable extends Messages
     } else if (isInserting) {
       context.missing(_deliveryStateMeta);
     }
+    if (data.containsKey('sig')) {
+      context.handle(
+        _sigMeta,
+        sig.isAcceptableOrUnknown(data['sig']!, _sigMeta),
+      );
+    }
+    if (data.containsKey('sender_pubkey')) {
+      context.handle(
+        _senderPubkeyMeta,
+        senderPubkey.isAcceptableOrUnknown(
+          data['sender_pubkey']!,
+          _senderPubkeyMeta,
+        ),
+      );
+    }
+    if (data.containsKey('signed_at_ms')) {
+      context.handle(
+        _signedAtMsMeta,
+        signedAtMs.isAcceptableOrUnknown(
+          data['signed_at_ms']!,
+          _signedAtMsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('key_version')) {
+      context.handle(
+        _keyVersionMeta,
+        keyVersion.isAcceptableOrUnknown(data['key_version']!, _keyVersionMeta),
+      );
+    }
     return context;
   }
 
@@ -321,6 +397,22 @@ class $MessagesTable extends Messages
         DriftSqlType.string,
         data['${effectivePrefix}delivery_state'],
       )!,
+      sig: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sig'],
+      ),
+      senderPubkey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sender_pubkey'],
+      ),
+      signedAtMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}signed_at_ms'],
+      ),
+      keyVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}key_version'],
+      ),
     );
   }
 
@@ -353,6 +445,19 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
   /// tiebreak so rapid sends under a skewed clock keep compose order. 0 inbound.
   final int localSeq;
   final String deliveryState;
+
+  /// Sovereign message signature (sovereign-message-signing, schema v3). All
+  /// nullable: pre-feature rows and inbound rows have none. LOCAL verifiable
+  /// history only — NOT emitted on the wire yet (gated on gateway carriage). See
+  /// `docs/crucible/sovereign-message-signing/SIGNING-SPEC.md`.
+  final String? sig;
+  final String? senderPubkey;
+
+  /// The SIGNED compose time — persisted separately from [createdAt] because ack
+  /// reconciliation overwrites createdAt with server time, which would break
+  /// verification of the signed bytes.
+  final int? signedAtMs;
+  final int? keyVersion;
   const MessageRow({
     required this.clientTempId,
     this.serverUlid,
@@ -366,6 +471,10 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     required this.createdAt,
     required this.localSeq,
     required this.deliveryState,
+    this.sig,
+    this.senderPubkey,
+    this.signedAtMs,
+    this.keyVersion,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -390,6 +499,18 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     map['created_at'] = Variable<int>(createdAt);
     map['local_seq'] = Variable<int>(localSeq);
     map['delivery_state'] = Variable<String>(deliveryState);
+    if (!nullToAbsent || sig != null) {
+      map['sig'] = Variable<String>(sig);
+    }
+    if (!nullToAbsent || senderPubkey != null) {
+      map['sender_pubkey'] = Variable<String>(senderPubkey);
+    }
+    if (!nullToAbsent || signedAtMs != null) {
+      map['signed_at_ms'] = Variable<int>(signedAtMs);
+    }
+    if (!nullToAbsent || keyVersion != null) {
+      map['key_version'] = Variable<int>(keyVersion);
+    }
     return map;
   }
 
@@ -415,6 +536,16 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       createdAt: Value(createdAt),
       localSeq: Value(localSeq),
       deliveryState: Value(deliveryState),
+      sig: sig == null && nullToAbsent ? const Value.absent() : Value(sig),
+      senderPubkey: senderPubkey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderPubkey),
+      signedAtMs: signedAtMs == null && nullToAbsent
+          ? const Value.absent()
+          : Value(signedAtMs),
+      keyVersion: keyVersion == null && nullToAbsent
+          ? const Value.absent()
+          : Value(keyVersion),
     );
   }
 
@@ -436,6 +567,10 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       createdAt: serializer.fromJson<int>(json['createdAt']),
       localSeq: serializer.fromJson<int>(json['localSeq']),
       deliveryState: serializer.fromJson<String>(json['deliveryState']),
+      sig: serializer.fromJson<String?>(json['sig']),
+      senderPubkey: serializer.fromJson<String?>(json['senderPubkey']),
+      signedAtMs: serializer.fromJson<int?>(json['signedAtMs']),
+      keyVersion: serializer.fromJson<int?>(json['keyVersion']),
     );
   }
   @override
@@ -454,6 +589,10 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       'createdAt': serializer.toJson<int>(createdAt),
       'localSeq': serializer.toJson<int>(localSeq),
       'deliveryState': serializer.toJson<String>(deliveryState),
+      'sig': serializer.toJson<String?>(sig),
+      'senderPubkey': serializer.toJson<String?>(senderPubkey),
+      'signedAtMs': serializer.toJson<int?>(signedAtMs),
+      'keyVersion': serializer.toJson<int?>(keyVersion),
     };
   }
 
@@ -470,6 +609,10 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     int? createdAt,
     int? localSeq,
     String? deliveryState,
+    Value<String?> sig = const Value.absent(),
+    Value<String?> senderPubkey = const Value.absent(),
+    Value<int?> signedAtMs = const Value.absent(),
+    Value<int?> keyVersion = const Value.absent(),
   }) => MessageRow(
     clientTempId: clientTempId ?? this.clientTempId,
     serverUlid: serverUlid.present ? serverUlid.value : this.serverUlid,
@@ -483,6 +626,10 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     createdAt: createdAt ?? this.createdAt,
     localSeq: localSeq ?? this.localSeq,
     deliveryState: deliveryState ?? this.deliveryState,
+    sig: sig.present ? sig.value : this.sig,
+    senderPubkey: senderPubkey.present ? senderPubkey.value : this.senderPubkey,
+    signedAtMs: signedAtMs.present ? signedAtMs.value : this.signedAtMs,
+    keyVersion: keyVersion.present ? keyVersion.value : this.keyVersion,
   );
   MessageRow copyWithCompanion(MessagesCompanion data) {
     return MessageRow(
@@ -510,6 +657,16 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       deliveryState: data.deliveryState.present
           ? data.deliveryState.value
           : this.deliveryState,
+      sig: data.sig.present ? data.sig.value : this.sig,
+      senderPubkey: data.senderPubkey.present
+          ? data.senderPubkey.value
+          : this.senderPubkey,
+      signedAtMs: data.signedAtMs.present
+          ? data.signedAtMs.value
+          : this.signedAtMs,
+      keyVersion: data.keyVersion.present
+          ? data.keyVersion.value
+          : this.keyVersion,
     );
   }
 
@@ -527,7 +684,11 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ..write('replyToId: $replyToId, ')
           ..write('createdAt: $createdAt, ')
           ..write('localSeq: $localSeq, ')
-          ..write('deliveryState: $deliveryState')
+          ..write('deliveryState: $deliveryState, ')
+          ..write('sig: $sig, ')
+          ..write('senderPubkey: $senderPubkey, ')
+          ..write('signedAtMs: $signedAtMs, ')
+          ..write('keyVersion: $keyVersion')
           ..write(')'))
         .toString();
   }
@@ -546,6 +707,10 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     createdAt,
     localSeq,
     deliveryState,
+    sig,
+    senderPubkey,
+    signedAtMs,
+    keyVersion,
   );
   @override
   bool operator ==(Object other) =>
@@ -562,7 +727,11 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           other.replyToId == this.replyToId &&
           other.createdAt == this.createdAt &&
           other.localSeq == this.localSeq &&
-          other.deliveryState == this.deliveryState);
+          other.deliveryState == this.deliveryState &&
+          other.sig == this.sig &&
+          other.senderPubkey == this.senderPubkey &&
+          other.signedAtMs == this.signedAtMs &&
+          other.keyVersion == this.keyVersion);
 }
 
 class MessagesCompanion extends UpdateCompanion<MessageRow> {
@@ -578,6 +747,10 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   final Value<int> createdAt;
   final Value<int> localSeq;
   final Value<String> deliveryState;
+  final Value<String?> sig;
+  final Value<String?> senderPubkey;
+  final Value<int?> signedAtMs;
+  final Value<int?> keyVersion;
   final Value<int> rowid;
   const MessagesCompanion({
     this.clientTempId = const Value.absent(),
@@ -592,6 +765,10 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.createdAt = const Value.absent(),
     this.localSeq = const Value.absent(),
     this.deliveryState = const Value.absent(),
+    this.sig = const Value.absent(),
+    this.senderPubkey = const Value.absent(),
+    this.signedAtMs = const Value.absent(),
+    this.keyVersion = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -607,6 +784,10 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     required int createdAt,
     this.localSeq = const Value.absent(),
     required String deliveryState,
+    this.sig = const Value.absent(),
+    this.senderPubkey = const Value.absent(),
+    this.signedAtMs = const Value.absent(),
+    this.keyVersion = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : clientTempId = Value(clientTempId),
        channelId = Value(channelId),
@@ -628,6 +809,10 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Expression<int>? createdAt,
     Expression<int>? localSeq,
     Expression<String>? deliveryState,
+    Expression<String>? sig,
+    Expression<String>? senderPubkey,
+    Expression<int>? signedAtMs,
+    Expression<int>? keyVersion,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -643,6 +828,10 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       if (createdAt != null) 'created_at': createdAt,
       if (localSeq != null) 'local_seq': localSeq,
       if (deliveryState != null) 'delivery_state': deliveryState,
+      if (sig != null) 'sig': sig,
+      if (senderPubkey != null) 'sender_pubkey': senderPubkey,
+      if (signedAtMs != null) 'signed_at_ms': signedAtMs,
+      if (keyVersion != null) 'key_version': keyVersion,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -660,6 +849,10 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Value<int>? createdAt,
     Value<int>? localSeq,
     Value<String>? deliveryState,
+    Value<String?>? sig,
+    Value<String?>? senderPubkey,
+    Value<int?>? signedAtMs,
+    Value<int?>? keyVersion,
     Value<int>? rowid,
   }) {
     return MessagesCompanion(
@@ -675,6 +868,10 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       createdAt: createdAt ?? this.createdAt,
       localSeq: localSeq ?? this.localSeq,
       deliveryState: deliveryState ?? this.deliveryState,
+      sig: sig ?? this.sig,
+      senderPubkey: senderPubkey ?? this.senderPubkey,
+      signedAtMs: signedAtMs ?? this.signedAtMs,
+      keyVersion: keyVersion ?? this.keyVersion,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -718,6 +915,18 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     if (deliveryState.present) {
       map['delivery_state'] = Variable<String>(deliveryState.value);
     }
+    if (sig.present) {
+      map['sig'] = Variable<String>(sig.value);
+    }
+    if (senderPubkey.present) {
+      map['sender_pubkey'] = Variable<String>(senderPubkey.value);
+    }
+    if (signedAtMs.present) {
+      map['signed_at_ms'] = Variable<int>(signedAtMs.value);
+    }
+    if (keyVersion.present) {
+      map['key_version'] = Variable<int>(keyVersion.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -739,6 +948,10 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
           ..write('createdAt: $createdAt, ')
           ..write('localSeq: $localSeq, ')
           ..write('deliveryState: $deliveryState, ')
+          ..write('sig: $sig, ')
+          ..write('senderPubkey: $senderPubkey, ')
+          ..write('signedAtMs: $signedAtMs, ')
+          ..write('keyVersion: $keyVersion, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1332,6 +1545,10 @@ typedef $$MessagesTableCreateCompanionBuilder =
       required int createdAt,
       Value<int> localSeq,
       required String deliveryState,
+      Value<String?> sig,
+      Value<String?> senderPubkey,
+      Value<int?> signedAtMs,
+      Value<int?> keyVersion,
       Value<int> rowid,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
@@ -1348,6 +1565,10 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int> createdAt,
       Value<int> localSeq,
       Value<String> deliveryState,
+      Value<String?> sig,
+      Value<String?> senderPubkey,
+      Value<int?> signedAtMs,
+      Value<int?> keyVersion,
       Value<int> rowid,
     });
 
@@ -1417,6 +1638,26 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get deliveryState => $composableBuilder(
     column: $table.deliveryState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sig => $composableBuilder(
+    column: $table.sig,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get senderPubkey => $composableBuilder(
+    column: $table.senderPubkey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get signedAtMs => $composableBuilder(
+    column: $table.signedAtMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get keyVersion => $composableBuilder(
+    column: $table.keyVersion,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1489,6 +1730,26 @@ class $$MessagesTableOrderingComposer
     column: $table.deliveryState,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get sig => $composableBuilder(
+    column: $table.sig,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get senderPubkey => $composableBuilder(
+    column: $table.senderPubkey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get signedAtMs => $composableBuilder(
+    column: $table.signedAtMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get keyVersion => $composableBuilder(
+    column: $table.keyVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -1547,6 +1808,24 @@ class $$MessagesTableAnnotationComposer
     column: $table.deliveryState,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get sig =>
+      $composableBuilder(column: $table.sig, builder: (column) => column);
+
+  GeneratedColumn<String> get senderPubkey => $composableBuilder(
+    column: $table.senderPubkey,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get signedAtMs => $composableBuilder(
+    column: $table.signedAtMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get keyVersion => $composableBuilder(
+    column: $table.keyVersion,
+    builder: (column) => column,
+  );
 }
 
 class $$MessagesTableTableManager
@@ -1592,6 +1871,10 @@ class $$MessagesTableTableManager
                 Value<int> createdAt = const Value.absent(),
                 Value<int> localSeq = const Value.absent(),
                 Value<String> deliveryState = const Value.absent(),
+                Value<String?> sig = const Value.absent(),
+                Value<String?> senderPubkey = const Value.absent(),
+                Value<int?> signedAtMs = const Value.absent(),
+                Value<int?> keyVersion = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion(
                 clientTempId: clientTempId,
@@ -1606,6 +1889,10 @@ class $$MessagesTableTableManager
                 createdAt: createdAt,
                 localSeq: localSeq,
                 deliveryState: deliveryState,
+                sig: sig,
+                senderPubkey: senderPubkey,
+                signedAtMs: signedAtMs,
+                keyVersion: keyVersion,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1622,6 +1909,10 @@ class $$MessagesTableTableManager
                 required int createdAt,
                 Value<int> localSeq = const Value.absent(),
                 required String deliveryState,
+                Value<String?> sig = const Value.absent(),
+                Value<String?> senderPubkey = const Value.absent(),
+                Value<int?> signedAtMs = const Value.absent(),
+                Value<int?> keyVersion = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion.insert(
                 clientTempId: clientTempId,
@@ -1636,6 +1927,10 @@ class $$MessagesTableTableManager
                 createdAt: createdAt,
                 localSeq: localSeq,
                 deliveryState: deliveryState,
+                sig: sig,
+                senderPubkey: senderPubkey,
+                signedAtMs: signedAtMs,
+                keyVersion: keyVersion,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

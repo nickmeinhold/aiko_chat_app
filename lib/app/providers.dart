@@ -30,6 +30,7 @@ import '../features/chat/data/gateway_rest_api.dart';
 import '../features/chat/data/transport/chat_transport.dart';
 import '../features/chat/data/transport/gateway_transport.dart';
 import '../services/secure_token_store.dart';
+import '../services/sovereign_key_store.dart';
 import 'config.dart';
 
 // --- config ----------------------------------------------------------------
@@ -94,6 +95,12 @@ class GatewayConfigController extends Notifier<GatewayConfig> {
 /// The encrypted JWT store. Tests override this with an `InMemoryTokenStore`.
 final secureTokenStoreProvider = Provider<SecureTokenStore>(
   (ref) => SecureTokenStore(),
+);
+
+/// The device's sovereign Ed25519 signing-key store (sovereign-message-signing).
+/// Distinct from the JWT store: this proves authorship; the JWT asserts identity.
+final sovereignKeyStoreProvider = Provider<SovereignKeyStore>(
+  (ref) => SovereignKeyStore(),
 );
 
 /// A broadcast sink for "the session is now *terminally* unauthenticated"

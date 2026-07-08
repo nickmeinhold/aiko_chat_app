@@ -19,7 +19,7 @@
 /// a "resolves the real impl, not a stub" check.
 library;
 
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
@@ -38,6 +38,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/fake_chat_transport.dart';
 import 'support/fakes.dart';
+import 'support/test_helpers.dart' show installSecureStorageMock;
 
 const _me = AppUser(
   userId: 'u1',
@@ -76,6 +77,10 @@ ProviderContainer _repoGraphContainer({ChatTelemetry? telemetryOverride}) {
 
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+  // The sovereign key store reads flutter_secure_storage when the real graph
+  // builds; mock the channel in-memory (leaf I/O, like the SharedPreferences mock
+  // the leaf group uses) so construction stays offline.
+  setUpAll(installSecureStorageMock);
 
   group('chatRepositoryProvider telemetry wiring (#16 regression class)', () {
     test(
@@ -114,6 +119,21 @@ void main() {
       // provider says"; this proves "the provider says LoggingChatTelemetry".)
       expect(repo.debugTelemetry, isA<LoggingChatTelemetry>());
       expect(repo.debugTelemetry, same(container.read(chatTelemetryProvider)));
+    });
+
+    test(
+        'wires a REAL sovereign signing key — the same DI-no-op class as '
+        'telemetry (sovereign-message-signing)', () async {
+      // RED-prove: delete `signingKey: signingKey` from chat_providers.dart and
+      // the repo's nullable _signingKey stays null → messages silently never get
+      // signed. debugSigningKey being non-null is the automated guard.
+      final container = _repoGraphContainer();
+      addTearDown(container.dispose);
+      container.listen(chatRepositoryProvider, (_, _) {});
+
+      final repo = await container.read(chatRepositoryProvider.future);
+      expect(repo.debugSigningKey, isNotNull);
+      expect(repo.debugSigningKey!.rawPublicKey.length, 32);
     });
   });
 
