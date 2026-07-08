@@ -235,4 +235,49 @@ void main() {
     expect(after.body, 'server edited');
     expect(after.sig, isNull, reason: 'diverged content drops the stale sig');
   });
+
+  test('cage-match Tesla R3: a content-identical COLLAPSE preserves the seal',
+      () async {
+    final repo = buildRepo(signingKey: key);
+    await repo.sendMessage(_chan, 'echo me');
+    final signed = await rawRow();
+    expect(signed.sig, isNotNull);
+
+    // Birth-race: our OWN self-echo (identical body) lands as a server row BEFORE
+    // the ack, then the ack collapses our signed row onto it. Content is identical
+    // to what we signed → the seal must SURVIVE the race-order merge.
+    transport.emitMessage(Message(
+      clientTempId: '01U',
+      id: '01U',
+      channelId: _chan,
+      sender: const MessageSender(
+          userId: 'me', kind: SenderKind.human, label: 'Me'),
+      body: 'echo me', // identical to what we signed
+      createdAt: DateTime.parse('2026-01-01T00:00:00Z').toUtc(),
+      deliveryState: DeliveryState.sent,
+    ));
+    await pump();
+    transport.emitAck(signed.clientTempId, '01U');
+    await pump();
+
+    final after = await rawRow();
+    expect(after.serverUlid, '01U', reason: 'collapsed onto the server ULID');
+    expect(after.sig, signed.sig,
+        reason: 'identical-content collapse preserves the valid seal');
+    // And it still verifies against the preserved signed_at_ms.
+    final ok = await verifySignature(
+      base64Decode(after.senderPubkey!),
+      base64Decode(after.sig!),
+      SignedPayload(
+        rawPublicKey: base64Decode(after.senderPubkey!),
+        channelId: after.channelId,
+        clientMsgId: after.clientTempId,
+        signedAtMs: after.signedAtMs!,
+        body: after.body,
+        replyTo: null,
+      ),
+    );
+    expect(ok, isTrue);
+    await repo.dispose();
+  });
 }

@@ -247,6 +247,16 @@ class DriftCache extends _$DriftCache {
         await (delete(messages)
               ..where((t) => t.clientTempId.equals(ru.clientTempId)))
             .go();
+        // Collapse is a ULID-COLLISION (birth-race) path, not a mutation path: a
+        // self-echo / history row (ru) landed before our ack, and the SURVIVING
+        // row is our SIGNED optimistic row (rc). In the common self-echo case
+        // ru's body/reply/channel equal what rc signed, so our sig is STILL VALID
+        // — clearing unconditionally would erase valid local history by race order
+        // (cage-match Tesla R3). Clear ONLY when a signed field truly diverges;
+        // otherwise preserve rc's existing signature via Value.absent().
+        final signedFieldChanged = rc.body != ru.body ||
+            rc.replyToId != ru.replyToId ||
+            rc.channelId != ru.channelId;
         await (update(messages)
               ..where((t) => t.clientTempId.equals(clientTempId)))
             .write(MessagesCompanion(
@@ -265,14 +275,14 @@ class DriftCache extends _$DriftCache {
           // using one source removes the path-dependent asymmetry.
           createdAt: Value(serverCreatedAt.toUtc().millisecondsSinceEpoch),
           deliveryState: Value(DeliveryState.sent.wire),
-          // Server-authoritative body/channel/replyTo now govern this row, so our
-          // signature (computed over OUR content) no longer authenticates it.
-          // Clear the signing columns → "unverified", never a stale sig beside
-          // mutated content (absent = unverified, never invalid; cage-match Carnot).
-          sig: const Value(null),
-          senderPubkey: const Value(null),
-          signedAtMs: const Value(null),
-          keyVersion: const Value(null),
+          // Diverged → drop the now-stale sig; identical → preserve rc's seal.
+          sig: signedFieldChanged ? const Value(null) : const Value.absent(),
+          senderPubkey:
+              signedFieldChanged ? const Value(null) : const Value.absent(),
+          signedAtMs:
+              signedFieldChanged ? const Value(null) : const Value.absent(),
+          keyVersion:
+              signedFieldChanged ? const Value(null) : const Value.absent(),
         ));
         return AckOutcome.collapsed;
       }
