@@ -123,9 +123,12 @@ cleanly to the edge pile, while <code>kGatewayPresets</code> sorts so cleanly to
 two concepts are genuinely separable.</p>
 
 <h2 id="census">3 · The census — how the references cluster</h2>
-<p><code>gateway</code> appears <strong>166×</strong> across <code>lib/</code>; <code>island</code> <strong>18×</strong>
-(comments only). But the raw count hides the story — the <em>files</em> cluster into two disjoint groups with almost no
-overlap:</p>
+<p><code>gateway</code> appears <strong>166×</strong> across <code>lib/</code>; <code>island</code> <strong>18×</strong>,
+comments-only <em>at the moment this census was taken</em>. (Caveat, so the number survives contact with its own diff:
+the forward-compat slice shipped alongside this doc — see §5-C — adds the <em>first live-code</em> <code>island</code>
+occurrence, the <code>'islands'</code> envelope key in <code>gateway_directory_client.dart</code>. So read "comments-only"
+as the pre-down-payment baseline, not a post-merge invariant.) But the raw count hides the story — the <em>files</em>
+cluster into two disjoint groups with almost no overlap:</p>
 
 <table>
 <thead><tr><th>Node-identity cluster → <span class="tag island">island</span></th><th>Protocol-edge cluster → <span class="tag gateway">gateway</span> (stays)</th></tr></thead>
@@ -185,9 +188,25 @@ the island tab's call (§6). Rename to <code>IslandEntry</code> before <code>#17
 an <em>edge-named path returning node-identity data</em> — the perfect crystallization of the whole conflation. The app
 only <em>consumes</em> it; it cannot rename it. And renaming it is not free even for the island: it needs a
 <strong>compat window</strong> (serve both <code>/v1/gateways</code> and, say, <code>/v1/islands</code>; accept both JSON
-keys) so old app builds don't break. The client already reads fallback keys
-(<code>['gateways','servers','entries','directory']</code>) — adding <code>'islands'</code> to that list is the app's
-cheap forward-compat down-payment, and is safe to do <em>now</em> because it only <em>widens</em> what we accept.</p>
+keys) so old app builds don't break.</p>
+
+<p><strong>Tranche C splits into a reversible half and an irreversible half — and only the reversible half is shipped
+here.</strong> The two are not the same commitment:</p>
+<ul class="tight">
+<li><strong>Response-key widening (reversible, done now).</strong> The client's accepted-key list now leads with
+<code>'islands'</code> ahead of the legacy <code>'gateways'</code> (<code>['islands','gateways','servers','entries',
+'directory']</code>). Note this is a <em>canonical-precedence prepend</em>, not a passive append to the fallbacks: when a
+compat-window peer double-serves both keys, <code>'islands'</code> <em>wins</em> — a behavioural commitment, guard-contract
+tested, and fail-soft (an empty or all-malformed <code>'islands'</code> does <em>not</em> shadow a populated
+<code>'gateways'</code>). Reversible: drop the key from the list and nothing breaks.</li>
+<li><strong>Request-path migration (irreversible, NOT done, still island-gated).</strong> The app still <em>requests</em>
+<code>$base/v1/gateways</code> (<code>gateway_directory_provider.dart</code>). If the island renames the <em>path</em>,
+the app must change what it <em>sends</em> — and a sent path can't be widened the way a parsed key can (you request one
+URL). That later app-side edit is real work this PR does <em>not</em> pre-pay; it waits on the island publishing the new
+path + its own dual-serve window.</li>
+</ul>
+<p>So the down-payment is genuinely safe to ship <em>now</em> because the reversible half only <em>widens</em> what we
+<em>accept</em>; the irreversible half (what we <em>request</em>) is untouched and stays island-gated.</p>
 
 <blockquote class="danger">
 <strong>Do not</strong> rename the <code>/v1/gateways</code> path app-side under any circumstance — it's a request the app
@@ -226,8 +245,9 @@ endpoint</em> and document that the edge serves the island directory — zero mi
 </blockquote>
 
 <p>When both gates open and both decisions land, the app-side work is a single clean coordinated PR: affirm Tranche A,
-apply Tranche B with the chosen noun, widen Tranche C's accepted keys to match the compat window. No cold start, no
-guesswork — this doc <em>is</em> the plan, pre-verified against the real code.</p>
+apply Tranche B with the chosen noun, and — <em>if</em> Decision 2 picks path-rename (option a) — point the request path
+at <code>/v1/islands</code> (Tranche C's irreversible half; the reversible key-widening half is already shipped). No cold
+start, no guesswork — this doc <em>is</em> the plan, pre-verified against the real code.</p>
 
 <p class="note">Authored app-side as preparation, 2026-07-08. Tracked as app task #13. Cross-references: island
 <code>claude-tasks#1760</code>, memory <code>concept_island_vs_gateway.md</code>. When the island tab reads this, the two
