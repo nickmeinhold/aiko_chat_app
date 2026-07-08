@@ -15,8 +15,24 @@
 library;
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../domain/server_entry.dart';
+
+/// The directory-array envelope keys we accept, in PRIORITY order. `islands` is
+/// the canonical island-vocabulary key (Design 10) and is tried FIRST; `gateways`
+/// is the current wire key, kept for backward-compat; `servers`/`entries`/
+/// `directory` are tolerant fallbacks. ORDER IS SEMANTIC — a guard-contract test
+/// pins that `islands` wins over `gateways` when both are present, so this is not
+/// a set to reorder casually. No island serves `islands` yet, so accepting it is
+/// a pure widening today.
+const kDirectoryEnvelopeKeysByPriority = <String>[
+  'islands',
+  'gateways',
+  'servers',
+  'entries',
+  'directory',
+];
 
 /// Optional fixed directory origin (`--dart-define=GATEWAY_DIRECTORY_URL`). Empty
 /// = the shipped default: discover from the currently-selected gateway instead of
@@ -45,31 +61,62 @@ class GatewayDirectoryClient {
     return _parse(res.data);
   }
 
-  /// Accept either a bare JSON array of entries, or an envelope object holding
-  /// the array under a conventional key (`gateways`/`servers`/`entries`/
-  /// `directory`). Anything else yields an empty list rather than throwing — a
-  /// shape we don't recognise is "no directory", not a crash.
-  static List<ServerEntry> _parse(dynamic data) {
-    final List<dynamic>? list = switch (data) {
-      List<dynamic> l => l,
-      Map<String, dynamic> m => _firstList(
-          m, const ['gateways', 'servers', 'entries', 'directory']),
-      _ => null,
-    };
-    if (list == null) return const [];
-    return list
-        .whereType<Map<String, dynamic>>()
-        .map(ServerEntry.tryFromJson)
-        .whereType<ServerEntry>()
-        .toList(growable: false);
-  }
+  /// Accept either a bare JSON array of entries, or an envelope object holding the
+  /// array under a conventional key (see [kDirectoryEnvelopeKeysByPriority]:
+  /// `islands` first, then legacy `gateways`, then tolerant fallbacks). This reads
+  /// both a legacy directory and a future island that renames `/v1/gateways`'s
+  /// payload during its compat window. Anything else yields an empty list rather
+  /// than throwing — a shape we don't recognise is "no directory", not a crash.
+  static List<ServerEntry> _parse(dynamic data) => switch (data) {
+        List<dynamic> l => _entries(l),
+        Map<String, dynamic> m => _firstUsableEnvelope(m),
+        _ => const [],
+      };
 
-  static List<dynamic>? _firstList(Map<String, dynamic> m, List<String> keys) {
-    for (final key in keys) {
+  /// Parse a raw list of directory entries, dropping any malformed one (each is
+  /// held to [ServerEntry.tryFromJson]'s http(s)+host bar — the directory is
+  /// attacker-influenceable, so a bad entry is skipped, never surfaced).
+  static List<ServerEntry> _entries(List<dynamic> raw) => raw
+      .whereType<Map<String, dynamic>>()
+      .map(ServerEntry.tryFromJson)
+      .whereType<ServerEntry>()
+      .toList(growable: false);
+
+  /// The parsed entries of the first envelope key (by priority) that yields at
+  /// least one USABLE entry.
+  ///
+  /// Neither an empty list NOR a list whose every entry is malformed shadows a
+  /// later populated-and-valid one: during a compat window a peer that serves
+  /// `islands: []` (or `islands: [<garbage>]`) beside a populated `gateways: [...]`
+  /// must still yield the gateways. Returning the empty/unusable `islands` would
+  /// silently blank the directory — a lie strictly worse than picking the legacy
+  /// rail — and the whole point of multi-key tolerance is to MAXIMISE directory
+  /// availability (same SPOF-avoidance ethos as bundling multiple seeds). If no
+  /// present key yields a usable entry, the result is an empty directory — the
+  /// correct "recognised but genuinely empty" outcome. Dual-key MISMATCH semantics
+  /// (two populated lists that DISAGREE) ultimately belong to the island (#1760);
+  /// until then this fail-soft default — unusable never shadows usable, priority
+  /// breaks a genuine tie — is the safe pick.
+  static List<ServerEntry> _firstUsableEnvelope(Map<String, dynamic> m) {
+    List<ServerEntry>? firstUsable;
+    final usableKeys = <String>[];
+    for (final key in kDirectoryEnvelopeKeysByPriority) {
       final v = m[key];
-      if (v is List) return v;
+      if (v is! List) continue;
+      final parsed = _entries(v);
+      if (parsed.isEmpty) continue;
+      usableKeys.add(key);
+      firstUsable ??= parsed;
     }
-    return null;
+    // Observability breadcrumb (debug only): more than one envelope key yielded
+    // usable entries — a peer is double-serving during a compat window. If those
+    // lists ever DIVERGE we silently prefer the priority winner; this is the log
+    // that saves a future 3am ghost-chase across federated nodes (Tesla).
+    if (kDebugMode && usableKeys.length > 1) {
+      debugPrint('GatewayDirectoryClient: multiple usable directory envelope keys '
+          'present $usableKeys — preferring "${usableKeys.first}" by priority.');
+    }
+    return firstUsable ?? const [];
   }
 }
 

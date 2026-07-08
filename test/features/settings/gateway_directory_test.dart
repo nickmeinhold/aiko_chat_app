@@ -109,6 +109,85 @@ void main() {
       expect(out.single.httpBaseUrl, 'https://enspyr.co');
     });
 
+    // Forward-compat (Design 10): when an island renames `/v1/gateways`'s payload
+    // to the canonical `islands` key, the app already reads it — a pure widening.
+    test('parses an envelope under the canonical `islands` key', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _CannedAdapter(jsonEncode({
+          'islands': [
+            {'name': 'Enspyr', 'base_url': 'https://enspyr.co'}
+          ]
+        }));
+      final client = GatewayDirectoryClient(dio: dio);
+      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      expect(out.single.httpBaseUrl, 'https://enspyr.co');
+    });
+
+    // Guard-contract, not just outcome: `islands` is tried BEFORE `gateways`, so
+    // during a compat window that double-serves both, the canonical key wins.
+    test('`islands` wins over `gateways` when both keys are present', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _CannedAdapter(jsonEncode({
+          'islands': [
+            {'name': 'New', 'base_url': 'https://new.example'}
+          ],
+          'gateways': [
+            {'name': 'Legacy', 'base_url': 'https://legacy.example'}
+          ],
+        }));
+      final client = GatewayDirectoryClient(dio: dio);
+      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      expect(out.single.httpBaseUrl, 'https://new.example');
+    });
+
+    // Empty-shadow guard (Tesla): an empty `islands` must NOT blank the directory
+    // when a populated `gateways` is present — priority yields to usability, so we
+    // fall through to the legacy rail rather than silently show zero islands.
+    test('an empty `islands` does not shadow a populated `gateways`', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _CannedAdapter(jsonEncode({
+          'islands': <dynamic>[],
+          'gateways': [
+            {'name': 'Legacy', 'base_url': 'https://legacy.example'}
+          ],
+        }));
+      final client = GatewayDirectoryClient(dio: dio);
+      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      expect(out.single.httpBaseUrl, 'https://legacy.example');
+    });
+
+    // Invalid-shadow guard (Tesla, second harmonic): a non-empty `islands` whose
+    // every entry is malformed is ALSO unusable — it must not shadow a valid
+    // `gateways` either. Dissolves the whole shadow class, not just the empty case.
+    test('an all-malformed `islands` does not shadow a valid `gateways`',
+        () async {
+      final dio = Dio()
+        ..httpClientAdapter = _CannedAdapter(jsonEncode({
+          'islands': [
+            {'name': 'Bad', 'base_url': 'javascript:alert(1)'}, // fails validator
+            {'name': 'AlsoBad'}, // no url at all
+          ],
+          'gateways': [
+            {'name': 'Legacy', 'base_url': 'https://legacy.example'}
+          ],
+        }));
+      final client = GatewayDirectoryClient(dio: dio);
+      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      expect(out.single.httpBaseUrl, 'https://legacy.example');
+    });
+
+    // Both empty is a genuinely empty directory, not a crash and not a fallthrough
+    // to something else — the "recognised but empty" result.
+    test('both keys empty yields [] (genuinely empty directory)', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _CannedAdapter(jsonEncode({
+          'islands': <dynamic>[],
+          'gateways': <dynamic>[],
+        }));
+      final client = GatewayDirectoryClient(dio: dio);
+      expect(await client.fetchFrom('https://dir.example/v1/gateways'), isEmpty);
+    });
+
     test('an unrecognised shape yields [] (not a crash)', () async {
       final dio = Dio()..httpClientAdapter = _CannedAdapter(jsonEncode(42));
       final client = GatewayDirectoryClient(dio: dio);
