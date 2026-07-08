@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
+import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
@@ -148,6 +149,38 @@ void main() {
       ),
     );
     expect(ok, isTrue);
+    await repo.dispose();
+  });
+
+  test('cage-match Carnot: a collapse (server body wins) CLEARS the stale sig',
+      () async {
+    final repo = buildRepo(signingKey: key);
+    await repo.sendMessage(_chan, 'my body');
+    final before = await rawRow();
+    expect(before.sig, isNotNull, reason: 'our optimistic row is signed');
+
+    // A server row with the SAME ULID but a DIFFERENT body arrives first, then
+    // our ack collapses our row onto server truth. The stored signature was over
+    // "my body" — it must NOT survive beside the server's "server body".
+    transport.emitMessage(Message(
+      clientTempId: '01U',
+      id: '01U',
+      channelId: _chan,
+      sender: const MessageSender(
+          userId: 'me', kind: SenderKind.human, label: 'Me'),
+      body: 'server body',
+      createdAt: DateTime.parse('2026-01-01T00:00:00Z').toUtc(),
+      deliveryState: DeliveryState.sent,
+    ));
+    await pump();
+    transport.emitAck(before.clientTempId, '01U');
+    await pump();
+
+    final after = await rawRow();
+    expect(after.body, 'server body', reason: 'collapse merged server content');
+    expect(after.sig, isNull, reason: 'stale signature cleared on collapse');
+    expect(after.senderPubkey, isNull);
+    expect(after.signedAtMs, isNull);
     await repo.dispose();
   });
 }

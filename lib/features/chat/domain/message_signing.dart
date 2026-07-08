@@ -67,6 +67,23 @@ class MessageSignature {
 /// (`"ab"‖"c"` ≠ `"a"‖"bc"`). Transmit/verify these EXACT bytes — never
 /// deserialize→reserialize before verifying (the Briar 2023 malleability bug).
 Uint8List signingBytes(SignedPayload p) {
+  // Fail LOUD at the cryptographic boundary (cage-match: Carnot). A signature is
+  // only meaningful over well-formed inputs, and these invariants are what a
+  // future verifier will assume.
+  if (p.rawPublicKey.length != 32) {
+    throw ArgumentError('sender public key must be 32 bytes (Ed25519), '
+        'got ${p.rawPublicKey.length}');
+  }
+  if (p.channelId.isEmpty) throw ArgumentError('channelId must not be empty');
+  if (p.clientMsgId.isEmpty) throw ArgumentError('clientMsgId must not be empty');
+  if (p.signedAtMs < 0) throw ArgumentError('signedAtMs must be non-negative');
+  // Absent (null) and present-empty ('') reply_to would serialize identically via
+  // `?? ''`, breaking injectivity if a verifier distinguishes them. Forbid the
+  // empty string so `null` is the ONLY "no reply" encoding (cage-match: Carnot).
+  if (p.replyTo != null && p.replyTo!.isEmpty) {
+    throw ArgumentError('replyTo must be null or non-empty, never "" '
+        '(absent must not collide with present-empty)');
+  }
   final out = BytesBuilder(copy: false);
   void lengthPrefixed(List<int> field) {
     final len = ByteData(4)..setUint32(0, field.length, Endian.big);
@@ -92,18 +109,36 @@ final Ed25519 _ed25519 = Ed25519();
 /// wrong-forever signature (deferring recipient verify is disciplined; shipping
 /// a broken sender signature is how you mint history that is invalid forever).
 Future<MessageSignature> sign(SovereignKey key, SignedPayload p) async {
-  final message = signingBytes(p);
-  final signature = await _ed25519.sign(message, keyPair: key.keyPair);
-  final ok = await _ed25519.verify(message, signature: signature);
+  // Slam the single door: the payload's pubkey MUST be the signing key's own.
+  // Otherwise self-verify (below) could pass while the RETURNED/persisted pubkey
+  // can't verify the sig — the exact wrong-forever class this self-check exists
+  // to prevent (cage-match consensus: Carnot + Tesla).
+  if (!_bytesEqual(p.rawPublicKey, key.rawPublicKey)) {
+    throw ArgumentError('SignedPayload.rawPublicKey must equal the signing '
+        "key's own public key");
+  }
+  final signature = await _ed25519.sign(signingBytes(p), keyPair: key.keyPair);
+  final sig = Uint8List.fromList(signature.bytes);
+  // Self-verify through the SAME path a future verifier uses — proving the
+  // returned (pubkey, sig) pair verifies, not merely that the keypair signed.
+  final ok = await verifySignature(p.rawPublicKey, sig, p);
   if (!ok) {
     throw StateError('sovereign self-verify failed — refusing to emit a signature');
   }
   return MessageSignature(
-    sig: Uint8List.fromList(signature.bytes),
+    sig: sig,
     rawPublicKey: p.rawPublicKey,
     signedAtMs: p.signedAtMs,
     keyVersion: key.keyVersion,
   );
+}
+
+bool _bytesEqual(List<int> a, List<int> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 /// Verify a detached signature over [p]. Shipped now for the sender self-check;

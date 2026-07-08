@@ -265,6 +265,14 @@ class DriftCache extends _$DriftCache {
           // using one source removes the path-dependent asymmetry.
           createdAt: Value(serverCreatedAt.toUtc().millisecondsSinceEpoch),
           deliveryState: Value(DeliveryState.sent.wire),
+          // Server-authoritative body/channel/replyTo now govern this row, so our
+          // signature (computed over OUR content) no longer authenticates it.
+          // Clear the signing columns → "unverified", never a stale sig beside
+          // mutated content (absent = unverified, never invalid; cage-match Carnot).
+          sig: const Value(null),
+          senderPubkey: const Value(null),
+          signedAtMs: const Value(null),
+          keyVersion: const Value(null),
         ));
         return AckOutcome.collapsed;
       }
@@ -302,6 +310,13 @@ class DriftCache extends _$DriftCache {
             replyToId: Value(serverMsg.replyToId),
             createdAt:
                 Value(serverMsg.createdAt.toUtc().millisecondsSinceEpoch),
+            // Server state overwrites the signed fields → drop any signature so a
+            // stale one never sits beside mutated content. No-op for inbound rows
+            // (never signed); correct for our own acked row the server later edits.
+            sig: const Value(null),
+            senderPubkey: const Value(null),
+            signedAtMs: const Value(null),
+            keyVersion: const Value(null),
           ),
         );
       } else {

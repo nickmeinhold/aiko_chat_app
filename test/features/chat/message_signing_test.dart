@@ -139,6 +139,50 @@ void main() {
           body: p.body);
       expect(await verifySignature(wrongPub, s.sig, substituted), isFalse);
     });
+
+    // Cage-match consensus (Carnot + Tesla): sign() must slam the door on a
+    // payload whose pubkey isn't the signing key's — else self-verify passes but
+    // the persisted pubkey can't verify (wrong-forever history).
+    test('sign REJECTS a payload pubkey != the signing key', () async {
+      final key = await SovereignKeyStore().loadOrCreate();
+      final wrongPub = Uint8List(32); // valid length, wrong key
+      final p = _fixture(wrongPub);
+      expect(() => sign(key, p), throwsArgumentError);
+    });
+  });
+
+  group('domain-bounds validation (cage-match: Carnot — fail loud at the boundary)', () {
+    SignedPayload payload({
+      Uint8List? pub,
+      String channelId = 'c',
+      String clientMsgId = 'm',
+      int signedAtMs = 1,
+      String? replyTo,
+    }) =>
+        SignedPayload(
+            rawPublicKey: pub ?? Uint8List(32),
+            channelId: channelId,
+            clientMsgId: clientMsgId,
+            signedAtMs: signedAtMs,
+            body: 'b',
+            replyTo: replyTo);
+
+    test('a non-32-byte public key is rejected', () {
+      expect(() => signingBytes(payload(pub: Uint8List(31))), throwsArgumentError);
+    });
+    test('an empty channelId / clientMsgId is rejected', () {
+      expect(() => signingBytes(payload(channelId: '')), throwsArgumentError);
+      expect(() => signingBytes(payload(clientMsgId: '')), throwsArgumentError);
+    });
+    test('a negative signedAtMs is rejected', () {
+      expect(() => signingBytes(payload(signedAtMs: -1)), throwsArgumentError);
+    });
+    test('an empty-string replyTo is rejected (absent != present-empty)', () {
+      expect(() => signingBytes(payload(replyTo: '')), throwsArgumentError);
+    });
+    test('a null replyTo is allowed', () {
+      expect(signingBytes(payload(replyTo: null)), isNotNull);
+    });
   });
 }
 
