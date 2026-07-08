@@ -109,6 +109,37 @@ void main() {
       expect(out.single.httpBaseUrl, 'https://enspyr.co');
     });
 
+    // Forward-compat (Design 10): when an island renames `/v1/gateways`'s payload
+    // to the canonical `islands` key, the app already reads it — a pure widening.
+    test('parses an envelope under the canonical `islands` key', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _CannedAdapter(jsonEncode({
+          'islands': [
+            {'name': 'Enspyr', 'base_url': 'https://enspyr.co'}
+          ]
+        }));
+      final client = GatewayDirectoryClient(dio: dio);
+      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      expect(out.single.httpBaseUrl, 'https://enspyr.co');
+    });
+
+    // Guard-contract, not just outcome: `islands` is tried BEFORE `gateways`, so
+    // during a compat window that double-serves both, the canonical key wins.
+    test('`islands` wins over `gateways` when both keys are present', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _CannedAdapter(jsonEncode({
+          'islands': [
+            {'name': 'New', 'base_url': 'https://new.example'}
+          ],
+          'gateways': [
+            {'name': 'Legacy', 'base_url': 'https://legacy.example'}
+          ],
+        }));
+      final client = GatewayDirectoryClient(dio: dio);
+      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      expect(out.single.httpBaseUrl, 'https://new.example');
+    });
+
     test('an unrecognised shape yields [] (not a crash)', () async {
       final dio = Dio()..httpClientAdapter = _CannedAdapter(jsonEncode(42));
       final client = GatewayDirectoryClient(dio: dio);

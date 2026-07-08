@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 10 — The island/gateway semantic split</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.thesis { background:#f3f0fb; border-left-color:#7d5fff; font-size:1.02rem; }
+  blockquote.danger { background:#fdf0ef; border-left-color:var(--blocker); }
+  .note { color:var(--muted); font-size:.9rem; }
+  .tag { font-weight:700; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; padding:.1em .5em;
+         border-radius:4px; color:#fff; white-space:nowrap; }
+  .island { background:#7d5fff; } .gateway { background:var(--accent); } .wire { background:var(--blocker); }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.5rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  ul.tight li { margin:.25rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Design 10 — The island/gateway semantic split</h1>
+<p class="lead">The codebase uses one word, <code>gateway</code>, for two different things: the <em>sovereign node</em>
+(who/where — the unit of federation and choice) and its <em>protocol edge</em> (how — the substrate-agnostic
+<code>/v1/*</code> seam). This is not a rename to apply; it is a <strong>distinction the code failed to make</strong>, and
+the code's own comments already half-know it. This doc proves the split from a census, classifies every reference, and
+sharpens the open decision from a yes/no into the two precise questions the island tab actually has to answer.</p>
+
+<div class="scope">
+  <strong>Status:</strong> <em>app-side preparation — NOT a rename yet.</em> The actual rename is <strong>blocked</strong>,
+  deliberately, on two gates (see <a href="#gates">§6</a>): the island session's canonical decision
+  (<code>claude-tasks#1760</code>, <code>project:aiko-chat-island</code>, still OPEN) and the team group's naming reply.
+  The canonical concept + wire contract live <em>island-side</em> (peer-owned); an app-only rename creates
+  app-says-island / island-says-gateway drift. This doc is the work that turns the eventual rename into a clean coordinated
+  push instead of a cold start.<br>
+  <strong>Companion to</strong> <a href="06-sovereign-identity-federation.html">Design 06</a> (federation north-star) and
+  <a href="05-communities-and-discovery.html">Design 05</a> (community/discovery). The vocabulary carved here is the one
+  every future federation feature will reason in.<br>
+  <strong>Tag legend:</strong> <span class="tag island">island</span> sovereign node ·
+  <span class="tag gateway">gateway</span> protocol edge (stays) · <span class="tag wire">wire</span> peer-owned wire contract.
+</div>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#thesis">The thesis — an island <em>has</em> a gateway</a></li>
+  <li><a href="#evidence">The evidence — the code already knows</a></li>
+  <li><a href="#census">The census — how the references cluster</a></li>
+  <li><a href="#classification">The classification — every reference, sorted</a></li>
+  <li><a href="#tranches">Three tranches by gate — what's app-autonomous, what waits</a></li>
+  <li><a href="#gates">The two gates, and why even the internal rename waits</a></li>
+  <li><a href="#handoff">The sharpened handoff — two decisions for the island tab</a></li>
+</ol>
+</nav>
+
+<h2 id="thesis">1 · The thesis — an island <em>has</em> a gateway</h2>
+
+<blockquote class="thesis">
+An <strong>island</strong> is the sovereign node: identity, community, users, operator, data — the unit of federation and
+of the user's <em>choice</em>. A <strong>gateway</strong> is that node's protocol edge: the substrate-agnostic
+<code>/v1/*</code> REST + WS seam the app speaks. An island <em>has</em> a gateway the way a landmass has a front door.
+The app's <code>lib/</code> contains <em>zero</em> matrix/mosquitto references — it only ever speaks the edge; the island
+translates that edge to whatever substrate it runs. So the split is real, load-bearing, and asymmetric: the app knows
+gateways intimately and islands only by name.
+</blockquote>
+
+<p>This matters because Design 06's whole federation model is <em>identity that is owned by no gateway</em>. You cannot
+express "owned by no gateway" cleanly while the word <code>gateway</code> also means "the node that owns things." The
+vocabulary has to carve the node away from its edge before the federation vision has words to be built in. This is the
+smallest possible unblocking move for the north-star: not code, <em>names</em>.</p>
+
+<h2 id="evidence">2 · The evidence — the code already knows</h2>
+
+<p>The strongest sign a distinction is real is when the code narrates it in comments while the <em>symbols</em> lag. Two
+smoking guns, both in <code>lib/features/settings/domain/server_entry.dart</code>:</p>
+
+<h3>Gun 1 — the presets are described as <em>islands</em>, five times over</h3>
+<pre><code>// kGatewayPresets — the built-in seeds...
+// "MULTIPLE real internet islands are bundled (not just one), so bootstrap
+//  discovery survives any single one being down..."
+// "Every island serves the FULL peer directory from /v1/gateways, so reaching
+//  ANY one of these teaches the app about all the others..."
+// example description: "Imagineering's flagship island"</code></pre>
+<p>The constant is named <code>kGatewayPresets</code> and the type is <code>ServerEntry</code>, but the concept the
+comments reach for — every single time — is <em>island</em>. The code knows what these are. Only the names disagree.</p>
+
+<h3>Gun 2 — the entire split fits in one sentence</h3>
+<blockquote class="invariant">
+"Every <strong>island</strong> serves the FULL peer directory from <strong><code>/v1/gateways</code></strong>."
+</blockquote>
+<p>The <em>island</em> (node) serves; the <code>/v1/gateways</code> (edge) is the <em>how</em>. Node-concept and
+edge-concept co-occur in a single clause, each already named correctly for its role. The distinction isn't something we're
+imposing — it's already there in the prose, waiting for the symbols to catch up.</p>
+
+<h3>The counter-check — <code>GatewayConfig</code> is <em>pure</em> edge</h3>
+<p><code>lib/app/config.dart</code>'s <code>GatewayConfig</code> is 100% protocol edge: "where the gateway lives", an HTTP
+base, a WSS URL <em>derived</em> from it (http→ws) so the two can't drift, <code>$base/v1/...</code> composition. There is
+nothing sovereign-node about it. It should <strong>stay</strong> <code>gateway</code> — and the fact that it sorts so
+cleanly to the edge pile, while <code>kGatewayPresets</code> sorts so cleanly to the node pile, <em>is</em> the proof the
+two concepts are genuinely separable.</p>
+
+<h2 id="census">3 · The census — how the references cluster</h2>
+<p><code>gateway</code> appears <strong>166×</strong> across <code>lib/</code>; <code>island</code> <strong>18×</strong>
+(comments only). But the raw count hides the story — the <em>files</em> cluster into two disjoint groups with almost no
+overlap:</p>
+
+<table>
+<thead><tr><th>Node-identity cluster → <span class="tag island">island</span></th><th>Protocol-edge cluster → <span class="tag gateway">gateway</span> (stays)</th></tr></thead>
+<tbody>
+<tr>
+<td><code>gateway_directory_provider.dart</code> (31)<br><code>gateway_picker_screen.dart</code> (24)<br><code>gateway_directory_client.dart</code> (16)<br><code>server_entry.dart</code> (9)<br><code>gateway_seed_store.dart</code> (9)</td>
+<td><code>chat_rest_api.dart</code> (20)<br><code>gateway_rest_api.dart</code> (9)<br><code>broker/social/passkey_auth_client.dart</code><br><code>gateway_transport.dart</code> (2)<br><code>config.dart</code> → <code>GatewayConfig</code> half (24, mixed)</td>
+</tr>
+</tbody>
+</table>
+<p>The left pile is all "<em>which node, chosen from a directory</em>." The right pile all speaks the wire. The split is
+not statistical — it's structural. Only two files genuinely straddle it (<code>config.dart</code>: <code>GatewayConfig</code>
+edge + <code>kDefaultGatewayBaseUrl</code>; and DI wiring in <code>providers.dart</code>), and both straddle because they
+<em>compose</em> a node choice with an edge config — exactly where the two concepts meet.</p>
+
+<h2 id="classification">4 · The classification — every reference, sorted</h2>
+<details>
+<summary>Full symbol-by-symbol classification (click to expand)</summary>
+<table>
+<thead><tr><th>Symbol / artifact</th><th>Verdict</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><code>ServerEntry</code></td><td><span class="tag island">island</span> → <code>IslandEntry</code></td><td>A selectable node: label, id, description ("flagship island"), region. Node metadata, not a wire object.</td></tr>
+<tr><td><code>kGatewayPresets</code></td><td><span class="tag island">island</span> → <code>kIslandPresets</code></td><td>The comments call them islands 5×. Bootstrap set of nodes.</td></tr>
+<tr><td><code>gateway_directory_*</code> (provider/client)</td><td><span class="tag island">island</span> → <code>island_directory_*</code></td><td>Discovers the set of <em>nodes</em>. The directory <em>of</em> islands.</td></tr>
+<tr><td><code>gateway_seed_store</code></td><td><span class="tag island">island</span> → <code>island_seed_store</code></td><td>"Islands I've met" — persisted node set.</td></tr>
+<tr><td><code>gateway_picker_screen</code></td><td><span class="tag island">island</span> → <code>island_picker_screen</code></td><td>The user <em>chooses a node</em>. Choice = sovereignty.</td></tr>
+<tr><td><code>GatewayConfig</code></td><td><span class="tag gateway">gateway</span> (stays)</td><td>"Where the gateway lives" — HTTP/WS edge config. Pure edge.</td></tr>
+<tr><td><code>GatewayRestApi</code>, <code>gateway_transport</code></td><td><span class="tag gateway">gateway</span> (stays)</td><td>The <code>/v1/*</code> + WS seam itself. Definitionally the edge.</td></tr>
+<tr><td><code>kDefaultGatewayBaseUrl</code></td><td><span class="tag gateway">gateway</span> (stays)</td><td>A URL for the edge. (An island <em>has</em> this URL; the URL isn't the island.)</td></tr>
+<tr><td><code>/v1/gateways</code> path + <code>'gateways'</code> JSON key</td><td><span class="tag wire">wire</span> — island-coordinated</td><td>An edge-<em>named</em> path returning node-identity <em>data</em>. The single most conflated artifact. See §5-C.</td></tr>
+</tbody>
+</table>
+</details>
+<p class="note">Rule of thumb that resolves every case: <strong>if it's about <em>which</em> node → island; if it's about
+<em>how</em> to talk to a node → gateway.</strong> A URL and a REST client are "how"; a directory, a picker, a preset, a
+seed store are "which".</p>
+
+<h2 id="tranches">5 · Three tranches by gate</h2>
+<p>The key finding of this census: <strong>the blockage is not monolithic.</strong> It layers into three tranches, each
+gated differently. Treating them as one all-or-nothing rename is what made this feel more blocked than it is.</p>
+
+<h3>A · Protocol-edge — <span class="tag gateway">stays gateway</span>, no change, ever</h3>
+<p><code>GatewayConfig</code>, <code>GatewayRestApi</code>, <code>gateway_transport</code>, <code>kDefaultGatewayBaseUrl</code>,
+the auth clients. These are correctly named today. The refactor's <em>first</em> act is to affirm they don't move —
+otherwise a naïve find-replace would wrongly island-ify the edge and destroy the very distinction we're drawing.</p>
+
+<h3>B · Node-identity Dart symbols — mechanically app-autonomous, <em>semantically</em> gated</h3>
+<p><code>ServerEntry</code>→<code>IslandEntry</code>, <code>kGatewayPresets</code>→<code>kIslandPresets</code>, the directory
+/ seed / picker files. These are <em>internal Dart symbols</em> — renaming them touches no wire byte (the persisted JSON
+already uses neutral snake_case keys like <code>base_url</code>, <code>display_name</code>). Mechanically the app could do
+this alone. <strong>But it shouldn't yet</strong>, for a subtle reason: the rename picks a <em>noun</em>, and the noun is
+the island tab's call (§6). Rename to <code>IslandEntry</code> before <code>#1760</code> settles, and if the canon lands on
+"Node" or "Server" we churn twice. The distinction is app-verifiable; the <em>word</em> is not.</p>
+
+<h3>C · The wire contract — <span class="tag wire">island-coordinated + compat window</span>, blocked hard</h3>
+<p><code>/v1/gateways</code> (path) and the <code>'gateways'</code> response key are the real peer-owned artifact. This is
+an <em>edge-named path returning node-identity data</em> — the perfect crystallization of the whole conflation. The app
+only <em>consumes</em> it; it cannot rename it. And renaming it is not free even for the island: it needs a
+<strong>compat window</strong> (serve both <code>/v1/gateways</code> and, say, <code>/v1/islands</code>; accept both JSON
+keys) so old app builds don't break. The client already reads fallback keys
+(<code>['gateways','servers','entries','directory']</code>) — adding <code>'islands'</code> to that list is the app's
+cheap forward-compat down-payment, and is safe to do <em>now</em> because it only <em>widens</em> what we accept.</p>
+
+<blockquote class="danger">
+<strong>Do not</strong> rename the <code>/v1/gateways</code> path app-side under any circumstance — it's a request the app
+<em>sends</em>. Changing it without the island serving the new path is an instant break. Tranche C moves only when the
+island moves.
+</blockquote>
+
+<h2 id="gates">6 · The two gates — and why even the internal rename waits</h2>
+<p>The rename is blocked on two things. Both must be open before Tranche B ships:</p>
+<ol>
+<li><strong>The island session's canonical decision</strong> — <code>claude-tasks#1760</code> ("own the island-vs-gateway
+distinction + wire contract", <code>project:aiko-chat-island</code>). <em>Status as of this writing: OPEN.</em> This is
+where the canonical <em>noun</em> and the <code>/v1/gateways</code> migration are decided. The concept lives island-side by
+design (Design 06 §identity: identity owned by no gateway → the node concept is the island's to name).</li>
+<li><strong>The team group's naming-alignment reply</strong> — Nick's message to the group; no reply yet at last check.</li>
+</ol>
+<p>Even Tranche B (pure internal symbols) waits, because the <em>noun</em> is not the app's to coin. This is the
+non-obvious part: mechanical autonomy ≠ semantic autonomy. The app can rename the symbols without touching the wire, but it
+can't choose <em>what</em> to rename them to without re-centralizing a decision Design 06 deliberately pushed to the node.</p>
+
+<h2 id="handoff">7 · The sharpened handoff — two decisions, not a yes/no</h2>
+<p>The census converts the fuzzy question — <em>"are these gateways or islands?"</em> — into two precise decisions the
+island tab can actually make. That's the whole value of doing this app-side prep now:</p>
+
+<blockquote class="invariant">
+<strong>Decision 1 — the canonical noun for the sovereign node.</strong> The code's comments already vote
+<em>island</em> (5× in one file). Is the canon <code>Island</code>, or something else (<code>Node</code>,
+<code>Server</code>, <code>Home</code>)? This unblocks Tranche B verbatim. <em>Recommendation: <code>Island</code> —
+it's what the code already reaches for, and it carries the sovereignty connotation <code>Server</code>/<code>Node</code>
+lack.</em><br><br>
+<strong>Decision 2 — the <code>/v1/gateways</code> wire migration.</strong> Three options: <strong>(a)</strong> rename to
+<code>/v1/islands</code> with a compat window (serve both, accept both JSON keys) — cleanest, matches the concept;
+<strong>(b)</strong> keep <code>/v1/gateways</code> as a deliberate historical name for the <em>edge's directory
+endpoint</em> and document that the edge serves the island directory — zero migration, permanent minor conflation;
+<strong>(c)</strong> defer. This is purely the island's call; the app will follow whatever compat contract it publishes.
+</blockquote>
+
+<p>When both gates open and both decisions land, the app-side work is a single clean coordinated PR: affirm Tranche A,
+apply Tranche B with the chosen noun, widen Tranche C's accepted keys to match the compat window. No cold start, no
+guesswork — this doc <em>is</em> the plan, pre-verified against the real code.</p>
+
+<p class="note">Authored app-side as preparation, 2026-07-08. Tracked as app task #13. Cross-references: island
+<code>claude-tasks#1760</code>, memory <code>concept_island_vs_gateway.md</code>. When the island tab reads this, the two
+decisions in §7 are the only inputs it needs from us.</p>
+
+</body>
+</html>

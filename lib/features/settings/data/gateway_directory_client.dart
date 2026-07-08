@@ -46,14 +46,19 @@ class GatewayDirectoryClient {
   }
 
   /// Accept either a bare JSON array of entries, or an envelope object holding
-  /// the array under a conventional key (`gateways`/`servers`/`entries`/
-  /// `directory`). Anything else yields an empty list rather than throwing — a
-  /// shape we don't recognise is "no directory", not a crash.
+  /// the array under a conventional key. `islands` is the canonical
+  /// island-vocabulary key (Design 10) and is tried first; `gateways` is the
+  /// current wire key and stays accepted for backward-compat, so this reads both
+  /// a legacy directory and a future island that renames `/v1/gateways`'s payload
+  /// during its compat window — a pure widening, no island serves `islands` yet.
+  /// `servers`/`entries`/`directory` remain as tolerant fallbacks. Anything else
+  /// yields an empty list rather than throwing — a shape we don't recognise is
+  /// "no directory", not a crash.
   static List<ServerEntry> _parse(dynamic data) {
     final List<dynamic>? list = switch (data) {
       List<dynamic> l => l,
       Map<String, dynamic> m => _firstList(
-          m, const ['gateways', 'servers', 'entries', 'directory']),
+          m, const ['islands', 'gateways', 'servers', 'entries', 'directory']),
       _ => null,
     };
     if (list == null) return const [];
