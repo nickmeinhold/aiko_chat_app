@@ -6,7 +6,7 @@ import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
 import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show rootBundle, MethodChannel;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -34,6 +34,40 @@ Future<void> initializeTestEnvironment() async {
   realEula = await rootBundle.loadString('assets/legal/eula.md');
   SharedPreferences.setMockInitialValues({});
   testPrefs = await SharedPreferences.getInstance();
+  // The sovereign key store (sovereign-message-signing) reads flutter_secure_
+  // storage on first message send; mock the platform channel in-memory so widget
+  // tests that build chatRepositoryProvider don't fail on the missing channel.
+  installSecureStorageMock();
+}
+
+/// In-memory mock of the flutter_secure_storage platform channel. Shared by the
+/// widget-test environment and the signing unit tests so neither touches a real
+/// Keychain/Keystore.
+void installSecureStorageMock() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  const channel = MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+  final backing = <String, String>{};
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(channel, (call) async {
+    final args = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
+    switch (call.method) {
+      case 'write':
+        backing[args['key'] as String] = args['value'] as String;
+        return null;
+      case 'read':
+        return backing[args['key'] as String];
+      case 'delete':
+        backing.remove(args['key'] as String);
+        return null;
+      case 'readAll':
+        return backing;
+      case 'deleteAll':
+        backing.clear();
+        return null;
+      default:
+        return null;
+    }
+  });
 }
 
 /// Build a container wiring the real graph to faked seams. The token provider

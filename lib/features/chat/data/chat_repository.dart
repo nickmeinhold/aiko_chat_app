@@ -11,8 +11,10 @@ library;
 
 import 'dart:async';
 
+import '../../../services/sovereign_key_store.dart';
 import '../../auth/domain/auth_models.dart';
 import '../domain/message.dart';
+import '../domain/message_signing.dart';
 import '../domain/ulid.dart';
 import 'cache/drift_cache.dart';
 import 'chat_rest_api.dart';
@@ -85,6 +87,14 @@ class ChatRepository {
 
   final String Function() _newTempId;
 
+  /// The device sovereign signing key (sovereign-message-signing). When present,
+  /// every optimistic send is signed at birth and the signature persisted on the
+  /// row (LOCAL verifiable history — NOT emitted on the wire). Nullable so tests
+  /// that don't exercise signing needn't provide one; the PRODUCTION provider
+  /// MUST wire it (see chatRepositoryProvider + its provider-default test), the
+  /// same DI-wiring discipline the telemetry sink needed (PR #45).
+  final SovereignKey? _signingKey;
+
   ChatRepository({
     required DriftCache cache,
     required ChatTransport transport,
@@ -96,8 +106,10 @@ class ChatRepository {
     Duration disposeDrainTimeout = const Duration(seconds: 5),
     int inboundHighWater = 256,
     int inboundLowWater = 64,
+    SovereignKey? signingKey,
     required String Function() newTempId,
-  })  : assert(inboundHighWater > inboundLowWater && inboundLowWater >= 0,
+  })  : _signingKey = signingKey,
+        assert(inboundHighWater > inboundLowWater && inboundLowWater >= 0,
             'low-water must be below high-water (hysteresis), both non-negative'),
         _cache = cache,
         _transport = transport,
@@ -131,6 +143,11 @@ class ChatRepository {
   /// collaborator (the provider-default test pins the provider, not the
   /// consumption edge). Not for production use.
   ChatTelemetry get debugTelemetry => _telemetry;
+
+  /// Test-only: the injected sovereign signing key (or null if unwired). Guards
+  /// the same DI-no-op class as [debugTelemetry] — a nullable injectable that
+  /// silently doesn't sign if the production provider forgets to wire it.
+  SovereignKey? get debugSigningKey => _signingKey;
 
   // --- B-live: wire the streams ONCE -----------------------------------------
 
@@ -302,6 +319,7 @@ class ChatRepository {
     if (_disposed) return;
     try {
       final tempId = _newTempId();
+      final createdAt = await _clampToBottom(channelId);
       final optimistic = Message(
         clientTempId: tempId,
         id: null, // serverUlid NULL → in the outbox
@@ -309,10 +327,30 @@ class ChatRepository {
         sender: _meSender,
         body: body,
         replyToId: replyToId,
-        createdAt: await _clampToBottom(channelId),
+        createdAt: createdAt,
         deliveryState: DeliveryState.sending,
       );
-      await _cache.insertOptimistic(optimistic); // COMMITS before the wire send
+      // Sign at birth (sovereign-message-signing). signedAtMs is the compose
+      // time, fixed here and persisted in its own column so ack reconciliation
+      // overwriting createdAt with server time never breaks verification. The
+      // signature is LOCAL history only — deliberately NOT added to
+      // OutgoingMessage/SendFrame (wire emission is gated on gateway carriage).
+      MessageSignature? signature;
+      if (_signingKey != null) {
+        signature = await sign(
+          _signingKey,
+          SignedPayload(
+            rawPublicKey: _signingKey.rawPublicKey,
+            channelId: channelId,
+            clientMsgId: tempId,
+            signedAtMs: createdAt.toUtc().millisecondsSinceEpoch,
+            body: body,
+            replyTo: replyToId,
+          ),
+        );
+      }
+      // COMMITS before the wire send — signature written in the same txn.
+      await _cache.insertOptimistic(optimistic, signature: signature);
       _transport.sendMessage(OutgoingMessage(
           clientTempId: tempId, channelId: channelId, body: body, replyToId: replyToId));
     } catch (e, st) {

@@ -63,12 +63,19 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
   }
   final channels = await ref.watch(channelsProvider.future);
 
+  // Load the device sovereign signing key (sovereign-message-signing). Wired
+  // here in the PRODUCTION provider — a nullable injectable silently no-ops if
+  // the wiring is forgotten, the same DI trap the telemetry sink hit (PR #45),
+  // so a provider-default test asserts a real key reaches the repo.
+  final signingKey = await ref.watch(sovereignKeyStoreProvider).loadOrCreate();
+
   final repo = ChatRepository(
     cache: ref.watch(cacheProvider),
     transport: ref.watch(transportProvider),
     rest: ref.watch(restApiProvider),
     me: user,
     subscribedChannelIds: channels.map((c) => c.id).toList(),
+    signingKey: signingKey,
     // Wire the REAL telemetry sink (via [chatTelemetryProvider]) so the
     // reconcile engine's must-be-seen events (orphan ack, reconnect failure, the
     // #16 sync fault) actually surface — without this the repo falls back to the
