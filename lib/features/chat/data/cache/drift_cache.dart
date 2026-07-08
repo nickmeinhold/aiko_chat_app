@@ -300,6 +300,14 @@ class DriftCache extends _$DriftCache {
               'serverUlid $u matched a row in channel ${existing.channelId} '
               '!= ${serverMsg.channelId} — corruption, refusing to overwrite');
         }
+        // Clear the signature ONLY when a SIGNED field actually diverges — a
+        // content-identical re-echo / history re-sync of our own message must
+        // PRESERVE its valid sig, else normal server re-delivery silently erases
+        // the local verifiable history the feature exists to build (cage-match
+        // Tesla R2). channelId can't differ here (the identity guard above throws
+        // on a mismatch); body/replyToId are the ones the server can change.
+        final signedFieldChanged = existing.body != serverMsg.body ||
+            existing.replyToId != serverMsg.replyToId;
         await (update(messages)..where((t) => t.serverUlid.equals(u))).write(
           MessagesCompanion(
             senderUserId: Value(serverMsg.sender.userId),
@@ -310,13 +318,15 @@ class DriftCache extends _$DriftCache {
             replyToId: Value(serverMsg.replyToId),
             createdAt:
                 Value(serverMsg.createdAt.toUtc().millisecondsSinceEpoch),
-            // Server state overwrites the signed fields → drop any signature so a
-            // stale one never sits beside mutated content. No-op for inbound rows
-            // (never signed); correct for our own acked row the server later edits.
-            sig: const Value(null),
-            senderPubkey: const Value(null),
-            signedAtMs: const Value(null),
-            keyVersion: const Value(null),
+            // Diverged → drop the now-stale sig (absent = unverified, never a lie).
+            // Unchanged → Value.absent() leaves the columns untouched (preserve).
+            sig: signedFieldChanged ? const Value(null) : const Value.absent(),
+            senderPubkey:
+                signedFieldChanged ? const Value(null) : const Value.absent(),
+            signedAtMs:
+                signedFieldChanged ? const Value(null) : const Value.absent(),
+            keyVersion:
+                signedFieldChanged ? const Value(null) : const Value.absent(),
           ),
         );
       } else {

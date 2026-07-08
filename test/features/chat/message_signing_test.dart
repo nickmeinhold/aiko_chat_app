@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart';
@@ -41,6 +42,38 @@ void main() {
       await store.clear();
       final after = await store.loadOrCreate();
       expect(after.rawPublicKey, isNot(before.rawPublicKey));
+    });
+
+    // Cage-match Tesla R2: the single-flight cache must NOT cache a rejected
+    // future — a transient first-use fault would otherwise mute signing forever.
+    test('a failed first-use is evicted so a later load can retry', () async {
+      const channel =
+          MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+      final backing = <String, String>{};
+      var failNextRead = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        final args = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
+        if (call.method == 'read' && failNextRead) {
+          failNextRead = false;
+          throw PlatformException(code: 'transient', message: 'storage blip');
+        }
+        switch (call.method) {
+          case 'write':
+            backing[args['key'] as String] = args['value'] as String;
+            return null;
+          case 'read':
+            return backing[args['key'] as String];
+          default:
+            return null;
+        }
+      });
+
+      final store = SovereignKeyStore();
+      await expectLater(store.loadOrCreate(), throwsA(isA<PlatformException>()));
+      // The failed future was evicted → this retry runs cleanly.
+      final key = await store.loadOrCreate();
+      expect(key.rawPublicKey.length, 32);
     });
   });
 

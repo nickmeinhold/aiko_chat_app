@@ -183,4 +183,56 @@ void main() {
     expect(after.signedAtMs, isNull);
     await repo.dispose();
   });
+
+  test('cage-match Tesla R2: a content-identical re-echo PRESERVES the sig',
+      () async {
+    final repo = buildRepo(signingKey: key);
+    await repo.sendMessage(_chan, 'same body');
+    final sent = transport.sent.single;
+    transport.emitAck(sent.clientTempId, '01U'); // happy path keeps the sig
+    await pump();
+    final acked = await rawRow();
+    expect(acked.sig, isNotNull);
+
+    // History re-sync delivers our own message unchanged — must NOT scrape the
+    // valid sig off the row (silent history amnesia).
+    await cache.upsertInbound(Message(
+      clientTempId: '01U',
+      id: '01U',
+      channelId: _chan,
+      sender: const MessageSender(
+          userId: 'me', kind: SenderKind.human, label: 'Me'),
+      body: 'same body', // identical
+      createdAt:
+          DateTime.fromMillisecondsSinceEpoch(acked.createdAt, isUtc: true),
+      deliveryState: DeliveryState.sent,
+    ));
+    final after = await rawRow();
+    expect(after.sig, isNotNull, reason: 'unchanged content keeps the valid sig');
+    expect(after.sig, acked.sig);
+  });
+
+  test('cage-match Tesla R2: an inbound update with CHANGED body clears the sig',
+      () async {
+    final repo = buildRepo(signingKey: key);
+    await repo.sendMessage(_chan, 'original');
+    final sent = transport.sent.single;
+    transport.emitAck(sent.clientTempId, '01U');
+    await pump();
+    expect((await rawRow()).sig, isNotNull);
+
+    await cache.upsertInbound(Message(
+      clientTempId: '01U',
+      id: '01U',
+      channelId: _chan,
+      sender: const MessageSender(
+          userId: 'me', kind: SenderKind.human, label: 'Me'),
+      body: 'server edited', // diverged
+      createdAt: DateTime.now().toUtc(),
+      deliveryState: DeliveryState.sent,
+    ));
+    final after = await rawRow();
+    expect(after.body, 'server edited');
+    expect(after.sig, isNull, reason: 'diverged content drops the stale sig');
+  });
 }

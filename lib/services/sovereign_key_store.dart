@@ -62,7 +62,20 @@ class SovereignKeyStore {
 
   /// Load the persisted device key, generating + persisting one on first use.
   /// Idempotent: the same device always resolves to the same key until [clear].
-  Future<SovereignKey> loadOrCreate() => _inflight ??= _loadOrCreate();
+  Future<SovereignKey> loadOrCreate() => _inflight ??= _guardedLoad();
+
+  /// Caches only a SUCCESSFUL load. A failed first-use (secure-storage I/O error,
+  /// seed corruption) EVICTS the cached future so a later call can retry — else a
+  /// transient fault would permanently mute signing until process death
+  /// (cage-match Tesla R2: don't cache a rejected Future forever).
+  Future<SovereignKey> _guardedLoad() async {
+    try {
+      return await _loadOrCreate();
+    } catch (_) {
+      _inflight = null;
+      rethrow;
+    }
+  }
 
   Future<SovereignKey> _loadOrCreate() async {
     final storedSeed = await _storage.read(key: _kSeed);
