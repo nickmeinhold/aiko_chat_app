@@ -202,6 +202,72 @@ void main() {
     });
   });
 
+  group('named trust-boundary limitations (cage-match Carnot)', () {
+    // HIGH: originCryptoValid proves signature-over-content, NOT message-identity.
+    // On the read path there is no frame client_msg_id to bind against, so a
+    // validly-signed origin verifies for ANY row with matching channel/body/reply.
+    // This test PINS that named limitation (acceptable: no verified-sender UI until
+    // a trust root exists).
+    test('a valid origin verifies for a DIFFERENT row with identical content '
+        '(content-integrity, not position-binding)', () async {
+      // Same signer, same signed body/cmid, but delivered under two different ULIDs.
+      Map<String, dynamic> v(String ulid) => {
+            'msg_id': ulid,
+            'channel_id': _chan,
+            'sender': {'user_id': 'other', 'kind': 'human', 'label': 'O'},
+            'body': 'shared',
+            'created_at': '2026-01-01T00:00:00Z',
+            'reply_to': null,
+          };
+      final signed = await signedView(
+          ulid: 'IGNORED', signedCmid: 'sig-over-shared', signedBody: 'shared');
+      final a = v('01AAA')..['origin'] = signed['origin'];
+      final b = v('01BBB')..['origin'] = signed['origin'];
+      await persist(a);
+      await persist(b);
+      // BOTH verify — the signature is over the content, which is identical.
+      expect((await rawRow('01AAA')).originCryptoValid, 1);
+      expect((await rawRow('01BBB')).originCryptoValid, 1);
+      // Neither is bound to its ULID — this is the documented limitation.
+    });
+
+    // MEDIUM: our own OUTBOUND local signature populates the same sig columns but
+    // was never carried on the wire → it must NOT surface as Message.origin.
+    test('an outbound local signature does NOT surface as a carried origin',
+        () async {
+      final payload = SignedPayload(
+        rawPublicKey: signer.rawPublicKey,
+        channelId: _chan,
+        clientMsgId: 'my-tmp',
+        signedAtMs: 1720000000000,
+        body: 'mine',
+      );
+      final mySig = await sign(signer, payload);
+      await cache.insertOptimistic(
+        Message(
+          clientTempId: 'my-tmp',
+          channelId: _chan,
+          sender: const MessageSender(userId: 'me', kind: SenderKind.human),
+          body: 'mine',
+          createdAt: DateTime.now().toUtc(),
+          deliveryState: DeliveryState.sending,
+        ),
+        signature: mySig,
+      );
+      final rows = await cache.watchChannel(_chan).first;
+      final mine = rows.firstWhere((m) => m.clientTempId == 'my-tmp');
+      // sig columns ARE set (local verifiable history)...
+      expect((await (cache.select(cache.messages)
+                    ..where((t) => t.clientTempId.equals('my-tmp')))
+                  .getSingle())
+              .sig,
+          isNotNull);
+      // ...but Message.origin is null — nothing was carried on the wire.
+      expect(mine.origin, isNull, reason: 'local sig is not a carried origin');
+      expect(mine.originCryptoValid, isNull);
+    });
+  });
+
   test('an unsigned inbound message stores no origin, no verdict', () async {
     await persist({
       'msg_id': '01G',

@@ -132,6 +132,20 @@ deploy clocks, and dissolves the emit-before-deploy split-brain for every gatewa
    origin == unverified, never invalid). Owner: this task's step 6 gate. Mitigation: capability
    gate means we never *newly* create void messages against a known-carrying gateway.
 
+## Named limitation (cage-match Carnot, re-review) — read-path identity binding
+
+Inbound `validateOrigin` enforces envelope SHAPE but NOT the gateway's send-side
+`client_msg_id` binding: the `message_view` carries no frame id, so the signed id lives only in
+`origin` and the check is self-referential. Therefore `originCryptoValid` proves "a valid
+signature exists over these content fields," NEVER "this sender signed THIS message position."
+A dishonest gateway could relocate a validly-signed origin onto a different row with identical
+channel/body/reply and it would verify. **Accepted** under the no-trust-root tradeoff (no
+verified-sender UI until peer PR B binds key→account); pinned by the swapped-origin test. The
+`_originFromRow` reconstruction is gated on `originCryptoValid != null` so an outbound LOCAL
+signature never masquerades as a carried origin. Also named: `copyWith` cannot CLEAR
+`origin`/`originCryptoValid` (null == preserve) — fine today (only `_persistInbound` writes them,
+always-set); a future clear-transition needs an explicit mutator, not `copyWith`.
+
 ## Claims to falsify (v2)
 
 - **C1.** The 7-key `toWire()` passes `validateOrigin` and the gateway's `validate_origin`

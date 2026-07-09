@@ -175,12 +175,19 @@ class DriftCache extends _$DriftCache {
         originCryptoValid: r.originCryptoValid == null ? null : r.originCryptoValid == 1,
       );
 
-  /// Rebuild the [OriginEnvelope] from the typed signature columns (there is NO
-  /// stored JSON — wire-half TEMPER T3). The signed `client_msg_id` is
-  /// [signedClientMsgId] for inbound rows, else [clientTempId] (which IS the
-  /// signed id for our own outbound rows). Returns null unless the full material
-  /// is present.
+  /// Rebuild the CARRIED [OriginEnvelope] from the typed signature columns (there
+  /// is NO stored JSON — wire-half TEMPER T3). The signed `client_msg_id` is
+  /// [signedClientMsgId] for inbound rows, else [clientTempId].
+  ///
+  /// Gated on `originCryptoValid != null` (cage-match Carnot): the SAME columns
+  /// are populated by our own OUTBOUND local signature (LOCAL verifiable history,
+  /// never carried on the wire), and those must NOT masquerade as a carried
+  /// `origin` — `Message.origin` means "the envelope carried WITH this message".
+  /// `originCryptoValid` is written ONLY on the inbound verify path, so it is the
+  /// carriage discriminator. (Post-emit, our own self-echo carries origin and gets
+  /// a verdict, so it too surfaces correctly.)
   OriginEnvelope? _originFromRow(MessageRow r) {
+    if (r.originCryptoValid == null) return null; // local-only sig, not carried
     final sig = r.sig, pub = r.senderPubkey, ts = r.signedAtMs, kv = r.keyVersion;
     if (sig == null || pub == null || ts == null || kv == null) return null;
     return OriginEnvelope(

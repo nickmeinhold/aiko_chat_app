@@ -221,11 +221,24 @@ Uint8List _b64urlRaw(String s, {required int expectLen, required String field}) 
 /// legal; unsigned history predates the feature). Throws [OriginError] on any
 /// malformation. **Shape only — the signature is NOT verified here.**
 ///
-/// Byte-for-byte mirror of the gateway's `validate_origin`, so the app admits
-/// exactly what the gateway carries and vice versa. Used BOTH as the outbound
-/// self-assert (build → validate → emit) AND the inbound admission gate
-/// (receive → validate → persist), which is why it lives with the primitive and
-/// not the transport.
+/// Mirror of the gateway's `validate_origin` for SHAPE (key set, alg, Multikey,
+/// base64url, caps). Used BOTH as the outbound self-assert (build → validate →
+/// emit) AND the inbound admission gate (receive → validate → persist).
+///
+/// **Read-path caveat (cage-match Carnot — do not overstate the mirror).** The
+/// gateway's marquee `client_msg_id` binding (`origin.client_msg_id ==
+/// frameClientMsgId`) is a SEND-side defense: the gateway holds the send frame's
+/// id. On the INBOUND read path the `message_view` carries NO frame
+/// `client_msg_id` (the signed id lives only inside `origin`), so callers there
+/// pass `origin.client_msg_id` back as [frameClientMsgId] and the check is a
+/// tautology. Consequence: inbound `validateOrigin` enforces SHAPE, not the
+/// message-identity binding — a dishonest gateway could relocate a validly-signed
+/// origin onto a DIFFERENT message row with identical channel/body/reply and it
+/// would still verify. This is inherent to "no trust root yet": the verdict
+/// ([originCryptoValid]) means "a valid signature exists over these content
+/// fields", NEVER "this sender signed THIS message position". Acceptable under the
+/// named tradeoff (no verified-sender UI until peer PR B binds key→account); pinned
+/// by the swapped-origin test.
 OriginEnvelope? validateOrigin(
   Object? raw, {
   required String frameClientMsgId,

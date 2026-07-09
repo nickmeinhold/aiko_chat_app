@@ -224,6 +224,10 @@ class Message {
     }
   }
 
+  /// NB (cage-match): `null` means PRESERVE, so this CANNOT clear `origin` /
+  /// `originCryptoValid`. Fine today — only `_persistInbound` writes them, and
+  /// always to a set value. A future clear-transition (e.g. revocation) needs an
+  /// explicit mutator, not `copyWith`.
   Message copyWith({
     String? id,
     MessageSender? sender,
