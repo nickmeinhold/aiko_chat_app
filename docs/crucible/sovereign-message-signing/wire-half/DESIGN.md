@@ -42,7 +42,7 @@ collapse:  reconcileAck: SET-on-success + clear-on-diverge + dual-store coherenc
 - **`validateOrigin(Map raw, {required String frameClientMsgId}) -> OriginEnvelope?`** — a Dart
   port of the gateway's `validate_origin`: exact-7-keys, `alg=='EdDSA'`, Multikey decode to
   raw-32 (len-capped 128), `sig` unpadded-base64url→64 bytes (charset-gated), `client_msg_id`
-  ≤64 AND `== frameClientMsgId`, `signed_at_ms` in (0, 2^62), primitive types only. Returns a
+  ≤64 AND `== frameClientMsgId`, `signed_at_ms` in [0, 2^62] inclusive (matches the gateway), primitive types only. Returns a
   canonical `OriginEnvelope`, or throws `OriginError` (caller drops origin). **This one function
   is the single door** — outbound builds through it (fromSignature then self-assert), inbound
   admits through it.
