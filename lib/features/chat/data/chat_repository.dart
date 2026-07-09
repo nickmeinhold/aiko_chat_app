@@ -15,6 +15,7 @@ import '../../../services/sovereign_key_store.dart';
 import '../../auth/domain/auth_models.dart';
 import '../domain/message.dart';
 import '../domain/message_signing.dart';
+import '../domain/origin_envelope.dart';
 import '../domain/ulid.dart';
 import 'cache/drift_cache.dart';
 import 'chat_rest_api.dart';
@@ -430,10 +431,27 @@ class ChatRepository {
     // cache failure (invariant violation, closed DB) is OWNED via telemetry
     // rather than leaking as an unhandled async error from this stream handler.
     try {
-      await _cache.upsertInbound(m);
+      await _persistInbound(m);
     } catch (e, st) {
       _telemetry.inboundWriteFailed(e, st);
     }
+  }
+
+  /// Verify an inbound message's sovereign origin (if any) ONCE at ingest, then
+  /// persist. The single verify point for BOTH inbound paths (live fanout +
+  /// history sync) so the cache never runs crypto and the verdict is computed
+  /// exactly once. A malformed origin was already dropped at parse (fromView);
+  /// an unverifiable-but-well-formed origin persists with originVerified=false
+  /// (carried-but-invalid), which is DATA — no UI ships from it (wire-half T5).
+  Future<void> _persistInbound(Message m) async {
+    final o = m.origin;
+    final verified = o == null
+        ? m
+        : m.copyWith(
+            originVerified: await verifyOrigin(o,
+                channelId: m.channelId, body: m.body, replyTo: m.replyToId),
+          );
+    await _cache.upsertInbound(verified);
   }
 
   Future<void> _onError(TransportError e) async {
@@ -604,7 +622,7 @@ class ChatRepository {
         return;
       }
       for (final m in page.messages) {
-        await _cache.upsertInbound(m); // ASC; W3 dedups on serverUlid
+        await _persistInbound(m); // ASC; W3 dedups on serverUlid, verifies origin
       }
       final newCursor = page.messages.last.id;
       if (newCursor != null) {

@@ -27,7 +27,8 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'message_signing.dart' show MessageSignature;
+import 'message_signing.dart'
+    show MessageSignature, SignedPayload, verifySignature;
 
 /// EdDSA is the ONLY accepted algorithm — allowlisted, never read from the
 /// envelope's own claim (JWT alg-confusion class).
@@ -287,6 +288,34 @@ OriginEnvelope? validateOrigin(
     signedAtMs: ts,
     sig: rawSig,
   );
+}
+
+/// Verify a validated inbound [OriginEnvelope] against the MESSAGE's own content
+/// fields. The envelope carries the signature material ([rawPublicKey], [sig],
+/// signed [clientMsgId], [signedAtMs]); the content it authenticates
+/// ([channelId], [body], [replyTo]) comes from the message itself — this is the
+/// "verifier-sufficient" reconstruction. Returns the verdict; NEVER throws — a
+/// reconstruction/verify error (e.g. a signed field that trips [signingBytes]'
+/// domain bounds) is `false` (carried-but-invalid), not a crash at ingest.
+Future<bool> verifyOrigin(
+  OriginEnvelope o, {
+  required String channelId,
+  required String body,
+  String? replyTo,
+}) async {
+  try {
+    final payload = SignedPayload(
+      rawPublicKey: o.rawPublicKey,
+      channelId: channelId,
+      clientMsgId: o.clientMsgId,
+      signedAtMs: o.signedAtMs,
+      body: body,
+      replyTo: replyTo,
+    );
+    return await verifySignature(o.rawPublicKey, o.sig, payload);
+  } catch (_) {
+    return false;
+  }
 }
 
 // --- base58btc (no external dep; BigInt-backed, mirrors the gateway) ---

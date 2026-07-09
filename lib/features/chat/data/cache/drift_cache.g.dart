@@ -181,6 +181,29 @@ class $MessagesTable extends Messages
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _signedClientMsgIdMeta = const VerificationMeta(
+    'signedClientMsgId',
+  );
+  @override
+  late final GeneratedColumn<String> signedClientMsgId =
+      GeneratedColumn<String>(
+        'signed_client_msg_id',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _originVerifiedMeta = const VerificationMeta(
+    'originVerified',
+  );
+  @override
+  late final GeneratedColumn<int> originVerified = GeneratedColumn<int>(
+    'origin_verified',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     clientTempId,
@@ -199,6 +222,8 @@ class $MessagesTable extends Messages
     senderPubkey,
     signedAtMs,
     keyVersion,
+    signedClientMsgId,
+    originVerified,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -340,6 +365,24 @@ class $MessagesTable extends Messages
         keyVersion.isAcceptableOrUnknown(data['key_version']!, _keyVersionMeta),
       );
     }
+    if (data.containsKey('signed_client_msg_id')) {
+      context.handle(
+        _signedClientMsgIdMeta,
+        signedClientMsgId.isAcceptableOrUnknown(
+          data['signed_client_msg_id']!,
+          _signedClientMsgIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('origin_verified')) {
+      context.handle(
+        _originVerifiedMeta,
+        originVerified.isAcceptableOrUnknown(
+          data['origin_verified']!,
+          _originVerifiedMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -413,6 +456,14 @@ class $MessagesTable extends Messages
         DriftSqlType.int,
         data['${effectivePrefix}key_version'],
       ),
+      signedClientMsgId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}signed_client_msg_id'],
+      ),
+      originVerified: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}origin_verified'],
+      ),
     );
   }
 
@@ -458,6 +509,20 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
   /// verification of the signed bytes.
   final int? signedAtMs;
   final int? keyVersion;
+
+  /// The SIGNED `client_msg_id` (wire-half, schema v4). For an OUTBOUND row the
+  /// signed id IS [clientTempId], so this stays NULL and readers fall back to it.
+  /// For an INBOUND row [clientTempId] is the server ULID — NOT what was signed —
+  /// so the sender's signed `origin.client_msg_id` is stored here, keeping the
+  /// persisted signature independently re-verifiable (same rationale as storing
+  /// [signedAtMs] separately from [createdAt]).
+  final String? signedClientMsgId;
+
+  /// The local verify verdict for an INBOUND origin, computed once at ingest
+  /// (wire-half, schema v4). NULL = no origin / our own outbound sig (self-
+  /// verified at sign-time, never re-checked); 1 = carried-and-verified; 0 =
+  /// carried-but-invalid. DATA, not UI (no "verified sender" badge until PR B).
+  final int? originVerified;
   const MessageRow({
     required this.clientTempId,
     this.serverUlid,
@@ -475,6 +540,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     this.senderPubkey,
     this.signedAtMs,
     this.keyVersion,
+    this.signedClientMsgId,
+    this.originVerified,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -511,6 +578,12 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     if (!nullToAbsent || keyVersion != null) {
       map['key_version'] = Variable<int>(keyVersion);
     }
+    if (!nullToAbsent || signedClientMsgId != null) {
+      map['signed_client_msg_id'] = Variable<String>(signedClientMsgId);
+    }
+    if (!nullToAbsent || originVerified != null) {
+      map['origin_verified'] = Variable<int>(originVerified);
+    }
     return map;
   }
 
@@ -546,6 +619,12 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       keyVersion: keyVersion == null && nullToAbsent
           ? const Value.absent()
           : Value(keyVersion),
+      signedClientMsgId: signedClientMsgId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(signedClientMsgId),
+      originVerified: originVerified == null && nullToAbsent
+          ? const Value.absent()
+          : Value(originVerified),
     );
   }
 
@@ -571,6 +650,10 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       senderPubkey: serializer.fromJson<String?>(json['senderPubkey']),
       signedAtMs: serializer.fromJson<int?>(json['signedAtMs']),
       keyVersion: serializer.fromJson<int?>(json['keyVersion']),
+      signedClientMsgId: serializer.fromJson<String?>(
+        json['signedClientMsgId'],
+      ),
+      originVerified: serializer.fromJson<int?>(json['originVerified']),
     );
   }
   @override
@@ -593,6 +676,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       'senderPubkey': serializer.toJson<String?>(senderPubkey),
       'signedAtMs': serializer.toJson<int?>(signedAtMs),
       'keyVersion': serializer.toJson<int?>(keyVersion),
+      'signedClientMsgId': serializer.toJson<String?>(signedClientMsgId),
+      'originVerified': serializer.toJson<int?>(originVerified),
     };
   }
 
@@ -613,6 +698,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     Value<String?> senderPubkey = const Value.absent(),
     Value<int?> signedAtMs = const Value.absent(),
     Value<int?> keyVersion = const Value.absent(),
+    Value<String?> signedClientMsgId = const Value.absent(),
+    Value<int?> originVerified = const Value.absent(),
   }) => MessageRow(
     clientTempId: clientTempId ?? this.clientTempId,
     serverUlid: serverUlid.present ? serverUlid.value : this.serverUlid,
@@ -630,6 +717,12 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     senderPubkey: senderPubkey.present ? senderPubkey.value : this.senderPubkey,
     signedAtMs: signedAtMs.present ? signedAtMs.value : this.signedAtMs,
     keyVersion: keyVersion.present ? keyVersion.value : this.keyVersion,
+    signedClientMsgId: signedClientMsgId.present
+        ? signedClientMsgId.value
+        : this.signedClientMsgId,
+    originVerified: originVerified.present
+        ? originVerified.value
+        : this.originVerified,
   );
   MessageRow copyWithCompanion(MessagesCompanion data) {
     return MessageRow(
@@ -667,6 +760,12 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       keyVersion: data.keyVersion.present
           ? data.keyVersion.value
           : this.keyVersion,
+      signedClientMsgId: data.signedClientMsgId.present
+          ? data.signedClientMsgId.value
+          : this.signedClientMsgId,
+      originVerified: data.originVerified.present
+          ? data.originVerified.value
+          : this.originVerified,
     );
   }
 
@@ -688,7 +787,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ..write('sig: $sig, ')
           ..write('senderPubkey: $senderPubkey, ')
           ..write('signedAtMs: $signedAtMs, ')
-          ..write('keyVersion: $keyVersion')
+          ..write('keyVersion: $keyVersion, ')
+          ..write('signedClientMsgId: $signedClientMsgId, ')
+          ..write('originVerified: $originVerified')
           ..write(')'))
         .toString();
   }
@@ -711,6 +812,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     senderPubkey,
     signedAtMs,
     keyVersion,
+    signedClientMsgId,
+    originVerified,
   );
   @override
   bool operator ==(Object other) =>
@@ -731,7 +834,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           other.sig == this.sig &&
           other.senderPubkey == this.senderPubkey &&
           other.signedAtMs == this.signedAtMs &&
-          other.keyVersion == this.keyVersion);
+          other.keyVersion == this.keyVersion &&
+          other.signedClientMsgId == this.signedClientMsgId &&
+          other.originVerified == this.originVerified);
 }
 
 class MessagesCompanion extends UpdateCompanion<MessageRow> {
@@ -751,6 +856,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   final Value<String?> senderPubkey;
   final Value<int?> signedAtMs;
   final Value<int?> keyVersion;
+  final Value<String?> signedClientMsgId;
+  final Value<int?> originVerified;
   final Value<int> rowid;
   const MessagesCompanion({
     this.clientTempId = const Value.absent(),
@@ -769,6 +876,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.senderPubkey = const Value.absent(),
     this.signedAtMs = const Value.absent(),
     this.keyVersion = const Value.absent(),
+    this.signedClientMsgId = const Value.absent(),
+    this.originVerified = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -788,6 +897,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.senderPubkey = const Value.absent(),
     this.signedAtMs = const Value.absent(),
     this.keyVersion = const Value.absent(),
+    this.signedClientMsgId = const Value.absent(),
+    this.originVerified = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : clientTempId = Value(clientTempId),
        channelId = Value(channelId),
@@ -813,6 +924,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Expression<String>? senderPubkey,
     Expression<int>? signedAtMs,
     Expression<int>? keyVersion,
+    Expression<String>? signedClientMsgId,
+    Expression<int>? originVerified,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -832,6 +945,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       if (senderPubkey != null) 'sender_pubkey': senderPubkey,
       if (signedAtMs != null) 'signed_at_ms': signedAtMs,
       if (keyVersion != null) 'key_version': keyVersion,
+      if (signedClientMsgId != null) 'signed_client_msg_id': signedClientMsgId,
+      if (originVerified != null) 'origin_verified': originVerified,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -853,6 +968,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Value<String?>? senderPubkey,
     Value<int?>? signedAtMs,
     Value<int?>? keyVersion,
+    Value<String?>? signedClientMsgId,
+    Value<int?>? originVerified,
     Value<int>? rowid,
   }) {
     return MessagesCompanion(
@@ -872,6 +989,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       senderPubkey: senderPubkey ?? this.senderPubkey,
       signedAtMs: signedAtMs ?? this.signedAtMs,
       keyVersion: keyVersion ?? this.keyVersion,
+      signedClientMsgId: signedClientMsgId ?? this.signedClientMsgId,
+      originVerified: originVerified ?? this.originVerified,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -927,6 +1046,12 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     if (keyVersion.present) {
       map['key_version'] = Variable<int>(keyVersion.value);
     }
+    if (signedClientMsgId.present) {
+      map['signed_client_msg_id'] = Variable<String>(signedClientMsgId.value);
+    }
+    if (originVerified.present) {
+      map['origin_verified'] = Variable<int>(originVerified.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -952,6 +1077,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
           ..write('senderPubkey: $senderPubkey, ')
           ..write('signedAtMs: $signedAtMs, ')
           ..write('keyVersion: $keyVersion, ')
+          ..write('signedClientMsgId: $signedClientMsgId, ')
+          ..write('originVerified: $originVerified, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1549,6 +1676,8 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<String?> senderPubkey,
       Value<int?> signedAtMs,
       Value<int?> keyVersion,
+      Value<String?> signedClientMsgId,
+      Value<int?> originVerified,
       Value<int> rowid,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
@@ -1569,6 +1698,8 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<String?> senderPubkey,
       Value<int?> signedAtMs,
       Value<int?> keyVersion,
+      Value<String?> signedClientMsgId,
+      Value<int?> originVerified,
       Value<int> rowid,
     });
 
@@ -1658,6 +1789,16 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<int> get keyVersion => $composableBuilder(
     column: $table.keyVersion,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get signedClientMsgId => $composableBuilder(
+    column: $table.signedClientMsgId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get originVerified => $composableBuilder(
+    column: $table.originVerified,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1750,6 +1891,16 @@ class $$MessagesTableOrderingComposer
     column: $table.keyVersion,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get signedClientMsgId => $composableBuilder(
+    column: $table.signedClientMsgId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get originVerified => $composableBuilder(
+    column: $table.originVerified,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -1826,6 +1977,16 @@ class $$MessagesTableAnnotationComposer
     column: $table.keyVersion,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get signedClientMsgId => $composableBuilder(
+    column: $table.signedClientMsgId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get originVerified => $composableBuilder(
+    column: $table.originVerified,
+    builder: (column) => column,
+  );
 }
 
 class $$MessagesTableTableManager
@@ -1875,6 +2036,8 @@ class $$MessagesTableTableManager
                 Value<String?> senderPubkey = const Value.absent(),
                 Value<int?> signedAtMs = const Value.absent(),
                 Value<int?> keyVersion = const Value.absent(),
+                Value<String?> signedClientMsgId = const Value.absent(),
+                Value<int?> originVerified = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion(
                 clientTempId: clientTempId,
@@ -1893,6 +2056,8 @@ class $$MessagesTableTableManager
                 senderPubkey: senderPubkey,
                 signedAtMs: signedAtMs,
                 keyVersion: keyVersion,
+                signedClientMsgId: signedClientMsgId,
+                originVerified: originVerified,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1913,6 +2078,8 @@ class $$MessagesTableTableManager
                 Value<String?> senderPubkey = const Value.absent(),
                 Value<int?> signedAtMs = const Value.absent(),
                 Value<int?> keyVersion = const Value.absent(),
+                Value<String?> signedClientMsgId = const Value.absent(),
+                Value<int?> originVerified = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion.insert(
                 clientTempId: clientTempId,
@@ -1931,6 +2098,8 @@ class $$MessagesTableTableManager
                 senderPubkey: senderPubkey,
                 signedAtMs: signedAtMs,
                 keyVersion: keyVersion,
+                signedClientMsgId: signedClientMsgId,
+                originVerified: originVerified,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
