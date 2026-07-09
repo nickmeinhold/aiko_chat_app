@@ -6,6 +6,8 @@
 /// directly testable as explicit code than as generated code.
 library;
 
+import 'origin_envelope.dart';
+
 /// Who sent a message. Mirrors the wire `sender.kind`.
 ///
 /// Forward-compat: an unknown wire value decodes to [actor] rather than throwing,
@@ -152,6 +154,21 @@ class Message {
   final DateTime createdAt;
   final DeliveryState deliveryState;
 
+  /// The sovereign-signing `origin` carried with this message (wire-half). Null
+  /// for unsigned / pre-feature messages (absent == "unverified", never
+  /// "invalid"). For an INBOUND message this is the SENDER's envelope, admitted
+  /// through [validateOrigin] at the parse boundary; a malformed inbound origin
+  /// is dropped (this stays null) while the message is still delivered.
+  final OriginEnvelope? origin;
+
+  /// The local verify verdict for [origin], computed ONCE at ingest (async, in
+  /// the repository — [signingBytes] verification can't run in the sync
+  /// [fromView]). `null` = not yet verified / no origin; `true`/`false` =
+  /// carried-and-verified / carried-but-invalid. This is DATA, not UI — no
+  /// "verified sender" affordance ships until a trust root binds key→account
+  /// (peer PR B; wire-half DESIGN.md named tradeoff #1).
+  final bool? originCryptoValid;
+
   const Message({
     required this.clientTempId,
     this.id,
@@ -162,6 +179,8 @@ class Message {
     this.replyToId,
     required this.createdAt,
     required this.deliveryState,
+    this.origin,
+    this.originCryptoValid,
   });
 
   /// Build from a server `MessageView` (an inbound message frame or a history
@@ -181,15 +200,42 @@ class Message {
       replyToId: v['reply_to'] as String?,
       createdAt: _parseTime(v['created_at'] as String?),
       deliveryState: DeliveryState.sent,
+      origin: _parseInboundOrigin(v['origin']),
+      // originCryptoValid stays null here — verification is async and runs at
+      // repository ingest, never in this sync factory.
     );
   }
 
+  /// Admit an inbound `origin` through the SHAPE gate. There is no separate frame
+  /// `client_msg_id` on the read path (the `message_view` carries none — the
+  /// signed id lives INSIDE origin), so the binding is self-referential: the
+  /// signature verify (client_msg_id is inside the signed bytes) is the real
+  /// guard against a swapped id. A malformed origin returns null — dropped, while
+  /// the message is still delivered (wire-half TEMPER T2: never trust the
+  /// transport's echo; validate before persist, but a bad envelope must not kill
+  /// the message).
+  static OriginEnvelope? _parseInboundOrigin(Object? raw) {
+    if (raw == null) return null;
+    final cmid = raw is Map ? raw['client_msg_id'] : null;
+    try {
+      return validateOrigin(raw, frameClientMsgId: cmid is String ? cmid : '');
+    } on OriginError {
+      return null;
+    }
+  }
+
+  /// NB (cage-match): `null` means PRESERVE, so this CANNOT clear `origin` /
+  /// `originCryptoValid`. Fine today — only `_persistInbound` writes them, and
+  /// always to a set value. A future clear-transition (e.g. revocation) needs an
+  /// explicit mutator, not `copyWith`.
   Message copyWith({
     String? id,
     MessageSender? sender,
     String? body,
     DateTime? createdAt,
     DeliveryState? deliveryState,
+    OriginEnvelope? origin,
+    bool? originCryptoValid,
   }) =>
       Message(
         clientTempId: clientTempId,
@@ -201,6 +247,8 @@ class Message {
         replyToId: replyToId,
         createdAt: createdAt ?? this.createdAt,
         deliveryState: deliveryState ?? this.deliveryState,
+        origin: origin ?? this.origin,
+        originCryptoValid: originCryptoValid ?? this.originCryptoValid,
       );
 
   static DateTime _parseTime(String? iso) {
