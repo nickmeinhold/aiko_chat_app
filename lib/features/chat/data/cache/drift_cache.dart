@@ -322,6 +322,9 @@ class DriftCache extends _$DriftCache {
         final signedFieldChanged = rc.body != ru.body ||
             rc.replyToId != ru.replyToId ||
             rc.channelId != ru.channelId;
+        // ru carried a verified origin off the wire (its verdict is non-null only
+        // via the inbound verify path) → the survivor adopts it (see below).
+        final adoptCarried = !signedFieldChanged && ru.originCryptoValid != null;
         await (update(messages)
               ..where((t) => t.clientTempId.equals(clientTempId)))
             .write(MessagesCompanion(
@@ -340,22 +343,32 @@ class DriftCache extends _$DriftCache {
           // using one source removes the path-dependent asymmetry.
           createdAt: Value(serverCreatedAt.toUtc().millisecondsSinceEpoch),
           deliveryState: Value(DeliveryState.sent.wire),
-          // Diverged → drop the now-stale sig; identical → preserve rc's seal.
-          // The verdict + signed-id columns clear WITH the sig (dual-store
-          // coherence, wire-half T4: a cleared sig can never leave a dangling
-          // verdict/id behind). rc is our own signed outbound row, so these are
-          // already NULL — clearing is a harmless invariant-preserving no-op.
-          sig: signedFieldChanged ? const Value(null) : const Value.absent(),
-          senderPubkey:
-              signedFieldChanged ? const Value(null) : const Value.absent(),
-          signedAtMs:
-              signedFieldChanged ? const Value(null) : const Value.absent(),
-          keyVersion:
-              signedFieldChanged ? const Value(null) : const Value.absent(),
-          signedClientMsgId:
-              signedFieldChanged ? const Value(null) : const Value.absent(),
-          originCryptoValid:
-              signedFieldChanged ? const Value(null) : const Value.absent(),
+          // Diverged → drop the now-stale sig. Identical: if the deleted ru CARRIED
+          // a verified origin (post-emit self-echo — `ru.originCryptoValid != null`),
+          // ADOPT ru's carriage state onto the survivor, else the discriminator dies
+          // with the deleted row and _originFromRow can't surface the origin
+          // (cage-match Carnot/Tesla: the collapse must SET from ru, not only
+          // preserve rc). Pre-emit ru carries nothing → preserve rc's LOCAL seal via
+          // Value.absent() (Tesla R3). rc's sig == ru's origin sig for our own send,
+          // so adopting is coherent, and it additionally carries ru's verdict/signed-id.
+          sig: signedFieldChanged
+              ? const Value(null)
+              : (adoptCarried ? Value(ru.sig) : const Value.absent()),
+          senderPubkey: signedFieldChanged
+              ? const Value(null)
+              : (adoptCarried ? Value(ru.senderPubkey) : const Value.absent()),
+          signedAtMs: signedFieldChanged
+              ? const Value(null)
+              : (adoptCarried ? Value(ru.signedAtMs) : const Value.absent()),
+          keyVersion: signedFieldChanged
+              ? const Value(null)
+              : (adoptCarried ? Value(ru.keyVersion) : const Value.absent()),
+          signedClientMsgId: signedFieldChanged
+              ? const Value(null)
+              : (adoptCarried ? Value(ru.signedClientMsgId) : const Value.absent()),
+          originCryptoValid: signedFieldChanged
+              ? const Value(null)
+              : (adoptCarried ? Value(ru.originCryptoValid) : const Value.absent()),
         ));
         return AckOutcome.collapsed;
       }

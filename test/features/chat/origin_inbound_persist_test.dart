@@ -202,6 +202,49 @@ void main() {
     });
   });
 
+  // cage-match Carnot/Tesla: post-emit, a self-echo (ru) carrying a verified origin
+  // can land before our ack; the collapse must ADOPT ru's carriage state onto the
+  // survivor, not let it die with the deleted row.
+  test('collapse ADOPTS a carried self-echo origin (not lost when ru is deleted)',
+      () async {
+    const myTmp = 'my-tmp-echo';
+    // 1) our optimistic outbound row with a LOCAL signature (no verdict).
+    final payload = SignedPayload(
+      rawPublicKey: signer.rawPublicKey,
+      channelId: _chan,
+      clientMsgId: myTmp,
+      signedAtMs: 1720000000000,
+      body: 'echo me',
+    );
+    final mySig = await sign(signer, payload);
+    await cache.insertOptimistic(
+      Message(
+        clientTempId: myTmp,
+        channelId: _chan,
+        sender: const MessageSender(userId: 'me', kind: SenderKind.human),
+        body: 'echo me',
+        createdAt: DateTime.now().toUtc(),
+        deliveryState: DeliveryState.sending,
+      ),
+      signature: mySig,
+    );
+    // 2) the gateway self-echo lands FIRST (verified origin, same content), signed
+    //    id == our temp id (what we'd have emitted).
+    await persist(await signedView(
+        ulid: '01ECHO', signedCmid: myTmp, signedBody: 'echo me'));
+    // 3) our ack collapses the optimistic row onto the echo's ULID.
+    await cache.reconcileAck(
+        myTmp, '01ECHO', DateTime.parse('2026-01-01T00:00:00Z').toUtc());
+
+    final rows = await cache.watchChannel(_chan).first;
+    final survivor = rows.firstWhere((m) => m.id == '01ECHO');
+    expect(survivor.originCryptoValid, isTrue,
+        reason: 'the carried verdict survives the collapse');
+    expect(survivor.origin, isNotNull,
+        reason: 'the carried origin is adopted, not lost with ru');
+    expect(survivor.origin!.clientMsgId, myTmp);
+  });
+
   group('named trust-boundary limitations (cage-match Carnot)', () {
     // HIGH: originCryptoValid proves signature-over-content, NOT message-identity.
     // On the read path there is no frame client_msg_id to bind against, so a
