@@ -193,12 +193,12 @@ class $MessagesTable extends Messages
         type: DriftSqlType.string,
         requiredDuringInsert: false,
       );
-  static const VerificationMeta _originVerifiedMeta = const VerificationMeta(
-    'originVerified',
+  static const VerificationMeta _originCryptoValidMeta = const VerificationMeta(
+    'originCryptoValid',
   );
   @override
-  late final GeneratedColumn<int> originVerified = GeneratedColumn<int>(
-    'origin_verified',
+  late final GeneratedColumn<int> originCryptoValid = GeneratedColumn<int>(
+    'origin_crypto_valid',
     aliasedName,
     true,
     type: DriftSqlType.int,
@@ -223,7 +223,7 @@ class $MessagesTable extends Messages
     signedAtMs,
     keyVersion,
     signedClientMsgId,
-    originVerified,
+    originCryptoValid,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -374,12 +374,12 @@ class $MessagesTable extends Messages
         ),
       );
     }
-    if (data.containsKey('origin_verified')) {
+    if (data.containsKey('origin_crypto_valid')) {
       context.handle(
-        _originVerifiedMeta,
-        originVerified.isAcceptableOrUnknown(
-          data['origin_verified']!,
-          _originVerifiedMeta,
+        _originCryptoValidMeta,
+        originCryptoValid.isAcceptableOrUnknown(
+          data['origin_crypto_valid']!,
+          _originCryptoValidMeta,
         ),
       );
     }
@@ -460,9 +460,9 @@ class $MessagesTable extends Messages
         DriftSqlType.string,
         data['${effectivePrefix}signed_client_msg_id'],
       ),
-      originVerified: attachedDatabase.typeMapping.read(
+      originCryptoValid: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
-        data['${effectivePrefix}origin_verified'],
+        data['${effectivePrefix}origin_crypto_valid'],
       ),
     );
   }
@@ -522,7 +522,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
   /// (wire-half, schema v4). NULL = no origin / our own outbound sig (self-
   /// verified at sign-time, never re-checked); 1 = carried-and-verified; 0 =
   /// carried-but-invalid. DATA, not UI (no "verified sender" badge until PR B).
-  final int? originVerified;
+  final int? originCryptoValid;
   const MessageRow({
     required this.clientTempId,
     this.serverUlid,
@@ -541,7 +541,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     this.signedAtMs,
     this.keyVersion,
     this.signedClientMsgId,
-    this.originVerified,
+    this.originCryptoValid,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -581,8 +581,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     if (!nullToAbsent || signedClientMsgId != null) {
       map['signed_client_msg_id'] = Variable<String>(signedClientMsgId);
     }
-    if (!nullToAbsent || originVerified != null) {
-      map['origin_verified'] = Variable<int>(originVerified);
+    if (!nullToAbsent || originCryptoValid != null) {
+      map['origin_crypto_valid'] = Variable<int>(originCryptoValid);
     }
     return map;
   }
@@ -622,9 +622,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       signedClientMsgId: signedClientMsgId == null && nullToAbsent
           ? const Value.absent()
           : Value(signedClientMsgId),
-      originVerified: originVerified == null && nullToAbsent
+      originCryptoValid: originCryptoValid == null && nullToAbsent
           ? const Value.absent()
-          : Value(originVerified),
+          : Value(originCryptoValid),
     );
   }
 
@@ -653,7 +653,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       signedClientMsgId: serializer.fromJson<String?>(
         json['signedClientMsgId'],
       ),
-      originVerified: serializer.fromJson<int?>(json['originVerified']),
+      originCryptoValid: serializer.fromJson<int?>(json['originCryptoValid']),
     );
   }
   @override
@@ -677,7 +677,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       'signedAtMs': serializer.toJson<int?>(signedAtMs),
       'keyVersion': serializer.toJson<int?>(keyVersion),
       'signedClientMsgId': serializer.toJson<String?>(signedClientMsgId),
-      'originVerified': serializer.toJson<int?>(originVerified),
+      'originCryptoValid': serializer.toJson<int?>(originCryptoValid),
     };
   }
 
@@ -699,7 +699,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     Value<int?> signedAtMs = const Value.absent(),
     Value<int?> keyVersion = const Value.absent(),
     Value<String?> signedClientMsgId = const Value.absent(),
-    Value<int?> originVerified = const Value.absent(),
+    Value<int?> originCryptoValid = const Value.absent(),
   }) => MessageRow(
     clientTempId: clientTempId ?? this.clientTempId,
     serverUlid: serverUlid.present ? serverUlid.value : this.serverUlid,
@@ -720,9 +720,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     signedClientMsgId: signedClientMsgId.present
         ? signedClientMsgId.value
         : this.signedClientMsgId,
-    originVerified: originVerified.present
-        ? originVerified.value
-        : this.originVerified,
+    originCryptoValid: originCryptoValid.present
+        ? originCryptoValid.value
+        : this.originCryptoValid,
   );
   MessageRow copyWithCompanion(MessagesCompanion data) {
     return MessageRow(
@@ -763,9 +763,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       signedClientMsgId: data.signedClientMsgId.present
           ? data.signedClientMsgId.value
           : this.signedClientMsgId,
-      originVerified: data.originVerified.present
-          ? data.originVerified.value
-          : this.originVerified,
+      originCryptoValid: data.originCryptoValid.present
+          ? data.originCryptoValid.value
+          : this.originCryptoValid,
     );
   }
 
@@ -789,7 +789,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ..write('signedAtMs: $signedAtMs, ')
           ..write('keyVersion: $keyVersion, ')
           ..write('signedClientMsgId: $signedClientMsgId, ')
-          ..write('originVerified: $originVerified')
+          ..write('originCryptoValid: $originCryptoValid')
           ..write(')'))
         .toString();
   }
@@ -813,7 +813,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     signedAtMs,
     keyVersion,
     signedClientMsgId,
-    originVerified,
+    originCryptoValid,
   );
   @override
   bool operator ==(Object other) =>
@@ -836,7 +836,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           other.signedAtMs == this.signedAtMs &&
           other.keyVersion == this.keyVersion &&
           other.signedClientMsgId == this.signedClientMsgId &&
-          other.originVerified == this.originVerified);
+          other.originCryptoValid == this.originCryptoValid);
 }
 
 class MessagesCompanion extends UpdateCompanion<MessageRow> {
@@ -857,7 +857,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   final Value<int?> signedAtMs;
   final Value<int?> keyVersion;
   final Value<String?> signedClientMsgId;
-  final Value<int?> originVerified;
+  final Value<int?> originCryptoValid;
   final Value<int> rowid;
   const MessagesCompanion({
     this.clientTempId = const Value.absent(),
@@ -877,7 +877,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.signedAtMs = const Value.absent(),
     this.keyVersion = const Value.absent(),
     this.signedClientMsgId = const Value.absent(),
-    this.originVerified = const Value.absent(),
+    this.originCryptoValid = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -898,7 +898,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.signedAtMs = const Value.absent(),
     this.keyVersion = const Value.absent(),
     this.signedClientMsgId = const Value.absent(),
-    this.originVerified = const Value.absent(),
+    this.originCryptoValid = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : clientTempId = Value(clientTempId),
        channelId = Value(channelId),
@@ -925,7 +925,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Expression<int>? signedAtMs,
     Expression<int>? keyVersion,
     Expression<String>? signedClientMsgId,
-    Expression<int>? originVerified,
+    Expression<int>? originCryptoValid,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -946,7 +946,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       if (signedAtMs != null) 'signed_at_ms': signedAtMs,
       if (keyVersion != null) 'key_version': keyVersion,
       if (signedClientMsgId != null) 'signed_client_msg_id': signedClientMsgId,
-      if (originVerified != null) 'origin_verified': originVerified,
+      if (originCryptoValid != null) 'origin_crypto_valid': originCryptoValid,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -969,7 +969,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Value<int?>? signedAtMs,
     Value<int?>? keyVersion,
     Value<String?>? signedClientMsgId,
-    Value<int?>? originVerified,
+    Value<int?>? originCryptoValid,
     Value<int>? rowid,
   }) {
     return MessagesCompanion(
@@ -990,7 +990,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       signedAtMs: signedAtMs ?? this.signedAtMs,
       keyVersion: keyVersion ?? this.keyVersion,
       signedClientMsgId: signedClientMsgId ?? this.signedClientMsgId,
-      originVerified: originVerified ?? this.originVerified,
+      originCryptoValid: originCryptoValid ?? this.originCryptoValid,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1049,8 +1049,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     if (signedClientMsgId.present) {
       map['signed_client_msg_id'] = Variable<String>(signedClientMsgId.value);
     }
-    if (originVerified.present) {
-      map['origin_verified'] = Variable<int>(originVerified.value);
+    if (originCryptoValid.present) {
+      map['origin_crypto_valid'] = Variable<int>(originCryptoValid.value);
     }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
@@ -1078,7 +1078,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
           ..write('signedAtMs: $signedAtMs, ')
           ..write('keyVersion: $keyVersion, ')
           ..write('signedClientMsgId: $signedClientMsgId, ')
-          ..write('originVerified: $originVerified, ')
+          ..write('originCryptoValid: $originCryptoValid, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1677,7 +1677,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<int?> signedAtMs,
       Value<int?> keyVersion,
       Value<String?> signedClientMsgId,
-      Value<int?> originVerified,
+      Value<int?> originCryptoValid,
       Value<int> rowid,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
@@ -1699,7 +1699,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int?> signedAtMs,
       Value<int?> keyVersion,
       Value<String?> signedClientMsgId,
-      Value<int?> originVerified,
+      Value<int?> originCryptoValid,
       Value<int> rowid,
     });
 
@@ -1797,8 +1797,8 @@ class $$MessagesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<int> get originVerified => $composableBuilder(
-    column: $table.originVerified,
+  ColumnFilters<int> get originCryptoValid => $composableBuilder(
+    column: $table.originCryptoValid,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1897,8 +1897,8 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<int> get originVerified => $composableBuilder(
-    column: $table.originVerified,
+  ColumnOrderings<int> get originCryptoValid => $composableBuilder(
+    column: $table.originCryptoValid,
     builder: (column) => ColumnOrderings(column),
   );
 }
@@ -1983,8 +1983,8 @@ class $$MessagesTableAnnotationComposer
     builder: (column) => column,
   );
 
-  GeneratedColumn<int> get originVerified => $composableBuilder(
-    column: $table.originVerified,
+  GeneratedColumn<int> get originCryptoValid => $composableBuilder(
+    column: $table.originCryptoValid,
     builder: (column) => column,
   );
 }
@@ -2037,7 +2037,7 @@ class $$MessagesTableTableManager
                 Value<int?> signedAtMs = const Value.absent(),
                 Value<int?> keyVersion = const Value.absent(),
                 Value<String?> signedClientMsgId = const Value.absent(),
-                Value<int?> originVerified = const Value.absent(),
+                Value<int?> originCryptoValid = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion(
                 clientTempId: clientTempId,
@@ -2057,7 +2057,7 @@ class $$MessagesTableTableManager
                 signedAtMs: signedAtMs,
                 keyVersion: keyVersion,
                 signedClientMsgId: signedClientMsgId,
-                originVerified: originVerified,
+                originCryptoValid: originCryptoValid,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2079,7 +2079,7 @@ class $$MessagesTableTableManager
                 Value<int?> signedAtMs = const Value.absent(),
                 Value<int?> keyVersion = const Value.absent(),
                 Value<String?> signedClientMsgId = const Value.absent(),
-                Value<int?> originVerified = const Value.absent(),
+                Value<int?> originCryptoValid = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessagesCompanion.insert(
                 clientTempId: clientTempId,
@@ -2099,7 +2099,7 @@ class $$MessagesTableTableManager
                 signedAtMs: signedAtMs,
                 keyVersion: keyVersion,
                 signedClientMsgId: signedClientMsgId,
-                originVerified: originVerified,
+                originCryptoValid: originCryptoValid,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

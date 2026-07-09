@@ -89,7 +89,7 @@ class Messages extends Table {
   /// (wire-half, schema v4). NULL = no origin / our own outbound sig (self-
   /// verified at sign-time, never re-checked); 1 = carried-and-verified; 0 =
   /// carried-but-invalid. DATA, not UI (no "verified sender" badge until PR B).
-  IntColumn get originVerified => integer().nullable()();
+  IntColumn get originCryptoValid => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {clientTempId};
@@ -150,7 +150,7 @@ class DriftCache extends _$DriftCache {
           // verify verdict. Both nullable — existing rows keep NULLs.
           if (from < 4) {
             await m.addColumn(messages, messages.signedClientMsgId);
-            await m.addColumn(messages, messages.originVerified);
+            await m.addColumn(messages, messages.originCryptoValid);
           }
         },
       );
@@ -172,7 +172,7 @@ class DriftCache extends _$DriftCache {
         createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt, isUtc: true),
         deliveryState: DeliveryState.fromWire(r.deliveryState),
         origin: _originFromRow(r),
-        originVerified: r.originVerified == null ? null : r.originVerified == 1,
+        originCryptoValid: r.originCryptoValid == null ? null : r.originCryptoValid == 1,
       );
 
   /// Rebuild the [OriginEnvelope] from the typed signature columns (there is NO
@@ -219,9 +219,9 @@ class DriftCache extends _$DriftCache {
       signedClientMsgId: (o == null || o.clientMsgId == m.clientTempId)
           ? const Value.absent()
           : Value(o.clientMsgId),
-      originVerified: m.originVerified == null
+      originCryptoValid: m.originCryptoValid == null
           ? const Value.absent()
-          : Value(m.originVerified! ? 1 : 0),
+          : Value(m.originCryptoValid! ? 1 : 0),
     );
   }
 
@@ -347,7 +347,7 @@ class DriftCache extends _$DriftCache {
               signedFieldChanged ? const Value(null) : const Value.absent(),
           signedClientMsgId:
               signedFieldChanged ? const Value(null) : const Value.absent(),
-          originVerified:
+          originCryptoValid:
               signedFieldChanged ? const Value(null) : const Value.absent(),
         ));
         return AckOutcome.collapsed;
@@ -376,38 +376,26 @@ class DriftCache extends _$DriftCache {
               'serverUlid $u matched a row in channel ${existing.channelId} '
               '!= ${serverMsg.channelId} — corruption, refusing to overwrite');
         }
-        // Origin coherence (wire-half T4 — the full law, not a half). channelId
-        // can't differ here (the identity guard above throws); body/replyToId are
-        // the fields the server can change.
-        //   * diverged signed field → CLEAR the sig+verdict (a stale sig can't be
-        //     trusted; absent/false = unverified, never a lie);
-        //   * else the echo CARRIES an origin → SET it (set-on-success: fills a
-        //     previously-null origin — e.g. a first fanout of another user's
-        //     message, or our own row whose echo now carries the same origin);
-        //   * else (no incoming origin, unchanged) → absent = preserve.
-        // Setting an identical origin over our own is a harmless idempotent write.
+        // Origin coherence (wire-half T4 — the FULL law). The origin follows the
+        // INCOMING body, so the axis is "does this echo carry an origin?", NOT
+        // "did the body change?" (cage-match Tesla: an edit-then-re-sign must
+        // REPLACE, not clear). channelId can't differ (the guard above throws).
+        //   * incoming origin present → SET it: it signs the incoming body and was
+        //     verified at ingest (fills a null origin OR replaces a re-signed one),
+        //     whether or not the body diverged;
+        //   * no incoming origin + a signed field diverged → CLEAR: the old sig
+        //     signed the old body we're overwriting (absent = unverified, no lie);
+        //   * no incoming origin + unchanged → absent = preserve the still-valid sig.
         final signedFieldChanged = existing.body != serverMsg.body ||
             existing.replyToId != serverMsg.replyToId;
         final o = serverMsg.origin;
-        // Set-or-preserve on the unchanged path (an echo carrying an origin fills
-        // a previously-null one; no incoming origin leaves the columns untouched).
-        final setSig = o != null
-            ? Value(base64Encode(o.sig))
-            : const Value<String?>.absent();
-        final setPubkey = o != null
-            ? Value(base64Encode(o.rawPublicKey))
-            : const Value<String?>.absent();
-        final setSignedAt =
-            o != null ? Value(o.signedAtMs) : const Value<int?>.absent();
-        final setKeyVersion =
-            o != null ? Value(o.keyVersion) : const Value<int?>.absent();
-        final setSignedCmid =
-            (o != null && o.clientMsgId != existing.clientTempId)
-                ? Value(o.clientMsgId)
-                : const Value<String?>.absent();
-        final setVerdict = serverMsg.originVerified != null
-            ? Value(serverMsg.originVerified! ? 1 : 0)
-            : const Value<int?>.absent();
+        // Precedence helpers: SET-from-origin wins; else clear-on-diverge; else keep.
+        Value<String?> str(String? Function(OriginEnvelope) f) => o != null
+            ? Value(f(o))
+            : (signedFieldChanged ? const Value(null) : const Value.absent());
+        Value<int?> intg(int? Function(OriginEnvelope) f) => o != null
+            ? Value(f(o))
+            : (signedFieldChanged ? const Value(null) : const Value.absent());
         await (update(messages)..where((t) => t.serverUlid.equals(u))).write(
           MessagesCompanion(
             senderUserId: Value(serverMsg.sender.userId),
@@ -418,14 +406,18 @@ class DriftCache extends _$DriftCache {
             replyToId: Value(serverMsg.replyToId),
             createdAt:
                 Value(serverMsg.createdAt.toUtc().millisecondsSinceEpoch),
-            // Diverged → CLEAR (stale sig can't be trusted); else set-or-preserve.
-            sig: signedFieldChanged ? const Value(null) : setSig,
-            senderPubkey: signedFieldChanged ? const Value(null) : setPubkey,
-            signedAtMs: signedFieldChanged ? const Value(null) : setSignedAt,
-            keyVersion: signedFieldChanged ? const Value(null) : setKeyVersion,
+            sig: str((e) => base64Encode(e.sig)),
+            senderPubkey: str((e) => base64Encode(e.rawPublicKey)),
+            signedAtMs: intg((e) => e.signedAtMs),
+            keyVersion: intg((e) => e.keyVersion),
+            // Store the signed id only when it differs from the PK (inbound).
             signedClientMsgId:
-                signedFieldChanged ? const Value(null) : setSignedCmid,
-            originVerified: signedFieldChanged ? const Value(null) : setVerdict,
+                str((e) => e.clientMsgId != existing.clientTempId ? e.clientMsgId : null),
+            // Verdict comes from the ingest-time verify (serverMsg), not the raw
+            // envelope; when origin is present it is always non-null.
+            originCryptoValid: o != null
+                ? Value(serverMsg.originCryptoValid == true ? 1 : 0)
+                : (signedFieldChanged ? const Value(null) : const Value.absent()),
           ),
         );
       } else {

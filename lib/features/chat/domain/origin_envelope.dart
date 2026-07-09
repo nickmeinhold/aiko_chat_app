@@ -294,9 +294,16 @@ OriginEnvelope? validateOrigin(
 /// fields. The envelope carries the signature material ([rawPublicKey], [sig],
 /// signed [clientMsgId], [signedAtMs]); the content it authenticates
 /// ([channelId], [body], [replyTo]) comes from the message itself — this is the
-/// "verifier-sufficient" reconstruction. Returns the verdict; NEVER throws — a
-/// reconstruction/verify error (e.g. a signed field that trips [signingBytes]'
-/// domain bounds) is `false` (carried-but-invalid), not a crash at ingest.
+/// "verifier-sufficient" reconstruction. Returns the verdict.
+///
+/// Catches only the EXPECTED verification-failure classes — an [ArgumentError]
+/// from [signingBytes]' domain-bounds asserts (a content field that can't be a
+/// legal signed input) and any [Exception] from the crypto layer — and reports
+/// them as `false` (carried-but-invalid) so one bad inbound message can't kill
+/// the ingest stream. It does NOT swallow arbitrary [Error]s: a genuine
+/// programming/schema fault propagates to the repository's guarded ingest, where
+/// it is telemetered, rather than being silently laundered into a `false` verdict
+/// indistinguishable from a real bad signature (cage-match: Carnot + Tesla).
 Future<bool> verifyOrigin(
   OriginEnvelope o, {
   required String channelId,
@@ -313,8 +320,10 @@ Future<bool> verifyOrigin(
       replyTo: replyTo,
     );
     return await verifySignature(o.rawPublicKey, o.sig, payload);
-  } catch (_) {
-    return false;
+  } on ArgumentError {
+    return false; // signingBytes rejected a content field as an illegal input
+  } on Exception {
+    return false; // crypto-layer failure (malformed key/sig material)
   }
 }
 

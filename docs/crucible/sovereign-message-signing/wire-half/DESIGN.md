@@ -51,7 +51,7 @@ collapse:  reconcileAck: SET-on-success + clear-on-diverge + dual-store coherenc
 
 ### Data shapes
 - Outbound: `OutgoingMessage` gains `Map<String,dynamic>? originWire` (built at send via `toWire`).
-- Inbound: `Message` gains `OriginEnvelope? origin` + `bool? originVerified` (the local verdict —
+- Inbound: `Message` gains `OriginEnvelope? origin` + `bool? originCryptoValid` (the local verdict —
   data, not UI). `fromView` runs `validateOrigin` on `v['origin']`; on `OriginError` → `origin =
   null` (message still delivered, unverified).
 - **Cache: NO JSON blob (T3 resolved — Nick).** The drift schema ALREADY has the typed columns
@@ -62,9 +62,13 @@ collapse:  reconcileAck: SET-on-success + clear-on-diverge + dual-store coherenc
   signature carried with this message"). The framework serializes typed columns → there is NO
   JSON persistence to re-serialize, so the byte-drift question dissolves rather than being guarded.
   A verifier reconstructs `signingBytes` from these typed fields + the message's content fields.
-  Migration v3→v4 adds only **one** column: `origin_verified INTEGER NULLABLE` (we self-verify
-  outbound at sign-time, but must verify inbound on ingest). `toWire` regenerates a valid envelope
-  from fields on demand for re-emit/forward — storing wire bytes is unnecessary.
+  Migration v3→v4 adds **two** columns: `origin_crypto_valid INTEGER NULLABLE` (the ingest verify
+  verdict — we self-verify outbound at sign-time, but must verify inbound) + `signed_client_msg_id
+  TEXT NULLABLE` (the signed id for inbound rows whose PK is the ULID, keeping the stored sig
+  re-verifiable). `toWire` regenerates a valid envelope from fields on demand for re-emit/forward —
+  storing wire bytes is unnecessary. NB the verdict field is named `originCryptoValid`, NOT
+  `originVerified` — it proves signature-integrity-over-content, never sender identity
+  (cage-match: prevent a future badge misreading it as "verified sender").
 
 ### Emit capability gate (T1 — remove the coupling)
 Emission is gated on the **target gateway advertising origin carriage**, per gateway — not a
@@ -82,7 +86,7 @@ deploy clocks, and dissolves the emit-before-deploy split-brain for every gatewa
    RED cases (extra key, bad alg, padded sig, `client_msg_id` mismatch) throw. **Resolve here:**
    does the sender self-receive its own message echoed with `origin`, or only an `ack`? (branches
    T4 set-on-success) — confirm against the deployed gateway fanout.
-2. **Inbound: validate + persist + verify (T2+T5 merged).** `Message.origin`/`originVerified`,
+2. **Inbound: validate + persist + verify (T2+T5 merged).** `Message.origin`/`originCryptoValid`,
    `fromView` runs `validateOrigin`, cache v3→v4 migration, `_fromDomain`/`_toDomain`, verify on
    ingest → store verdict. **No UI.** Independently useful (portable, *verified* local history)
    and harmless anytime — it only ever tightens what we accept.

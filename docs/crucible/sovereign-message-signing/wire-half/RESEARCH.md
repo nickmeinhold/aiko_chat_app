@@ -58,7 +58,10 @@ sequence: no lock-step release required.
 - `client_msg_id` ≤ 64 chars AND **MUST equal the frame's `client_msg_id`** — the gateway's
   ONLY binding (envelope-vs-payload confusion defense). This is the single hard app-side
   correctness constraint: the value signed must be the value the frame is sent under.
-- `signed_at_ms` a sane int (0 < x < 2^62). This is the SIGNED time, distinct from server
+- `signed_at_ms` a sane int in the INCLUSIVE range `[0, 2^62]` (gateway: reject `ts < 0` or
+  `ts > 2^62`). The app gate matches this exactly (`ts < 0 || ts > _kMaxSignedAtMs`) — do NOT
+  tighten to an open interval, that would diverge from the frozen contract (cage-match Carnot:
+  the finding was a doc imprecision here, not a code bug). The SIGNED time, distinct from server
   `created_at`.
 - What it does NOT bind: `sender_pubkey` → authenticated account. Echo proves "*some* key
   signed *these* bytes", never "*this user*". The pubkey→account binding is PR B

@@ -167,7 +167,7 @@ class Message {
   /// carried-and-verified / carried-but-invalid. This is DATA, not UI — no
   /// "verified sender" affordance ships until a trust root binds key→account
   /// (peer PR B; wire-half DESIGN.md named tradeoff #1).
-  final bool? originVerified;
+  final bool? originCryptoValid;
 
   const Message({
     required this.clientTempId,
@@ -180,7 +180,7 @@ class Message {
     required this.createdAt,
     required this.deliveryState,
     this.origin,
-    this.originVerified,
+    this.originCryptoValid,
   });
 
   /// Build from a server `MessageView` (an inbound message frame or a history
@@ -201,7 +201,7 @@ class Message {
       createdAt: _parseTime(v['created_at'] as String?),
       deliveryState: DeliveryState.sent,
       origin: _parseInboundOrigin(v['origin']),
-      // originVerified stays null here — verification is async and runs at
+      // originCryptoValid stays null here — verification is async and runs at
       // repository ingest, never in this sync factory.
     );
   }
@@ -231,7 +231,7 @@ class Message {
     DateTime? createdAt,
     DeliveryState? deliveryState,
     OriginEnvelope? origin,
-    bool? originVerified,
+    bool? originCryptoValid,
   }) =>
       Message(
         clientTempId: clientTempId,
@@ -244,7 +244,7 @@ class Message {
         createdAt: createdAt ?? this.createdAt,
         deliveryState: deliveryState ?? this.deliveryState,
         origin: origin ?? this.origin,
-        originVerified: originVerified ?? this.originVerified,
+        originCryptoValid: originCryptoValid ?? this.originCryptoValid,
       );
 
   static DateTime _parseTime(String? iso) {

@@ -48,6 +48,16 @@ void main() {
       expect(encodeMultikey(_goldenPub).startsWith('z6Mk'), isTrue);
     });
 
+    // EXTERNAL known-answer (not a mirror): this exact string was produced by the
+    // gateway's base58btc alphabet for the fixture pubkey 00..1f AND verified to
+    // round-trip through the gateway's own decode_multikey (aiko-chat-island
+    // domain/signing.py). A change here means the app has drifted from the gateway
+    // encoder — the interop contract is broken. (cage-match Tesla: no mirror tests.)
+    test('golden: the canonical Multikey matches the gateway byte-for-byte', () {
+      expect(encodeMultikey(_goldenPub),
+          'z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c');
+    });
+
     test('a non-32-byte key is rejected at encode', () {
       expect(() => encodeMultikey(Uint8List(31)), throwsA(isA<OriginError>()));
     });

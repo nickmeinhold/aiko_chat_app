@@ -441,14 +441,14 @@ class ChatRepository {
   /// persist. The single verify point for BOTH inbound paths (live fanout +
   /// history sync) so the cache never runs crypto and the verdict is computed
   /// exactly once. A malformed origin was already dropped at parse (fromView);
-  /// an unverifiable-but-well-formed origin persists with originVerified=false
+  /// an unverifiable-but-well-formed origin persists with originCryptoValid=false
   /// (carried-but-invalid), which is DATA — no UI ships from it (wire-half T5).
   Future<void> _persistInbound(Message m) async {
     final o = m.origin;
     final verified = o == null
         ? m
         : m.copyWith(
-            originVerified: await verifyOrigin(o,
+            originCryptoValid: await verifyOrigin(o,
                 channelId: m.channelId, body: m.body, replyTo: m.replyToId),
           );
     await _cache.upsertInbound(verified);

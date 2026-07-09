@@ -75,7 +75,7 @@ void main() {
     final verified = o == null
         ? m
         : m.copyWith(
-            originVerified: await verifyOrigin(o,
+            originCryptoValid: await verifyOrigin(o,
                 channelId: m.channelId, body: m.body, replyTo: m.replyToId));
     await cache.upsertInbound(verified);
   }
@@ -86,7 +86,7 @@ void main() {
           ulid: '01ULID', signedCmid: 'sender-tmp-1', signedBody: 'hi'));
       expect(m.origin, isNotNull);
       expect(m.origin!.clientMsgId, 'sender-tmp-1');
-      expect(m.originVerified, isNull, reason: 'verify is async, not in fromView');
+      expect(m.originCryptoValid, isNull, reason: 'verify is async, not in fromView');
     });
 
     test('a MALFORMED origin is dropped; the message is still delivered', () async {
@@ -109,7 +109,7 @@ void main() {
       expect(row.senderPubkey, isNotNull);
       expect(row.signedAtMs, 1720000000000);
       expect(row.keyVersion, 1);
-      expect(row.originVerified, 1, reason: 'verified at ingest');
+      expect(row.originCryptoValid, 1, reason: 'verified at ingest');
       // The signed id is stored because it differs from the ULID PK.
       expect(row.signedClientMsgId, 'sender-tmp');
     });
@@ -124,7 +124,7 @@ void main() {
           viewBody: 'tampered'));
       final row = await rawRow('01B');
       expect(row.sig, isNotNull, reason: 'carried, so stored');
-      expect(row.originVerified, 0, reason: 'body mismatch → unverifiable');
+      expect(row.originCryptoValid, 0, reason: 'body mismatch → unverifiable');
     });
 
     test('round-trips: _toDomain reconstructs the origin + verdict from columns',
@@ -132,7 +132,7 @@ void main() {
       await persist(await signedView(
           ulid: '01C', signedCmid: 'sender-tmp', signedBody: 'rt'));
       final m = await readDomain('01C');
-      expect(m.originVerified, isTrue);
+      expect(m.originCryptoValid, isTrue);
       expect(m.origin, isNotNull);
       expect(m.origin!.clientMsgId, 'sender-tmp',
           reason: 'signed id survives the round-trip, not the ULID');
@@ -148,7 +148,7 @@ void main() {
     test('SET-on-success: a first fanout INSERT sets the origin columns', () async {
       await persist(await signedView(
           ulid: '01D', signedCmid: 'c', signedBody: 'x'));
-      expect((await rawRow('01D')).originVerified, 1);
+      expect((await rawRow('01D')).originCryptoValid, 1);
     });
 
     test('a content-identical re-echo PRESERVES the verdict + sig', () async {
@@ -159,7 +159,23 @@ void main() {
       await persist(view); // identical re-echo (history re-sync)
       final second = await rawRow('01E');
       expect(second.sig, first.sig);
-      expect(second.originVerified, 1);
+      expect(second.originCryptoValid, 1);
+    });
+
+    test('cage-match Tesla: a diverged body with a FRESH valid origin REPLACES, '
+        'not clears', () async {
+      // Server re-echoes the same ULID with a NEW body AND a new envelope signing
+      // that new body. The origin follows the incoming body → SET (verified=1),
+      // never cleared at the zero-crossing.
+      await persist(await signedView(
+          ulid: '01H', signedCmid: 'c1', signedBody: 'v1'));
+      await persist(await signedView(
+          ulid: '01H', signedCmid: 'c2', signedBody: 'v2'));
+      final row = await rawRow('01H');
+      expect(row.body, 'v2');
+      expect(row.sig, isNotNull, reason: 'the fresh origin replaces the old one');
+      expect(row.originCryptoValid, 1, reason: 'the new origin signs the new body');
+      expect(row.signedClientMsgId, 'c2', reason: 'the new signed id, not c1');
     });
 
     test('a diverged-body re-echo CLEARS sig + verdict + signed id (coherence)',
@@ -181,7 +197,7 @@ void main() {
       final row = await rawRow('01F');
       expect(row.body, 'edited');
       expect(row.sig, isNull, reason: 'stale sig cleared');
-      expect(row.originVerified, isNull, reason: 'verdict clears WITH the sig');
+      expect(row.originCryptoValid, isNull, reason: 'verdict clears WITH the sig');
       expect(row.signedClientMsgId, isNull, reason: 'signed id clears too');
     });
   });
@@ -197,6 +213,6 @@ void main() {
     });
     final row = await rawRow('01G');
     expect(row.sig, isNull);
-    expect(row.originVerified, isNull);
+    expect(row.originCryptoValid, isNull);
   });
 }
