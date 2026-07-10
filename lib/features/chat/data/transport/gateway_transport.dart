@@ -133,15 +133,24 @@ class GatewayTransport implements ChatTransport {
   /// failure we strip origin and send UNSIGNED — a legal "unverified" delivery
   /// beats a rejected one. `frameClientMsgId` is the frame's own id, which the
   /// origin's `client_msg_id` must equal (identical by construction).
+  ///
+  /// The ENTIRE ornament construction is inside the try (cage-match Carnot F1 +
+  /// Tesla): `toWire()` calls `encodeMultikey`, which throws [OriginError] on a
+  /// bad-length key — that throw is OUTSIDE the caller's control and must not
+  /// escape `sendMessage` (never-throws contract) nor defeat the strip. The
+  /// catch is broad on purpose: the origin is an OPTIONAL ornament, so ANY
+  /// construction failure strips it rather than killing the message. Logged so a
+  /// construction bug is observable, not a silent sovereignty downgrade.
   Map<String, dynamic>? _originWire(OutgoingMessage message) {
     final o = message.origin;
     if (o == null) return null;
-    final wire = o.toWire();
     try {
+      final wire = o.toWire();
       validateOrigin(wire, frameClientMsgId: message.clientTempId);
       return wire;
-    } on OriginError {
-      return null; // fail-safe: strip a malformed self-built origin, still deliver
+    } catch (e) {
+      _log?.call('origin self-assert failed, sending unsigned: $e');
+      return null;
     }
   }
 

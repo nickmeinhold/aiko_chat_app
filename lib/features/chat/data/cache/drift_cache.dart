@@ -199,13 +199,22 @@ class DriftCache extends _$DriftCache {
   OriginEnvelope? _originFromColumns(MessageRow r) {
     final sig = r.sig, pub = r.senderPubkey, ts = r.signedAtMs, kv = r.keyVersion;
     if (sig == null || pub == null || ts == null || kv == null) return null;
-    return OriginEnvelope(
-      keyVersion: kv,
-      rawPublicKey: base64Decode(pub),
-      clientMsgId: r.signedClientMsgId ?? r.clientTempId,
-      signedAtMs: ts,
-      sig: base64Decode(sig),
-    );
+    try {
+      return OriginEnvelope(
+        keyVersion: kv,
+        rawPublicKey: base64Decode(pub),
+        clientMsgId: r.signedClientMsgId ?? r.clientTempId,
+        signedAtMs: ts,
+        sig: base64Decode(sig),
+      );
+    } on FormatException {
+      // A corrupt persisted signature column (bad base64) must DEGRADE to null,
+      // never throw (cage-match Carnot F2 + Tesla): on the reconnect drain a
+      // throw here aborts the whole outbox flush and stalls delivery. Return null
+      // → the message emits UNSIGNED (outbound) or the inbound origin is dropped
+      // while the message is kept — both the intended graceful-degradation path.
+      return null;
+    }
   }
 
   /// The OUTBOUND origin for an outbox row (retry / reconnect drain), rebuilt

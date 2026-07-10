@@ -62,6 +62,21 @@ void main() {
       final out = await cache.outbox();
       expect(out, isEmpty);
     });
+
+    // cage-match Carnot F2 + Tesla: a corrupt persisted signature column must
+    // DEGRADE to null, never throw — a throw in the reconnect-drain rebuild would
+    // abort the whole outbox flush and stall delivery.
+    test('outboundOrigin yields null on a corrupt signature column (no throw)',
+        () async {
+      await cache.insertOptimistic(optimistic('c1', 'chan', 'hi'));
+      // Populate the sig columns with INVALID base64 (a partial/corrupt persist).
+      await cache.customStatement(
+          "UPDATE messages SET sig = '!!!not-base64!!!', "
+          "sender_pubkey = 'AAAA', signed_at_ms = 1, key_version = 1 "
+          "WHERE client_temp_id = 'c1'");
+      // Must not throw; degrades to null (message emits unsigned, drain survives).
+      expect(await cache.outboundOrigin('c1'), isNull);
+    });
   });
 
   group('W2 — ack reconcile', () {
