@@ -214,11 +214,21 @@ class SendFrame {
   final String channelId;
   final String body;
   final String? replyTo;
+
+  /// The sovereign-signing `origin` envelope — the 7-key wire object from
+  /// [OriginEnvelope.toWire] — or null for an unsigned send (legal: absent ==
+  /// "unverified", never "invalid"). Emitted verbatim; the transport
+  /// self-asserts it through `validateOrigin` BEFORE construction, so a
+  /// malformed envelope is stripped-to-unsigned rather than emitted and
+  /// `bad_origin`-rejected by the gateway (which would drop the whole message).
+  final Map<String, dynamic>? origin;
+
   const SendFrame({
     required this.clientMsgId,
     required this.channelId,
     required this.body,
     this.replyTo,
+    this.origin,
   });
 
   Map<String, dynamic> toJson() => {
@@ -227,6 +237,7 @@ class SendFrame {
         'channel_id': channelId,
         'body': body,
         if (replyTo != null) 'reply_to': replyTo,
+        if (origin != null) 'origin': origin,
       };
 
   String encode() => jsonEncode(toJson());

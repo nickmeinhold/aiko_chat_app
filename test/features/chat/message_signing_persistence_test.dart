@@ -3,8 +3,12 @@ import 'dart:convert';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
+import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart'
+    show ConnectionState;
+import 'package:aiko_chat_app/features/chat/data/transport/envelopes.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
+import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
@@ -92,16 +96,96 @@ void main() {
     await repo.dispose();
   });
 
-  test('BRIGHT LINE: nothing signing-related leaks onto the wire', () async {
+  test(
+      'carriage LIVE: a signed send EMITS a valid, verifying origin on the wire '
+      '(wire-half Path A — replaces the pre-carriage bright line)', () async {
     final repo = buildRepo(signingKey: key);
     await repo.sendMessage(_chan, 'hi');
-    // OutgoingMessage carries only the four content fields — no sig/pubkey by
-    // construction. Assert the wire payload is exactly the pre-signing shape.
     final sent = transport.sent.single;
+
+    // Content fields unchanged...
     expect(sent.clientTempId, isNotNull);
     expect(sent.channelId, _chan);
     expect(sent.body, 'hi');
     expect(sent.replyToId, isNull);
+
+    // ...and NOW the sovereign origin IS carried, built from the in-hand
+    // signature with the SAME id the frame carries (the client_msg_id binding).
+    final o = sent.origin;
+    expect(o, isNotNull, reason: 'carriage deployed → origin emitted');
+    expect(o!.clientMsgId, sent.clientTempId);
+
+    // The wire object passes the gateway-mirrored SHAPE gate exactly...
+    final wire = o.toWire();
+    expect(() => validateOrigin(wire, frameClientMsgId: sent.clientTempId),
+        returnsNormally);
+    // ...and the signature VERIFIES over the message content (verifier-
+    // sufficient reconstruction — the whole point of the round-trip).
+    expect(await verifyOrigin(o, channelId: sent.channelId, body: sent.body),
+        isTrue);
+    await repo.dispose();
+  });
+
+  test('the emitted SendFrame serialises origin as exactly the 7-key wire object',
+      () async {
+    final repo = buildRepo(signingKey: key);
+    await repo.sendMessage(_chan, 'hi');
+    final sent = transport.sent.single;
+    // The actual JSON the transport puts on the wire.
+    final json = SendFrame(
+      clientMsgId: sent.clientTempId,
+      channelId: _chan,
+      body: 'hi',
+      origin: sent.origin!.toWire(),
+    ).toJson();
+    expect(json['origin'], isA<Map>());
+    expect(
+        (json['origin'] as Map).keys.toSet(),
+        {
+          'v',
+          'alg',
+          'key_version',
+          'sender_pubkey',
+          'client_msg_id',
+          'signed_at_ms',
+          'sig'
+        },
+        reason: 'exact frozen v1 key set, no more no fewer');
+    await repo.dispose();
+  });
+
+  test('unsigned send emits NO origin on the wire (legal absent state)',
+      () async {
+    final repo = buildRepo(signingKey: null);
+    await repo.sendMessage(_chan, 'hi');
+    expect(transport.sent.single.origin, isNull);
+    await repo.dispose();
+  });
+
+  test('BOTH PATHS: a reconnect-drained resend re-emits its origin', () async {
+    final repo = buildRepo(signingKey: key);
+    await repo.sendMessage(_chan, 'hi');
+    expect(transport.sent.single.origin, isNotNull,
+        reason: 'the fresh send carries origin');
+
+    // No ack → the row stays in the outbox. Bounce the connection: the reconnect
+    // drain re-sends via `_toOutgoing`, which must rebuild origin from the
+    // persisted signature columns (not just the in-hand fresh-send path).
+    transport.emitConn(ConnectionState.disconnected);
+    await pump();
+    transport.emitConn(ConnectionState.connected);
+    await pump();
+
+    expect(transport.sent.length, greaterThanOrEqualTo(2),
+        reason: 'pending row re-sent on drain');
+    final resend = transport.sent.last;
+    expect(resend.origin, isNotNull,
+        reason: 'a drained resend carries origin too, rebuilt from columns');
+    // Same signature material, still verifying over the content.
+    expect(
+        await verifyOrigin(resend.origin!,
+            channelId: resend.channelId, body: resend.body),
+        isTrue);
     await repo.dispose();
   });
 
