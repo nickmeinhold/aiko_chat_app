@@ -25,17 +25,17 @@ import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../../chat/data/transport/chat_transport.dart';
-import '../data/broker_auth_client.dart';
+import '../data/auth_exceptions.dart';
 import '../data/passkey_auth_client.dart';
-import '../data/social_auth_client.dart';
 import '../domain/auth_models.dart';
-import '../domain/social_models.dart';
+import '../domain/identity_models.dart';
 
 final authControllerProvider =
     AsyncNotifierProvider<AuthController, AppUser?>(AuthController.new);
 
-/// The transient "a new social identity has been verified but has not yet
-/// claimed a handle" state. It lives ALONGSIDE [authControllerProvider]'s
+/// The transient "a new identity has been verified but has not yet claimed a
+/// handle" state (first-passkey-creates-account). It lives ALONGSIDE
+/// [authControllerProvider]'s
 /// `AppUser?` rather than inside it, so the logged-in/out state machine is
 /// untouched: a non-null value here (while logged out) is what drives the
 /// router to `/claim-handle`. Cleared once the handle is claimed (→ logged in)
@@ -54,8 +54,6 @@ class PendingHandleNotifier extends Notifier<PendingHandle?> {
 class AuthController extends AsyncNotifier<AppUser?> {
   ChatRestApi get _rest => ref.read(restApiProvider);
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
-  SocialAuthClient get _social => ref.read(socialAuthClientProvider);
-  BrokerAuthClient get _broker => ref.read(brokerAuthClientProvider);
   PasskeyAuthClient get _passkey => ref.read(passkeyAuthClientProvider);
 
   @override
@@ -96,7 +94,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   }
 
   /// The shared ingress preamble for every "start a sign-in ceremony" entry
-  /// point (native, broker, passkey-authenticate, passkey-register). Ingress-only
+  /// point (passkey-authenticate, passkey-register). Ingress-only
   /// AND single-flight — the guard rejects when:
   ///   * a session is already live (`state.value != null`) — a stray call must
   ///     not park a PendingHandle behind a live session (Carnot, #37); OR
@@ -119,65 +117,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
     state = await AsyncValue.guard(() => ceremony(prior));
   }
 
-  /// Sign in with a social [provider]. Drives the native SDK for a credential,
-  /// hands the ID token to the gateway, then either logs straight in (known
-  /// identity) or parks a [PendingHandle] (new identity) so the router shows the
-  /// claim-handle screen. A user cancellation restores the prior state silently
-  /// — no error banner.
-  Future<void> signInWith(SocialProvider provider) => _ingress((prior) async {
-        // Fetch a server-issued single-use nonce FIRST, then bind the provider
-        // token to it. The controller owns this nonce end-to-end: it threads it
-        // into the SDK flow AND submits its own copy to /social — so a captured
-        // request can't be replayed, and a buggy client can't swap in a nonce
-        // the gateway never issued.
-        final rawNonce = await _rest.fetchNonce();
-        final SocialCredential cred;
-        try {
-          cred = await _social.signIn(provider, rawNonce: rawNonce);
-        } on SocialSignInCancelled {
-          return prior; // user backed out — no-op, restore prior state
-        }
-        final outcome = await _rest.socialSignIn(
-          provider: provider,
-          idToken: cred.idToken,
-          rawNonce: rawNonce,
-          name: cred.name,
-        );
-        return _applyOutcome(outcome, prior);
-      });
-
-  /// Sign in via a gateway OAuth-BROKER provider (e.g. GitHub) identified by
-  /// [slug]. Mirrors [signInWith] but the ingress is the system web-auth session
-  /// + a handoff exchange instead of a native SDK + id-token: run the browser
-  /// flow, redeem the handoff at the gateway, then route on the SAME outcome
-  /// (log in, or park a PendingHandle for /claim-handle). A user dismissal of the
-  /// browser restores the prior state silently (no error banner).
-  Future<void> signInWithBroker(String slug) => _ingress((prior) async {
-        final BrokerHandoff handoff;
-        try {
-          handoff = await _broker.authenticate(slug);
-        } on SocialSignInCancelled {
-          return prior; // user closed the browser — no-op, restore prior state
-        }
-        final outcome =
-            await _rest.exchangeOAuth(handoff.code, handoff.verifier);
-        return _applyOutcome(outcome, prior);
-      });
-
-  /// Sign in with an EXISTING passkey (WebAuthn). Mirrors [signInWithBroker] but
-  /// the ingress is a gateway challenge + an on-device authenticator assertion:
-  /// fetch the request options, let the platform sign the challenge with a
-  /// discoverable credential (usernameless), then redeem the assertion. Routes on
-  /// the SAME outcome. A user dismissal of the system sheet restores the prior
-  /// state silently (no error banner). A "no passkey on this device" error is a
-  /// real [SocialSignInFailed] — surfaced, not swallowed — so the UI can nudge
-  /// toward [registerWithPasskey].
+  /// Sign in with an EXISTING passkey (WebAuthn). The ingress is a gateway
+  /// challenge + an on-device authenticator assertion: fetch the request
+  /// options, let the platform sign the challenge with a discoverable credential
+  /// (usernameless), then redeem the assertion and route on the outcome. A user
+  /// dismissal of the system sheet restores the prior state silently (no error
+  /// banner). A "no passkey on this device" error is a real [AuthCeremonyFailed]
+  /// — surfaced, not swallowed — so the UI can nudge toward [registerWithPasskey].
   Future<void> signInWithPasskey() => _ingress((prior) async {
         final challenge = await _rest.startPasskeyAuthentication();
         final String assertion;
         try {
           assertion = await _passkey.authenticate(challenge.optionsJson);
-        } on SocialSignInCancelled {
+        } on AuthCeremonyCancelled {
           return prior; // user dismissed the sheet — no-op, restore prior state
         }
         final outcome = await _rest.finishPasskeyAuthentication(
@@ -196,7 +148,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
         final String attestation;
         try {
           attestation = await _passkey.register(challenge.optionsJson);
-        } on SocialSignInCancelled {
+        } on AuthCeremonyCancelled {
           return prior; // user dismissed the sheet — no-op, restore prior state
         }
         final outcome = await _rest.finishPasskeyRegistration(
@@ -205,8 +157,8 @@ class AuthController extends AsyncNotifier<AppUser?> {
       });
 
   /// Add a passkey to the CURRENTLY signed-in account (link-to-existing, #1727).
-  /// This is the recovery path for a user who ALREADY has an account (typically
-  /// via social sign-in) and wants passkey sign-in: routing them through
+  /// This is the recovery path for a user who ALREADY has an account and wants a
+  /// second passkey (e.g. a new device): routing them through
   /// [registerWithPasskey] would try to mint a SECOND account and — on a handle
   /// collision with their own account — orphan the device credential (the exact
   /// passkey-401 bug this closes).
@@ -218,7 +170,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// to /splash. The caller (Settings) awaits this with its own local spinner and
   /// surfaces the outcome. A sheet dismissal is a silent no-op; a real
   /// authenticator/gateway failure ([PasskeyAlreadyRegistered], [Unauthorized],
-  /// [SocialSignInFailed]) propagates to the caller and leaves the session
+  /// [AuthCeremonyFailed]) propagates to the caller and leaves the session
   /// untouched (a failed link must not log the user out).
   ///
   /// Returns `true` when a passkey was linked, `false` when the user dismissed
@@ -246,7 +198,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       final String attestation;
       try {
         attestation = await _passkey.register(challenge.optionsJson);
-      } on SocialSignInCancelled {
+      } on AuthCeremonyCancelled {
         return false; // user dismissed the sheet — no-op, session untouched
       }
       await _rest.addPasskey(challenge.state, attestation);
@@ -256,11 +208,11 @@ class AuthController extends AsyncNotifier<AppUser?> {
     }
   }
 
-  /// Apply a verified [outcome] (from native `/social` OR broker `/exchange` —
-  /// the gateway's single identity door makes them identical here): a known
-  /// identity adopts the tokens and publishes the user; a new identity parks the
-  /// [PendingHandle] (router → /claim-handle) and keeps the [prior] state.
-  Future<AppUser?> _applyOutcome(SocialOutcome outcome, AppUser? prior) async {
+  /// Apply a verified [outcome] from a passkey finish (the gateway's single
+  /// identity door): a known identity adopts the tokens and publishes the user;
+  /// a new identity parks the [PendingHandle] (router → /claim-handle) and keeps
+  /// the [prior] state (first-passkey-creates-account).
+  Future<AppUser?> _applyOutcome(IdentityOutcome outcome, AppUser? prior) async {
     switch (outcome) {
       case Authenticated(:final session):
         await _tokens.setTokens(session.tokens);
@@ -271,15 +223,15 @@ class AuthController extends AsyncNotifier<AppUser?> {
     }
   }
 
-  /// Complete a new social identity's sign-in by claiming a handle. Requires a
-  /// pending identity (set by [signInWith]); on success adopts the tokens,
+  /// Complete a new identity's sign-in by claiming a handle. Requires a pending
+  /// identity (set by [registerWithPasskey]); on success adopts the tokens,
   /// clears the pending state, and publishes the user (→ chat).
   Future<void> claimHandle(String handle, String displayName) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
       final pending = ref.read(pendingHandleProvider);
       if (pending == null) {
-        throw StateError('claimHandle called with no pending social identity');
+        throw StateError('claimHandle called with no pending identity');
       }
       final session = await _rest.claimHandle(
         provisioningToken: pending.provisioningToken,
@@ -318,7 +270,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// R3-B). Clearing first means any human-paced re-login's `setTokens` always
   /// lands after this clear, never before it.
   Future<void> _teardownResources() async {
-    // Clear any half-finished social provisioning so a teardown ALWAYS lands in
+    // Clear any half-finished identity provisioning so a teardown ALWAYS lands in
     // a clean logged-out state — otherwise an abandoned PendingHandle survives
     // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
     ref.read(pendingHandleProvider.notifier).clear();

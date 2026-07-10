@@ -3,10 +3,9 @@ import 'dart:async';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
-import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
+import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
-import 'package:aiko_chat_app/features/auth/domain/auth_provider.dart';
-import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show PasskeyAlreadyRegistered;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,8 +16,8 @@ import '../../support/fakes.dart';
 import '../../support/ui_fakes.dart';
 
 /// Passkey (WebAuthn) sign-in: the gateway-challenge → on-device authenticator →
-/// finish ingress, verified to route through the SAME outcome handling as the
-/// native and broker paths (single identity door → `_applyOutcome`).
+/// finish ingress, verified to route register and authenticate through the SAME
+/// outcome handling (single identity door → `_applyOutcome`).
 void main() {
   ProviderContainer makeContainer({
     required FakeRestApi rest,
@@ -67,7 +66,7 @@ void main() {
         () async {
       final rest = FakeRestApi();
       final passkey = FakePasskeyAuthClient(
-          authenticateThrows: const SocialSignInCancelled());
+          authenticateThrows: const AuthCeremonyCancelled());
       final c = makeContainer(rest: rest, passkey: passkey);
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
@@ -85,7 +84,7 @@ void main() {
         () async {
       final rest = FakeRestApi();
       final passkey = FakePasskeyAuthClient(
-          authenticateThrows: const SocialSignInFailed('Passkey: none'));
+          authenticateThrows: const AuthCeremonyFailed('Passkey: none'));
       final c = makeContainer(rest: rest, passkey: passkey);
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
@@ -201,7 +200,7 @@ void main() {
     test('user dismisses the sheet → no-op, finish not called', () async {
       final rest = FakeRestApi();
       final passkey = FakePasskeyAuthClient(
-          registerThrows: const SocialSignInCancelled());
+          registerThrows: const AuthCeremonyCancelled());
       final c = makeContainer(rest: rest, passkey: passkey);
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
@@ -281,7 +280,7 @@ void main() {
         () async {
       final rest = FakeRestApi();
       final passkey = FakePasskeyAuthClient(
-          registerThrows: const SocialSignInCancelled());
+          registerThrows: const AuthCeremonyCancelled());
       final c = signedIn(rest, passkey);
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
@@ -366,18 +365,6 @@ void main() {
           reason: 'a failed link must not log the user out');
       expect(c.read(authControllerProvider).hasError, isFalse,
           reason: 'the error is surfaced to the caller, not the auth state');
-    });
-  });
-
-  group('provider advertisement', () {
-    test('a passkey kind is now understood (no longer fail-closed dropped)', () {
-      final parsed = AuthProviderInfo.tryParse(const {
-        'slug': 'passkey',
-        'display_name': 'Passkey',
-        'kind': 'passkey',
-      });
-      expect(parsed, isNotNull);
-      expect(parsed!.kind, AuthProviderKind.passkey);
     });
   });
 }

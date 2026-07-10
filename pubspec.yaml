@@ -48,11 +48,7 @@ dependencies:
   connectivity_plus: ^7.1.1
   path_provider: ^2.1.6
   path: ^1.9.1
-  sign_in_with_apple: ^8.1.0
-  google_sign_in: ^7.2.0
-  crypto: ^3.0.7
   shared_preferences: ^2.3.2
-  flutter_web_auth_2: ^5.0.3
   # Passkeys via the federated implementation packages directly (NOT the
   # `passkeys` umbrella) — the umbrella declares a vestigial `ua_client_hints`
   # dep that lacks macOS Swift Package Manager support and forces a CocoaPods

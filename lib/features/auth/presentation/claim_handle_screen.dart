@@ -4,11 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../chat/data/chat_rest_api.dart' show HandleTaken;
 import '../application/auth_controller.dart';
 
-/// Shown once, right after a NEW social identity is verified: the user picks
-/// their public `@handle` and confirms a display name (pre-filled from the
-/// provider when it supplied one). On success the controller publishes the user
-/// and the router redirects to chat. Closing the screen abandons the pending
-/// identity and returns to `/login`.
+/// Shown once, right after a NEW identity is verified (first-passkey-creates-
+/// account): the user picks their public `@handle` and confirms a display name
+/// (pre-filled from the gateway when it supplied one). On success the controller
+/// publishes the user and the router redirects to chat. Closing the screen
+/// abandons the pending identity and returns to `/login`.
 class ClaimHandleScreen extends ConsumerStatefulWidget {
   const ClaimHandleScreen({super.key});
 

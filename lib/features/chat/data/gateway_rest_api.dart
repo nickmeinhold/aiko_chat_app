@@ -2,10 +2,8 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
-import '../../auth/data/social_auth_client.dart';
 import '../../auth/domain/auth_models.dart';
-import '../../auth/domain/auth_provider.dart';
-import '../../auth/domain/social_models.dart';
+import '../../auth/domain/identity_models.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
@@ -69,7 +67,7 @@ class AuthInterceptor extends Interceptor {
 }
 
 class GatewayRestApi implements ChatRestApi {
-  /// Token-less client for unauthenticated endpoints (social/claim/refresh).
+  /// Token-less client for unauthenticated endpoints (passkey/claim/refresh).
   final Dio _bare;
 
   /// Interceptor-wrapped client for authed endpoints (me/channels/history).
@@ -87,56 +85,11 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
-  Future<String> fetchNonce() async {
-    final r = await _bare.post('/v1/auth/nonce');
-    return _map(r.data)['nonce'] as String;
-  }
-
-  @override
-  Future<SocialOutcome> socialSignIn({
-    required SocialProvider provider,
-    required String idToken,
-    required String rawNonce,
-    String? name,
-  }) async {
-    final r = await _bare.post('/v1/auth/social', data: {
-      'provider': provider.name, // 'apple' | 'google'
-      'id_token': idToken,
-      'nonce': rawNonce,
-      if (name != null) 'name': name,
-    });
-    return _resolveOutcome(_map(r.data));
-  }
-
-  @override
-  Future<List<AuthProviderInfo>> listAuthProviders() async {
-    final r = await _bare.get('/v1/auth/providers');
-    final raw = (_map(r.data)['providers'] as List?) ?? const [];
-    return raw
-        .cast<Map>()
-        .map((e) => AuthProviderInfo.tryParse(e.cast<String, dynamic>()))
-        // Drop provider kinds this build doesn't understand (fail-closed).
-        .whereType<AuthProviderInfo>()
-        .toList(growable: false);
-  }
-
-  @override
-  Future<SocialOutcome> exchangeOAuth(String code, String verifier) async {
-    // Same single-door response shape as /social — known identity → tokens, new
-    // identity → provisioning_token. Reuse the exact resolver so the broker and
-    // native paths can never diverge on how they read the outcome. The
-    // app_verifier binds this redemption to the app that started the flow.
-    final r = await _bare.post('/v1/auth/oauth/exchange',
-        data: {'code': code, 'app_verifier': verifier});
-    return _resolveOutcome(_map(r.data));
-  }
-
-  @override
   Future<PasskeyChallenge> startPasskeyRegistration() =>
       _passkeyStart('/v1/auth/passkey/register/start');
 
   @override
-  Future<SocialOutcome> finishPasskeyRegistration(
+  Future<IdentityOutcome> finishPasskeyRegistration(
           String state, String credentialJson) =>
       _passkeyFinish('/v1/auth/passkey/register/finish', state, credentialJson);
 
@@ -145,7 +98,7 @@ class GatewayRestApi implements ChatRestApi {
       _passkeyStart('/v1/auth/passkey/authenticate/start');
 
   @override
-  Future<SocialOutcome> finishPasskeyAuthentication(
+  Future<IdentityOutcome> finishPasskeyAuthentication(
           String state, String credentialJson) =>
       _passkeyFinish(
           '/v1/auth/passkey/authenticate/finish', state, credentialJson);
@@ -199,9 +152,9 @@ class GatewayRestApi implements ChatRestApi {
 
   /// Complete a passkey ceremony: POST the device's response [credentialJson]
   /// (WebAuthn JSON the authenticator produced) plus the binding [state], and
-  /// route the gateway's identity response through the SAME single-door resolver
-  /// as native/broker — passkeys can never diverge on how the outcome is read.
-  Future<SocialOutcome> _passkeyFinish(
+  /// route the gateway's identity response through the single-door resolver so
+  /// register and authenticate can never diverge on how the outcome is read.
+  Future<IdentityOutcome> _passkeyFinish(
       String path, String state, String credentialJson) async {
     final Object? credential;
     try {
@@ -221,12 +174,12 @@ class GatewayRestApi implements ChatRestApi {
     return _resolveOutcome(_map(r.data));
   }
 
-  /// Resolve the gateway's identity response (from /social OR /oauth/exchange)
-  /// into a [SocialOutcome]. Route on the PRIMARY signal — a provisioning_token
+  /// Resolve the gateway's identity response (from a passkey finish) into an
+  /// [IdentityOutcome]. Route on the PRIMARY signal — a provisioning_token
   /// (or explicit status:pending) — not the mere ABSENCE of an access_token, so a
   /// malformed authenticated response fails loudly instead of casting a null
   /// provisioning_token (cage-match consensus: Maxwell/Kelvin/Carnot).
-  SocialOutcome _resolveOutcome(Map<String, dynamic> m) {
+  IdentityOutcome _resolveOutcome(Map<String, dynamic> m) {
     final ptok = m['provisioning_token'];
     if (m['status'] == 'pending' || ptok != null) {
       if (ptok is! String) {
