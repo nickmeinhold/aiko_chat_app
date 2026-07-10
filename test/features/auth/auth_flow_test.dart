@@ -1,7 +1,6 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
-import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
@@ -25,15 +24,18 @@ void main() {
     expect(text.toLowerCase(), contains('report')); // report mechanism named
   });
 
-  testWidgets('logged out → login screen shows social sign-in', (tester) async {
+  testWidgets('logged out → login screen shows passkey sign-in', (tester) async {
     final container = makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
 
     expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
-    expect(find.text('Continue with Google'), findsOneWidget);
-    expect(find.byType(TextField), findsNothing); // no password fields
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
+    expect(find.text('Already have a passkey? Sign in'), findsOneWidget);
+    // Social sign-in is fully removed — no provider buttons, no password fields.
+    expect(find.text('Continue with Google'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
   });
 
   // --- #35: the gateway picker is a PRE-LOGIN act -------------------------
@@ -100,47 +102,32 @@ void main() {
     expect(find.text('Server: localhost:8095'), findsOneWidget);
   });
 
-  // --- social sign-in (#5) -------------------------------------------------
+  // --- passkey sign-in (first-passkey-creates-account) ---------------------
 
-  testWidgets('login screen offers the Google social button (social-only)',
+  testWidgets('passkey sign-in with an existing credential → straight to chat',
       (tester) async {
-    final container = makeContainer(
-        rest: FakeRestApi(), transport: FakeChatTransport());
-    addTearDown(container.dispose);
-
-    await pumpApp(tester, container);
-
-    expect(find.widgetWithText(OutlinedButton, 'Continue with Google'),
-        findsOneWidget);
-    // No "or" divider — password path removed.
-    expect(find.text('or'), findsNothing);
-    expect(find.byType(TextField), findsNothing);
-  });
-
-  testWidgets('social sign-in with a known identity → straight to chat',
-      (tester) async {
-    final rest = FakeRestApi(); // default socialOutcome = Authenticated
+    // Default finishPasskeyAuthentication outcome = Authenticated.
+    final rest = FakeRestApi();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Continue with Google'));
+    await tester.tap(find.text('Already have a passkey? Sign in'));
     await tester.pumpAndSettle();
 
-    expect(rest.socialCalls, 1);
+    expect(rest.passkeyAuthFinishCalls, 1);
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
   });
 
-  testWidgets('social sign-in with a NEW identity → claim-handle → chat',
-      (tester) async {
-    final rest = FakeRestApi()
-      ..socialOutcome = const PendingHandle(
-          provisioningToken: 'ptok', suggestedName: 'Robin');
+  testWidgets('a NEW passkey account → claim-handle → chat', (tester) async {
+    // Default finishPasskeyRegistration outcome = PendingHandle, so creating a
+    // passkey mints the account then routes to the handle claim.
+    final rest = FakeRestApi();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Continue with Google'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Create a passkey'));
     await tester.pumpAndSettle();
 
     // A new identity is routed to the pick-your-handle screen, NOT chat.
@@ -156,14 +143,13 @@ void main() {
   });
 
   testWidgets('claim-handle surfaces a taken handle inline', (tester) async {
-    final rest = FakeRestApi()
-      ..socialOutcome = const PendingHandle(provisioningToken: 'ptok')
+    final rest = FakeRestApi() // default register outcome = PendingHandle
       ..claimThrows = const HandleTaken();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Continue with Google'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Create a passkey'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).at(0), 'taken');
     await tester.tap(find.widgetWithText(FilledButton, 'Continue'));
@@ -174,18 +160,19 @@ void main() {
     expect(find.widgetWithText(AppBar, 'Pick your handle'), findsOneWidget);
   });
 
-  testWidgets('cancelling social sign-in stays on login with no error',
+  testWidgets('cancelling passkey sign-in stays on login with no error',
       (tester) async {
-    final social = FakeSocialAuthClient(throws: const SocialSignInCancelled());
+    final passkey = FakePasskeyAuthClient(
+        authenticateThrows: const AuthCeremonyCancelled());
     final container = makeContainer(
-        rest: FakeRestApi(), transport: FakeChatTransport(), social: social);
+        rest: FakeRestApi(), transport: FakeChatTransport(), passkey: passkey);
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Continue with Google'));
+    await tester.tap(find.text('Already have a passkey? Sign in'));
     await tester.pumpAndSettle();
 
-    expect(social.signInCalls, 1);
+    expect(passkey.authenticateCalls, 1);
     expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget); // still login
     expect(find.textContaining('went wrong'), findsNothing); // no error banner
   });

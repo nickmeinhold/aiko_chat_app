@@ -12,7 +12,7 @@ void main() {
     await initializeTestEnvironment();
   });
 
-  testWidgets('social sign-in → chat screen shows the channel', (tester) async {
+  testWidgets('passkey sign-in → chat screen shows the channel', (tester) async {
     final rest = FakeRestApi();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
@@ -20,7 +20,7 @@ void main() {
     await pumpApp(tester, container);
     await signIn(tester);
 
-    expect(rest.socialCalls, 1);
+    expect(rest.passkeyAuthFinishCalls, 1);
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget); // channel name
     expect(find.text('No messages yet. Say hello!'), findsOneWidget);
   });

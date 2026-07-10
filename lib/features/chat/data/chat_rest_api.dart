@@ -1,7 +1,5 @@
-import '../../auth/data/social_auth_client.dart';
 import '../../auth/domain/auth_models.dart';
-import '../../auth/domain/auth_provider.dart';
-import '../../auth/domain/social_models.dart';
+import '../../auth/domain/identity_models.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
@@ -27,9 +25,8 @@ class HistoryPage {
 /// A passkey ceremony's `start` response: the gateway's WebAuthn `options`
 /// (opaque JSON the device authenticator consumes) plus an opaque [state] token
 /// that binds the issued challenge server-side. The app round-trips [state]
-/// untouched to the matching `finish` call — the same server-side-nonce shape
-/// the broker uses, so a challenge can only be completed by the flow that
-/// started it.
+/// untouched to the matching `finish` call — a server-side-nonce binding, so a
+/// challenge can only be completed by the flow that started it.
 typedef PasskeyChallenge = ({String state, String optionsJson});
 
 /// Thrown by an authenticated REST call when the request is *terminally*
@@ -83,41 +80,6 @@ class SoleAdminDeletionBlocked implements Exception {
 /// The history/auth/media REST seam (plan §B1; media is a later phase). No
 /// lifecycle. Riverpod + the repository depend on THIS, never on `dio`.
 abstract interface class ChatRestApi {
-  /// Fetch a fresh, server-issued single-use nonce (pre-auth) for a social
-  /// sign-in. The gateway records it so it can be marked consumed on `/social`
-  /// — defeating replay of a captured request. The caller threads this nonce
-  /// through the provider SDK (Apple hashes it, Google echoes it) and submits
-  /// the SAME raw value to [socialSignIn].
-  Future<String> fetchNonce();
-
-  /// Verify a provider ID token at the gateway. Returns [Authenticated] for a
-  /// known identity (log straight in) or [PendingHandle] for a new one (which
-  /// must then call [claimHandle]). [rawNonce] is the un-hashed, server-issued
-  /// nonce (from [fetchNonce]) — the gateway applies the provider-specific
-  /// transform before comparing against the token's `nonce` claim: `sha256(rawNonce)`
-  /// for Apple (which echoes the hash), the raw value for Google (which echoes
-  /// it verbatim).
-  /// [name] forwards the provider's display name (Apple only sends it on the
-  /// first sign-in, so it may be null).
-  Future<SocialOutcome> socialSignIn({
-    required SocialProvider provider,
-    required String idToken,
-    required String rawNonce,
-    String? name,
-  });
-
-  /// The sign-in providers the gateway offers (native + broker), driving the
-  /// dynamic login UI. Empty when social sign-in is disabled at the gateway.
-  Future<List<AuthProviderInfo>> listAuthProviders();
-
-  /// Redeem a broker OAuth [code] (the single-use handoff captured from the
-  /// `aikochat://auth?code=…` callback) for a session, presenting the app-held
-  /// [verifier] that binds the handoff to this app (cage-match #37 — a stolen
-  /// code is unredeemable without it). Returns the SAME shape as [socialSignIn]
-  /// — [Authenticated] or [PendingHandle] — because both funnel through the
-  /// gateway's single identity door.
-  Future<SocialOutcome> exchangeOAuth(String code, String verifier);
-
   /// Begin passkey REGISTRATION (first-passkey-creates-account). Returns the
   /// WebAuthn creation options + a binding [PasskeyChallenge.state]. No prior
   /// session is required — the matching [finishPasskeyRegistration] mints the
@@ -125,11 +87,11 @@ abstract interface class ChatRestApi {
   Future<PasskeyChallenge> startPasskeyRegistration();
 
   /// Complete registration: hand back the device's attestation [credentialJson]
-  /// with the [state] from [startPasskeyRegistration]. Returns the SAME outcome
-  /// shape as [socialSignIn] / [exchangeOAuth] (single identity door) —
+  /// with the [state] from [startPasskeyRegistration]. Returns an
+  /// [IdentityOutcome] from the gateway's single identity door —
   /// [Authenticated] for a straight-in mint, or [PendingHandle] when the gateway
   /// still needs a handle.
-  Future<SocialOutcome> finishPasskeyRegistration(
+  Future<IdentityOutcome> finishPasskeyRegistration(
       String state, String credentialJson);
 
   /// Begin passkey AUTHENTICATION (usernameless / discoverable credential).
@@ -138,8 +100,8 @@ abstract interface class ChatRestApi {
 
   /// Complete authentication: hand back the device's assertion [credentialJson]
   /// with the [state] from [startPasskeyAuthentication]. Returns the shared
-  /// [SocialOutcome] (verified signature → tokens).
-  Future<SocialOutcome> finishPasskeyAuthentication(
+  /// [IdentityOutcome] (verified signature → tokens).
+  Future<IdentityOutcome> finishPasskeyAuthentication(
       String state, String credentialJson);
 
   /// Link a NEW passkey to the CURRENTLY authenticated account (add-to-existing,
@@ -152,14 +114,14 @@ abstract interface class ChatRestApi {
   ///
   /// Returns the (unchanged) [AppUser] — the gateway echoes a BARE user view with
   /// NO tokens, because the caller is already authenticated. So this does NOT
-  /// share the [SocialOutcome] resolver the other finishes use (that resolver
+  /// share the [IdentityOutcome] resolver the other finishes use (that resolver
   /// requires an access_token or provisioning_token and would throw on the bare
   /// body). Throws [PasskeyAlreadyRegistered] on a 409 (this credential is already
   /// registered — to this or another account) and [Unauthorized] on a terminal
   /// auth rejection.
   Future<AppUser> addPasskey(String state, String credentialJson);
 
-  /// Complete provisioning for a new social identity by claiming a [handle].
+  /// Complete provisioning for a new identity by claiming a [handle].
   /// [provisioningToken] comes from the [PendingHandle]. Throws [HandleTaken]
   /// on a 409 conflict.
   Future<AuthSession> claimHandle({

@@ -1,6 +1,5 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
-import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
 import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
@@ -16,8 +15,8 @@ import 'fakes.dart';
 import 'ui_fakes.dart';
 
 export 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
-export 'package:aiko_chat_app/features/auth/domain/social_models.dart';
-export 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
+export 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
+export 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 export 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart' show HandleTaken, SoleAdminDeletionBlocked;
 export 'fake_chat_transport.dart';
 export 'fakes.dart';
@@ -77,8 +76,7 @@ ProviderContainer makeContainer({
   required FakeRestApi rest,
   required FakeChatTransport transport,
   InMemoryTokenStore? store,
-  FakeSocialAuthClient? social,
-  FakeBrokerAuthClient? broker,
+  FakePasskeyAuthClient? passkey,
   FakeEulaStore? eula,
   String? eulaText,
 }) {
@@ -90,10 +88,10 @@ ProviderContainer makeContainer({
     sharedPreferencesProvider.overrideWithValue(testPrefs),
     restApiProvider.overrideWithValue(rest),
     transportProvider.overrideWithValue(transport),
-    // The real social client hits Apple/Google platform channels — fake it.
-    socialAuthClientProvider.overrideWithValue(social ?? FakeSocialAuthClient()),
-    // The real broker client opens a system web-auth session — fake it.
-    brokerAuthClientProvider.overrideWithValue(broker ?? FakeBrokerAuthClient()),
+    // The real passkey client hits the platform authenticator — a
+    // FakePasskeyAuthClient drives the ceremony without a platform channel.
+    // Tests inject a throwing/gated one to exercise cancel/failure paths.
+    passkeyAuthClientProvider.overrideWithValue(passkey ?? FakePasskeyAuthClient()),
     // EULA acceptance is faked at its store seam. Default ACCEPTED so existing
     // tests reach login/chat unchanged; gate-specific tests pass accepted:false.
     eulaStoreProvider.overrideWithValue(eula ?? FakeEulaStore(accepted: true)),
@@ -134,11 +132,13 @@ Future<void> pumpApp(WidgetTester tester, ProviderContainer container) async {
   await tester.pumpAndSettle();
 }
 
-/// Drive social sign-in to the chat screen. Assumes a logged-out start.
-/// The [FakeRestApi] defaults to returning an [Authenticated] session and
-/// [FakeSocialAuthClient] returns a canned credential without hitting a
-/// platform channel, so tapping either social button immediately navigates to chat.
+/// Drive passkey sign-in to the chat screen. Assumes a logged-out start.
+/// [FakeRestApi.finishPasskeyAuthentication] defaults to an [Authenticated]
+/// session and the injected [FakePasskeyAuthClient] returns a canned assertion
+/// without hitting a platform channel, so tapping "Already have a passkey?"
+/// immediately navigates to chat (the register button would instead land on the
+/// claim-handle screen — first-passkey-creates-account).
 Future<void> signIn(WidgetTester tester) async {
-  await tester.tap(find.text('Continue with Google'));
+  await tester.tap(find.text('Already have a passkey? Sign in'));
   await tester.pumpAndSettle();
 }

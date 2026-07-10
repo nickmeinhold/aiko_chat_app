@@ -1,15 +1,12 @@
-/// The passkey (WebAuthn / FIDO2) sign-in seam — the third ingress alongside the
-/// native [SocialAuthClient] (Apple/Google SDK → id_token) and the
-/// [BrokerAuthClient] (OAuth2 code → handoff).
+/// The passkey (WebAuthn / FIDO2) sign-in seam — the app's sole ingress.
 ///
-/// Unlike those two, a passkey carries NO bearer secret: the device holds a
+/// A passkey carries NO bearer secret: the device holds a
 /// private key, the gateway stores only the matching PUBLIC key, and sign-in is
 /// a challenge–signature. A gateway DB dump is therefore worthless, and the flow
 /// is phishing-resistant by construction (the OS binds each passkey to the
 /// `webcredentials:` associated domain and refuses to release it to any other
 /// origin). That domain binding is why this path needs the Associated Domains
-/// entitlement + a hosted apple-app-site-association / assetlinks.json — the cost
-/// the custom-scheme broker deliberately avoided.
+/// entitlement + a hosted apple-app-site-association / assetlinks.json.
 ///
 /// This client owns ONLY the on-device authenticator leg. The WebAuthn structure
 /// is opaque to it: the gateway issues `options` JSON, the platform authenticator
@@ -33,7 +30,7 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:passkeys_platform_interface/passkeys_platform_interface.dart';
 import 'package:passkeys_platform_interface/types/types.dart';
 
-import 'social_auth_client.dart' show SocialSignInCancelled, SocialSignInFailed;
+import 'auth_exceptions.dart' show AuthCeremonyCancelled, AuthCeremonyFailed;
 
 /// Drives the on-device authenticator for the two WebAuthn legs. Each method
 /// takes the gateway's `options` JSON (the `start` response) and returns the
@@ -41,9 +38,9 @@ import 'social_auth_client.dart' show SocialSignInCancelled, SocialSignInFailed;
 abstract interface class PasskeyAuthClient {
   /// Create a new passkey for the relying party described by [optionsJson]
   /// (WebAuthn `PublicKeyCredentialCreationOptions`). Returns the attestation
-  /// response as WebAuthn JSON. Throws [SocialSignInCancelled] if the user
-  /// dismisses the system sheet (silent restore, like the other ingresses) or
-  /// [SocialSignInFailed] for any real authenticator/device error.
+  /// response as WebAuthn JSON. Throws [AuthCeremonyCancelled] if the user
+  /// dismisses the system sheet (silent restore) or [AuthCeremonyFailed] for
+  /// any real authenticator/device error.
   Future<String> register(String optionsJson);
 
   /// Assert an existing passkey for [optionsJson] (WebAuthn
@@ -66,10 +63,10 @@ class PlatformPasskeyAuthClient implements PasskeyAuthClient {
     } on PlatformException catch (e) {
       _throwMapped(e);
     } catch (e) {
-      // The contract promises SocialSignInFailed for any real failure. A
+      // The contract promises AuthCeremonyFailed for any real failure. A
       // non-PlatformException (e.g. fromJsonString choking on malformed options,
       // or a package-internal error) must not propagate raw to the UI.
-      throw SocialSignInFailed('Passkey: $e');
+      throw AuthCeremonyFailed('Passkey: $e');
     }
   }
 
@@ -83,7 +80,7 @@ class PlatformPasskeyAuthClient implements PasskeyAuthClient {
     } on PlatformException catch (e) {
       _throwMapped(e);
     } catch (e) {
-      throw SocialSignInFailed('Passkey: $e');
+      throw AuthCeremonyFailed('Passkey: $e');
     }
   }
 
@@ -94,6 +91,6 @@ class PlatformPasskeyAuthClient implements PasskeyAuthClient {
   /// `domain-not-associated`, `deviceNotSupported`, timeouts) is a real failure
   /// the UI surfaces, so the user can be nudged toward registration.
   Never _throwMapped(PlatformException e) => throw (e.code == 'cancelled'
-      ? const SocialSignInCancelled()
-      : SocialSignInFailed('Passkey: ${e.code}'));
+      ? const AuthCeremonyCancelled()
+      : AuthCeremonyFailed('Passkey: ${e.code}'));
 }

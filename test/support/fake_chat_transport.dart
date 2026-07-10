@@ -1,9 +1,7 @@
 import 'dart:async';
 
-import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
-import 'package:aiko_chat_app/features/auth/domain/auth_provider.dart';
-import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
@@ -143,8 +141,6 @@ class FakeChatRestApi implements ChatRestApi {
   }
 
   @override
-  Future<String> fetchNonce() => throw UnimplementedError();
-  @override
   Future<String> refresh(String refreshToken) => throw UnimplementedError();
   @override
   Future<AppUser> me() => throw UnimplementedError();
@@ -162,35 +158,21 @@ class FakeChatRestApi implements ChatRestApi {
   Future<void> reportMessage(String messageId, ReportReason reason) =>
       throw UnimplementedError();
   @override
-  Future<List<AuthProviderInfo>> listAuthProviders() =>
-      throw UnimplementedError();
-  @override
-  Future<SocialOutcome> exchangeOAuth(String code, String verifier) =>
-      throw UnimplementedError();
-  @override
   Future<PasskeyChallenge> startPasskeyRegistration() =>
       throw UnimplementedError();
   @override
-  Future<SocialOutcome> finishPasskeyRegistration(
+  Future<IdentityOutcome> finishPasskeyRegistration(
           String state, String credentialJson) =>
       throw UnimplementedError();
   @override
   Future<PasskeyChallenge> startPasskeyAuthentication() =>
       throw UnimplementedError();
   @override
-  Future<SocialOutcome> finishPasskeyAuthentication(
+  Future<IdentityOutcome> finishPasskeyAuthentication(
           String state, String credentialJson) =>
       throw UnimplementedError();
   @override
   Future<AppUser> addPasskey(String state, String credentialJson) =>
-      throw UnimplementedError();
-  @override
-  Future<SocialOutcome> socialSignIn({
-    required SocialProvider provider,
-    required String idToken,
-    required String rawNonce,
-    String? name,
-  }) =>
       throw UnimplementedError();
   @override
   Future<AuthSession> claimHandle({

@@ -32,7 +32,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   final refresh = ValueNotifier<int>(0);
   ref.onDispose(refresh.dispose);
   ref.listen(authControllerProvider, (_, _) => refresh.value++);
-  // A new social identity awaiting its handle is a redirect trigger too.
+  // A new identity awaiting its handle is a redirect trigger too.
   ref.listen(pendingHandleProvider, (_, _) => refresh.value++);
   // Accepting the Terms is a redirect trigger (gate → login/chat).
   ref.listen(eulaAcceptanceProvider, (_, _) => refresh.value++);
@@ -58,7 +58,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       final auth = ref.read(authControllerProvider);
 
       // Auth in flight. The COLD-START restore parks on the splash, but a
-      // login/register/social call submitted FROM the login OR claim-handle
+      // passkey sign-in/register call submitted FROM the login OR claim-handle
       // screen also flips state to loading — and that must keep that screen
       // (with its own in-button progress + error UI), not flash the full-screen
       // splash (Maxwell F1).
@@ -68,8 +68,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
 
       final loggedIn = auth.value != null;
-      // A verified-but-handle-less social identity (only meaningful while
-      // logged out — see [pendingHandleProvider]).
+      // A verified-but-handle-less identity (only meaningful while logged out —
+      // see [pendingHandleProvider]).
       final pendingHandle = ref.read(pendingHandleProvider) != null;
 
       // Restore finished: leave the splash for the right destination.
@@ -94,7 +94,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // gateway's /login (via the loading → /splash → /login redirect).
       if (loc == '/settings/gateway') return null;
 
-      // Logged out: a pending social identity must claim a handle first;
+      // Logged out: a pending identity must claim a handle first;
       // otherwise the login screen.
       if (pendingHandle) return loc == '/claim-handle' ? null : '/claim-handle';
       return loc == '/login' ? null : '/login';

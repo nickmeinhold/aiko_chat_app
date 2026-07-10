@@ -4,7 +4,6 @@ import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import '../../support/fake_chat_transport.dart';
 import '../../support/test_helpers.dart';
 
 void main() {
@@ -87,14 +86,13 @@ void main() {
       () async {
     final rest = FakeRestApi()
       ..deleteThrows = const SoleAdminDeletionBlocked('nope');
-    final social = FakeSocialAuthClient();
     final container =
-        makeContainer(rest: rest, transport: FakeChatTransport(), social: social);
+        makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
     await container.read(authControllerProvider.future); // settle restore
     await container
         .read(authControllerProvider.notifier)
-        .signInWith(SocialProvider.google);
+        .signInWithPasskey();
     expect(container.read(authControllerProvider).value, isNotNull);
 
     await expectLater(

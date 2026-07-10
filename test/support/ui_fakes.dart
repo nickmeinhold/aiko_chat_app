@@ -1,11 +1,8 @@
 import 'dart:async';
 
-import 'package:aiko_chat_app/features/auth/data/broker_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/data/passkey_auth_client.dart';
-import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
-import 'package:aiko_chat_app/features/auth/domain/auth_provider.dart';
-import 'package:aiko_chat_app/features/auth/domain/social_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
@@ -36,10 +33,6 @@ class FakeRestApi implements ChatRestApi {
   /// If set, `me()` (cold-start restore) throws this.
   Object? meThrows;
 
-  /// Programmable result of `socialSignIn`. Default: a known identity (log
-  /// straight in). Set a [PendingHandle] to exercise the claim-handle path.
-  SocialOutcome? socialOutcome;
-
   /// If set, `claimHandle` throws this (e.g. `HandleTaken`).
   Object? claimThrows;
 
@@ -47,17 +40,8 @@ class FakeRestApi implements ChatRestApi {
   Object? deleteThrows;
 
   int meCalls = 0;
-  int socialCalls = 0;
   int claimCalls = 0;
   int deleteCalls = 0;
-
-  /// The nonce `fetchNonce` hands back (simulating a server-issued value).
-  String nonceToIssue = 'server-nonce';
-  int fetchNonceCalls = 0;
-
-  /// The `rawNonce` the controller submitted to `socialSignIn` — asserted to be
-  /// the SAME server-issued nonce that `fetchNonce` returned (single source).
-  String? lastSocialNonce;
 
   AuthSession _session() => AuthSession(
         user: user,
@@ -74,62 +58,11 @@ class FakeRestApi implements ChatRestApi {
     return user;
   }
 
-  @override
-  Future<String> fetchNonce() async {
-    fetchNonceCalls++;
-    return nonceToIssue;
-  }
-
-  @override
-  Future<SocialOutcome> socialSignIn({
-    required SocialProvider provider,
-    required String idToken,
-    required String rawNonce,
-    String? name,
-  }) async {
-    socialCalls++;
-    lastSocialNonce = rawNonce;
-    return socialOutcome ?? Authenticated(_session());
-  }
-
-  /// Programmable provider list for the login screen. Default mirrors the live
-  /// gateway: native Apple/Google + the GitHub broker.
-  List<AuthProviderInfo> authProviders = const [
-    AuthProviderInfo(
-        slug: 'apple', displayName: 'Apple', kind: AuthProviderKind.native),
-    AuthProviderInfo(
-        slug: 'google', displayName: 'Google', kind: AuthProviderKind.native),
-    AuthProviderInfo(
-        slug: 'github', displayName: 'GitHub', kind: AuthProviderKind.broker),
-  ];
-
-  /// Programmable result of `exchangeOAuth`. Default: a known identity (log
-  /// straight in). Set a [PendingHandle] to exercise the broker claim path.
-  SocialOutcome? brokerOutcome;
-
-  int providersCalls = 0;
-  int exchangeCalls = 0;
-
-  @override
-  Future<List<AuthProviderInfo>> listAuthProviders() async {
-    providersCalls++;
-    return authProviders;
-  }
-
-  String? lastExchangeVerifier;
-
-  @override
-  Future<SocialOutcome> exchangeOAuth(String code, String verifier) async {
-    exchangeCalls++;
-    lastExchangeVerifier = verifier;
-    return brokerOutcome ?? Authenticated(_session());
-  }
-
   /// Programmable passkey outcomes. Default register: a new identity that must
   /// claim a handle (first-passkey-creates-account). Default authenticate: a
   /// known identity (log straight in). Override per-test.
-  SocialOutcome? passkeyRegisterOutcome;
-  SocialOutcome? passkeyAuthOutcome;
+  IdentityOutcome? passkeyRegisterOutcome;
+  IdentityOutcome? passkeyAuthOutcome;
 
   int passkeyRegisterStartCalls = 0;
   int passkeyRegisterFinishCalls = 0;
@@ -147,7 +80,7 @@ class FakeRestApi implements ChatRestApi {
   }
 
   @override
-  Future<SocialOutcome> finishPasskeyRegistration(
+  Future<IdentityOutcome> finishPasskeyRegistration(
       String state, String credentialJson) async {
     passkeyRegisterFinishCalls++;
     lastPasskeyRegisterState = state;
@@ -164,7 +97,7 @@ class FakeRestApi implements ChatRestApi {
   }
 
   @override
-  Future<SocialOutcome> finishPasskeyAuthentication(
+  Future<IdentityOutcome> finishPasskeyAuthentication(
       String state, String credentialJson) async {
     passkeyAuthFinishCalls++;
     lastPasskeyAuthState = state;
@@ -255,65 +188,8 @@ class FakeRestApi implements ChatRestApi {
   }
 }
 
-/// A [SocialAuthClient] fake — returns a canned credential (or throws, e.g.
-/// [SocialSignInCancelled]) without touching a platform channel.
-class FakeSocialAuthClient implements SocialAuthClient {
-  FakeSocialAuthClient({this.credential, this.throws});
-
-  /// If set, [signIn] throws this instead of returning a credential.
-  Object? throws;
-  SocialCredential? credential;
-
-  int signInCalls = 0;
-  SocialProvider? lastProvider;
-
-  /// The server-issued nonce the controller threaded into [signIn] — asserted to
-  /// be the value from `fetchNonce` (not a client-minted one).
-  String? lastRawNonce;
-
-  @override
-  Future<SocialCredential> signIn(
-    SocialProvider provider, {
-    required String rawNonce,
-  }) async {
-    signInCalls++;
-    lastProvider = provider;
-    lastRawNonce = rawNonce;
-    if (throws != null) throw throws!;
-    return credential ??
-        SocialCredential(
-          provider: provider,
-          idToken: 'fake-id-token',
-          name: 'Fake Name',
-        );
-  }
-}
-
-/// A [BrokerAuthClient] fake — returns a canned handoff code (or throws, e.g.
-/// [SocialSignInCancelled]) without opening a real web-auth session.
-class FakeBrokerAuthClient implements BrokerAuthClient {
-  FakeBrokerAuthClient(
-      {this.code = 'fake-handoff', this.verifier = 'fake-verifier', this.throws});
-
-  /// If set, [authenticate] throws this instead of returning a handoff.
-  Object? throws;
-  String code;
-  String verifier;
-
-  int authCalls = 0;
-  String? lastSlug;
-
-  @override
-  Future<BrokerHandoff> authenticate(String slug) async {
-    authCalls++;
-    lastSlug = slug;
-    if (throws != null) throw throws!;
-    return (code: code, verifier: verifier);
-  }
-}
-
 /// A [PasskeyAuthClient] fake — returns canned attestation/assertion JSON (or
-/// throws, e.g. [SocialSignInCancelled]) without touching a platform channel.
+/// throws, e.g. [AuthCeremonyCancelled]) without touching a platform channel.
 class FakePasskeyAuthClient implements PasskeyAuthClient {
   FakePasskeyAuthClient({
     this.attestation = 'fake-attestation',

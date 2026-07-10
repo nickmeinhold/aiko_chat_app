@@ -6,8 +6,8 @@
 // what left Nick staring at a dead-end on the first live build.
 //
 // These drive the FULL wire the failure actually travels: the platform
-// authenticator throws `SocialSignInFailed('Passkey: <code>')` (the exact shape
-// PlatformPasskeyAuthClient emits — see passkey_auth_client.dart:96-98), the
+// authenticator throws `AuthCeremonyFailed('Passkey: <code>')` (the exact shape
+// PlatformPasskeyAuthClient emits — see passkey_auth_client.dart), the
 // controller records it via AsyncValue.guard, and the screen must render
 // actionable text. The load-bearing property is the FALLBACK: an UNMAPPED code
 // must surface its raw text ("Sign-in failed: …"), never the generic message —
@@ -16,8 +16,7 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
-import 'package:aiko_chat_app/features/auth/data/social_auth_client.dart';
-import 'package:aiko_chat_app/features/auth/domain/auth_provider.dart';
+import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 import 'package:aiko_chat_app/features/auth/presentation/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -54,9 +53,6 @@ void main() {
         remoteRefresh: (_) async => 'access2',
         onUnauthenticated: () {},
       )),
-      // Keep the button list off the network; the banner is under test, not the
-      // buttons, so an empty list (→ native fallback) is enough to render.
-      authProvidersProvider.overrideWith((ref) async => const <AuthProviderInfo>[]),
     ]);
     addTearDown(container.dispose);
 
@@ -81,7 +77,7 @@ void main() {
         (tester) async {
       await pumpFailedSignIn(tester,
           authenticateThrows:
-              const SocialSignInFailed('Passkey: no-credentials-available'));
+              const AuthCeremonyFailed('Passkey: no-credentials-available'));
 
       expect(find.textContaining('No passkey found on this device'),
           findsOneWidget);
@@ -92,7 +88,7 @@ void main() {
         (tester) async {
       final r = await pumpFailedSignIn(tester,
           authenticateThrows:
-              const SocialSignInFailed('Passkey: domain-not-associated'));
+              const AuthCeremonyFailed('Passkey: domain-not-associated'));
 
       expect(find.textContaining("aren't linked to"), findsOneWidget);
       // The host is interpolated so the user knows WHICH server isn't linked.
@@ -103,7 +99,7 @@ void main() {
         (tester) async {
       await pumpFailedSignIn(tester,
           authenticateThrows:
-              const SocialSignInFailed('Passkey: deviceNotSupported'));
+              const AuthCeremonyFailed('Passkey: deviceNotSupported'));
 
       expect(find.textContaining("doesn't support passkeys"), findsOneWidget);
     });
@@ -114,7 +110,7 @@ void main() {
       // must still reach the user verbatim, so a future failure mode is visible.
       await pumpFailedSignIn(tester,
           authenticateThrows:
-              const SocialSignInFailed('Passkey: some-brand-new-error'));
+              const AuthCeremonyFailed('Passkey: some-brand-new-error'));
 
       expect(find.textContaining('Sign-in failed: Passkey: some-brand-new-error'),
           findsOneWidget);
