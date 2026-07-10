@@ -8,6 +8,9 @@ import 'package:aiko_chat_app/features/chat/data/gateway_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/gateway_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -275,6 +278,66 @@ void main() {
           fake.sent.any(
               (f) => f.contains('"type":"send"') && f.contains('"body":"hello"')),
           isTrue);
+    });
+
+    // A well-formed origin (32-byte key, 64-byte sig, id == frame id) passes the
+    // real _originWire self-assert and IS serialised onto the wire frame.
+    test('sendMessage emits a well-formed origin through the real wire path',
+        () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+      );
+      await t.connect();
+      t.sendMessage(OutgoingMessage(
+        clientTempId: 'tmp1',
+        channelId: 'c1',
+        body: 'hello',
+        origin: OriginEnvelope(
+          keyVersion: 1,
+          rawPublicKey: Uint8List(32),
+          clientMsgId: 'tmp1',
+          signedAtMs: 1,
+          sig: Uint8List(64),
+        ),
+      ));
+      final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
+      expect(sent.contains('"origin"'), isTrue);
+      expect(sent.contains('"sender_pubkey"'), isTrue);
+    });
+
+    // cage-match Carnot F1 + Tesla: a MALFORMED self-built origin (bad-length
+    // key) makes toWire() throw OriginError. The strip must catch it (never-throws
+    // contract) and emit the message UNSIGNED — origin stripped, delivery intact.
+    test('sendMessage STRIPS a malformed origin and does not throw '
+        '(fail-safe covers construction, not just validation)', () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+      );
+      await t.connect();
+      // 10-byte key → encodeMultikey (inside toWire) throws OriginError.
+      final id = t.sendMessage(OutgoingMessage(
+        clientTempId: 'tmp1',
+        channelId: 'c1',
+        body: 'hello',
+        origin: OriginEnvelope(
+          keyVersion: 1,
+          rawPublicKey: Uint8List(10),
+          clientMsgId: 'tmp1',
+          signedAtMs: 1,
+          sig: Uint8List(64),
+        ),
+      ));
+      expect(id, 'tmp1', reason: 'never throws — the message still sends');
+      final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
+      expect(sent.contains('"origin"'), isFalse,
+          reason: 'malformed origin stripped; message emitted unsigned');
+      expect(sent.contains('"body":"hello"'), isTrue);
     });
 
     test('subscribe awaits the suback and returns the per-channel fence map',

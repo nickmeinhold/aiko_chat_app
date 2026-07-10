@@ -188,15 +188,54 @@ class DriftCache extends _$DriftCache {
   /// a verdict, so it too surfaces correctly.)
   OriginEnvelope? _originFromRow(MessageRow r) {
     if (r.originCryptoValid == null) return null; // local-only sig, not carried
+    return _originFromColumns(r);
+  }
+
+  /// Rebuild an [OriginEnvelope] from the typed signature columns WITHOUT the
+  /// carriage gate. `client_msg_id` is [signedClientMsgId] for inbound rows,
+  /// else [clientTempId] (an outbound row's PK IS its wire client_msg_id).
+  /// Shared by [_originFromRow] (gated, inbound) and [outboundOrigin] (ungated,
+  /// our own send being emitted).
+  OriginEnvelope? _originFromColumns(MessageRow r) {
     final sig = r.sig, pub = r.senderPubkey, ts = r.signedAtMs, kv = r.keyVersion;
     if (sig == null || pub == null || ts == null || kv == null) return null;
-    return OriginEnvelope(
-      keyVersion: kv,
-      rawPublicKey: base64Decode(pub),
-      clientMsgId: r.signedClientMsgId ?? r.clientTempId,
-      signedAtMs: ts,
-      sig: base64Decode(sig),
-    );
+    try {
+      final rawPub = base64Decode(pub);
+      final rawSig = base64Decode(sig);
+      // Reject valid-base64 but WRONG-LENGTH material (cage-match Carnot R2): a
+      // 32-byte ed25519 key and 64-byte sig are the only legal shapes. Wrong
+      // lengths → null, so the outbound emit never relies on toWire() throwing
+      // downstream and the inbound path never surfaces an OriginEnvelope carrying
+      // illegal-length crypto.
+      if (rawPub.length != 32 || rawSig.length != 64) return null;
+      return OriginEnvelope(
+        keyVersion: kv,
+        rawPublicKey: rawPub,
+        clientMsgId: r.signedClientMsgId ?? r.clientTempId,
+        signedAtMs: ts,
+        sig: rawSig,
+      );
+    } on FormatException {
+      // A corrupt persisted signature column (bad base64) must DEGRADE to null,
+      // never throw (cage-match Carnot F2 + Tesla): on the reconnect drain a
+      // throw here aborts the whole outbox flush and stalls delivery. Return null
+      // → the message emits UNSIGNED (outbound) or the inbound origin is dropped
+      // while the message is kept — both the intended graceful-degradation path.
+      return null;
+    }
+  }
+
+  /// The OUTBOUND origin for an outbox row (retry / reconnect drain), rebuilt
+  /// from the persisted signature columns. Deliberately BYPASSES the
+  /// [_originFromRow] inbound-carriage gate: this is our OWN local signature
+  /// (originCryptoValid NULL) being emitted on the wire, not a carried inbound
+  /// one — the gate exists to keep `Message.origin` inbound-only, and the emit
+  /// path must not be subject to it. Null when the row is unsigned or absent.
+  Future<OriginEnvelope?> outboundOrigin(String clientTempId) async {
+    final r = await (select(messages)
+          ..where((t) => t.clientTempId.equals(clientTempId)))
+        .getSingleOrNull();
+    return r == null ? null : _originFromColumns(r);
   }
 
   MessagesCompanion _fromDomain(Message m, {required int localSeq}) {

@@ -6,6 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../../../core/auth/token_provider.dart';
 import '../../domain/message.dart';
+import '../../domain/origin_envelope.dart';
 import 'chat_transport.dart';
 import 'envelopes.dart';
 
@@ -117,11 +118,40 @@ class GatewayTransport implements ChatTransport {
       channelId: message.channelId,
       body: message.body,
       replyTo: message.replyToId,
+      origin: _originWire(message),
     );
     // No-op if not connected; the repository keeps the row 'sending' and flushes
     // its outbox on reconnect. Never throws (interface contract).
     _sendRaw(frame.encode());
     return message.clientTempId;
+  }
+
+  /// Build the wire `origin`, self-asserting through [validateOrigin] before
+  /// emit — the OUTBOUND admission gate (origin_envelope.dart): never emit a
+  /// malformed envelope. Now that carriage is live a `bad_origin` reject would
+  /// drop the whole MESSAGE, so on the (should-be-impossible) construction
+  /// failure we strip origin and send UNSIGNED — a legal "unverified" delivery
+  /// beats a rejected one. `frameClientMsgId` is the frame's own id, which the
+  /// origin's `client_msg_id` must equal (identical by construction).
+  ///
+  /// The ENTIRE ornament construction is inside the try (cage-match Carnot F1 +
+  /// Tesla): `toWire()` calls `encodeMultikey`, which throws [OriginError] on a
+  /// bad-length key — that throw is OUTSIDE the caller's control and must not
+  /// escape `sendMessage` (never-throws contract) nor defeat the strip. The
+  /// catch is broad on purpose: the origin is an OPTIONAL ornament, so ANY
+  /// construction failure strips it rather than killing the message. Logged so a
+  /// construction bug is observable, not a silent sovereignty downgrade.
+  Map<String, dynamic>? _originWire(OutgoingMessage message) {
+    final o = message.origin;
+    if (o == null) return null;
+    try {
+      final wire = o.toWire();
+      validateOrigin(wire, frameClientMsgId: message.clientTempId);
+      return wire;
+    } catch (e) {
+      _log?.call('origin self-assert failed, sending unsigned: $e');
+      return null;
+    }
   }
 
   // --- internals -----------------------------------------------------------

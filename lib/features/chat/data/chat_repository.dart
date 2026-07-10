@@ -334,8 +334,8 @@ class ChatRepository {
       // Sign at birth (sovereign-message-signing). signedAtMs is the compose
       // time, fixed here and persisted in its own column so ack reconciliation
       // overwriting createdAt with server time never breaks verification. The
-      // signature is LOCAL history only — deliberately NOT added to
-      // OutgoingMessage/SendFrame (wire emission is gated on gateway carriage).
+      // signature is persisted as local verifiable history AND (wire-half, carriage
+      // now live) emitted on the wire as the `origin` envelope below.
       MessageSignature? signature;
       if (_signingKey != null) {
         signature = await sign(
@@ -352,8 +352,17 @@ class ChatRepository {
       }
       // COMMITS before the wire send — signature written in the same txn.
       await _cache.insertOptimistic(optimistic, signature: signature);
+      // Emit the sovereign `origin` on the wire (wire-half, Path A). Built from
+      // the in-hand signature — never re-fetched — with the SAME clientMsgId the
+      // frame carries (identical by construction). Null signature → unsigned.
       _transport.sendMessage(OutgoingMessage(
-          clientTempId: tempId, channelId: channelId, body: body, replyToId: replyToId));
+          clientTempId: tempId,
+          channelId: channelId,
+          body: body,
+          replyToId: replyToId,
+          origin: signature == null
+              ? null
+              : OriginEnvelope.fromSignature(signature, clientMsgId: tempId)));
     } catch (e, st) {
       // The entry guard proves entry-time state only; dispose can begin DURING
       // the awaits above and close the cache. A teardown-race write is benign
@@ -373,7 +382,10 @@ class ChatRepository {
       final row = (await _cache.outbox())
           .where((m) => m.clientTempId == clientTempId)
           .firstOrNull;
-      if (row != null) _transport.sendMessage(_toOutgoing(row));
+      if (row != null) {
+        _transport.sendMessage(
+            _toOutgoing(row, await _cache.outboundOrigin(row.clientTempId)));
+      }
     } catch (e, st) {
       // Teardown race (cache closing) is benign; a genuine error propagates.
       if (!_disposed) rethrow;
@@ -394,11 +406,13 @@ class ChatRepository {
     return now.isAfter(floor) ? now : floor;
   }
 
-  OutgoingMessage _toOutgoing(Message m) => OutgoingMessage(
-      clientTempId: m.clientTempId,
-      channelId: m.channelId,
-      body: m.body,
-      replyToId: m.replyToId);
+  OutgoingMessage _toOutgoing(Message m, OriginEnvelope? origin) =>
+      OutgoingMessage(
+          clientTempId: m.clientTempId,
+          channelId: m.channelId,
+          body: m.body,
+          replyToId: m.replyToId,
+          origin: origin);
 
   // --- W2 / W3 / W4: stream handlers -----------------------------------------
 
@@ -547,7 +561,11 @@ class ChatRepository {
     _registerAckWaiters(waiting); // register BEFORE dispatch (ack-race fix)
     for (final m in pending) {
       if (_aborted(epoch)) return;
-      _transport.sendMessage(_toOutgoing(m)); // gateway idempotent → safe resend
+      // Rebuild the outbound origin from persisted columns so a reconnect-drained
+      // message carries its signature too (not just fresh sends).
+      final origin = await _cache.outboundOrigin(m.clientTempId);
+      _transport.sendMessage(
+          _toOutgoing(m, origin)); // gateway idempotent → safe resend
     }
     await _resolveAlreadyAcked(waiting); // an ack that already landed completes now
     await _awaitAcksOrTimeout(waiting);

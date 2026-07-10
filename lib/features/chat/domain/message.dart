@@ -284,10 +284,17 @@ class OutgoingMessage {
   final String body;
   final String? replyToId;
 
+  /// The sovereign `origin` to carry on the wire (wire-half). Built from the
+  /// in-hand [MessageSignature] on a fresh send, or rebuilt from the persisted
+  /// outbound signature columns for an outbox resend (retry / reconnect drain).
+  /// Null == unsigned (no signing key, or a pre-feature row).
+  final OriginEnvelope? origin;
+
   const OutgoingMessage({
     required this.clientTempId,
     required this.channelId,
     required this.body,
     this.replyToId,
+    this.origin,
   });
 }
