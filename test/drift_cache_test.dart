@@ -77,6 +77,17 @@ void main() {
       // Must not throw; degrades to null (message emits unsigned, drain survives).
       expect(await cache.outboundOrigin('c1'), isNull);
     });
+
+    // cage-match Carnot R2: valid base64 but WRONG length (a 4-byte "key") must
+    // also degrade to null, so the emit path never relies on a downstream throw.
+    test('outboundOrigin yields null on valid-base64 wrong-length crypto',
+        () async {
+      await cache.insertOptimistic(optimistic('c1', 'chan', 'hi'));
+      await cache.customStatement(
+          "UPDATE messages SET sig = 'AAAA', sender_pubkey = 'AAAA', "
+          "signed_at_ms = 1, key_version = 1 WHERE client_temp_id = 'c1'");
+      expect(await cache.outboundOrigin('c1'), isNull);
+    });
   });
 
   group('W2 — ack reconcile', () {

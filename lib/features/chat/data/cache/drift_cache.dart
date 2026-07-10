@@ -200,12 +200,20 @@ class DriftCache extends _$DriftCache {
     final sig = r.sig, pub = r.senderPubkey, ts = r.signedAtMs, kv = r.keyVersion;
     if (sig == null || pub == null || ts == null || kv == null) return null;
     try {
+      final rawPub = base64Decode(pub);
+      final rawSig = base64Decode(sig);
+      // Reject valid-base64 but WRONG-LENGTH material (cage-match Carnot R2): a
+      // 32-byte ed25519 key and 64-byte sig are the only legal shapes. Wrong
+      // lengths → null, so the outbound emit never relies on toWire() throwing
+      // downstream and the inbound path never surfaces an OriginEnvelope carrying
+      // illegal-length crypto.
+      if (rawPub.length != 32 || rawSig.length != 64) return null;
       return OriginEnvelope(
         keyVersion: kv,
-        rawPublicKey: base64Decode(pub),
+        rawPublicKey: rawPub,
         clientMsgId: r.signedClientMsgId ?? r.clientTempId,
         signedAtMs: ts,
-        sig: base64Decode(sig),
+        sig: rawSig,
       );
     } on FormatException {
       // A corrupt persisted signature column (bad base64) must DEGRADE to null,

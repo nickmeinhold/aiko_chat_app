@@ -334,8 +334,8 @@ class ChatRepository {
       // Sign at birth (sovereign-message-signing). signedAtMs is the compose
       // time, fixed here and persisted in its own column so ack reconciliation
       // overwriting createdAt with server time never breaks verification. The
-      // signature is LOCAL history only — deliberately NOT added to
-      // OutgoingMessage/SendFrame (wire emission is gated on gateway carriage).
+      // signature is persisted as local verifiable history AND (wire-half, carriage
+      // now live) emitted on the wire as the `origin` envelope below.
       MessageSignature? signature;
       if (_signingKey != null) {
         signature = await sign(
