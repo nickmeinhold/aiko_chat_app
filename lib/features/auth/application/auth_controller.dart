@@ -141,17 +141,31 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// pair fresh tokens with a stale/mismatched cached identity (Carnot) — worst
   /// case is "no offline restore", never "wrong identity". Never throws.
   Future<void> _writeCachedUser(AppUser user) async {
+    // setString/remove return false on a persistence failure WITHOUT throwing
+    // (Carnot, PR #71). The invariant to protect: a storage failure must never
+    // leave a cached identity that MISMATCHES the current tokens. So a failed
+    // write degrades to a clear; we check BOTH booleans.
+    bool sanitized;
     try {
-      // setString returns false on a persistence failure WITHOUT throwing
-      // (Carnot, PR #71) — a false write must trigger the same clear fallback as
-      // a thrown one, else a stale identity survives a new login's fresh tokens.
-      final ok = await _cachedUser.write(user);
-      if (!ok) await _cachedUser.clear();
+      if (await _cachedUser.write(user)) return; // wrote the correct identity
+      sanitized = await _cachedUser.clear(); // write failed → erase, don't leave old
     } catch (_) {
       try {
-        await _cachedUser.clear();
-      } catch (_) {/* best-effort: a tokenless-consult is gated in restore */}
+        sanitized = await _cachedUser.clear();
+      } catch (_) {
+        sanitized = false;
+      }
     }
+    // Residual (both write AND clear silently failed — a rare platform-storage
+    // pathology): a stale cached identity may remain. It is NOT a security hole —
+    // the cache is only ever CONSULTED under valid tokens (restore checks tokens
+    // first) and only to DISPLAY identity; every authed action still fails closed
+    // on a terminal 401. And it SELF-HEALS: the next successful me() overwrites
+    // the cache with the correct identity. We surface it via assert so it's never
+    // silent in debug, but do not log the user out on a prefs hiccup.
+    assert(sanitized,
+        'CachedUserStore could not persist OR clear — stale identity may '
+        'linger until the next successful me() (self-healing, display-only).');
   }
 
   /// The shared ingress preamble for every "start a sign-in ceremony" entry
