@@ -188,6 +188,29 @@ void main() {
           reason: 'a fresh login seeds the offline cache');
     });
 
+    test('a FALSE write (persistence failure, no throw) triggers a clear',
+        () async {
+      // SharedPreferences.setString returns false on failure without throwing.
+      // A false write must degrade to a clear so a stale identity can't survive
+      // a new login's fresh tokens (Carnot, PR #71).
+      final rest = FakeRestApi();
+      final cache = InMemoryCachedUserStore()..failWrites = true;
+      final c = makeContainer(
+          rest: rest,
+          cached: cache,
+          passkey: FakePasskeyAuthClient(assertion: 'assert-json'));
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await c.read(authControllerProvider.notifier).signInWithPasskey();
+
+      expect(c.read(authControllerProvider).value, isNotNull,
+          reason: 'a cache persistence failure must not break login');
+      expect(cache.current, isNull,
+          reason: 'a failed write leaves NO cached identity, never a stale one');
+      expect(cache.cleared, isTrue, reason: 'the clear fallback fired');
+    });
+
     test('logout clears the cached user', () async {
       final rest = FakeRestApi();
       final cache = InMemoryCachedUserStore(cachedUser);

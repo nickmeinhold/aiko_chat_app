@@ -33,6 +33,10 @@ class InMemoryCachedUserStore extends CachedUserStore {
   AppUser? _user;
   AppUser? written;
   bool cleared = false;
+
+  /// When true, `write` returns `false` (SharedPreferences persistence-failure
+  /// semantics — no throw) so a test can exercise the caller's fallback.
+  bool failWrites = false;
   InMemoryCachedUserStore([AppUser? initial])
       : _user = initial,
         super(null);
@@ -40,15 +44,18 @@ class InMemoryCachedUserStore extends CachedUserStore {
   @override
   AppUser? read() => _user;
   @override
-  Future<void> write(AppUser user) async {
+  Future<bool> write(AppUser user) async {
+    if (failWrites) return false; // persisted nothing; no throw
     _user = user;
     written = user;
+    return true;
   }
 
   @override
-  Future<void> clear() async {
+  Future<bool> clear() async {
     _user = null;
     cleared = true;
+    return true;
   }
 
   AppUser? get current => _user;

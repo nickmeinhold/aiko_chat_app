@@ -142,7 +142,11 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// case is "no offline restore", never "wrong identity". Never throws.
   Future<void> _writeCachedUser(AppUser user) async {
     try {
-      await _cachedUser.write(user);
+      // setString returns false on a persistence failure WITHOUT throwing
+      // (Carnot, PR #71) — a false write must trigger the same clear fallback as
+      // a thrown one, else a stale identity survives a new login's fresh tokens.
+      final ok = await _cachedUser.write(user);
+      if (!ok) await _cachedUser.clear();
     } catch (_) {
       try {
         await _cachedUser.clear();
