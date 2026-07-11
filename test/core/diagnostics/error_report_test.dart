@@ -6,6 +6,7 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/diagnostics/error_report.dart';
 import 'package:aiko_chat_app/core/diagnostics/report_problem_button.dart';
 import 'package:aiko_chat_app/core/network/network_status.dart';
+import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,7 +20,46 @@ class _FakeDiagnostics implements DiagnosticsSource {
   Future<Map<String, String>> collect() async => facts;
 }
 
+/// An error whose toString() leaks a credential — stands in for a raw
+/// DioException whose requestOptions.data carries a provisioning_token.
+class _LeakyError {
+  @override
+  String toString() =>
+      'DioException: POST /v1/auth/social/claim data:{provisioning_token: SECRET-TOKEN-123}';
+}
+
 void main() {
+  group(
+    'describeError — PII-safe projection (never a raw exception string)',
+    () {
+      test('NetworkUnavailable drops its wrapped cause', () {
+        // The cause is the DioException that could carry the request body.
+        expect(
+          describeError(const NetworkUnavailable('POST /claim {token: X}')),
+          'NetworkUnavailable',
+        );
+      });
+
+      test('a credential-leaking error collapses to its class name ONLY', () {
+        final d = describeError(_LeakyError());
+        expect(d, '_LeakyError');
+        expect(d, isNot(contains('SECRET-TOKEN-123')));
+        expect(d, isNot(contains('provisioning_token')));
+      });
+
+      test('safe domain exceptions keep their (safe) detail', () {
+        expect(describeError(const Unauthorized(401)), 'Unauthorized(401)');
+        expect(describeError(const HandleTaken()), 'HandleTaken');
+        expect(
+          describeError(const AuthCeremonyFailed('Passkey: no-credentials')),
+          'AuthCeremonyFailed(Passkey: no-credentials)',
+        );
+      });
+
+      test('null → "unknown"', () => expect(describeError(null), 'unknown'));
+    },
+  );
+
   group('formatErrorReport', () {
     test(
       'includes time, server, network, every device fact, and the error',
@@ -33,12 +73,26 @@ void main() {
         );
         expect(text, contains('2026-07-11T09:51:00.000Z'));
         expect(text, contains('Server: https://chat.example.com'));
-        expect(text, contains('Network: offline'));
+        expect(text, contains('Network (at report time): offline'));
         expect(text, contains('App: Aiko Chat 0.0.1+6'));
         expect(text, contains('Device: Google Pixel 7'));
-        expect(text, contains('Error: NetworkUnavailable(dns)'));
+        // Safe projection — the type, not the wrapped DioException detail.
+        expect(text, contains('Error: NetworkUnavailable'));
+        expect(text, isNot(contains('dns')));
       },
     );
+
+    test('a credential-shaped error never reaches the shared text', () {
+      final text = formatErrorReport(
+        error: _LeakyError(),
+        status: NetworkStatus.offline,
+        host: 'h',
+        device: const {},
+        nowUtc: DateTime.utc(2026),
+      );
+      expect(text, isNot(contains('SECRET-TOKEN-123')));
+      expect(text, contains('Error: _LeakyError'));
+    });
 
     test('a null error degrades to "unknown", never throws', () {
       final text = formatErrorReport(
@@ -87,7 +141,7 @@ void main() {
 
     expect(shared, hasLength(1));
     expect(shared.single, contains('Google Pixel 7'));
-    expect(shared.single, contains('Network: offline'));
+    expect(shared.single, contains('Network (at report time): offline'));
     expect(shared.single, contains('NetworkUnavailable'));
   });
 }

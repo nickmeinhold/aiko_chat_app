@@ -57,8 +57,14 @@ void main() {
       );
     });
 
-    test('Unauthorized → "couldn\'t verify that passkey"', () {
+    test('Unauthorized on signIn → "couldn\'t verify that passkey"', () {
       expect(text(const Unauthorized(401)), contains("couldn't verify"));
+    });
+
+    test('Unauthorized on claimHandle → expired-setup, NOT passkey-verify', () {
+      final t = text(const Unauthorized(401), action: AuthAction.claimHandle);
+      expect(t, contains('setup session expired'));
+      expect(t, isNot(contains('passkey')));
     });
   });
 
@@ -93,11 +99,34 @@ void main() {
     });
   });
 
-  group('the never-blind-again fallback', () {
-    test('an UNMAPPED code surfaces its RAW text, not the generic line', () {
-      final t = text(const AuthCeremonyFailed('Passkey: brand-new-code'));
-      expect(t, 'Sign-in failed: Passkey: brand-new-code');
-      expect(t, isNot(contains('Something went wrong')));
+  group('the never-blind-again fallback names the RIGHT ritual', () {
+    test(
+      'signIn: an UNMAPPED code surfaces its RAW text as "Sign-in failed"',
+      () {
+        final t = text(const AuthCeremonyFailed('Passkey: brand-new-code'));
+        expect(t, 'Sign-in failed: Passkey: brand-new-code');
+        expect(t, isNot(contains('Something went wrong')));
+      },
+    );
+
+    test('claimHandle: an UNMAPPED failure must NOT say "Sign-in failed"', () {
+      // The bug the matrix invited (cage-match #74): a claim-screen fallback
+      // that lies about which ritual failed.
+      final t = text(
+        const AuthCeremonyFailed('Passkey: brand-new-code'),
+        action: AuthAction.claimHandle,
+      );
+      expect(t, "Couldn't finish setup: Passkey: brand-new-code");
+      expect(t, isNot(contains('Sign-in failed')));
+    });
+
+    test('createAccount: an UNMAPPED failure names account creation', () {
+      final t = text(
+        const AuthCeremonyFailed('Passkey: brand-new-code'),
+        action: AuthAction.createAccount,
+      );
+      expect(t, "Couldn't create your account: Passkey: brand-new-code");
+      expect(t, isNot(contains('Sign-in failed')));
     });
 
     test('a null/blank error is the ONLY case that gets the generic line', () {

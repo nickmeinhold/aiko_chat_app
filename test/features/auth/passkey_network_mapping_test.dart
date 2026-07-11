@@ -59,6 +59,14 @@ void main() {
       );
     });
 
+    test('finishPasskeyAuthentication', () async {
+      final api = apiThatThrows(conn('/v1/auth/passkey/authenticate/finish'));
+      await expectLater(
+        api.finishPasskeyAuthentication('st', '{"id":"c"}'),
+        throwsA(isA<NetworkUnavailable>()),
+      );
+    });
+
     test('claimHandle', () async {
       final api = apiThatThrows(conn('/v1/auth/social/claim'));
       await expectLater(

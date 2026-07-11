@@ -66,7 +66,11 @@ String authErrorText(
       return 'That passkey is already registered to an account. Try '
           '"Already have a passkey? Sign in" instead.';
     case Unauthorized():
-      return "We couldn't verify that passkey. Try again, or create a new one.";
+      // On the claim screen an Unauthorized is far more often a dead/expired
+      // provisioning token than a passkey-verify failure (cage-match #74, Tesla).
+      return action == AuthAction.claimHandle
+          ? 'Your setup session expired. Start again to pick your handle.'
+          : "We couldn't verify that passkey. Try again, or create a new one.";
   }
 
   // (2) Passkey ceremony failures: AuthCeremonyFailed('Passkey: <code>').
@@ -89,8 +93,30 @@ String authErrorText(
     return 'The request timed out. Please try again.';
   }
 
-  // (3) Fallback: never hide a new failure mode behind the generic line.
+  // (3) Fallback: never hide a new failure mode behind the generic line, but
+  // name the RIGHT ritual — an unmapped claim failure must not read "Sign-in
+  // failed" (cage-match #74, Carnot + Tesla). A blank error is the only case
+  // that gets the generic line.
+  final prefix = switch (action) {
+    AuthAction.createAccount => "Couldn't create your account",
+    AuthAction.signIn => 'Sign-in failed',
+    AuthAction.claimHandle => "Couldn't finish setup",
+  };
   return raw.isEmpty
       ? 'Something went wrong. Please try again.'
-      : 'Sign-in failed: $raw';
+      : '$prefix: $raw';
+}
+
+/// The host (with port when present) of a gateway base URL for display — falls
+/// back to the full URL if it doesn't parse to a host. Shared by every screen
+/// that shows the active gateway or passes `host:` to [authErrorText], so the
+/// login and claim screens can never drift on how a gateway is named
+/// (cage-match #74, Tesla: two tunings of one host seam). The port is
+/// load-bearing: two gateways differing only by port would otherwise be
+/// indistinguishable (Carnot, cage-match #53).
+String gatewayHostLabel(String httpBaseUrl) {
+  final uri = Uri.tryParse(httpBaseUrl);
+  final host = uri?.host;
+  if (host == null || host.isEmpty) return httpBaseUrl;
+  return uri!.hasPort ? '$host:${uri.port}' : host;
 }

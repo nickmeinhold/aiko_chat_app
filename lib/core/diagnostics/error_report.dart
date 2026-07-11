@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../features/auth/data/auth_exceptions.dart';
+import '../../features/chat/data/chat_rest_api.dart';
 import '../network/network_status.dart';
 
 /// Collects the device/app facts a maintainer needs to reproduce a failure — and
@@ -58,6 +60,36 @@ class PlatformDiagnosticsSource implements DiagnosticsSource {
   }
 }
 
+/// A PII-safe, one-line description of an error for a problem report.
+///
+/// NEVER the raw `toString()` of an arbitrary exception: a [NetworkUnavailable]
+/// wraps the original `DioException`, whose string can carry `requestOptions`
+/// — and on the claim path that request body holds a `provisioning_token`
+/// (a bearer credential), the handle, and the display name (cage-match #74,
+/// Carnot + Tesla). So we ALLOWLIST a safe projection per known type, and fall
+/// back to the bare class name (which carries no data) for anything else. The
+/// invariant is "diagnostics, never a credential" — and it must not depend on a
+/// third-party library's `toString()` staying restrained.
+String describeError(Object? error) {
+  return switch (error) {
+    null => 'unknown',
+    // Drop the wrapped cause entirely — the type IS the diagnosis, and the
+    // cause is the one that carries the request body.
+    NetworkUnavailable() => 'NetworkUnavailable',
+    Unauthorized(:final statusCode) => 'Unauthorized($statusCode)',
+    HandleTaken() => 'HandleTaken',
+    PasskeyAlreadyRegistered() => 'PasskeyAlreadyRegistered',
+    AuthCeremonyCancelled() => 'AuthCeremonyCancelled',
+    // message is 'Passkey: <code>' — an authenticator error code, not user data.
+    AuthCeremonyFailed(:final message) => 'AuthCeremonyFailed($message)',
+    // Drop the message (it may name channels) — the type is enough to triage.
+    SoleAdminDeletionBlocked() => 'SoleAdminDeletionBlocked',
+    // Anything else (incl. a raw DioException / FormatException): class name
+    // ONLY — never toString(), which could stringify a request body or headers.
+    _ => error.runtimeType.toString(),
+  };
+}
+
 /// Format a shareable, plain-text problem report from the pieces. Pure and
 /// deterministic (time is injected) so it's unit-testable without a clock.
 String formatErrorReport({
@@ -71,15 +103,18 @@ String formatErrorReport({
     ..writeln('Aiko Chat — problem report')
     ..writeln('Time: ${nowUtc.toIso8601String()}')
     ..writeln('Server: $host')
-    ..writeln('Network: ${status.name}');
+    // "at report time", not at-failure: the tap can be minutes after the error
+    // (offline → reconnect → report), so labelling it as current avoids a false
+    // "online next to NetworkUnavailable" chord (cage-match #74, Tesla).
+    ..writeln('Network (at report time): ${status.name}');
   for (final e in device.entries) {
     b.writeln('${e.key}: ${e.value}');
   }
   b
     ..writeln('---')
-    // The raw exception is for the maintainer, not the user — the friendly
-    // message already told the user what to do; this is the technical detail.
-    ..writeln('Error: ${error ?? 'unknown'}');
+    // A SAFE projection of the error for the maintainer — never the raw
+    // exception string (see [describeError]).
+    ..writeln('Error: ${describeError(error)}');
   return b.toString();
 }
 

@@ -96,11 +96,9 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
                   Text(
                     authErrorText(
                       auth.error,
-                      host:
-                          Uri.tryParse(
-                            ref.watch(configProvider).httpBaseUrl,
-                          )?.host ??
-                          '',
+                      host: gatewayHostLabel(
+                        ref.watch(configProvider).httpBaseUrl,
+                      ),
                       action: AuthAction.claimHandle,
                     ),
                     style: TextStyle(
