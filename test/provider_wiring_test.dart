@@ -25,8 +25,7 @@ import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/cache_database.dart';
-import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart'
-    hide Channel;
+import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/gateway_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/logging_chat_telemetry.dart';

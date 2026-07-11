@@ -1,12 +1,11 @@
-import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/providers.dart';
+import '../../../core/network/network_status_banner.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
-import '../data/transport/chat_transport.dart';
 import '../domain/message.dart';
 
 /// The single-channel Phase-1 chat surface: channel header + logout, a thin
@@ -45,37 +44,13 @@ class ChatScreen extends ConsumerWidget {
           }
           return Column(
             children: [
-              const ConnectionBanner(),
+              const NetworkStatusBanner(),
               Expanded(child: MessageList(channelId: channel.id)),
               Composer(channelId: channel.id),
             ],
           );
         },
       ),
-    );
-  }
-}
-
-/// A thin status strip shown only while the realtime link is not `connected`.
-/// `unauthenticated` is intentionally NOT surfaced here — the auth controller
-/// turns that into a logout, so the router has already left this screen.
-class ConnectionBanner extends ConsumerWidget {
-  const ConnectionBanner({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(connectionStateProvider).value;
-    final (String label, Color color)? banner = switch (state) {
-      ConnectionState.connecting => ('Connecting…', Colors.orange),
-      ConnectionState.disconnected => ('Offline — reconnecting…', Colors.grey),
-      _ => null, // connected / unauthenticated / null → no banner
-    };
-    if (banner == null) return const SizedBox.shrink();
-    return Container(
-      width: double.infinity,
-      color: banner.$2.withValues(alpha: 0.18),
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Text(banner.$1, textAlign: TextAlign.center),
     );
   }
 }

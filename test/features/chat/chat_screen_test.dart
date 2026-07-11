@@ -72,7 +72,9 @@ void main() {
 
     // Still on chat — a dropped socket is not a logout (auth_error_boundary).
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
-    expect(find.text('Offline — reconnecting…'), findsOneWidget);
+    // The unified NetworkStatusBanner: device online + socket not connected →
+    // "Can't reach the server" (superseded the old "Offline — reconnecting…").
+    expect(find.text("Can't reach the server"), findsOneWidget);
   });
 
   testWidgets('REST-terminal logout tears down the transport', (tester) async {

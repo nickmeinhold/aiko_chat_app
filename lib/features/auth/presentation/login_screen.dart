@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/providers.dart';
+import '../../../core/network/network_status_banner.dart';
 import '../application/auth_controller.dart';
 import '../data/auth_exceptions.dart';
 
@@ -34,7 +35,14 @@ class LoginScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sign in')),
-      body: Center(
+      body: Column(
+        children: [
+          // Full-width network banner — the login screen is exactly where the
+          // DNS failure surfaced (PR #71), and pre-auth there is no socket, so
+          // this is the user's only connectivity signal here.
+          const NetworkStatusBanner(),
+          Expanded(
+            child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 360),
           child: SingleChildScrollView(
@@ -85,6 +93,9 @@ class LoginScreen extends ConsumerWidget {
             ),
           ),
         ),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -15,6 +15,7 @@
 
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
+import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 import 'package:aiko_chat_app/features/auth/presentation/login_screen.dart';
@@ -53,6 +54,10 @@ void main() {
         remoteRefresh: (_) async => 'access2',
         onUnauthenticated: () {},
       )),
+      // Login screen mounts NetworkStatusBanner → fake connectivity/reachability
+      // so the test never touches the platform channel or the network.
+      connectivityServiceProvider.overrideWithValue(FakeConnectivityService()),
+      reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
     ]);
     addTearDown(container.dispose);
 
