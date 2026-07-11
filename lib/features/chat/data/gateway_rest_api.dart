@@ -25,7 +25,9 @@ class AuthInterceptor extends Interceptor {
 
   @override
   void onRequest(
-      RequestOptions options, RequestInterceptorHandler handler) async {
+    RequestOptions options,
+    RequestInterceptorHandler handler,
+  ) async {
     final token = await _tokens.currentAccessToken();
     if (token != null) options.headers['Authorization'] = 'Bearer $token';
     handler.next(options);
@@ -74,13 +76,15 @@ class GatewayRestApi implements ChatRestApi {
   final Dio _authed;
 
   GatewayRestApi({required Dio bare, required Dio authed})
-      : _bare = bare,
-        _authed = authed;
+    : _bare = bare,
+      _authed = authed;
 
   @override
   Future<String> refresh(String refreshToken) async {
-    final r = await _bare
-        .post('/v1/auth/refresh', data: {'refresh_token': refreshToken});
+    final r = await _bare.post(
+      '/v1/auth/refresh',
+      data: {'refresh_token': refreshToken},
+    );
     return _map(r.data)['access_token'] as String;
   }
 
@@ -90,7 +94,9 @@ class GatewayRestApi implements ChatRestApi {
 
   @override
   Future<IdentityOutcome> finishPasskeyRegistration(
-          String state, String credentialJson) =>
+    String state,
+    String credentialJson,
+  ) =>
       _passkeyFinish('/v1/auth/passkey/register/finish', state, credentialJson);
 
   @override
@@ -99,9 +105,13 @@ class GatewayRestApi implements ChatRestApi {
 
   @override
   Future<IdentityOutcome> finishPasskeyAuthentication(
-          String state, String credentialJson) =>
-      _passkeyFinish(
-          '/v1/auth/passkey/authenticate/finish', state, credentialJson);
+    String state,
+    String credentialJson,
+  ) => _passkeyFinish(
+    '/v1/auth/passkey/authenticate/finish',
+    state,
+    credentialJson,
+  );
 
   @override
   Future<AppUser> addPasskey(String state, String credentialJson) async {
@@ -113,22 +123,26 @@ class GatewayRestApi implements ChatRestApi {
       credential = jsonDecode(credentialJson);
     } on FormatException catch (e) {
       throw FormatException(
-          'passkey: add received malformed credential JSON from the '
-          'authenticator: ${e.message}');
+        'passkey: add received malformed credential JSON from the '
+        'authenticator: ${e.message}',
+      );
     }
     // Runs on the AUTHED client: the bearer IS the identity the credential links
     // to — that is the whole distinction from register/finish (which mints a new
     // account). `_authedCall` maps a terminal 401/403 → Unauthorized.
     return _authedCall(() async {
       try {
-        final r = await _authed.post('/v1/auth/passkey/add/finish',
-            data: {'state': state, 'credential': credential});
+        final r = await _authed.post(
+          '/v1/auth/passkey/add/finish',
+          data: {'state': state, 'credential': credential},
+        );
         // The add endpoint returns a BARE user view (no tokens — the caller is
         // already authenticated), so it deliberately bypasses `_resolveOutcome`
         // (which requires a token/provisioning_token and would throw here).
         return AppUser.fromJson(_map(r.data));
       } on DioException catch (e) {
-        if (e.response?.statusCode == 409) throw const PasskeyAlreadyRegistered();
+        if (e.response?.statusCode == 409)
+          throw const PasskeyAlreadyRegistered();
         rethrow; // terminal 401/403 mapped by _authedCall; else propagate
       }
     });
@@ -138,24 +152,28 @@ class GatewayRestApi implements ChatRestApi {
   /// `options` is the WebAuthn options object. We re-encode `options` to the
   /// opaque JSON string the device authenticator consumes, and carry `state`
   /// untouched to the `finish` call (server-side challenge binding).
-  Future<PasskeyChallenge> _passkeyStart(String path) async {
+  Future<PasskeyChallenge> _passkeyStart(String path) => _mapNetwork(() async {
     final r = await _bare.post(path);
     final m = _map(r.data);
     final options = m['options'];
     final state = m['state'];
     if (options is! Map || state is! String) {
       throw const FormatException(
-          'passkey: start response missing state/options');
+        'passkey: start response missing state/options',
+      );
     }
     return (state: state, optionsJson: jsonEncode(options));
-  }
+  });
 
   /// Complete a passkey ceremony: POST the device's response [credentialJson]
   /// (WebAuthn JSON the authenticator produced) plus the binding [state], and
   /// route the gateway's identity response through the single-door resolver so
   /// register and authenticate can never diverge on how the outcome is read.
   Future<IdentityOutcome> _passkeyFinish(
-      String path, String state, String credentialJson) async {
+    String path,
+    String state,
+    String credentialJson,
+  ) async {
     final Object? credential;
     try {
       credential = jsonDecode(credentialJson);
@@ -164,14 +182,17 @@ class GatewayRestApi implements ChatRestApi {
       // failure here is client-plumbing corruption, not a server rejection.
       // Tag it (like the start path) so it doesn't read as a generic auth fail.
       throw FormatException(
-          'passkey: finish received malformed credential JSON from the '
-          'authenticator: ${e.message}');
+        'passkey: finish received malformed credential JSON from the '
+        'authenticator: ${e.message}',
+      );
     }
-    final r = await _bare.post(path, data: {
-      'state': state,
-      'credential': credential,
+    return _mapNetwork(() async {
+      final r = await _bare.post(
+        path,
+        data: {'state': state, 'credential': credential},
+      );
+      return _resolveOutcome(_map(r.data));
     });
-    return _resolveOutcome(_map(r.data));
   }
 
   /// Resolve the gateway's identity response (from a passkey finish) into an
@@ -184,7 +205,8 @@ class GatewayRestApi implements ChatRestApi {
     if (m['status'] == 'pending' || ptok != null) {
       if (ptok is! String) {
         throw const FormatException(
-            'auth: pending response missing provisioning_token');
+          'auth: pending response missing provisioning_token',
+        );
       }
       return PendingHandle(
         provisioningToken: ptok,
@@ -194,7 +216,8 @@ class GatewayRestApi implements ChatRestApi {
     }
     if (m['access_token'] == null) {
       throw const FormatException(
-          'auth: response has neither access_token nor provisioning_token');
+        'auth: response has neither access_token nor provisioning_token',
+      );
     }
     return Authenticated(AuthSession.fromJson(m));
   }
@@ -204,19 +227,22 @@ class GatewayRestApi implements ChatRestApi {
     required String provisioningToken,
     required String handle,
     required String displayName,
-  }) async {
+  }) => _mapNetwork(() async {
     try {
-      final r = await _bare.post('/v1/auth/social/claim', data: {
-        'provisioning_token': provisioningToken,
-        'handle': handle,
-        'display_name': displayName,
-      });
+      final r = await _bare.post(
+        '/v1/auth/social/claim',
+        data: {
+          'provisioning_token': provisioningToken,
+          'handle': handle,
+          'display_name': displayName,
+        },
+      );
       return AuthSession.fromJson(_map(r.data));
     } on DioException catch (e) {
       if (e.response?.statusCode == 409) throw const HandleTaken();
       rethrow;
     }
-  }
+  });
 
   @override
   // me() is the offline-first restore probe (its only caller is
@@ -224,17 +250,25 @@ class GatewayRestApi implements ChatRestApi {
   // _authedCall); a connection/DNS/timeout-class failure → NetworkUnavailable so
   // the controller can safely distinguish "server unreachable" (optimistic
   // restore OK) from "server answered with something unexpected" (fail closed).
-  Future<AppUser> me() => _mapNetwork(() => _authedCall(() async {
-        final r = await _authed.get('/v1/me');
-        return AppUser.fromJson(_map(r.data));
-      }));
+  Future<AppUser> me() => _mapNetwork(
+    () => _authedCall(() async {
+      final r = await _authed.get('/v1/me');
+      return AppUser.fromJson(_map(r.data));
+    }),
+  );
 
   /// Translate a connection-class [DioException] (no response from the server —
   /// DNS/connect/timeout) into the domain [NetworkUnavailable]. A DioException
   /// that carries a response (the server answered, even an error) is NOT
   /// remapped — it propagates so the caller fails closed rather than treating a
-  /// server-side error as a benign network blip. Scoped to me(); other callers'
-  /// error handling is unchanged.
+  /// server-side error as a benign network blip.
+  ///
+  /// Wraps every offline-reachable AUTH ingress: me() (restore), the passkey
+  /// ceremony start/finish, and claimHandle — so an offline first sign-in or
+  /// handle claim surfaces as the same domain [NetworkUnavailable] the UI maps to
+  /// a friendly "you're offline" message, instead of a raw transport exception.
+  /// The classification stays narrow (connection-class, no response) so the
+  /// offline-first trust boundary does not widen (see me_network_mapping_test).
   static Future<T> _mapNetwork<T>(Future<T> Function() call) async {
     try {
       return await call();
@@ -265,7 +299,8 @@ class GatewayRestApi implements ChatRestApi {
             ? (e.response!.data as Map)['detail']?.toString()
             : null;
         throw SoleAdminDeletionBlocked(
-            detail ?? 'You are the sole admin of a channel.');
+          detail ?? 'You are the sole admin of a channel.',
+        );
       }
       rethrow;
     }
@@ -275,37 +310,38 @@ class GatewayRestApi implements ChatRestApi {
   // NetworkUnavailable — channelsProvider falls back to the cached list on that,
   // delivering offline-first chat rendering (PR #71 follow-up, task #19).
   @override
-  Future<List<Channel>> listChannels() => _mapNetwork(() => _authedCall(() async {
-        final r = await _authed.get('/v1/channels');
-        final list = (_map(r.data)['channels'] as List?) ?? const [];
-        return list
-            .map((e) => Channel.fromJson((e as Map).cast<String, dynamic>()))
-            .toList();
-      }));
+  Future<List<Channel>> listChannels() => _mapNetwork(
+    () => _authedCall(() async {
+      final r = await _authed.get('/v1/channels');
+      final list = (_map(r.data)['channels'] as List?) ?? const [];
+      return list
+          .map((e) => Channel.fromJson((e as Map).cast<String, dynamic>()))
+          .toList();
+    }),
+  );
 
   @override
-  Future<HistoryPage> getHistory(String channelId,
-          {String? before, String? after, int limit = 50}) =>
-      _authedCall(() async {
-        final r = await _authed.get(
-          '/v1/channels/$channelId/messages',
-          queryParameters: {
-            'before': ?before,
-            'after': ?after,
-            'limit': limit,
-          },
-        );
-        final data = _map(r.data);
-        final list = (data['messages'] as List?) ?? const [];
-        return HistoryPage(
-          channelId: channelId,
-          messages: list
-              .map((e) => Message.fromView((e as Map).cast<String, dynamic>()))
-              .toList(),
-          nextBefore: data['next_before'] as String?,
-          nextAfter: data['next_after'] as String?,
-        );
-      });
+  Future<HistoryPage> getHistory(
+    String channelId, {
+    String? before,
+    String? after,
+    int limit = 50,
+  }) => _authedCall(() async {
+    final r = await _authed.get(
+      '/v1/channels/$channelId/messages',
+      queryParameters: {'before': ?before, 'after': ?after, 'limit': limit},
+    );
+    final data = _map(r.data);
+    final list = (data['messages'] as List?) ?? const [];
+    return HistoryPage(
+      channelId: channelId,
+      messages: list
+          .map((e) => Message.fromView((e as Map).cast<String, dynamic>()))
+          .toList(),
+      nextBefore: data['next_before'] as String?,
+      nextAfter: data['next_after'] as String?,
+    );
+  });
 
   @override
   Future<void> blockUser(String userId) =>
@@ -317,17 +353,21 @@ class GatewayRestApi implements ChatRestApi {
 
   @override
   Future<List<BlockedUser>> listBlocks() => _authedCall(() async {
-        final r = await _authed.get('/v1/blocks');
-        final list = (_map(r.data)['blocks'] as List?) ?? const [];
-        return list
-            .map((e) => BlockedUser.fromJson((e as Map).cast<String, dynamic>()))
-            .toList();
-      });
+    final r = await _authed.get('/v1/blocks');
+    final list = (_map(r.data)['blocks'] as List?) ?? const [];
+    return list
+        .map((e) => BlockedUser.fromJson((e as Map).cast<String, dynamic>()))
+        .toList();
+  });
 
   @override
   Future<void> reportMessage(String messageId, ReportReason reason) =>
-      _authedCall(() => _authed.post('/v1/messages/$messageId/report',
-          data: {'reason': reason.wire}));
+      _authedCall(
+        () => _authed.post(
+          '/v1/messages/$messageId/report',
+          data: {'reason': reason.wire},
+        ),
+      );
 
   /// Run an authed request, translating a *terminal* auth rejection — a 401 that
   /// survived [AuthInterceptor]'s single-flight refresh-and-retry, or a 403 —
@@ -369,8 +409,10 @@ class GatewayRestApi implements ChatRestApi {
     onUnauthenticated: onUnauthenticated,
     remoteRefresh: (rt) async {
       try {
-        final r =
-            await bare.post('/v1/auth/refresh', data: {'refresh_token': rt});
+        final r = await bare.post(
+          '/v1/auth/refresh',
+          data: {'refresh_token': rt},
+        );
         return ((r.data as Map).cast<String, dynamic>())['access_token']
             as String;
       } on DioException catch (e) {
