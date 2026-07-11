@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../chat/data/chat_rest_api.dart' show HandleTaken;
+import '../../../app/providers.dart';
+import '../../../core/diagnostics/report_problem_button.dart';
 import '../application/auth_controller.dart';
+import 'auth_error_text.dart';
 
 /// Shown once, right after a NEW identity is verified (first-passkey-creates-
 /// account): the user picks their public `@handle` and confirms a display name
@@ -31,8 +33,9 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
   void _submit() {
     final handle = _handle.text.trim();
     if (handle.isEmpty) return;
-    final displayName =
-        _displayName.text.trim().isEmpty ? handle : _displayName.text.trim();
+    final displayName = _displayName.text.trim().isEmpty
+        ? handle
+        : _displayName.text.trim();
     ref.read(authControllerProvider.notifier).claimHandle(handle, displayName);
   }
 
@@ -54,8 +57,9 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
         title: const Text('Pick your handle'),
         leading: IconButton(
           icon: const Icon(Icons.close),
-          onPressed:
-              busy ? null : () => ref.read(pendingHandleProvider.notifier).clear(),
+          onPressed: busy
+              ? null
+              : () => ref.read(pendingHandleProvider.notifier).clear(),
         ),
       ),
       body: Center(
@@ -90,9 +94,18 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
                 if (auth.hasError) ...[
                   const SizedBox(height: 16),
                   Text(
-                    _friendlyError(auth.error!),
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    authErrorText(
+                      auth.error,
+                      host: gatewayHostLabel(
+                        ref.watch(configProvider).httpBaseUrl,
+                      ),
+                      action: AuthAction.claimHandle,
+                    ),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
+                  ReportProblemButton(error: auth.error),
                 ],
                 const SizedBox(height: 24),
                 FilledButton(
@@ -112,12 +125,4 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
       ),
     );
   }
-
-  /// Surface a taken handle inline; keep raw transport detail out of the UI.
-  String _friendlyError(Object error) => switch (error) {
-        HandleTaken() =>
-          "That handle is taken — try another. If it's already yours, sign in "
-              'with your existing account, then add a passkey from Settings.',
-        _ => 'Something went wrong. Please try again.',
-      };
 }

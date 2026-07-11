@@ -59,6 +59,9 @@ dependencies:
   passkeys_darwin: ^0.4.0
   passkeys_android: ^2.12.0
   cryptography: ^2.9.0
+  device_info_plus: ^13.2.0
+  package_info_plus: ^10.2.0
+  share_plus: ^13.2.0
 
 dev_dependencies:
   flutter_test:
