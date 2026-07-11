@@ -28,6 +28,7 @@ ProviderContainer _loggedInContainer(FakeRestApi rest) {
       restApiProvider.overrideWithValue(rest),
       transportProvider.overrideWithValue(FakeChatTransport()),
       passkeyAuthClientProvider.overrideWithValue(FakePasskeyAuthClient()),
+      cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
       tokenProviderProvider.overrideWithValue(
         DefaultTokenProvider(
           store: InMemoryTokenStore(),

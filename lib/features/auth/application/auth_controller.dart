@@ -26,6 +26,7 @@ import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../../chat/data/transport/chat_transport.dart';
 import '../data/auth_exceptions.dart';
+import '../data/cached_user_store.dart';
 import '../data/passkey_auth_client.dart';
 import '../domain/auth_models.dart';
 import '../domain/identity_models.dart';
@@ -55,6 +56,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   ChatRestApi get _rest => ref.read(restApiProvider);
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
   PasskeyAuthClient get _passkey => ref.read(passkeyAuthClientProvider);
+  CachedUserStore get _cachedUser => ref.read(cachedUserStoreProvider);
 
   @override
   Future<AppUser?> build() async {
@@ -74,22 +76,46 @@ class AuthController extends AsyncNotifier<AppUser?> {
     return _restoreSession();
   }
 
-  /// Cold-start session restore. With no in-memory session yet, a transient
-  /// failure cannot lose live data, so the Phase-1 rule is simple: tokens +
-  /// valid `me()` → authenticated; otherwise → logged out (show login). A
-  /// terminal rejection clears the dead tokens; a transient error leaves them
-  /// in place so a retry can still succeed (named Phase-1 tradeoff: a network
-  /// blip at launch shows the login screen rather than a stale session).
+  /// Cold-start session restore — offline-first.
+  ///
+  ///   tokens == null            → logged out (never signed in)
+  ///   me() ok                   → authenticated; refresh the cached user
+  ///   terminal Unauthorized     → logged out; clear the (dead) tokens + cache
+  ///   transient/network error   → OPTIMISTIC restore from the cached user if
+  ///                               one exists, else logged out
+  ///
+  /// The optimistic branch is the fix for the returning-user-locked-out-offline
+  /// bug: a user with valid tokens on their device must be able to open the app
+  /// and read cached chats when the network is down, not be bounced to the login
+  /// wall. We only need the *identity* to publish a session — the tokens are
+  /// still there for the transport/REST layer to use once the network returns.
+  ///
+  /// Session-validity revalidation is DELEGATED, not duplicated here: landing in
+  /// chat mounts `chatRepositoryProvider`, which calls `transport.connect()`. If
+  /// the session is genuinely dead the transport emits
+  /// `ConnectionState.unauthenticated` → [_becomeUnauthenticated] (a clean
+  /// logout); if the network is still down it retries with backoff; a successful
+  /// connect (or any authed REST call) confirms the session. So the optimistic
+  /// restore can never strand a truly-dead session — it is corrected the moment
+  /// the network can speak. (Named tradeoff: profile fields shown from the cache
+  /// may be stale by one session until the next successful online `me()`; session
+  /// VALIDITY is revalidated immediately on connect.)
   Future<AppUser?> _restoreSession() async {
     final existing = await _tokens.currentAccessToken();
     if (existing == null) return null; // never logged in
     try {
-      return await _rest.me();
+      final user = await _rest.me();
+      await _cachedUser.write(user); // keep the offline cache fresh
+      return user;
     } on Unauthorized {
       await _tokens.clearTokens(); // tokens are genuinely dead
+      await _cachedUser.clear();
       return null;
     } catch (_) {
-      return null; // transient — tokens kept, just show login this launch
+      // Transient/network error — tokens kept. Restore optimistically from the
+      // cached identity so the app opens offline; the transport reconciles
+      // validity on connect.
+      return _cachedUser.read();
     }
   }
 
@@ -216,6 +242,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
     switch (outcome) {
       case Authenticated(:final session):
         await _tokens.setTokens(session.tokens);
+        await _cachedUser.write(session.user); // enable offline restore
         return session.user;
       case PendingHandle pending:
         ref.read(pendingHandleProvider.notifier).set(pending);
@@ -239,6 +266,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
         displayName: displayName,
       );
       await _tokens.setTokens(session.tokens);
+      await _cachedUser.write(session.user); // enable offline restore
       ref.read(pendingHandleProvider.notifier).clear();
       return session.user;
     });
@@ -275,6 +303,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
     // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
     ref.read(pendingHandleProvider.notifier).clear();
     await _tokens.clearTokens();
+    await _cachedUser.clear(); // lifecycle-symmetric with the tokens
     await ref.read(transportProvider).disconnect();
   }
 
@@ -325,6 +354,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // error UI. Only the disconnect is best-effort.
       ref.read(pendingHandleProvider.notifier).clear();
       await _tokens.clearTokens(); // security-critical: old credential gone first
+      await _cachedUser.clear(); // old identity gone with the old credential
       try {
         await ref.read(transportProvider).disconnect(); // best-effort cleanup
       } catch (_) {
