@@ -33,6 +33,11 @@ class FakeRestApi implements ChatRestApi {
   /// If set, `me()` (cold-start restore) throws this.
   Object? meThrows;
 
+  /// If set, invoked INSIDE `me()` before it returns/throws — lets a test
+  /// simulate a concurrent event (e.g. a terminal `unauthenticated` clearing
+  /// tokens) racing the restore's `me()` call.
+  void Function()? onMe;
+
   /// If set, `claimHandle` throws this (e.g. `HandleTaken`).
   Object? claimThrows;
 
@@ -54,6 +59,7 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<AppUser> me() async {
     meCalls++;
+    onMe?.call();
     if (meThrows != null) throw meThrows!;
     return user;
   }

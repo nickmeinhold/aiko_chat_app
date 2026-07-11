@@ -46,6 +46,21 @@ class Unauthorized implements Exception {
   String toString() => 'Unauthorized(statusCode: $statusCode)';
 }
 
+/// The gateway could not be REACHED — a connection/DNS/timeout-class transport
+/// failure, as opposed to a server that answered (even with an error). The REST
+/// impl maps the connection-class [DioException] into this at the boundary so
+/// callers can distinguish "the network is down" from "the server said no"
+/// **without depending on `dio`**. Used by offline-first session restore
+/// (auth_controller) to decide when an optimistic restore is safe — a reachable
+/// server that returned a non-auth error is NOT this, and must not be treated as
+/// a benign network blip.
+class NetworkUnavailable implements Exception {
+  final Object? cause;
+  const NetworkUnavailable([this.cause]);
+  @override
+  String toString() => 'NetworkUnavailable($cause)';
+}
+
 /// Thrown by [ChatRestApi.claimHandle] when the requested handle is already
 /// taken (the gateway returns 409). The claim UI surfaces this inline ("that
 /// handle is taken") rather than as a generic failure.

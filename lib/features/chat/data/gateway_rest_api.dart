@@ -219,10 +219,38 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
-  Future<AppUser> me() => _authedCall(() async {
+  // me() is the offline-first restore probe (its only caller is
+  // AuthController._restoreSession). Terminal auth → Unauthorized (via
+  // _authedCall); a connection/DNS/timeout-class failure → NetworkUnavailable so
+  // the controller can safely distinguish "server unreachable" (optimistic
+  // restore OK) from "server answered with something unexpected" (fail closed).
+  Future<AppUser> me() => _mapNetwork(() => _authedCall(() async {
         final r = await _authed.get('/v1/me');
         return AppUser.fromJson(_map(r.data));
-      });
+      }));
+
+  /// Translate a connection-class [DioException] (no response from the server —
+  /// DNS/connect/timeout) into the domain [NetworkUnavailable]. A DioException
+  /// that carries a response (the server answered, even an error) is NOT
+  /// remapped — it propagates so the caller fails closed rather than treating a
+  /// server-side error as a benign network blip. Scoped to me(); other callers'
+  /// error handling is unchanged.
+  static Future<T> _mapNetwork<T>(Future<T> Function() call) async {
+    try {
+      return await call();
+    } on DioException catch (e) {
+      const connectionClass = {
+        DioExceptionType.connectionError,
+        DioExceptionType.connectionTimeout,
+        DioExceptionType.receiveTimeout,
+        DioExceptionType.sendTimeout,
+      };
+      if (e.response == null && connectionClass.contains(e.type)) {
+        throw NetworkUnavailable(e);
+      }
+      rethrow;
+    }
+  }
 
   @override
   Future<void> deleteAccount() async {
