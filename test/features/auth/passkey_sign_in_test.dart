@@ -30,6 +30,7 @@ void main() {
       restApiProvider.overrideWithValue(rest),
       transportProvider.overrideWithValue(FakeChatTransport()),
       passkeyAuthClientProvider.overrideWithValue(passkey),
+      cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
       tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
         store: tokenStore,
         remoteRefresh: (_) async => 'access2',

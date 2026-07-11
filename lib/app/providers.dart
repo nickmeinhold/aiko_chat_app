@@ -18,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/auth/token_provider.dart';
 import '../features/auth/application/auth_controller.dart';
+import '../features/auth/data/cached_user_store.dart';
 import '../features/auth/data/passkey_auth_client.dart';
 import '../features/chat/data/cache/cache_database.dart';
 import '../features/chat/data/cache/drift_cache.dart';
@@ -97,6 +98,14 @@ final secureTokenStoreProvider = Provider<SecureTokenStore>(
 /// Distinct from the JWT store: this proves authorship; the JWT asserts identity.
 final sovereignKeyStoreProvider = Provider<SovereignKeyStore>(
   (ref) => SovereignKeyStore(),
+);
+
+/// The last-known [AppUser] store — enables offline-first session restore (a
+/// returning user with valid tokens lands in cached chat even with no network,
+/// instead of the login wall). Backed by SharedPreferences (non-secret profile
+/// fields). Tests override this with an `InMemoryCachedUserStore`.
+final cachedUserStoreProvider = Provider<CachedUserStore>(
+  (ref) => CachedUserStore(ref.watch(sharedPreferencesProvider)),
 );
 
 /// A broadcast sink for "the session is now *terminally* unauthenticated"

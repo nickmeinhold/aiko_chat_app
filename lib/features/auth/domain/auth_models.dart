@@ -27,6 +27,16 @@ class AppUser {
         aikoUsername: (j['aiko_username'] as String?) ?? '',
       );
 
+  /// Serialize for local persistence (offline-first session restore). Keys
+  /// mirror [fromJson] / the gateway UserView wire shape EXACTLY so a persisted
+  /// user round-trips through [AppUser.fromJson] unchanged.
+  Map<String, dynamic> toJson() => {
+        'user_id': userId,
+        'username': username,
+        'display_name': displayName,
+        'aiko_username': aikoUsername,
+      };
+
   @override
   bool operator ==(Object other) =>
       other is AppUser &&

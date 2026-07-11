@@ -104,6 +104,10 @@ ProviderContainer makeContainer({
       remoteRefresh: (_) async => 'access2',
       onUnauthenticated: () => container.read(authEventsProvider).add(null),
     )),
+    // Offline-first restore reads/writes the cached user; use an in-memory store
+    // so tests neither touch a platform channel nor leak the cached user across
+    // tests via the shared testPrefs.
+    cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
     // The real cacheProvider is now file-backed via path_provider, which has no
     // platform channel under flutter_test. Widget tests get an in-memory cache
     // that, like the real provider, is disposed and recreated across auth

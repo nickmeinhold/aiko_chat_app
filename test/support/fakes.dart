@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:aiko_chat_app/features/auth/data/cached_user_store.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/legal/data/eula_store.dart';
 import 'package:aiko_chat_app/services/secure_token_store.dart';
@@ -21,6 +22,43 @@ class InMemoryTokenStore extends SecureTokenStore {
   Future<void> clear() async => _tokens = null;
 
   AuthTokens? get current => _tokens;
+}
+
+/// In-memory cached-user store: subclasses the real store and overrides its
+/// three methods (passing null prefs to the base, which the overrides never
+/// touch), so tests never depend on a real SharedPreferences. Seed with an
+/// initial user to exercise offline restore; `written`/`cleared` expose the
+/// lifecycle for symmetry assertions.
+class InMemoryCachedUserStore extends CachedUserStore {
+  AppUser? _user;
+  AppUser? written;
+  bool cleared = false;
+
+  /// When true, `write` returns `false` (SharedPreferences persistence-failure
+  /// semantics — no throw) so a test can exercise the caller's fallback.
+  bool failWrites = false;
+  InMemoryCachedUserStore([AppUser? initial])
+      : _user = initial,
+        super(null);
+
+  @override
+  AppUser? read() => _user;
+  @override
+  Future<bool> write(AppUser user) async {
+    if (failWrites) return false; // persisted nothing; no throw
+    _user = user;
+    written = user;
+    return true;
+  }
+
+  @override
+  Future<bool> clear() async {
+    _user = null;
+    cleared = true;
+    return true;
+  }
+
+  AppUser? get current => _user;
 }
 
 /// In-memory EULA store: fakes the SharedPreferences-backed acceptance flag at

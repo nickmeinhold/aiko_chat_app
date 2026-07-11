@@ -26,6 +26,7 @@ import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../../chat/data/transport/chat_transport.dart';
 import '../data/auth_exceptions.dart';
+import '../data/cached_user_store.dart';
 import '../data/passkey_auth_client.dart';
 import '../domain/auth_models.dart';
 import '../domain/identity_models.dart';
@@ -55,6 +56,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   ChatRestApi get _rest => ref.read(restApiProvider);
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
   PasskeyAuthClient get _passkey => ref.read(passkeyAuthClientProvider);
+  CachedUserStore get _cachedUser => ref.read(cachedUserStoreProvider);
 
   @override
   Future<AppUser?> build() async {
@@ -74,23 +76,96 @@ class AuthController extends AsyncNotifier<AppUser?> {
     return _restoreSession();
   }
 
-  /// Cold-start session restore. With no in-memory session yet, a transient
-  /// failure cannot lose live data, so the Phase-1 rule is simple: tokens +
-  /// valid `me()` → authenticated; otherwise → logged out (show login). A
-  /// terminal rejection clears the dead tokens; a transient error leaves them
-  /// in place so a retry can still succeed (named Phase-1 tradeoff: a network
-  /// blip at launch shows the login screen rather than a stale session).
+  /// Cold-start session restore — offline-first.
+  ///
+  ///   tokens == null           → logged out (never signed in)
+  ///   me() ok                  → authenticated; refresh the cached user
+  ///   terminal Unauthorized    → logged out; clear the (dead) tokens + cache
+  ///   NetworkUnavailable       → OPTIMISTIC restore from the cached user, IFF
+  ///                              tokens are still present at commit time
+  ///   any OTHER error          → fail CLOSED (keep tokens, show login)
+  ///
+  /// The optimistic branch fixes the returning-user-locked-out-offline bug: a
+  /// user with valid tokens must be able to open the app and read cached content
+  /// when the *network is down*, not be bounced to the login wall.
+  ///
+  /// Two deliberate safety choices, both from the PR #71 cage-match:
+  ///  1. **Fail closed on anything but a reachable-network failure.** Only
+  ///     [NetworkUnavailable] (server truly unreachable — DNS/connect/timeout,
+  ///     mapped in the REST seam) triggers optimism. A server that ANSWERED with
+  ///     an unexpected non-auth error, or any unclassified error, returns null →
+  ///     login. "Not [Unauthorized]" is NOT treated as "transient" (that was the
+  ///     trust-laundering Carnot/Tesla flagged).
+  ///  2. **Commit-time token guard.** We re-read the token AFTER the failed
+  ///     `me()` and only publish the cached user if it is STILL present. This
+  ///     closes the cold-start race (Tesla): a concurrent terminal signal
+  ///     (transport/REST `unauthenticated`) that fired during `me()` clears the
+  ///     tokens and flips state to logged-out; without this guard, returning the
+  ///     cached user here would clobber that with a resurrected session.
+  ///
+  /// Session-VALIDITY is not asserted here — it is reconciled by the transport
+  /// (`ConnectionState.unauthenticated` → [_becomeUnauthenticated]) and the REST
+  /// interceptor once the network can speak. The bounded claim: an optimistically
+  /// restored session can DISPLAY cached identity/content, but every
+  /// authenticated action fails closed on a terminal 401, and the session is
+  /// corrected on the next successful round-trip. (Named tradeoff: profile fields
+  /// may be one session stale until the next online `me()`.)
   Future<AppUser?> _restoreSession() async {
     final existing = await _tokens.currentAccessToken();
     if (existing == null) return null; // never logged in
     try {
-      return await _rest.me();
+      final user = await _rest.me();
+      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
+      return user;
     } on Unauthorized {
       await _tokens.clearTokens(); // tokens are genuinely dead
+      await _cachedUser.clear();
       return null;
+    } on NetworkUnavailable {
+      // Server unreachable — restore optimistically from the cached identity,
+      // but ONLY if the tokens survived any concurrent terminal signal.
+      final cached = _cachedUser.read();
+      if (cached == null) return null;
+      final stillAuthed = await _tokens.currentAccessToken();
+      return stillAuthed == null ? null : cached;
     } catch (_) {
-      return null; // transient — tokens kept, just show login this launch
+      // The server answered with something we didn't expect (not a clean
+      // unreachable-network signal). Fail CLOSED: keep the tokens for a later
+      // retry, but do NOT grant an optimistic session on an unknown error.
+      return null;
     }
+  }
+
+  /// Persist the cached user WITHOUT letting a storage failure break auth. A
+  /// failed write is degraded to a CLEAR so the next offline restore can never
+  /// pair fresh tokens with a stale/mismatched cached identity (Carnot) — worst
+  /// case is "no offline restore", never "wrong identity". Never throws.
+  Future<void> _writeCachedUser(AppUser user) async {
+    // setString/remove return false on a persistence failure WITHOUT throwing
+    // (Carnot, PR #71). The invariant to protect: a storage failure must never
+    // leave a cached identity that MISMATCHES the current tokens. So a failed
+    // write degrades to a clear; we check BOTH booleans.
+    bool sanitized;
+    try {
+      if (await _cachedUser.write(user)) return; // wrote the correct identity
+      sanitized = await _cachedUser.clear(); // write failed → erase, don't leave old
+    } catch (_) {
+      try {
+        sanitized = await _cachedUser.clear();
+      } catch (_) {
+        sanitized = false;
+      }
+    }
+    // Residual (both write AND clear silently failed — a rare platform-storage
+    // pathology): a stale cached identity may remain. It is NOT a security hole —
+    // the cache is only ever CONSULTED under valid tokens (restore checks tokens
+    // first) and only to DISPLAY identity; every authed action still fails closed
+    // on a terminal 401. And it SELF-HEALS: the next successful me() overwrites
+    // the cache with the correct identity. We surface it via assert so it's never
+    // silent in debug, but do not log the user out on a prefs hiccup.
+    assert(sanitized,
+        'CachedUserStore could not persist OR clear — stale identity may '
+        'linger until the next successful me() (self-healing, display-only).');
   }
 
   /// The shared ingress preamble for every "start a sign-in ceremony" entry
@@ -216,6 +291,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
     switch (outcome) {
       case Authenticated(:final session):
         await _tokens.setTokens(session.tokens);
+        await _writeCachedUser(session.user); // enable offline restore
         return session.user;
       case PendingHandle pending:
         ref.read(pendingHandleProvider.notifier).set(pending);
@@ -239,6 +315,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
         displayName: displayName,
       );
       await _tokens.setTokens(session.tokens);
+      await _writeCachedUser(session.user); // enable offline restore
       ref.read(pendingHandleProvider.notifier).clear();
       return session.user;
     });
@@ -275,6 +352,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
     // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
     ref.read(pendingHandleProvider.notifier).clear();
     await _tokens.clearTokens();
+    await _cachedUser.clear(); // lifecycle-symmetric with the tokens
     await ref.read(transportProvider).disconnect();
   }
 
@@ -325,6 +403,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // error UI. Only the disconnect is best-effort.
       ref.read(pendingHandleProvider.notifier).clear();
       await _tokens.clearTokens(); // security-critical: old credential gone first
+      await _cachedUser.clear(); // old identity gone with the old credential
       try {
         await ref.read(transportProvider).disconnect(); // best-effort cleanup
       } catch (_) {
