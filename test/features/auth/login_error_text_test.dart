@@ -58,6 +58,9 @@ void main() {
       // so the test never touches the platform channel or the network.
       connectivityServiceProvider.overrideWithValue(FakeConnectivityService()),
       reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
+      // Stub the 5s-Timer reachability loop so the pumped login screen doesn't
+      // leave a pending timer at test teardown.
+      gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
     ]);
     addTearDown(container.dispose);
 

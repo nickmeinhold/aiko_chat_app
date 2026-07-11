@@ -27,7 +27,7 @@ void main() {
       deviceOnlineProvider.overrideWith((ref) => Stream.value(deviceOnline)),
       connectionStateProvider.overrideWith(
           (ref) => Stream.value(socket ?? ConnectionState.disconnected)),
-      gatewayReachableProvider.overrideWith((ref) async => gatewayReachable),
+      gatewayReachableProvider.overrideWith((ref) => Stream.value(gatewayReachable)),
       authControllerProvider.overrideWith(() => _FixedAuth(loggedInUser)),
     ]);
   }
@@ -61,13 +61,36 @@ void main() {
     expect(await status(c), NetworkStatus.online);
   });
 
-  test('logged in + socket NOT connected → serverUnreachable', () async {
+  test('logged in + socket DISCONNECTED → serverUnreachable', () async {
     final c = container(
         deviceOnline: true,
         loggedInUser: user,
         socket: ConnectionState.disconnected);
     addTearDown(c.dispose);
     expect(await status(c), NetworkStatus.serverUnreachable);
+  });
+
+  test('logged in + socket CONNECTING → online (no false-alarm flash)',
+      () async {
+    // The normal connect/revalidate window must NOT paint "can't reach" — that
+    // was the PR #72 cage-match false-alarm hole (Tesla).
+    final c = container(
+        deviceOnline: true,
+        loggedInUser: user,
+        socket: ConnectionState.connecting);
+    addTearDown(c.dispose);
+    expect(await status(c), NetworkStatus.online);
+  });
+
+  test('logged in + socket UNAUTHENTICATED → online (auth signal, not network)',
+      () async {
+    final c = container(
+        deviceOnline: true,
+        loggedInUser: user,
+        socket: ConnectionState.unauthenticated);
+    addTearDown(c.dispose);
+    expect(await status(c), NetworkStatus.online,
+        reason: 'unauthenticated is a logout signal, not a network banner');
   });
 
   test('logged out + gateway reachable → online', () async {

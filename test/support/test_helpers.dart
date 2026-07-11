@@ -116,6 +116,10 @@ ProviderContainer makeContainer({
     connectivityServiceProvider
         .overrideWithValue(FakeConnectivityService()),
     reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
+    // The real gatewayReachableProvider polls on a 5s Timer loop; stub it with a
+    // one-shot reachable stream so widget tests don't trip "pending timer" at
+    // teardown. (Its derived logic is covered in network_status_test.)
+    gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
     // The real cacheProvider is now file-backed via path_provider, which has no
     // platform channel under flutter_test. Widget tests get an in-memory cache
     // that, like the real provider, is disposed and recreated across auth

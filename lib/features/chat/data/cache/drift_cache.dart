@@ -106,6 +106,12 @@ class Channels extends Table {
   TextColumn get kind => text()();
   TextColumn get aikoChannel => text().nullable()();
 
+  /// The channel's position in the authoritative server list, so the offline
+  /// read replays the SAME order the online fetch would (the UI picks
+  /// `channels.firstOrNull` as the default channel — a different offline order
+  /// would silently pick a different default). Set from the list index on save.
+  IntColumn get ordinal => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -133,7 +139,7 @@ class DriftCache extends _$DriftCache {
   DriftCache(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -156,6 +162,10 @@ class DriftCache extends _$DriftCache {
             await m.addColumn(messages, messages.signedClientMsgId);
             await m.addColumn(messages, messages.originCryptoValid);
           }
+          // v4 -> v5: channel-list ordinal so the offline read preserves the
+          // authoritative server order (default 0 — self-heals on the next
+          // saveChannels, which rewrites every row's ordinal).
+          if (from < 5) await m.addColumn(channels, channels.ordinal);
         },
       );
 
@@ -171,11 +181,12 @@ class DriftCache extends _$DriftCache {
       await delete(this.channels).go();
       await batch((b) => b.insertAll(
             this.channels,
-            channels.map((c) => ChannelsCompanion.insert(
-                  id: c.id,
-                  name: c.name,
-                  kind: c.kind.wire,
-                  aikoChannel: Value(c.aikoChannel),
+            channels.indexed.map((e) => ChannelsCompanion.insert(
+                  id: e.$2.id,
+                  name: e.$2.name,
+                  kind: e.$2.kind.wire,
+                  aikoChannel: Value(e.$2.aikoChannel),
+                  ordinal: Value(e.$1), // preserve authoritative list order
                 )),
           ));
     });
@@ -185,7 +196,9 @@ class DriftCache extends _$DriftCache {
   /// reach the gateway. Empty when nothing has been cached yet (first-ever launch
   /// offline): the UI shows an empty list, never the raw-error screen.
   Future<List<Channel>> readChannels() async {
-    final rows = await select(channels).get();
+    final rows = await (select(channels)
+          ..orderBy([(t) => OrderingTerm.asc(t.ordinal)]))
+        .get();
     return rows
         .map((r) => Channel(
               id: r.id,

@@ -63,10 +63,16 @@ final connectivityServiceProvider = Provider<ConnectivityService>(
 
 /// Live device-online stream: an immediate seed (so the first frame is truthful)
 /// then every change. Distinct-collapsed so a no-op interface swap doesn't churn.
-final deviceOnlineProvider = StreamProvider<bool>((ref) async* {
+final deviceOnlineProvider = StreamProvider<bool>((ref) {
   final svc = ref.watch(connectivityServiceProvider);
-  yield await svc.isOnline();
-  yield* svc.onlineChanges;
+  // Seed with the current value, then live changes; `.distinct()` so a wifi↔
+  // cellular swap that stays "online" doesn't churn the gateway re-probe.
+  Stream<bool> raw() async* {
+    yield await svc.isOnline();
+    yield* svc.onlineChanges;
+  }
+
+  return raw().distinct();
 });
 
 // --- gateway reachability (logged-out probe) --------------------------------
@@ -103,14 +109,25 @@ final reachabilityProbeProvider = Provider<ReachabilityProbe>(
   (ref) => HttpReachabilityProbe(),
 );
 
-/// Whether the current gateway is reachable, re-probed whenever device
-/// connectivity flips (regaining wifi re-checks the server). Short-circuits to
-/// `false` when the device is offline — no point probing with no interface.
-final gatewayReachableProvider = FutureProvider.autoDispose<bool>((ref) async {
+/// Whether the current gateway is reachable — a live STREAM, not a one-shot
+/// sample: it re-probes on an interval so the (pre-auth) login banner CLEARS
+/// when a downed gateway comes back, and re-runs immediately when device
+/// connectivity flips. Short-circuits to `false` when the device is offline (no
+/// point probing with no interface). `autoDispose` stops the loop when nothing
+/// watches it (login screen unmounted). Cadence stays under the prompt-cache /
+/// battery threshold — this only runs while the login screen is foregrounded.
+final gatewayReachableProvider = StreamProvider.autoDispose<bool>((ref) async* {
   final online = ref.watch(deviceOnlineProvider).value ?? true;
-  if (!online) return false;
+  if (!online) {
+    yield false;
+    return;
+  }
   final baseUrl = ref.watch(configProvider).httpBaseUrl;
-  return ref.watch(reachabilityProbeProvider).canReach(baseUrl);
+  final probe = ref.watch(reachabilityProbeProvider);
+  while (true) {
+    yield await probe.canReach(baseUrl);
+    await Future<void>.delayed(const Duration(seconds: 5));
+  }
 });
 
 // --- unified status ---------------------------------------------------------
@@ -124,10 +141,15 @@ final networkStatusProvider = Provider<NetworkStatus>((ref) {
 
   final loggedIn = ref.watch(authControllerProvider).value != null;
   if (loggedIn) {
+    // Only a DEFINITIVE drop is "trouble". `connecting` and the still-loading
+    // (null) state are the normal connect/revalidate window — painting them
+    // serverUnreachable would flash a false "can't reach" on every chat open
+    // (Tesla, PR #72). `unauthenticated` is an auth signal, not a network one
+    // (the controller turns it into a logout), so it shows no banner either.
     final conn = ref.watch(connectionStateProvider).value;
-    return conn == ConnectionState.connected
-        ? NetworkStatus.online
-        : NetworkStatus.serverUnreachable;
+    return conn == ConnectionState.disconnected
+        ? NetworkStatus.serverUnreachable
+        : NetworkStatus.online;
   }
 
   final reachable = ref.watch(gatewayReachableProvider).value ?? true;

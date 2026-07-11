@@ -28,6 +28,18 @@ void main() {
     expect(read.length, 2);
   });
 
+  test('read preserves the authoritative save order (ordinal)', () async {
+    // The UI picks channels.firstOrNull as the default — offline order MUST
+    // match the online list order (Carnot, PR #72). Save in a non-alphabetical,
+    // non-id order and assert it reads back identically.
+    const a = Channel(id: 'zzz', name: 'first', kind: ChannelKind.standard);
+    const b = Channel(id: 'aaa', name: 'second', kind: ChannelKind.standard);
+    const c = Channel(id: 'mmm', name: 'third', kind: ChannelKind.standard);
+    await cache.saveChannels([a, b, c]);
+    expect(await cache.readChannels(), [a, b, c],
+        reason: 'not sorted by id/name — the server list order is preserved');
+  });
+
   test('save is an AUTHORITATIVE full replace (dropped channels vanish)',
       () async {
     await cache.saveChannels([general, llm]);
