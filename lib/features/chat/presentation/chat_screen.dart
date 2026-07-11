@@ -34,22 +34,34 @@ class ChatScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: channelsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load channels.\n$e')),
-        data: (channels) {
-          final channel = channels.firstOrNull;
-          if (channel == null) {
-            return const Center(child: Text('No channels yet.'));
-          }
-          return Column(
-            children: [
-              const NetworkStatusBanner(),
-              Expanded(child: MessageList(channelId: channel.id)),
-              Composer(channelId: channel.id),
-            ],
-          );
-        },
+      // The network banner lives ABOVE the channels branch so it stays visible
+      // in every state — including the offline empty-cache case ("No channels
+      // yet"), where it's the only thing explaining WHY the workspace looks empty
+      // (Carnot, PR #72). Without this, an offline first-launch reads as a real
+      // empty account rather than an offline one.
+      body: Column(
+        children: [
+          const NetworkStatusBanner(),
+          Expanded(
+            child: channelsAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) =>
+                  Center(child: Text('Could not load channels.\n$e')),
+              data: (channels) {
+                final channel = channels.firstOrNull;
+                if (channel == null) {
+                  return const Center(child: Text('No channels yet.'));
+                }
+                return Column(
+                  children: [
+                    Expanded(child: MessageList(channelId: channel.id)),
+                    Composer(channelId: channel.id),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
