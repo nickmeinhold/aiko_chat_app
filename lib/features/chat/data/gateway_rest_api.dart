@@ -141,8 +141,9 @@ class GatewayRestApi implements ChatRestApi {
         // (which requires a token/provisioning_token and would throw here).
         return AppUser.fromJson(_map(r.data));
       } on DioException catch (e) {
-        if (e.response?.statusCode == 409)
+        if (e.response?.statusCode == 409) {
           throw const PasskeyAlreadyRegistered();
+        }
         rethrow; // terminal 401/403 mapped by _authedCall; else propagate
       }
     });
@@ -187,12 +188,32 @@ class GatewayRestApi implements ChatRestApi {
       );
     }
     return _mapNetwork(() async {
-      final r = await _bare.post(
-        path,
-        data: {'state': state, 'credential': credential},
-      );
-      return _resolveOutcome(_map(r.data));
+      try {
+        final r = await _bare.post(
+          path,
+          data: {'state': state, 'credential': credential},
+        );
+        return _resolveOutcome(_map(r.data));
+      } on DioException catch (e) {
+        _throwIfAuthTerminal(e); // 401/403 → Unauthorized; else rethrow.
+      }
     });
+  }
+
+  /// Map a terminal auth status (401/403) on a token-less [_bare] auth call to
+  /// the domain [Unauthorized]. The passkey finish + claim paths go through
+  /// [_bare] (they carry a credential/provisioning token, not a bearer), so they
+  /// don't get [_authedCall]'s mapping — without this a rejected assertion or an
+  /// expired provisioning token propagates as a raw [DioException] whose string
+  /// can carry the request body (provisioning_token/handle/display_name),
+  /// leaking it into the on-screen error banner AND leaving the UI's action-aware
+  /// Unauthorized copy with no producer (cage-match #74 R2, Carnot + Tesla).
+  /// Non-terminal statuses rethrow unchanged (a connection-class error then maps
+  /// to [NetworkUnavailable] in the enclosing [_mapNetwork]).
+  static Never _throwIfAuthTerminal(DioException e) {
+    final code = e.response?.statusCode;
+    if (code == 401 || code == 403) throw Unauthorized(code);
+    throw e;
   }
 
   /// Resolve the gateway's identity response (from a passkey finish) into an
@@ -240,7 +261,7 @@ class GatewayRestApi implements ChatRestApi {
       return AuthSession.fromJson(_map(r.data));
     } on DioException catch (e) {
       if (e.response?.statusCode == 409) throw const HandleTaken();
-      rethrow;
+      _throwIfAuthTerminal(e); // 401/403 (expired provisioning) → Unauthorized.
     }
   });
 

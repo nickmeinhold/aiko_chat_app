@@ -15,8 +15,10 @@ import 'error_report.dart';
 class ReportProblemButton extends ConsumerStatefulWidget {
   const ReportProblemButton({super.key, required this.error});
 
-  /// The failure to attach to the report (its raw `toString()` — the technical
-  /// detail, not the friendly message the user already saw).
+  /// The failure to attach to the report. It is NOT stringified raw — the report
+  /// runs it through [describeError], a PII-safe type allowlist (a raw exception
+  /// string could carry the request body). Passed as `Object?` so any layer's
+  /// error can be reported; the safe projection happens at format time.
   final Object? error;
 
   @override

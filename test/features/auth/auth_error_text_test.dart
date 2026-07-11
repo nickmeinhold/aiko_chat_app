@@ -129,8 +129,25 @@ void main() {
       expect(t, isNot(contains('Sign-in failed')));
     });
 
+    test('an unmapped NON-ceremony error shows its TYPE, never its toString', () {
+      // On-screen PII guard (cage-match #74 R2): a raw DioException reaching the
+      // banner must not stringify its request body (provisioning_token/handle).
+      final t = text(_LeakyError(), action: AuthAction.claimHandle);
+      expect(t, "Couldn't finish setup: _LeakyError");
+      expect(t, isNot(contains('SECRET')));
+      expect(t, isNot(contains('provisioning_token')));
+    });
+
     test('a null/blank error is the ONLY case that gets the generic line', () {
       expect(text(null), 'Something went wrong. Please try again.');
     });
   });
+}
+
+/// An error whose toString() leaks a credential-shaped request body — stands in
+/// for a raw DioException reaching the banner.
+class _LeakyError {
+  @override
+  String toString() =>
+      'DioException: POST /claim {provisioning_token: SECRET, handle: bob}';
 }

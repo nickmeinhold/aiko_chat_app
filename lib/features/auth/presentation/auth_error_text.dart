@@ -73,38 +73,46 @@ String authErrorText(
           : "We couldn't verify that passkey. Try again, or create a new one.";
   }
 
-  // (2) Passkey ceremony failures: AuthCeremonyFailed('Passkey: <code>').
-  final raw = error is AuthCeremonyFailed
-      ? error.message
-      : (error?.toString() ?? '');
-  final lower = raw.toLowerCase();
-  if (raw.contains('no-credentials-available')) {
+  // (2) Passkey ceremony failures: AuthCeremonyFailed('Passkey: <code>'). ONLY
+  // this message is safe to echo verbatim — it's an authenticator error code,
+  // not user data. Any OTHER error's toString() may carry a request body (a
+  // DioException stringifies its requestOptions — the provisioning_token, handle
+  // and display name on the claim path), so it is NEVER rendered raw on screen
+  // (cage-match #74 R2, Carnot + Tesla: the report sheet was sanitized but the
+  // banner still leaked).
+  final ceremonyMsg = error is AuthCeremonyFailed ? error.message : '';
+  final lower = ceremonyMsg.toLowerCase();
+  if (ceremonyMsg.contains('no-credentials-available')) {
     return 'No passkey found on this device. '
         'Tap "Create a passkey" above to make one.';
   }
-  if (raw.contains('domain-not-associated')) {
+  if (ceremonyMsg.contains('domain-not-associated')) {
     return "Passkeys aren't linked to $host yet, so sign-in can't complete. "
         "(The server's domain association is still pending.)";
   }
-  if (raw.contains('deviceNotSupported') || lower.contains('not supported')) {
+  if (ceremonyMsg.contains('deviceNotSupported') ||
+      lower.contains('not supported')) {
     return "This device doesn't support passkeys.";
   }
   if (lower.contains('timeout') || lower.contains('timed out')) {
     return 'The request timed out. Please try again.';
   }
 
-  // (3) Fallback: never hide a new failure mode behind the generic line, but
-  // name the RIGHT ritual — an unmapped claim failure must not read "Sign-in
-  // failed" (cage-match #74, Carnot + Tesla). A blank error is the only case
-  // that gets the generic line.
+  // (3) Fallback: never blind — show the passkey code (safe) or the exception
+  // TYPE (safe) — but never a raw toString (would leak the request body). Name
+  // the RIGHT ritual so an unmapped claim failure doesn't read "Sign-in failed"
+  // (cage-match #74). A blank error is the only case that gets the generic line.
   final prefix = switch (action) {
     AuthAction.createAccount => "Couldn't create your account",
     AuthAction.signIn => 'Sign-in failed',
     AuthAction.claimHandle => "Couldn't finish setup",
   };
-  return raw.isEmpty
+  final safeDetail = ceremonyMsg.isNotEmpty
+      ? ceremonyMsg
+      : (error == null ? '' : error.runtimeType.toString());
+  return safeDetail.isEmpty
       ? 'Something went wrong. Please try again.'
-      : '$prefix: $raw';
+      : '$prefix: $safeDetail';
 }
 
 /// The host (with port when present) of a gateway base URL for display — falls

@@ -76,6 +76,46 @@ void main() {
     });
   });
 
+  // A terminal auth status on a token-less _bare auth call maps to the domain
+  // Unauthorized — so the expired-provisioning-token / rejected-assertion path
+  // gets friendly copy AND never reaches the UI as a raw DioException whose
+  // string could carry the request body (cage-match #74 R2, Carnot + Tesla).
+  group('auth-terminal (401/403) on a _bare auth call → Unauthorized', () {
+    test(
+      'claimHandle 401 (expired provisioning token) → Unauthorized',
+      () async {
+        final api = apiThatAnswers(401, '{"error":"expired"}');
+        await expectLater(
+          api.claimHandle(
+            provisioningToken: 'p',
+            handle: 'h',
+            displayName: 'd',
+          ),
+          throwsA(isA<Unauthorized>()),
+        );
+      },
+    );
+
+    test('claimHandle 403 → Unauthorized', () async {
+      final api = apiThatAnswers(403, '{"error":"forbidden"}');
+      await expectLater(
+        api.claimHandle(provisioningToken: 'p', handle: 'h', displayName: 'd'),
+        throwsA(isA<Unauthorized>()),
+      );
+    });
+
+    test(
+      'finishPasskeyAuthentication 401 (rejected assertion) → Unauthorized',
+      () async {
+        final api = apiThatAnswers(401, '{"error":"bad assertion"}');
+        await expectLater(
+          api.finishPasskeyAuthentication('st', '{"id":"c"}'),
+          throwsA(isA<Unauthorized>()),
+        );
+      },
+    );
+  });
+
   group('a server that ANSWERED is NOT remapped (boundary stays narrow)', () {
     test('claimHandle 409 → HandleTaken, not NetworkUnavailable', () async {
       final api = apiThatAnswers(409, '{"error":"taken"}');
