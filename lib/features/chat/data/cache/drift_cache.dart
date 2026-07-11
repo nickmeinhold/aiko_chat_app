@@ -197,7 +197,14 @@ class DriftCache extends _$DriftCache {
   /// offline): the UI shows an empty list, never the raw-error screen.
   Future<List<Channel>> readChannels() async {
     final rows = await (select(channels)
-          ..orderBy([(t) => OrderingTerm.asc(t.ordinal)]))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.ordinal),
+            // Deterministic tiebreak: pre-v5 rows all migrate to ordinal 0, so
+            // without a secondary key an immediately-offline migrated user could
+            // get nondeterministic default-channel selection (Carnot, PR #72).
+            // Self-heals on the first online saveChannels (real indexes).
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .get();
     return rows
         .map((r) => Channel(

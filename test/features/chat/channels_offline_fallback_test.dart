@@ -1,5 +1,6 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
+import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
@@ -25,12 +26,16 @@ void main() {
   ProviderContainer makeContainer({
     required FakeRestApi rest,
     required DriftCache cache,
+    FakeConnectivityService? connectivity,
   }) {
     late final ProviderContainer container;
     container = ProviderContainer(overrides: [
       restApiProvider.overrideWithValue(rest),
       transportProvider.overrideWithValue(FakeChatTransport()),
       cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
+      connectivityServiceProvider
+          .overrideWithValue(connectivity ?? FakeConnectivityService()),
+      reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
       cacheProvider.overrideWith((ref) => cache),
       tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
         store: InMemoryTokenStore(seededTokens),
@@ -81,5 +86,33 @@ void main() {
     await c.read(authControllerProvider.future);
 
     expect(await c.read(channelsProvider.future), isEmpty);
+  });
+
+  test('the offline fallback is NOT sticky — recovery refetches', () async {
+    // First-ever offline launch → []. When connectivity returns, channelsProvider
+    // must re-run listChannels() rather than stay stuck on the empty cache
+    // (Carnot, PR #72). Keep it alive with a listener so the connectivity edge
+    // triggers a rebuild.
+    final cache = DriftCache(NativeDatabase.memory());
+    addTearDown(cache.close);
+    final connectivity = FakeConnectivityService(online: true);
+    final rest = FakeRestApi(channels: const [c1])
+      ..listChannelsThrows = const NetworkUnavailable(); // offline at first
+    final c = makeContainer(rest: rest, cache: cache, connectivity: connectivity);
+    addTearDown(c.dispose);
+    await c.read(authControllerProvider.future);
+    c.listen(channelsProvider, (_, _) {}, fireImmediately: true);
+
+    expect(await c.read(channelsProvider.future), isEmpty,
+        reason: 'first-ever offline launch: empty');
+
+    // Network recovers: gateway answers now, and connectivity emits a change.
+    rest.listChannelsThrows = null;
+    connectivity.emit(false); // a transition so .distinct() passes it through
+    connectivity.emit(true); //  → online edge rebuilds channelsProvider
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(await c.read(channelsProvider.future), [c1],
+        reason: 'recovery refetched — not stuck on the empty offline result');
   });
 }
