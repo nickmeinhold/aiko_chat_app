@@ -1085,7 +1085,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   }
 }
 
-class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
+class $ChannelsTable extends Channels
+    with TableInfo<$ChannelsTable, ChannelRow> {
   @override
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
@@ -1137,7 +1138,7 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   static const String $name = 'channels';
   @override
   VerificationContext validateIntegrity(
-    Insertable<Channel> instance, {
+    Insertable<ChannelRow> instance, {
     bool isInserting = false,
   }) {
     final context = VerificationContext();
@@ -1178,9 +1179,9 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   @override
   Set<GeneratedColumn> get $primaryKey => {id};
   @override
-  Channel map(Map<String, dynamic> data, {String? tablePrefix}) {
+  ChannelRow map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
-    return Channel(
+    return ChannelRow(
       id: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}id'],
@@ -1206,12 +1207,12 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   }
 }
 
-class Channel extends DataClass implements Insertable<Channel> {
+class ChannelRow extends DataClass implements Insertable<ChannelRow> {
   final String id;
   final String name;
   final String kind;
   final String? aikoChannel;
-  const Channel({
+  const ChannelRow({
     required this.id,
     required this.name,
     required this.kind,
@@ -1240,12 +1241,12 @@ class Channel extends DataClass implements Insertable<Channel> {
     );
   }
 
-  factory Channel.fromJson(
+  factory ChannelRow.fromJson(
     Map<String, dynamic> json, {
     ValueSerializer? serializer,
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
-    return Channel(
+    return ChannelRow(
       id: serializer.fromJson<String>(json['id']),
       name: serializer.fromJson<String>(json['name']),
       kind: serializer.fromJson<String>(json['kind']),
@@ -1263,19 +1264,19 @@ class Channel extends DataClass implements Insertable<Channel> {
     };
   }
 
-  Channel copyWith({
+  ChannelRow copyWith({
     String? id,
     String? name,
     String? kind,
     Value<String?> aikoChannel = const Value.absent(),
-  }) => Channel(
+  }) => ChannelRow(
     id: id ?? this.id,
     name: name ?? this.name,
     kind: kind ?? this.kind,
     aikoChannel: aikoChannel.present ? aikoChannel.value : this.aikoChannel,
   );
-  Channel copyWithCompanion(ChannelsCompanion data) {
-    return Channel(
+  ChannelRow copyWithCompanion(ChannelsCompanion data) {
+    return ChannelRow(
       id: data.id.present ? data.id.value : this.id,
       name: data.name.present ? data.name.value : this.name,
       kind: data.kind.present ? data.kind.value : this.kind,
@@ -1287,7 +1288,7 @@ class Channel extends DataClass implements Insertable<Channel> {
 
   @override
   String toString() {
-    return (StringBuffer('Channel(')
+    return (StringBuffer('ChannelRow(')
           ..write('id: $id, ')
           ..write('name: $name, ')
           ..write('kind: $kind, ')
@@ -1301,14 +1302,14 @@ class Channel extends DataClass implements Insertable<Channel> {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is Channel &&
+      (other is ChannelRow &&
           other.id == this.id &&
           other.name == this.name &&
           other.kind == this.kind &&
           other.aikoChannel == this.aikoChannel);
 }
 
-class ChannelsCompanion extends UpdateCompanion<Channel> {
+class ChannelsCompanion extends UpdateCompanion<ChannelRow> {
   final Value<String> id;
   final Value<String> name;
   final Value<String> kind;
@@ -1330,7 +1331,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
   }) : id = Value(id),
        name = Value(name),
        kind = Value(kind);
-  static Insertable<Channel> custom({
+  static Insertable<ChannelRow> custom({
     Expression<String>? id,
     Expression<String>? name,
     Expression<String>? kind,
@@ -2230,14 +2231,17 @@ class $$ChannelsTableTableManager
         RootTableManager<
           _$DriftCache,
           $ChannelsTable,
-          Channel,
+          ChannelRow,
           $$ChannelsTableFilterComposer,
           $$ChannelsTableOrderingComposer,
           $$ChannelsTableAnnotationComposer,
           $$ChannelsTableCreateCompanionBuilder,
           $$ChannelsTableUpdateCompanionBuilder,
-          (Channel, BaseReferences<_$DriftCache, $ChannelsTable, Channel>),
-          Channel,
+          (
+            ChannelRow,
+            BaseReferences<_$DriftCache, $ChannelsTable, ChannelRow>,
+          ),
+          ChannelRow,
           PrefetchHooks Function()
         > {
   $$ChannelsTableTableManager(_$DriftCache db, $ChannelsTable table)
@@ -2291,14 +2295,14 @@ typedef $$ChannelsTableProcessedTableManager =
     ProcessedTableManager<
       _$DriftCache,
       $ChannelsTable,
-      Channel,
+      ChannelRow,
       $$ChannelsTableFilterComposer,
       $$ChannelsTableOrderingComposer,
       $$ChannelsTableAnnotationComposer,
       $$ChannelsTableCreateCompanionBuilder,
       $$ChannelsTableUpdateCompanionBuilder,
-      (Channel, BaseReferences<_$DriftCache, $ChannelsTable, Channel>),
-      Channel,
+      (ChannelRow, BaseReferences<_$DriftCache, $ChannelsTable, ChannelRow>),
+      ChannelRow,
       PrefetchHooks Function()
     >;
 typedef $$SyncMetaTableCreateCompanionBuilder =
