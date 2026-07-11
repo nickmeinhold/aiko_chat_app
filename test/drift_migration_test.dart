@@ -17,6 +17,7 @@
 import 'dart:io';
 
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
+import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -54,9 +55,10 @@ void main() {
 
     // 1. Build the CURRENT (v4) schema, then hand-downgrade to v3.
     final v3 = DriftCache(NativeDatabase(file));
-    await v3.select(v3.channels).get(); // force onCreate (createAll @ v4)
+    await v3.select(v3.channels).get(); // force onCreate (createAll @ current)
     await v3.customStatement('ALTER TABLE messages DROP COLUMN signed_client_msg_id');
     await v3.customStatement('ALTER TABLE messages DROP COLUMN origin_crypto_valid');
+    await v3.customStatement('ALTER TABLE channels DROP COLUMN ordinal'); // v5 col
     await insertBaselineRow(v3, 'row-v3');
     await v3.customStatement('PRAGMA user_version = 3');
     await v3.close();
@@ -88,6 +90,34 @@ void main() {
     expect(fresh.originCryptoValid, 1);
   });
 
+  test('v4 -> v5 upgrade adds channels.ordinal, keeping existing channel rows',
+      () async {
+    final file = dbFile('v4');
+
+    // Downgrade to v4: drop only the v5 channels.ordinal column, seed a channel.
+    final v4 = DriftCache(NativeDatabase(file));
+    await v4.select(v4.channels).get();
+    await v4.customStatement('ALTER TABLE channels DROP COLUMN ordinal');
+    await v4.customStatement(
+        "INSERT INTO channels (id, name, kind) VALUES ('c-old', 'general', 'standard')");
+    await v4.customStatement('PRAGMA user_version = 4');
+    await v4.close();
+
+    // Reopen -> onUpgrade(from: 4) runs the from<5 addColumn(channels.ordinal).
+    final v5 = DriftCache(NativeDatabase(file));
+    addTearDown(v5.close);
+
+    final channels = await v5.readChannels();
+    expect(channels.length, 1, reason: 'the pre-v5 channel row survives');
+    expect(channels.single.id, 'c-old');
+    // The added ordinal column is really there + usable by a fresh save.
+    await v5.saveChannels(const [
+      Channel(id: 'a', name: 'A', kind: ChannelKind.standard),
+      Channel(id: 'b', name: 'B', kind: ChannelKind.standard),
+    ]);
+    expect((await v5.readChannels()).map((c) => c.id).toList(), ['a', 'b']);
+  });
+
   test('v2 -> v4 upgrade adds the v3 signing columns AND the v4 wire columns',
       () async {
     final file = dbFile('v2');
@@ -105,6 +135,7 @@ void main() {
     ]) {
       await v2.customStatement('ALTER TABLE messages DROP COLUMN $col');
     }
+    await v2.customStatement('ALTER TABLE channels DROP COLUMN ordinal'); // v5 col
     await insertBaselineRow(v2, 'row-v2');
     await v2.customStatement('PRAGMA user_version = 2');
     await v2.close();
@@ -143,6 +174,7 @@ void main() {
     ]) {
       await v1.customStatement('ALTER TABLE messages DROP COLUMN $col');
     }
+    await v1.customStatement('ALTER TABLE channels DROP COLUMN ordinal'); // v5 col
     await insertBaselineRow(v1, 'row-v1');
     await v1.customStatement('PRAGMA user_version = 1');
     await v1.close();

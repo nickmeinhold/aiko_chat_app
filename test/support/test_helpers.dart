@@ -1,5 +1,6 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
+import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
 import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
@@ -108,6 +109,17 @@ ProviderContainer makeContainer({
     // so tests neither touch a platform channel nor leak the cached user across
     // tests via the shared testPrefs.
     cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
+    // The NetworkStatusBanner (login + chat) reads connectivity + reachability;
+    // fake both so widget tests never touch the connectivity_plus platform
+    // channel or the network. Default online + reachable → no banner, behaviour
+    // unchanged for existing tests.
+    connectivityServiceProvider
+        .overrideWithValue(FakeConnectivityService()),
+    reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
+    // The real gatewayReachableProvider polls on a 5s Timer loop; stub it with a
+    // one-shot reachable stream so widget tests don't trip "pending timer" at
+    // teardown. (Its derived logic is covered in network_status_test.)
+    gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
     // The real cacheProvider is now file-backed via path_provider, which has no
     // platform channel under flutter_test. Widget tests get an in-memory cache
     // that, like the real provider, is disposed and recreated across auth

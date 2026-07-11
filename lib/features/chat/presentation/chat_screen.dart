@@ -1,12 +1,11 @@
-import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/providers.dart';
+import '../../../core/network/network_status_banner.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
-import '../data/transport/chat_transport.dart';
 import '../domain/message.dart';
 
 /// The single-channel Phase-1 chat surface: channel header + logout, a thin
@@ -35,47 +34,35 @@ class ChatScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: channelsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load channels.\n$e')),
-        data: (channels) {
-          final channel = channels.firstOrNull;
-          if (channel == null) {
-            return const Center(child: Text('No channels yet.'));
-          }
-          return Column(
-            children: [
-              const ConnectionBanner(),
-              Expanded(child: MessageList(channelId: channel.id)),
-              Composer(channelId: channel.id),
-            ],
-          );
-        },
+      // The network banner lives ABOVE the channels branch so it stays visible
+      // in every state — including the offline empty-cache case ("No channels
+      // yet"), where it's the only thing explaining WHY the workspace looks empty
+      // (Carnot, PR #72). Without this, an offline first-launch reads as a real
+      // empty account rather than an offline one.
+      body: Column(
+        children: [
+          const NetworkStatusBanner(),
+          Expanded(
+            child: channelsAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) =>
+                  Center(child: Text('Could not load channels.\n$e')),
+              data: (channels) {
+                final channel = channels.firstOrNull;
+                if (channel == null) {
+                  return const Center(child: Text('No channels yet.'));
+                }
+                return Column(
+                  children: [
+                    Expanded(child: MessageList(channelId: channel.id)),
+                    Composer(channelId: channel.id),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
       ),
-    );
-  }
-}
-
-/// A thin status strip shown only while the realtime link is not `connected`.
-/// `unauthenticated` is intentionally NOT surfaced here — the auth controller
-/// turns that into a logout, so the router has already left this screen.
-class ConnectionBanner extends ConsumerWidget {
-  const ConnectionBanner({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(connectionStateProvider).value;
-    final (String label, Color color)? banner = switch (state) {
-      ConnectionState.connecting => ('Connecting…', Colors.orange),
-      ConnectionState.disconnected => ('Offline — reconnecting…', Colors.grey),
-      _ => null, // connected / unauthenticated / null → no banner
-    };
-    if (banner == null) return const SizedBox.shrink();
-    return Container(
-      width: double.infinity,
-      color: banner.$2.withValues(alpha: 0.18),
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Text(banner.$1, textAlign: TextAlign.center),
     );
   }
 }

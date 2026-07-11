@@ -15,6 +15,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 
+import '../../domain/channel.dart';
 import '../../domain/message.dart';
 import '../../domain/message_signing.dart';
 import '../../domain/origin_envelope.dart';
@@ -95,12 +96,21 @@ class Messages extends Table {
   Set<Column> get primaryKey => {clientTempId};
 }
 
-/// The `channels` table (CH1 channel-list sync is its only Phase-1 writer).
+/// The `channels` table — the offline-first channel-list cache. `ChannelRow`
+/// (not the auto-named `Channel`, which would collide with the domain type, same
+/// reason [Messages] uses `MessageRow`).
+@DataClassName('ChannelRow')
 class Channels extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();
   TextColumn get kind => text()();
   TextColumn get aikoChannel => text().nullable()();
+
+  /// The channel's position in the authoritative server list, so the offline
+  /// read replays the SAME order the online fetch would (the UI picks
+  /// `channels.firstOrNull` as the default channel — a different offline order
+  /// would silently pick a different default). Set from the list index on save.
+  IntColumn get ordinal => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -129,7 +139,7 @@ class DriftCache extends _$DriftCache {
   DriftCache(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -152,8 +162,59 @@ class DriftCache extends _$DriftCache {
             await m.addColumn(messages, messages.signedClientMsgId);
             await m.addColumn(messages, messages.originCryptoValid);
           }
+          // v4 -> v5: channel-list ordinal so the offline read preserves the
+          // authoritative server order (default 0 — self-heals on the next
+          // saveChannels, which rewrites every row's ordinal).
+          if (from < 5) await m.addColumn(channels, channels.ordinal);
         },
       );
+
+  // --- channel-list cache (offline-first) -----------------------------------
+
+  /// Replace the cached channel list with [channels]. The server's list is
+  /// AUTHORITATIVE, so this is a full replace in one transaction (a channel the
+  /// user can no longer see must disappear from the cache too — a stale local
+  /// row for a gone channel is drift wearing a tombstone). Called after a
+  /// successful `listChannels()`; the offline read below serves it back.
+  Future<void> saveChannels(List<Channel> channels) async {
+    await transaction(() async {
+      await delete(this.channels).go();
+      await batch((b) => b.insertAll(
+            this.channels,
+            channels.indexed.map((e) => ChannelsCompanion.insert(
+                  id: e.$2.id,
+                  name: e.$2.name,
+                  kind: e.$2.kind.wire,
+                  aikoChannel: Value(e.$2.aikoChannel),
+                  ordinal: Value(e.$1), // preserve authoritative list order
+                )),
+          ));
+    });
+  }
+
+  /// The cached channel list — the offline fallback when `listChannels()` can't
+  /// reach the gateway. Empty when nothing has been cached yet (first-ever launch
+  /// offline): the UI shows an empty list, never the raw-error screen.
+  Future<List<Channel>> readChannels() async {
+    final rows = await (select(channels)
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.ordinal),
+            // Deterministic tiebreak: pre-v5 rows all migrate to ordinal 0, so
+            // without a secondary key an immediately-offline migrated user could
+            // get nondeterministic default-channel selection (Carnot, PR #72).
+            // Self-heals on the first online saveChannels (real indexes).
+            (t) => OrderingTerm.asc(t.id),
+          ]))
+        .get();
+    return rows
+        .map((r) => Channel(
+              id: r.id,
+              name: r.name,
+              kind: ChannelKind.fromWire(r.kind),
+              aikoChannel: r.aikoChannel,
+            ))
+        .toList();
+  }
 
   // --- conversion -----------------------------------------------------------
 

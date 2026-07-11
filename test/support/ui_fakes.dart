@@ -33,6 +33,10 @@ class FakeRestApi implements ChatRestApi {
   /// If set, `me()` (cold-start restore) throws this.
   Object? meThrows;
 
+  /// If set, `listChannels()` throws this (e.g. `NetworkUnavailable` to exercise
+  /// the offline channel-cache fallback).
+  Object? listChannelsThrows;
+
   /// If set, invoked INSIDE `me()` before it returns/throws — lets a test
   /// simulate a concurrent event (e.g. a terminal `unauthenticated` clearing
   /// tokens) racing the restore's `me()` call.
@@ -144,7 +148,10 @@ class FakeRestApi implements ChatRestApi {
   }
 
   @override
-  Future<List<Channel>> listChannels() async => channels;
+  Future<List<Channel>> listChannels() async {
+    if (listChannelsThrows != null) throw listChannelsThrows!;
+    return channels;
+  }
 
   @override
   Future<HistoryPage> getHistory(String channelId,

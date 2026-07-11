@@ -1085,7 +1085,8 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   }
 }
 
-class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
+class $ChannelsTable extends Channels
+    with TableInfo<$ChannelsTable, ChannelRow> {
   @override
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
@@ -1128,8 +1129,20 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _ordinalMeta = const VerificationMeta(
+    'ordinal',
+  );
   @override
-  List<GeneratedColumn> get $columns => [id, name, kind, aikoChannel];
+  late final GeneratedColumn<int> ordinal = GeneratedColumn<int>(
+    'ordinal',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, name, kind, aikoChannel, ordinal];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1137,7 +1150,7 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   static const String $name = 'channels';
   @override
   VerificationContext validateIntegrity(
-    Insertable<Channel> instance, {
+    Insertable<ChannelRow> instance, {
     bool isInserting = false,
   }) {
     final context = VerificationContext();
@@ -1172,15 +1185,21 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         ),
       );
     }
+    if (data.containsKey('ordinal')) {
+      context.handle(
+        _ordinalMeta,
+        ordinal.isAcceptableOrUnknown(data['ordinal']!, _ordinalMeta),
+      );
+    }
     return context;
   }
 
   @override
   Set<GeneratedColumn> get $primaryKey => {id};
   @override
-  Channel map(Map<String, dynamic> data, {String? tablePrefix}) {
+  ChannelRow map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
-    return Channel(
+    return ChannelRow(
       id: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}id'],
@@ -1197,6 +1216,10 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
         DriftSqlType.string,
         data['${effectivePrefix}aiko_channel'],
       ),
+      ordinal: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}ordinal'],
+      )!,
     );
   }
 
@@ -1206,16 +1229,23 @@ class $ChannelsTable extends Channels with TableInfo<$ChannelsTable, Channel> {
   }
 }
 
-class Channel extends DataClass implements Insertable<Channel> {
+class ChannelRow extends DataClass implements Insertable<ChannelRow> {
   final String id;
   final String name;
   final String kind;
   final String? aikoChannel;
-  const Channel({
+
+  /// The channel's position in the authoritative server list, so the offline
+  /// read replays the SAME order the online fetch would (the UI picks
+  /// `channels.firstOrNull` as the default channel — a different offline order
+  /// would silently pick a different default). Set from the list index on save.
+  final int ordinal;
+  const ChannelRow({
     required this.id,
     required this.name,
     required this.kind,
     this.aikoChannel,
+    required this.ordinal,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1226,6 +1256,7 @@ class Channel extends DataClass implements Insertable<Channel> {
     if (!nullToAbsent || aikoChannel != null) {
       map['aiko_channel'] = Variable<String>(aikoChannel);
     }
+    map['ordinal'] = Variable<int>(ordinal);
     return map;
   }
 
@@ -1237,19 +1268,21 @@ class Channel extends DataClass implements Insertable<Channel> {
       aikoChannel: aikoChannel == null && nullToAbsent
           ? const Value.absent()
           : Value(aikoChannel),
+      ordinal: Value(ordinal),
     );
   }
 
-  factory Channel.fromJson(
+  factory ChannelRow.fromJson(
     Map<String, dynamic> json, {
     ValueSerializer? serializer,
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
-    return Channel(
+    return ChannelRow(
       id: serializer.fromJson<String>(json['id']),
       name: serializer.fromJson<String>(json['name']),
       kind: serializer.fromJson<String>(json['kind']),
       aikoChannel: serializer.fromJson<String?>(json['aikoChannel']),
+      ordinal: serializer.fromJson<int>(json['ordinal']),
     );
   }
   @override
@@ -1260,65 +1293,73 @@ class Channel extends DataClass implements Insertable<Channel> {
       'name': serializer.toJson<String>(name),
       'kind': serializer.toJson<String>(kind),
       'aikoChannel': serializer.toJson<String?>(aikoChannel),
+      'ordinal': serializer.toJson<int>(ordinal),
     };
   }
 
-  Channel copyWith({
+  ChannelRow copyWith({
     String? id,
     String? name,
     String? kind,
     Value<String?> aikoChannel = const Value.absent(),
-  }) => Channel(
+    int? ordinal,
+  }) => ChannelRow(
     id: id ?? this.id,
     name: name ?? this.name,
     kind: kind ?? this.kind,
     aikoChannel: aikoChannel.present ? aikoChannel.value : this.aikoChannel,
+    ordinal: ordinal ?? this.ordinal,
   );
-  Channel copyWithCompanion(ChannelsCompanion data) {
-    return Channel(
+  ChannelRow copyWithCompanion(ChannelsCompanion data) {
+    return ChannelRow(
       id: data.id.present ? data.id.value : this.id,
       name: data.name.present ? data.name.value : this.name,
       kind: data.kind.present ? data.kind.value : this.kind,
       aikoChannel: data.aikoChannel.present
           ? data.aikoChannel.value
           : this.aikoChannel,
+      ordinal: data.ordinal.present ? data.ordinal.value : this.ordinal,
     );
   }
 
   @override
   String toString() {
-    return (StringBuffer('Channel(')
+    return (StringBuffer('ChannelRow(')
           ..write('id: $id, ')
           ..write('name: $name, ')
           ..write('kind: $kind, ')
-          ..write('aikoChannel: $aikoChannel')
+          ..write('aikoChannel: $aikoChannel, ')
+          ..write('ordinal: $ordinal')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, name, kind, aikoChannel);
+  int get hashCode => Object.hash(id, name, kind, aikoChannel, ordinal);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is Channel &&
+      (other is ChannelRow &&
           other.id == this.id &&
           other.name == this.name &&
           other.kind == this.kind &&
-          other.aikoChannel == this.aikoChannel);
+          other.aikoChannel == this.aikoChannel &&
+          other.ordinal == this.ordinal);
 }
 
-class ChannelsCompanion extends UpdateCompanion<Channel> {
+class ChannelsCompanion extends UpdateCompanion<ChannelRow> {
   final Value<String> id;
   final Value<String> name;
   final Value<String> kind;
   final Value<String?> aikoChannel;
+  final Value<int> ordinal;
   final Value<int> rowid;
   const ChannelsCompanion({
     this.id = const Value.absent(),
     this.name = const Value.absent(),
     this.kind = const Value.absent(),
     this.aikoChannel = const Value.absent(),
+    this.ordinal = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChannelsCompanion.insert({
@@ -1326,15 +1367,17 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     required String name,
     required String kind,
     this.aikoChannel = const Value.absent(),
+    this.ordinal = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        name = Value(name),
        kind = Value(kind);
-  static Insertable<Channel> custom({
+  static Insertable<ChannelRow> custom({
     Expression<String>? id,
     Expression<String>? name,
     Expression<String>? kind,
     Expression<String>? aikoChannel,
+    Expression<int>? ordinal,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1342,6 +1385,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       if (name != null) 'name': name,
       if (kind != null) 'kind': kind,
       if (aikoChannel != null) 'aiko_channel': aikoChannel,
+      if (ordinal != null) 'ordinal': ordinal,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1351,6 +1395,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     Value<String>? name,
     Value<String>? kind,
     Value<String?>? aikoChannel,
+    Value<int>? ordinal,
     Value<int>? rowid,
   }) {
     return ChannelsCompanion(
@@ -1358,6 +1403,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
       name: name ?? this.name,
       kind: kind ?? this.kind,
       aikoChannel: aikoChannel ?? this.aikoChannel,
+      ordinal: ordinal ?? this.ordinal,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1377,6 +1423,9 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
     if (aikoChannel.present) {
       map['aiko_channel'] = Variable<String>(aikoChannel.value);
     }
+    if (ordinal.present) {
+      map['ordinal'] = Variable<int>(ordinal.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1390,6 +1439,7 @@ class ChannelsCompanion extends UpdateCompanion<Channel> {
           ..write('name: $name, ')
           ..write('kind: $kind, ')
           ..write('aikoChannel: $aikoChannel, ')
+          ..write('ordinal: $ordinal, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2130,6 +2180,7 @@ typedef $$ChannelsTableCreateCompanionBuilder =
       required String name,
       required String kind,
       Value<String?> aikoChannel,
+      Value<int> ordinal,
       Value<int> rowid,
     });
 typedef $$ChannelsTableUpdateCompanionBuilder =
@@ -2138,6 +2189,7 @@ typedef $$ChannelsTableUpdateCompanionBuilder =
       Value<String> name,
       Value<String> kind,
       Value<String?> aikoChannel,
+      Value<int> ordinal,
       Value<int> rowid,
     });
 
@@ -2167,6 +2219,11 @@ class $$ChannelsTableFilterComposer
 
   ColumnFilters<String> get aikoChannel => $composableBuilder(
     column: $table.aikoChannel,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get ordinal => $composableBuilder(
+    column: $table.ordinal,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -2199,6 +2256,11 @@ class $$ChannelsTableOrderingComposer
     column: $table.aikoChannel,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get ordinal => $composableBuilder(
+    column: $table.ordinal,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$ChannelsTableAnnotationComposer
@@ -2223,6 +2285,9 @@ class $$ChannelsTableAnnotationComposer
     column: $table.aikoChannel,
     builder: (column) => column,
   );
+
+  GeneratedColumn<int> get ordinal =>
+      $composableBuilder(column: $table.ordinal, builder: (column) => column);
 }
 
 class $$ChannelsTableTableManager
@@ -2230,14 +2295,17 @@ class $$ChannelsTableTableManager
         RootTableManager<
           _$DriftCache,
           $ChannelsTable,
-          Channel,
+          ChannelRow,
           $$ChannelsTableFilterComposer,
           $$ChannelsTableOrderingComposer,
           $$ChannelsTableAnnotationComposer,
           $$ChannelsTableCreateCompanionBuilder,
           $$ChannelsTableUpdateCompanionBuilder,
-          (Channel, BaseReferences<_$DriftCache, $ChannelsTable, Channel>),
-          Channel,
+          (
+            ChannelRow,
+            BaseReferences<_$DriftCache, $ChannelsTable, ChannelRow>,
+          ),
+          ChannelRow,
           PrefetchHooks Function()
         > {
   $$ChannelsTableTableManager(_$DriftCache db, $ChannelsTable table)
@@ -2257,12 +2325,14 @@ class $$ChannelsTableTableManager
                 Value<String> name = const Value.absent(),
                 Value<String> kind = const Value.absent(),
                 Value<String?> aikoChannel = const Value.absent(),
+                Value<int> ordinal = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion(
                 id: id,
                 name: name,
                 kind: kind,
                 aikoChannel: aikoChannel,
+                ordinal: ordinal,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2271,12 +2341,14 @@ class $$ChannelsTableTableManager
                 required String name,
                 required String kind,
                 Value<String?> aikoChannel = const Value.absent(),
+                Value<int> ordinal = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChannelsCompanion.insert(
                 id: id,
                 name: name,
                 kind: kind,
                 aikoChannel: aikoChannel,
+                ordinal: ordinal,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -2291,14 +2363,14 @@ typedef $$ChannelsTableProcessedTableManager =
     ProcessedTableManager<
       _$DriftCache,
       $ChannelsTable,
-      Channel,
+      ChannelRow,
       $$ChannelsTableFilterComposer,
       $$ChannelsTableOrderingComposer,
       $$ChannelsTableAnnotationComposer,
       $$ChannelsTableCreateCompanionBuilder,
       $$ChannelsTableUpdateCompanionBuilder,
-      (Channel, BaseReferences<_$DriftCache, $ChannelsTable, Channel>),
-      Channel,
+      (ChannelRow, BaseReferences<_$DriftCache, $ChannelsTable, ChannelRow>),
+      ChannelRow,
       PrefetchHooks Function()
     >;
 typedef $$SyncMetaTableCreateCompanionBuilder =

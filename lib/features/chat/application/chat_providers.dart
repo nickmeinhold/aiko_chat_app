@@ -11,10 +11,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../app/providers.dart';
+import '../../../core/network/network_status.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
 import '../../moderation/application/moderation_controller.dart';
 import '../data/chat_repository.dart';
+import '../data/chat_rest_api.dart' show NetworkUnavailable;
 import '../data/logging_chat_telemetry.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
@@ -38,7 +40,27 @@ final currentUserProvider = Provider<AppUser?>(
 final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) return const [];
-  return ref.watch(restApiProvider).listChannels();
+  // Re-run on a connectivity RECOVERY edge so an offline fallback is not sticky:
+  // a first-ever offline launch returns [] (→ "No channels yet"), and without
+  // this the provider would never refetch when the network returns, stranding
+  // the user (repo/socket never mount). Watching the distinct device-online bool
+  // rebuilds this provider on the offline→online transition, which retries
+  // listChannels() (Carnot, PR #72). `.distinct()` upstream keeps it to real
+  // transitions, not every interface swap.
+  ref.watch(deviceOnlineProvider);
+  final cache = ref.watch(cacheProvider);
+  try {
+    // Server list is authoritative: fetch, then refresh the offline cache.
+    final fresh = await ref.watch(restApiProvider).listChannels();
+    await cache.saveChannels(fresh);
+    return fresh;
+  } on NetworkUnavailable {
+    // Offline (or gateway unreachable): serve the cached list so a restored
+    // user lands in cached chat instead of the "Could not load channels" screen
+    // (task #19). Empty on a first-ever offline launch — an empty list, never a
+    // raw error. The transport still connects/revalidates when the net returns.
+    return cache.readChannels();
+  }
 });
 
 /// The reconcile engine, fully wired and connected. Construction requires the

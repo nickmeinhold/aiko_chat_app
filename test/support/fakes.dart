@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/auth/data/cached_user_store.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/legal/data/eula_store.dart';
@@ -79,6 +80,32 @@ class FakeEulaStore extends EulaStore {
     if (throwOnAccept) throw Exception('persist failed');
     accepted = true;
   }
+}
+
+/// In-memory connectivity: no platform channel. Defaults to online; a test can
+/// seed offline or push changes via [emit].
+class FakeConnectivityService implements ConnectivityService {
+  bool online;
+  final _controller = StreamController<bool>.broadcast();
+  FakeConnectivityService({this.online = true});
+
+  @override
+  Future<bool> isOnline() async => online;
+  @override
+  Stream<bool> get onlineChanges => _controller.stream;
+
+  void emit(bool v) {
+    online = v;
+    _controller.add(v);
+  }
+}
+
+/// In-memory reachability probe: no network. Defaults to reachable.
+class FakeReachabilityProbe implements ReachabilityProbe {
+  bool reachable;
+  FakeReachabilityProbe({this.reachable = true});
+  @override
+  Future<bool> canReach(String httpBaseUrl) async => reachable;
 }
 
 /// Programmable dio adapter: routes each request through [handler].

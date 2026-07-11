@@ -271,14 +271,17 @@ class GatewayRestApi implements ChatRestApi {
     }
   }
 
+  // Wrapped in _mapNetwork so an unreachable gateway surfaces as the domain
+  // NetworkUnavailable — channelsProvider falls back to the cached list on that,
+  // delivering offline-first chat rendering (PR #71 follow-up, task #19).
   @override
-  Future<List<Channel>> listChannels() => _authedCall(() async {
+  Future<List<Channel>> listChannels() => _mapNetwork(() => _authedCall(() async {
         final r = await _authed.get('/v1/channels');
         final list = (_map(r.data)['channels'] as List?) ?? const [];
         return list
             .map((e) => Channel.fromJson((e as Map).cast<String, dynamic>()))
             .toList();
-      });
+      }));
 
   @override
   Future<HistoryPage> getHistory(String channelId,
