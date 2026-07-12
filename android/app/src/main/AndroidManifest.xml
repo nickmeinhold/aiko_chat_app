@@ -1,4 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for ALL network access. Flutter auto-injects this into the
+         debug/profile manifests only, so a RELEASE build (which merges just this
+         `main` manifest) has NO network without it — every request fails and the
+         app reports "can't reach the server". Caught on the first release build
+         run on a real device (vc7 device-verify). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="Aiko Chat"
         android:name="${applicationName}"
