@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 11 — Veilid: the cross-over evaluation (our endgame, already built)</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.thesis { background:#f3f0fb; border-left-color:#7d5fff; font-size:1.02rem; }
+  blockquote.danger { background:#fdf0ef; border-left-color:var(--blocker); }
+  .note { color:var(--muted); font-size:.9rem; }
+  .tag { font-weight:700; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; padding:.1em .5em;
+         border-radius:4px; color:#fff; white-space:nowrap; }
+  .adopt { background:#c0392b; } .cross { background:var(--accent); } .expand { background:#7d5fff; }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.5rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  ul.tight li { margin:.25rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Design 11 — Veilid: the cross-over evaluation</h1>
+
+<blockquote class="danger">
+<strong>DECISION 2026-07-14 (Nick): Veilid is not the substrate.</strong> Rich media — images and video — is a
+first-class product requirement, and a serverless beta DHT-mailbox overlay is the wrong delivery path for large binary
+blobs: DHT records are kilobyte-scale, so media forces lossy out-of-band chunked transfer over exactly the
+<code>app_call</code> layer flagged beta (message loss, no notifications, worse on cellular). Rich media needs a real
+content store (object storage + signed fetch), which is <strong>island</strong> territory. <strong>Path: build our own
+island with a blob store.</strong> No adopt, no cross-over-the-network. What survives this decision: the VLD0 crypto
+precedent already folded into the identity crucible (a design citation, never a network dependency). What it costs:
+metadata-privacy via private-routing (§5 "expand", task #28) loses its only cheap path and now needs its own answer.
+What stays live regardless: background delivery / push-wake (#29) — media makes notifications matter <em>more</em>. The
+evaluation below is retained as the reasoning of record.
+</blockquote>
+
+<p class="lead">Veilid (Cult of the Dead Cow, DEF CON 31, 2023) is a Rust P2P framework — "Tor + IPFS" — with official
+<strong>Flutter</strong> bindings, and its flagship example app <strong>VeilidChat</strong> is a Flutter, end-to-end-encrypted,
+serverless chat. That is almost exactly aiko's use case, built intentionally: chat was Veilid's primary design target. This
+doc asks the uncomfortable, exciting question — <em>should aiko build on Veilid, steal from it, or ignore it?</em> — grounds
+the answer in Veilid's own docs, and lands a recommendation the tasks below can execute.</p>
+
+<div class="scope">
+  <strong>Status:</strong> <em>DECIDED 2026-07-14 — Veilid rejected as substrate (see banner above); build our own island
+  with a blob store.</em> Evaluation captured 2026-07-13 from a live design session; retained as the reasoning of record.<br>
+  <strong>Companion to</strong> <a href="06-sovereign-identity-federation.html">Design 06</a> (federation north-star),
+  <a href="07-notifications-federation-ready.html">Design 07</a> (notifications), <a href="08-phone-as-self-not-server.html">Design 08</a>
+  (phone-as-self), <a href="10-island-gateway-split.html">Design 10</a> (island/gateway split). Forge sibling:
+  <code>docs/crucible/pop-identity-binding/</code> (the identity keystone).<br>
+  <strong>Tracked as</strong> task #26 (this evaluation) + #28 (metadata privacy) + #29 (mobile background delivery) +
+  #24 (islands) + #25 (E2EE).<br>
+  <strong>Tag legend:</strong> <span class="tag adopt">adopt</span> take the substrate ·
+  <span class="tag cross">cross-over</span> steal the pattern · <span class="tag expand">expand</span> a capability we lack.
+</div>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#thesis">The thesis — our endgame, already built</a></li>
+  <li><a href="#anchor">The physics it does not repeal — the availability anchor</a></li>
+  <li><a href="#breaker">The make-or-break — no background delivery</a></li>
+  <li><a href="#arms">The three arms — adopt / cross-over / build</a></li>
+  <li><a href="#loot">The loot — what to steal, and how</a></li>
+  <li><a href="#diff">The differentiation — what aiko is that VeilidChat isn't</a></li>
+  <li><a href="#recommendation">Recommendation + open questions</a></li>
+</ol>
+</nav>
+
+<h2 id="thesis">1 · The thesis — our endgame, already built</h2>
+<blockquote class="thesis">
+Veilid is the <strong>productized, battle-tested version of aiko's sovereign-federation endgame.</strong> Node identity is a
+keypair (our <a href="06-sovereign-identity-federation.html">Design 06</a> / task #21). Messages are signed by the sender and
+encrypted per-recipient, stored in a multi-writer DHT as a <em>mailbox</em> read on reconnect (our #24 untrusted-integrity +
+#25 untrusted-confidentiality, combined). Its "relay/capable node" is our <em>island</em>. And it ships the one capability we
+don't even have on the roadmap: onion-style <strong>private routing</strong> — metadata privacy. It is not inspiration; it is a
+reference implementation of most of what we intend to build.
+</blockquote>
+
+<p>The alignment is not coincidence. Veilid was designed with chat as the primary use case, so the fit with aiko is
+<em>intentional</em>, not lucky. That cuts two ways — it validates our architecture <em>and</em> forces an honest question about
+differentiation (§6).</p>
+
+<h3>Why the two-key split we already have is not an accident</h3>
+<p>A recurring temptation is "why not use the passkey for everything?" Veilid's design answers it from first principles, the
+same way our codebase does: <strong>WebAuthn passkeys cannot sign arbitrary bytes</strong> — the private key is non-extractable
+and locked inside the ceremony/origin. So you <em>cannot</em> use a passkey to sign messages or DID assertions. That is exactly
+why aiko carries a separate native Ed25519 sovereign key (<code>lib/services/sovereign_key_store.dart</code>). Veilid's
+<strong>VLD0</strong> crypto suite makes the same call: separate <strong>Ed25519</strong> (identity/signing) and
+<strong>X25519</strong> (key agreement), plus BLAKE3, XChaCha20-Poly1305, Argon2id — a domain-matched precedent for the
+identity crucible's key-material decision (a separate X25519 key, not a birational conversion).</p>
+
+<h2 id="anchor">2 · The physics it does not repeal — the availability anchor</h2>
+<p>My initial claim in the session was "phones are the worst possible DHT nodes." True for <em>vanilla Kademlia</em>
+(BitTorrent/IPFS): phones can't accept inbound connections, churn IPs, and get their sockets killed by the OS. Veilid is the
+counterexample — but note precisely <em>how</em> it wins, because it is the punchline of our whole topology:</p>
+
+<blockquote class="invariant">
+Veilid does not make the phone a good DHT node. It <strong>splits the role</strong>: phones are lightweight participants
+reachable via <em>relays</em> and <em>private routes</em> (the receiver publishes a route, not an IP; NAT is traversed by the
+overlay), while higher-capability nodes carry routing and storage. The <strong>availability anchor</strong> — the thing that
+must be awake when your phone is asleep — is not eliminated. It is turned into a <em>permissionless, swappable relay role</em>
+that anyone can run. That is exactly our "demote the gateway to a replaceable untrusted relay" conclusion, shipped since 2023.
+Our <em>island</em> is Veilid's relay/capable node.
+</blockquote>
+
+<p>No cryptography repeals "someone must be awake." Veilid just made the awake-thing anonymous, permissionless, and — because
+messages are signed and encrypted — <strong>trustless</strong>. Persistence collapses from a trust problem into a replication
+problem. That is the whole prize the sovereign-signing work already bought us.</p>
+
+<h2 id="breaker">3 · The make-or-break — no background delivery</h2>
+<p>The single question that decides adopt-vs-cross-over is: <em>how does a serverless chat receive a message on iOS when
+backgrounded?</em> iOS kills background sockets, so there is no always-on connection to receive a DHT-mailbox write in real
+time. Veilid's own Known Issues page (verified 2026-07-13) answers it plainly:</p>
+
+<blockquote class="danger">
+"Notifications are not enabled yet. <strong>You have to open the app and check for new messages.</strong>" — plus documented
+"lag, invitations that don't complete, slow message sending, message loss, repeated messages," and "more problematic on cellular
+than wifi." VeilidChat is <em>beta</em>.
+</blockquote>
+
+<p>This is the availability-anchor physics wearing an iOS hat: the phone must not only have a relay holding its message, it must
+be <em>woken</em> to receive it. Even the best-engineered serverless chat has not beaten this — it defers delivery to app-open,
+putting the pain on the <em>user</em> rather than infrastructure. The honest consequence: <strong>our own islands hit the same
+wall</strong> (task #29). "Build our own" does not escape it. The realistic escape is a minimal push anchor (APNs/FCM) that
+carries only a <em>wake signal</em>, not content — E2EE keeps that relay blind to bodies.</p>
+
+<h2 id="arms">4 · The three arms — adopt / cross-over / build</h2>
+<table>
+<thead><tr><th>Arm</th><th>What it means</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td><span class="tag adopt">adopt</span> Veilid as substrate</td>
+    <td>Subsumes #24 (islands/transport) + #25 (E2EE) + the transport half of #21; metadata privacy for free. Massive roadmap collapse.</td>
+    <td><strong>Dented.</strong> No background delivery, beta reliability, a bet on a young/small overlay. Re-evaluate when they ship notifications + the network matures.</td></tr>
+<tr><td><span class="tag cross">cross-over</span> the patterns</td>
+    <td>Keep our MQTT/gateway stack; steal VLD0 crypto, the DHT-mailbox pattern, and private-route-lite.</td>
+    <td><strong>Recommended — start here.</strong> Low risk, keeps control, keeps the one-script-mosquitto-island simplicity.</td></tr>
+<tr><td>build our own</td>
+    <td>The current plan (Designs 06–10 + the identity crucible).</td>
+    <td>Default. But it inherits the same mobile-background wall (#29) — cross-over the mitigation regardless.</td></tr>
+</tbody>
+</table>
+<p class="note">Discipline: <em>predict from the instrument, not the reputation.</em> The adopt bet earns a <em>measured</em>
+spike (network reliability, Flutter-binding maturity, does-it-fit-robots), not enthusiasm.</p>
+
+<h2 id="loot">5 · The loot — what to steal, and how</h2>
+<table>
+<thead><tr><th>Feature</th><th>Disposition</th><th>Use for us</th></tr></thead>
+<tbody>
+<tr><td>VLD0 crypto (separate Ed25519 + X25519, domain-separated)</td><td><span class="tag cross">cross-over</span></td>
+    <td>Domain-matched precedent for the identity crucible's key-material Q4 (a separate X25519 key). Already cited in <code>docs/crucible/pop-identity-binding/RESEARCH.md</code>.</td></tr>
+<tr><td>DHT-as-mailbox (signed+encrypted records, read on reconnect)</td><td><span class="tag cross">cross-over</span></td>
+    <td>The concrete pattern for offline delivery / bounded retention (task #12). Transplants onto islands even without Veilid.</td></tr>
+<tr><td>Private routing (safety + private routes)</td><td><span class="tag expand">expand</span></td>
+    <td><strong>Metadata privacy</strong> (task #28) — who-talks-to-whom hidden. The single most differentiating "better than Matrix" capability (Design 06 / #14). We don't have it and hadn't planned it.</td></tr>
+<tr><td>Relay + network-class detection</td><td><span class="tag cross">cross-over</span></td>
+    <td>Validates the island model: phones = lightweight participants, islands = relay+storage. Adopt the conceptual split.</td></tr>
+<tr><td>Flutter bindings + VeilidChat reference app</td><td><span class="tag adopt">adopt</span>-enabler</td>
+    <td>What makes "adopt" tractable rather than fantasy — we're Flutter. The reason the adopt arm is a real option, not a rewrite.</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Aside — why DHT-for-storage is still wrong for us, and where DHT <em>is</em> right</summary>
+<p>A vanilla DHT is a distributed <em>index</em>, not distributed storage or an always-on host: it tells you <em>which node</em>
+holds content X; a node still has to be storing it and awake. It is worst exactly where chat lives — private, low-fanout content
+(your 3am DM has one pinner) evaporates without an anchor; lookups take seconds; participation leaks metadata. Both
+<strong>Nostr</strong> and <strong>SSB</strong> — the two systems closest to our design — evaluated DHT-for-messages and chose
+<em>relays</em> instead. The DHT's right layer is relay <em>discovery</em> (a find-the-node problem), not message storage. Veilid
+threads this needle with a <em>signed, multi-writer, relay-backed</em> DHT — closer to "replicated mailbox on capable nodes" than
+to raw Kademlia.</p>
+</details>
+
+<h2 id="diff">6 · The differentiation — what aiko is that VeilidChat isn't</h2>
+<p>If VeilidChat already exists as the reference sovereign E2EE chat, the honest question is: <em>what is aiko?</em> The answer is
+in the memory graph already, and adopting Veilid makes it <em>cleaner</em>, not moot:</p>
+
+<blockquote class="invariant">
+<strong>Robots are first-class citizens.</strong> VeilidChat is human-to-human. aiko's differentiator is AI participants as
+<em>group members holding keys</em> — and E2EE (#25) makes that literal: the bot is a member with a keypair, not a server reading
+plaintext (<a href="09-sybil-resistance-reputation-not-personhood.html">Design 09</a>: reputation-not-personhood; robots are
+participants aiko exists to include). So the coherent story is not "build a VeilidChat competitor" — it's <strong>adopt the
+substrate, differentiate at the social/AI layer</strong>: Veilid gives sovereign transport + E2EE + metadata privacy; aiko adds
+robot-citizens + reputation + product. That division is cleaner than building the substrate ourselves.
+</blockquote>
+
+<h2 id="recommendation">7 · Recommendation + open questions</h2>
+<blockquote class="thesis">
+<strong>Cross-over now; spike adopt as a measured evaluation; reject nothing.</strong> Steal VLD0 crypto (done, in the identity
+crucible), the DHT-mailbox pattern (#12), and private-route-lite (#28) today. Do <em>not</em> bet production aiko on the live
+Veilid network while background delivery is unsolved and the network is young (#26). Re-open the adopt arm when Veilid ships
+notifications and the overlay matures — at which point it is the single biggest roadmap collapse available and delivers the
+"better than Matrix" claim literally.
+</blockquote>
+
+<p>Open questions to deepen the evaluation (task #26):</p>
+<ul class="tight">
+<li><strong>Mobile background delivery</strong> — the decider. Read the Veilid roadmap (Discord/GitLab) for whether/when
+notifications land. Our own islands need the same answer (#29).</li>
+<li><strong>Group E2EE maturity</strong> — VeilidChat's multi-writer group model vs MLS. Channel chat is group chat; this is the
+hard part of #25.</li>
+<li><strong>Network reliability at our scale</strong> — measured, not assumed. The "beta / message loss / cellular" caveats are
+the instrument reading to trust.</li>
+<li><strong>Does the DHT-mailbox admit a robot member cleanly?</strong> — the differentiation (§6) rests on it.</li>
+</ul>
+
+<p class="note">Authored 2026-07-13 from a live design session (passkeys → pubkey-as-uid → islands → "can we eliminate the
+gateway?" → E2EE → Veilid). Sources: <a href="https://veilid.com/how-it-works/networking/">networking</a>,
+<a href="https://veilid.com/how-it-works/private-routing/">private routing</a>,
+<a href="https://veilid.com/how-it-works/cryptography/">cryptography (VLD0)</a>,
+<a href="https://veilid.com/chat/knownissues/">VeilidChat known issues</a>,
+<a href="https://gitlab.com/veilid/veilidchat">VeilidChat source</a>,
+<a href="https://www.eff.org/deeplinks/2023/12/meet-spritely-and-veilid">EFF</a>. Ecosystem: Hydra (hardened VeilidChat fork),
+OpenArchive Save. Prior art contrast: Nostr (NIP-42), SSB (secret handshake), Matrix.</p>
+
+</body>
+</html>
