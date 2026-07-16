@@ -43,8 +43,17 @@ class FakeChatTransport implements ChatTransport {
   /// path: a reconnect that hit [Unauthorized] disconnects → unauthenticated).
   int disconnectCalls = 0;
 
+  /// Mirrors the production seeded-replay contract (chat_transport.dart): a new
+  /// subscriber immediately receives the current state, then live changes.
+  ConnectionState lastConn = ConnectionState.idle;
+
   @override
-  Stream<ConnectionState> get connectionState => _conn.stream;
+  Stream<ConnectionState> get connectionState => Stream.multi((c) {
+        c.add(lastConn);
+        final sub =
+            _conn.stream.listen(c.add, onError: c.addError, onDone: c.close);
+        c.onCancel = sub.cancel;
+      });
   @override
   Stream<Message> get messages => _messages.stream;
   @override
@@ -93,7 +102,10 @@ class FakeChatTransport implements ChatTransport {
         detail: detail,
         refClientMsgId: refClientMsgId,
       ));
-  void emitConn(ConnectionState s) => _conn.add(s);
+  void emitConn(ConnectionState s) {
+    lastConn = s;
+    _conn.add(s);
+  }
 
   Future<void> dispose() async {
     disposed = true;

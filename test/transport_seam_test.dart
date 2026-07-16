@@ -280,6 +280,27 @@ void main() {
           isTrue);
     });
 
+    test(
+        'connectionState replays the CURRENT state to a late subscriber '
+        '(state, not an event log)', () async {
+      // A consumer that mounts AFTER `connected` fired (e.g. a repository
+      // rebuilt by the gateway-recovery channel refetch, task #16) must still
+      // learn the socket is live — its connected-driven choreography would
+      // otherwise never run.
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => FakeWebSocketChannel(),
+      );
+      expect(await t.connectionState.first, ConnectionState.idle,
+          reason: 'pre-connect subscriber is seeded with idle — no socket has '
+              'been requested yet, which is NOT a server drop (a disconnected '
+              'seed would flash a false "unreachable" banner at startup)');
+      await t.connect();
+      expect(await t.connectionState.first, ConnectionState.connected,
+          reason: 'a late subscriber is seeded with the live state');
+    });
+
     // A well-formed origin (32-byte key, 64-byte sig, id == frame id) passes the
     // real _originWire self-assert and IS serialised onto the wire frame.
     test('sendMessage emits a well-formed origin through the real wire path',
