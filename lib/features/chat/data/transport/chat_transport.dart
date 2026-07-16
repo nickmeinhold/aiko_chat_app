@@ -5,8 +5,11 @@ export 'envelopes.dart' show TransportErrorCode;
 
 /// Realtime connection lifecycle. `unauthenticated` is terminal until the user
 /// re-logs-in (the router watches it → redirect to login); it is distinct from
-/// `disconnected` (a transient drop that will be retried).
-enum ConnectionState { disconnected, connecting, connected, unauthenticated }
+/// `disconnected` (a transient drop that will be retried). `idle` is the
+/// initial "no socket requested yet" state — distinct from `disconnected` so a
+/// consumer sampling the seeded replay before `connect()` was ever called
+/// doesn't misread startup as a server drop (a false "unreachable" banner).
+enum ConnectionState { idle, disconnected, connecting, connected, unauthenticated }
 
 /// Server `ack` decoded — maps our optimistic [clientMsgId] to the server [msgId].
 class AckResult {

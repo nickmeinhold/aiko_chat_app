@@ -292,8 +292,10 @@ void main() {
         tokens: tokens(),
         channelFactory: (uri) => FakeWebSocketChannel(),
       );
-      expect(await t.connectionState.first, ConnectionState.disconnected,
-          reason: 'pre-connect subscriber is seeded with the initial state');
+      expect(await t.connectionState.first, ConnectionState.idle,
+          reason: 'pre-connect subscriber is seeded with idle — no socket has '
+              'been requested yet, which is NOT a server drop (a disconnected '
+              'seed would flash a false "unreachable" banner at startup)');
       await t.connect();
       expect(await t.connectionState.first, ConnectionState.connected,
           reason: 'a late subscriber is seeded with the live state');

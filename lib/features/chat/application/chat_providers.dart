@@ -38,6 +38,19 @@ final currentUserProvider = Provider<AppUser?>(
 /// and a re-login builds them FRESH rather than flushing stale cross-logout
 /// state (which crashed with "setState during build") and never leaves two
 /// repos racing on the one transport singleton (Carnot C2).
+/// One already-connected retry per fallback episode (Tesla, PR #75): when the
+/// fallback arms while the socket is ALREADY live (REST failed but the WSS
+/// never dropped), no future `connected` edge is coming, so we retry once —
+/// latched, or a persistently-down REST would refetch-loop. Lives OUTSIDE
+/// [channelsProvider] because an `invalidateSelf` rebuild would reset any
+/// closure-local flag. Reset on every successful fetch.
+class _ConnectedRetryLatch {
+  bool armed = false;
+}
+
+final _connectedRetryLatchProvider =
+    Provider<_ConnectedRetryLatch>((_) => _ConnectedRetryLatch());
+
 final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) return const [];
@@ -54,27 +67,35 @@ final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
     // Server list is authoritative: fetch, then refresh the offline cache.
     final fresh = await ref.watch(restApiProvider).listChannels();
     await cache.saveChannels(fresh);
+    ref.read(_connectedRetryLatchProvider).armed = false;
     return fresh;
   } on NetworkUnavailable {
     // Offline (or gateway unreachable): serve the cached list so a restored
     // user lands in cached chat instead of the "Could not load channels" screen
-    // (task #19). Empty on a first-ever offline launch — an empty list, never a
-    // raw error. The transport still connects/revalidates when the net returns.
+    // (task #19). Empty on a first-ever offline launch — never a raw error.
     //
-    // GATEWAY-recovery edge (Tesla, PR #72 residual): a server restart or DNS
-    // heal produces NO device-online edge (the interface never changed), so the
-    // deviceOnlineProvider watch above can't un-stick this fallback. The
-    // socket's own reconnect (transport backs off and retries on its own) is
-    // the recovery signal: on a transition TO connected, refetch. Armed ONLY
-    // while serving the fallback — a healthy fetched list never watches
-    // connection state, so routine socket blips cause no refetch churn. Loop-
-    // safe: a successful refetch arms no listener, and connect() on an already-
-    // open socket is a no-op (no fresh `connected` edge is emitted).
-    ref.listen(connectionStateProvider, (prev, next) {
-      if (next.value == ConnectionState.connected &&
-          prev?.value != ConnectionState.connected) {
-        ref.invalidateSelf();
+    // GATEWAY-recovery refetch (Tesla, PR #72 residual + PR #75 round 2). Armed
+    // ONLY while serving the fallback, so a healthy list never watches
+    // connection state (no churn on routine socket blips). Two recovery shapes:
+    //  - TRUE EDGE (non-connected → connected): the transport's own backoff
+    //    reconnect is the recovery signal — refetch, unlatched.
+    //  - ALREADY CONNECTED when the listener fires (`fireImmediately`, or a
+    //    duplicate emission): no edge is ever coming, so retry ONCE via the
+    //    latch — REST-still-down must not self-sustain a refetch loop. Beyond
+    //    that single retry, a REST-down-while-socket-up outage self-heals on
+    //    the next real edge, device-online edge, or screen re-entry (named
+    //    tradeoff: no polling while the socket is healthy).
+    ref.listen(connectionStateProvider, fireImmediately: true, (prev, next) {
+      if (next.value != ConnectionState.connected) return;
+      final prevVal = prev?.value;
+      final isTrueEdge =
+          prevVal != null && prevVal != ConnectionState.connected;
+      if (!isTrueEdge) {
+        final latch = ref.read(_connectedRetryLatchProvider);
+        if (latch.armed) return;
+        latch.armed = true;
       }
+      ref.invalidateSelf();
     });
     return cache.readChannels();
   }

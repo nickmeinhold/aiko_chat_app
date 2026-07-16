@@ -43,7 +43,10 @@ class GatewayTransport implements ChatTransport {
   /// mounts AFTER the `connected` emission (e.g. a repository rebuilt because a
   /// gateway-recovery refetch changed the channel list) must still learn the
   /// socket is live, or its connected-driven choreography never runs.
-  ConnectionState _lastConn = ConnectionState.disconnected;
+  /// Starts `idle` (not `disconnected`): no socket has been REQUESTED yet, and
+  /// seeding a drop-state before `connect()` would flash a false "server
+  /// unreachable" banner on every restored session (cage-match Carnot, PR #75).
+  ConnectionState _lastConn = ConnectionState.idle;
 
   void _setConn(ConnectionState s) {
     _lastConn = s;

@@ -37,6 +37,10 @@ class FakeRestApi implements ChatRestApi {
   /// the offline channel-cache fallback).
   Object? listChannelsThrows;
 
+  /// When true, [listChannelsThrows] is cleared after the first throw — a
+  /// TRANSIENT REST fault (fails once, healed by the time a retry lands).
+  bool listChannelsThrowsOnce = false;
+
   /// If set, invoked INSIDE `me()` before it returns/throws — lets a test
   /// simulate a concurrent event (e.g. a terminal `unauthenticated` clearing
   /// tokens) racing the restore's `me()` call.
@@ -151,7 +155,11 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<List<Channel>> listChannels() async {
     listChannelsCalls++;
-    if (listChannelsThrows != null) throw listChannelsThrows!;
+    if (listChannelsThrows != null) {
+      final e = listChannelsThrows!;
+      if (listChannelsThrowsOnce) listChannelsThrows = null;
+      throw e;
+    }
     return channels;
   }
 

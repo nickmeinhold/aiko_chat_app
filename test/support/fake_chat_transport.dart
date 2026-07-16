@@ -45,7 +45,7 @@ class FakeChatTransport implements ChatTransport {
 
   /// Mirrors the production seeded-replay contract (chat_transport.dart): a new
   /// subscriber immediately receives the current state, then live changes.
-  ConnectionState lastConn = ConnectionState.disconnected;
+  ConnectionState lastConn = ConnectionState.idle;
 
   @override
   Stream<ConnectionState> get connectionState => Stream.multi((c) {
