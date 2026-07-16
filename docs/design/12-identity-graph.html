@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 12 — The identity graph: who stakes, who speaks, who runs</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --accent:#0b5; --rule:#e2e2e2; --code-bg:#f6f8fa; --warn:#b35900; --blocker:#c0392b; }
+  * { box-sizing:border-box; }
+  body { font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); max-width:860px; margin:0 auto; padding:2.5rem 1.5rem 6rem; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .3rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .6rem; padding-top:1.2rem; border-top:1px solid var(--rule); }
+  h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+  .scope { color:var(--muted); font-size:.97rem; background:var(--code-bg); border-left:3px solid var(--accent);
+           padding:.8rem 1rem; border-radius:0 6px 6px 0; margin:1rem 0 1.5rem; }
+  .lead { font-size:1.05rem; }
+  code { font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--code-bg);
+         padding:.12em .4em; border-radius:4px; }
+  pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-weight:600; background:var(--code-bg); }
+  blockquote { margin:1.2rem 0; padding:.9rem 1.1rem; background:#fffdf5; border-left:4px solid var(--warn);
+               border-radius:0 6px 6px 0; }
+  blockquote.invariant { background:#f0fbf4; border-left-color:var(--accent); }
+  blockquote.thesis { background:#f3f0fb; border-left-color:#7d5fff; font-size:1.02rem; }
+  blockquote.danger { background:#fdf0ef; border-left-color:var(--blocker); }
+  .note { color:var(--muted); font-size:.9rem; }
+  .conf { font-weight:700; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; padding:.1em .5em;
+          border-radius:4px; color:#fff; }
+  .high { background:var(--accent); } .med { background:var(--warn); } .low { background:var(--blocker); }
+  details { margin:.6rem 0; border:1px solid var(--rule); border-radius:8px; padding:.4rem .9rem; }
+  details[open] { padding-bottom:.9rem; }
+  summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
+  nav.toc { background:var(--code-bg); border-radius:8px; padding:1rem 1.4rem; margin:1.5rem 0; font-size:.95rem; }
+  nav.toc ol { margin:.3rem 0; padding-left:1.3rem; }
+  nav.toc a { color:#06c; text-decoration:none; }
+  ul.tight li { margin:.25rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Design 12 — The identity graph: who stakes, who speaks, who runs</h1>
+<p class="lead"><a href="09-sybil-resistance-reputation-not-personhood.html">Design 09</a> established <em>what</em>
+abuse costs: reputation someone will lend you and can lose. This design pins down <em>whose</em> reputation that is.
+The federation vocabulary (Island, Gateway, Participant, Principal, Self, Registrar) has converged across two
+independent model-family passes — the nouns are nearly settled. What is <strong>not</strong> settled is the
+<strong>edges between them</strong>, and one cardinality question hiding in those edges — does a bot share its
+creator's Principal, or hold its own? — that turns out to <em>be</em> the sybil/reputation model. A glossary tells
+you what to call things; the edge structure tells you how trust flows. This is the edge structure.</p>
+
+<div class="scope">
+  <strong>Status:</strong> <em>vision / design exploration</em> — a vocabulary-and-relationships reconciliation, NOT a
+  build spec. Companion to <a href="09-sybil-resistance-reputation-not-personhood.html">09 · Sybil resistance</a>
+  (the mechanism this graph carries), <a href="06-sovereign-identity-federation.html">06 · Sovereign identity</a>
+  (where Self/key mechanics live) and <a href="08-phone-as-self-not-server.html">08 · Phone as Self</a>.<br>
+  <strong>Provenance:</strong> noun set from Andy's dual-model vocabulary pass (ChatGPT + Claude, 2026-07-10 — where
+  both families independently converge, the name is banked; where they diverge, a real decision is hiding); code
+  reality grounded in a read of <code>aiko_services service.py / process.py</code> and
+  <code>aiko_chat chat.py</code>. Steering constraint carried over from 09: <strong>robots are first-class
+  citizens</strong>.<br>
+  <strong>Confidence legend:</strong> <span class="conf high">solid</span> grounded in code or the settled vocabulary ·
+  <span class="conf med">plausible</span> coherent but unvalidated ·
+  <span class="conf low">thin</span> genuinely open — the questions this doc exists to raise.
+</div>
+
+<nav class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#nouns">The nouns — settled, and where each lives today</a></li>
+  <li><a href="#edges">The edges — the relationship graph</a></li>
+  <li><a href="#cardinality">The cardinality fork — the question that is the sybil model</a></li>
+  <li><a href="#owner">Owner — reconciling the registry field with Principal</a></li>
+  <li><a href="#squad">Open questions for the squad</a></li>
+</ol>
+</nav>
+
+<h2 id="nouns">1 · The nouns — settled, and where each lives today <span class="conf high">solid</span></h2>
+
+<table>
+<tr><th>Noun</th><th>What it is</th><th>Where it lives today</th></tr>
+<tr><td><strong>Participant</strong></td>
+    <td>Any chat-visible entity: human, bot, robot, service, agent. The thing with a name in a channel.</td>
+    <td>Addressing already distinguishes <code>@human</code> / <code>@@bot</code>; entries in the
+        <code>users</code> Category (entry shape being defined now).</td></tr>
+<tr><td><strong>Principal</strong></td>
+    <td>The <em>accountable</em> identity behind participants — the node that bonds, vouches, gets slashed and
+        rate-limited in Design 09.</td>
+    <td>Nowhere yet. This is the load-bearing new concept.</td></tr>
+<tr><td><strong>Self</strong></td>
+    <td>Product/UI word for the phone-held identity. In code it is a Principal <em>credential</em>
+        (passkey-guarded portable key, Design 06 §4), never a class named <code>Self</code>.</td>
+    <td>Design 06/08 vision; the passkey work is the on-ramp.</td></tr>
+<tr><td><strong>Owner</strong></td>
+    <td>The registry's answer to "who runs this Service."</td>
+    <td>A first-class field of every registered Service —
+        <code>ServiceFields(topic_path, name, protocol, transport, <strong>owner</strong>, tags)</code> — populated as
+        <code>get_username()</code>: the <em>OS login string</em>, unauthenticated, used as a discovery filter
+        (the <code>chat.py</code> TODO wants ChatServer discovery <em>by owner</em>).</td></tr>
+<tr><td><strong>Service identity</strong></td>
+    <td>The runtime <em>address</em> of a running Service.</td>
+    <td><code>ServiceTopicPath</code> — namespace/host/pid/sid. Ephemeral by construction (a restart mints a new
+        pid): an address, not an identity.</td></tr>
+</table>
+
+<blockquote class="invariant"><strong>The three-layer reading.</strong> These nouns stratify cleanly:
+<strong>Principal</strong> is the accountability layer (durable, stake-bearing);
+<strong>Participant</strong> is the presence layer (what a channel sees);
+<strong>ServiceTopicPath</strong> is the runtime layer (where the process is right now).
+Self and Owner are not a fourth and fifth layer — Self is the <em>credential</em> for a human's Principal, and Owner
+is the runtime layer's (currently unauthenticated) <em>pointer back up</em> to the accountability layer. Most of the
+remaining confusion dissolves once those two are seen as edges, not nodes.</blockquote>
+
+<h2 id="edges">2 · The edges — the relationship graph <span class="conf med">plausible</span></h2>
+
+<pre>
+                        vouches-for  (bonded · conserved · slashable — Design 09 §3–4)
+                       ┌──────────────────────────────┐
+                       ▼                              │
+   ┌────────────────────────┐              ┌────────────────────────┐
+   │       PRINCIPAL A      │              │       PRINCIPAL B      │
+   │  (accountability node: │              │   (e.g. the island     │
+   │   standing, bonds,     │              │    operator = genesis  │
+   │   rate limits)         │              │    voucher, 09 §7)     │
+   └────────────────────────┘              └────────────────────────┘
+      ▲            │      │
+      │            │      └────────────── owns / runs ──────────────┐
+ is-credential-of  │                                                ▼
+      │       speaks-as                              ┌──────────────────────────┐
+      │            │                                 │   SERVICE (runtime)      │
+   ┌──────┐        ▼                                 │   ServiceTopicPath =     │
+   │ SELF │   ┌───────────────────────┐              │   namespace/host/pid/sid │
+   │(phone│   │      PARTICIPANT      │              │   registry owner field   │
+   │ -held│   │  @human / @@bot in a  │              │   → should point at the  │
+   │ key) │   │  channel; users entry │              │     owning PRINCIPAL     │
+   └──────┘   └───────────────────────┘              └──────────────────────────┘
+</pre>
+
+<table>
+<tr><th>Edge</th><th>From → To</th><th>Properties</th></tr>
+<tr><td><code>is-credential-of</code></td><td>Self → Principal</td>
+    <td>The passkey-guarded portable key <em>proves</em> control of a Principal (Design 06 §4). Rotatable —
+        losing a device must not mean losing the Principal (Design 06 §7 recovery ceremony).</td></tr>
+<tr><td><code>speaks-as</code></td><td>Participant → Principal</td>
+    <td>Every message a Participant sends is accountable to exactly one Principal. This edge's
+        <strong>cardinality is the open fork</strong> (§3).</td></tr>
+<tr><td><code>vouches-for</code></td><td>Principal → Principal</td>
+    <td>Bonded (voucher slashed on vouchee misbehaviour), conserved (transfers standing from a finite budget,
+        never mints it), root-anchored at the island operator — all inherited from Design 09 §3–4.</td></tr>
+<tr><td><code>owns / runs</code></td><td>Principal → Service</td>
+    <td>What the registry's <code>owner</code> field is <em>trying</em> to say (§4). A Service's actions are
+        accountable to its owning Principal.</td></tr>
+<tr><td><code>is-instance-at</code></td><td>Participant / Service → ServiceTopicPath</td>
+    <td>Ephemeral runtime binding. Never carries trust: a restart changes the topic path, not the Principal.</td></tr>
+</table>
+
+<blockquote><strong>One invariant falls out immediately:</strong> trust and standing attach <em>only</em> to
+Principals. Participants display it, Services act under it, topic paths locate it — but every stake, slash, bond
+and rate limit is an operation on the Principal graph and nothing else. If a proposal ever needs to slash a
+Participant or trust a topic path, the model has been violated somewhere upstream.</blockquote>
+
+<h2 id="cardinality">3 · The cardinality fork — the question that is the sybil model <span class="conf low">thin</span></h2>
+
+<p>When a human runs a bot, what does the bot's <code>speaks-as</code> edge point at?</p>
+
+<table>
+<tr><th></th><th>Model A — shared Principal (many:1)</th><th>Model B — own Principal + vouch (1:1)</th></tr>
+<tr><td>Structure</td>
+    <td>Your bot speaks as <em>your</em> Principal.</td>
+    <td>Your bot gets its own Principal; yours <code>vouches-for</code> it with a bond.</td></tr>
+<tr><td>Accountability</td>
+    <td>Direct: bot misbehaves ⇒ <em>you</em> are slashed, full price.</td>
+    <td>One hop: bot's Principal slashed ⇒ slash propagates back through the vouch bond to you (Design 09's
+        pairwise slashing).</td></tr>
+<tr><td>Rate limiting</td>
+    <td>You and your whole fleet share one RLN allowance.</td>
+    <td>Each bot rate-limited separately; your bond, not your allowance, bounds fleet size.</td></tr>
+<tr><td>Sybil cost</td>
+    <td>Trivially sybil-proof: 50 bots mint zero new identities.</td>
+    <td>Bounded by conserved vouching: 50 bots require 50 bonds from your finite standing budget — sybil count
+        is priced, not prevented (Design 09's punchline, applied at home).</td></tr>
+<tr><td>Blast radius</td>
+    <td>A compromised bot burns your entire standing and rate allowance.</td>
+    <td>A compromised bot burns its bond; your remaining standing survives.</td></tr>
+<tr><td>Machinery needed</td>
+    <td>None beyond Design 09's base.</td>
+    <td>Nothing new either — vouching, bonds and slashing <em>already exist</em> in 09 §3; this just points them
+        at a new edge.</td></tr>
+<tr><td>Robots-first-class test</td>
+    <td><strong>Fails long-term:</strong> a robot can never earn standing of its own; it is forever an appendage.</td>
+    <td><strong>Passes:</strong> a robot behaving well accrues standing on its own Principal — it can eventually
+        stand without the vouch. Emancipation is possible.</td></tr>
+</table>
+
+<blockquote class="thesis"><strong>The candidate resolution: cardinality is a policy dial, not a schema choice.</strong>
+Model A is Model B degenerated — a bot whose Principal has zero independent standing and lives entirely on your bond
+behaves exactly like a bot sharing your Principal. So the schema can commit to B (every Participant gets a Principal;
+every non-self-sovereign Principal hangs off a vouch bond), while each <em>island's policy</em> chooses where on the
+A↔B spectrum newcomer bots start: bond size, whether bot Principals may receive third-party vouches, whether they may
+themselves vouch. The federation then doesn't have to agree on the answer — it only has to agree on the graph.
+And the robots-first-class constraint (Design 09 §2) independently forces B's schema: a system where a robot can
+never hold standing has quietly re-introduced the personhood test through the back door.</blockquote>
+
+<p class="note">Consistency check against 09 §4: conserved vouching already guarantees a bot fleet can never hold
+more total standing than flowed in from its human root — Model B doesn't weaken the sock-puppet defence, it
+<em>is</em> the sock-puppet defence pointed at a legitimate use.</p>
+
+<h2 id="owner">4 · Owner — reconciling the registry field with Principal <span class="conf med">plausible</span></h2>
+
+<p>Today <code>owner = get_username()</code>: whoever the OS says is logged in, as a bare string, trusted by every
+consumer of the registry. That was the right call for a single-operator lab deployment, and the field's
+<em>shape</em> is already correct — a Service carries a pointer to its accountable party, and discovery can filter on
+it. What changes as islands federate is only <em>what the string is</em> and <em>whether it's proven</em>:</p>
+
+<ul class="tight">
+<li><strong>Stage 0 (today):</strong> <code>owner</code> = OS username. Unauthenticated. Fine intra-island among
+    trusted operators.</li>
+<li><strong>Stage 1:</strong> <code>owner</code> = a Principal identifier. Same field, same filters, same
+    S-expression wire format — the value becomes a reference into the accountability layer. The <code>chat.py</code>
+    TODO ("discover ChatServer via owner, default <code>*</code>") becomes "discover Services run by Principal P"
+    with no structural change.</li>
+<li><strong>Stage 2 (only when cross-island traffic exists):</strong> registration is <em>signed</em> — the Registrar
+    verifies the registering process controls a credential of the claimed Principal, so <code>owner</code> goes from
+    label to claim-checked fact. This is gateway/Registrar work, aligned with 09's "enforcement is server-side."</li>
+</ul>
+
+<blockquote><strong>Explicitly not proposed:</strong> renaming the field, or touching any of this before the
+users/CRUD work lands. The reconciliation is that <em>Owner is the <code>owns/runs</code> edge, already in the wire
+format</em> — the roadmap above is about strengthening what backs it, one stage at a time, each stage useful without
+the next.</blockquote>
+
+<h2 id="squad">5 · Open questions for the squad <span class="conf low">thin</span></h2>
+
+<ol>
+<li><strong>The dial's default:</strong> if cardinality is per-island policy (§3), where should a community island
+    start a newcomer's bot — full shadow (pure Model A) or small independent bond? What's the cheapest thing to
+    learn from running it?</li>
+<li><strong>Emancipation:</strong> should a robot Principal that has earned real standing be able to outlive its
+    original voucher (creator revokes the vouch, robot stands alone)? Design 09's mechanics allow it; is it
+    <em>wanted</em>?</li>
+<li><strong>Vouch rights for bots:</strong> may a bot Principal vouch for another Principal, or is vouching reserved
+    for Principals holding a Self credential? (Allowing it is more robots-first-class; restricting it cheaply caps
+    ring-building.)</li>
+<li><strong>Principal portability vs island standing:</strong> the Principal (key) is portable across islands
+    (Design 06); its <em>standing</em> is per-island root-anchored (Design 09 §5). Is "port the key, re-earn the
+    standing, maybe with a letter-of-introduction vouch from the old island" the right federation story?</li>
+<li><strong>Genesis, restated on this graph:</strong> the island operator's Principal is the trust root (09 §7) —
+    what vouches <em>it</em> to the federation, and is that the IslandDirectory's job? (This is 09's open genesis
+    problem wearing identity-graph clothes; it's also the strongest argument that IslandDirectory deserves to be a
+    named service.)</li>
+<li><strong>The Owner roadmap:</strong> any objection to Stage 1 (owner = Principal id, same field) as the eventual
+    direction, so nothing built meanwhile paints over that seam?</li>
+</ol>
+
+<p class="note">Federation set: <a href="05-communities-and-discovery.html">05 · Communities &amp; discovery</a> ·
+<a href="06-sovereign-identity-federation.html">06 · Sovereign identity</a> ·
+<a href="07-notifications-federation-ready.html">07 · Notifications</a> ·
+<a href="08-phone-as-self-not-server.html">08 · The phone is the self</a> ·
+<a href="09-sybil-resistance-reputation-not-personhood.html">09 · Sybil resistance</a> ·
+12 · The identity graph (this doc).</p>
+
+</body>
+</html>
