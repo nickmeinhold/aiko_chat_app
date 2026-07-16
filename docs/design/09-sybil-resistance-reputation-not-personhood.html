@@ -226,6 +226,20 @@ even when every member behaves perfectly. To hide structurally, the farm must ac
 the full price again. Two orthogonal instruments on one graph: behavioural (spam) + conductance (the coordinated farm).</p>
 
 <blockquote class="danger">
+  <strong>Correction from the verified lit pass (2026-07-17, §6.1): conductance detection must be scoped as
+  <em>local whitelisting around the trust root</em>, never a global classifier.</strong> The refutation is unanimous
+  and specific: community structure defeats <em>universal</em> conductance-based detection — the cut between two
+  tightly-knit <em>honest</em> communities can be as sparse as the honest–sybil cut, so a sybil ring is
+  indistinguishable from a legitimate tight sub-community (Alvisi et al., IEEE S&amp;P 2013: "these considerations
+  argue against universal sybil defense"). Detection accuracy anticorrelates with modularity at −0.81 across eight
+  real networks (Viswanath et al.), and the fast-mixing assumption fails <em>worst</em> on small acquaintance-based
+  graphs — exactly an island's profile (mixing walks of 200–400 measured vs the 10–15 assumed; Mohaisen et al., IMC
+  2010). The guarantee degrades <em>linearly</em> with mixing time rather than cliff-failing (Yu 2011), and the
+  root-anchored formulation this design already uses (§4) <em>is</em> the local-whitelisting form — so the instrument
+  survives, but only in that form, and its per-island tuning is an open engineering question, not a solved one.
+</blockquote>
+
+<blockquote class="danger">
   <strong>The ceiling is honest, not a regression.</strong> No sybil-resistance scheme fully solves coordinated
   influence — a room of verified-<em>unique humans</em> can still brigade. So reputation gives up nothing personhood
   would have bought here. Coordinated-influence detection is a separate instrument (behavioural correlation), orthogonal
@@ -245,23 +259,73 @@ global uniqueness.</p>
 <blockquote class="danger">
   <strong>Do not build assuming this synthesis is novel.</strong> Deriving from first principles converged on named
   academic results. This is a candidate frame; the design must be <em>grounded on the literature</em> before the
-  mechanism is committed. A prior-art deep-research pass is a listed open problem (§7).
+  mechanism is committed. A prior-art deep-research pass ran 2026-07-17 (§6.1) — it settled the bonded-vouching and
+  structural-detection questions (3-0 adversarial verification) and left Advogato's attack history, Friedman–Resnick,
+  EigenTrust parameterization, and RLN-composition prior art still open (§7).
 </blockquote>
 
 <table>
 <thead><tr><th>Idea in this doc</th><th>Established name</th></tr></thead>
 <tbody>
 <tr><td>Dense-internal / sparse-cut structural detection</td><td><strong>SybilGuard / SybilLimit</strong> (Yu, Kaminsky, Gibbons, Flaxman, ~2006–08) — fast-mixing social graphs; attack edges = a sparse cut</td></tr>
-<tr><td>Conserved vouching (transfer-not-mint)</td><td><strong>Advogato</strong> trust metric (Levien) — max-flow / capacity-limited trust</td></tr>
+<tr><td>Conserved vouching (transfer-not-mint)</td><td><strong>Advogato</strong> trust metric (Levien) — max-flow / capacity-limited trust; <em>and</em> <strong>TrustDavis</strong> (verified §6.1): reference edges as finite max-flow capacities</td></tr>
 <tr><td>Root-anchored trust propagation</td><td><strong>EigenTrust</strong> (Kamvar, Schlosser, Garcia-Molina, 2003)</td></tr>
 <tr><td>Newcomers start below neutral</td><td><strong>Friedman–Resnick</strong> whitewashing / cheap-pseudonyms (still an open lit gap from run <code>wcezv0qan</code>)</td></tr>
-<tr><td>"Bonding inverts the free-vouch refutation"</td><td>likely exists (staked delegation / TrustDavis / collateralized attestation) — <em>not</em> verified novel</td></tr>
+<tr><td>"Bonding inverts the free-vouch refutation"</td><td><strong>TrustDavis</strong> (DeFigueiredo &amp; Barr, IEEE CEC 2005) — <em>verified, no longer "likely"</em> (§6.1): vouching as accepted limited liability, deposit-gated admission, sybils gain nothing because "a malicious party must back each identity with funds"</td></tr>
 </tbody>
 </table>
 
 <p>The genuinely app-tab contribution is narrower than it felt: the <strong>composition</strong> (bonded-vouch economics
 + RLN rate + EigenTrust anchoring + SybilLimit structural detection) aimed at a robots-first-class federated chat, plus
-the framing. Even that needs the lit check.</p>
+the framing. The lit check (§6.1) found no published or productized instance of the composition — <em>plausibly novel,
+needs-citation</em>; absence of found prior art, not verified absence.</p>
+
+<h3 id="litpass">6.1 · Verified prior-art pass (2026-07-17) <span class="conf high">solid</span></h3>
+
+<p class="note">Deep-research run, 106 agents, 3-vote adversarial verification per claim (a claim dies on 2/3 refutes).
+Verdicts below are the surviving set; sources are the primary PDFs, verified verbatim.</p>
+
+<table>
+<thead><tr><th>Question</th><th>Verdict</th><th>The finding</th></tr></thead>
+<tbody>
+<tr><td>Bonded vouching is prior art?</td><td><strong>Supported, 3-0</strong></td>
+    <td><strong>TrustDavis (2005)</strong> contains bonded vouching (a reference <em>is</em> accepted limited
+        liability), deposit-gated registration, <em>and</em> conserved vouching (edges as max-flow capacities) in one
+        paper, with the headline guarantee that honest players hard-cap losses under any collusion. Nuance: its
+        "slashing" is an insurance payout on default, not an automatic stake burn.
+        <a href="https://earlbarr.com/publications/trustdavis.pdf">[PDF]</a></td></tr>
+<tr><td>"Bonding inverts the free-vouch refutation"?</td><td><strong>Supported, 3-0</strong></td>
+    <td>Verbatim in TrustDavis: sybil/pseudonym identities "do not provide a significant advantage… since a malicious
+        party must back each identity with funds" — explicitly contrasted with free-rating systems (EigenTrust named
+        as still trickable). Caveat: an economic loss-bounding argument, not a formal sybil-proof theorem.</td></tr>
+<tr><td>Deployed staked vouching?</td><td><strong>Partial</strong></td>
+    <td><strong>Ethos Network</strong> ships staked vouching in production, but voucher-<em>slashing</em> is
+        whitepaper-only (refuted 0-3 as live). Deployed prior art for the stake, not for the slash.
+        <a href="https://whitepaper.ethos.network/ethos-mechanisms/vouch">[whitepaper]</a></td></tr>
+<tr><td>Fast-mixing holds on small islands?</td><td><strong>Refuted, 3-0</strong></td>
+    <td>Real acquaintance graphs need mixing walks of 200–400 vs the assumed 10–15 (Mohaisen, IMC 2010); SybilLimit's
+        own validation covers only 10<sup>5</sup>–10<sup>6</sup>-node graphs, and its preprocessing discards 75–85% of
+        nodes on real networks — on a small island that trimming <em>is</em> the failure. But the guarantee degrades
+        <em>linearly</em> with mixing time (Yu 2011, "there does not exist a threshold breaking point"), so the
+        engineering question is the island graph's <em>measured</em> mixing time, not a yes/no assumption.</td></tr>
+<tr><td>Global conductance detection?</td><td><strong>Refuted, 3-0</strong></td>
+    <td>Community structure defeats universal structural detection — a sybil ring is indistinguishable from a
+        legitimate tight sub-community (Alvisi, IEEE S&amp;P 2013); accuracy vs modularity correlates −0.81
+        (Viswanath). Survives only as <em>local whitelisting around a trusted seed</em> — the root-anchored form §4
+        already uses. Corrected inline in §5.</td></tr>
+<tr><td>Do the two mechanisms compose?</td><td><strong>Supported, 3-0</strong></td>
+    <td>Structural detection can only <em>bound</em> sybils per attack edge — Ω(1) lower bound for any mixing-based
+        protocol (Yu 2011) — never eliminate them. An admission-cost gate that makes attack edges expensive
+        strengthens the g&nbsp;=&nbsp;o(n/log&nbsp;n) precondition SybilLimit needs: bonded vouching and structural
+        detection are <em>complementary by proof</em>, not redundant.</td></tr>
+<tr><td>Advogato attacks · Friedman–Resnick · EigenTrust teleport params · RLN+reputation compositions (Waku/Semaphore)</td>
+    <td><strong>Unresolved</strong></td>
+    <td>No claims survived on these — still open (§7), not settled either way.</td></tr>
+<tr><td>Composition novelty</td><td><strong>Needs-citation</strong></td>
+    <td>Zero evidence found of the full composition published or productized; downgraded from "already published?"
+        to <em>plausibly novel as a composition</em>. Absence of found prior art ≠ verified absence.</td></tr>
+</tbody>
+</table>
 
 <h2 id="open">7 · Open problems <span class="conf low">thin</span></h2>
 <ul class="tight">
@@ -273,8 +337,13 @@ model those words rest on. Resolved (as a candidate frame) in
 <a href="12-identity-graph.html">Design 12 — the identity graph</a>: Participant / Principal / Self / Owner
 reconciliation, the bot-cardinality fork, and why every stake and slash here is an operation on the Principal
 graph only.</li>
-<li><strong>Prior-art pass</strong> — SybilGuard/SybilLimit, Advogato, staked-vouching, Friedman–Resnick, before
-committing the mechanism.</li>
+<li><strong>Prior-art pass</strong> — <em>partially done 2026-07-17</em> (§6.1): staked-vouching (TrustDavis) and
+SybilGuard/SybilLimit small-graph behaviour settled 3-0. Still open: Advogato's real-world attack history,
+Friedman–Resnick's exact whitewashing result, EigenTrust teleport parameterization, and whether anyone has composed
+reputation-gated registration with RLN (Waku RLN-relay / Semaphore ecosystems).</li>
+<li><strong>Measure, don't assume, the island graph</strong> — new from the lit pass: the structural instrument's
+strength depends on the island's <em>measured</em> mixing time and modularity (linear degradation, no cliff). A small
+tool that computes these on a real island's vouch graph would turn §5's corrected caveat into an engineering dial.</li>
 <li><strong>Stake denomination detail</strong> — for a no-token, phone-first, gateway-relayed app, what does the
 "registration stake" concretely resolve to? Device-attestation vs time-bond vs proof-of-prior-good-behaviour vs
 vouch-stake, and the app↔gateway split for each. The app produces the credential; the gateway is where it's verified,
