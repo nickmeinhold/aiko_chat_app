@@ -51,6 +51,7 @@ class FakeRestApi implements ChatRestApi {
   int meCalls = 0;
   int claimCalls = 0;
   int deleteCalls = 0;
+  int listChannelsCalls = 0;
 
   AuthSession _session() => AuthSession(
         user: user,
@@ -149,6 +150,7 @@ class FakeRestApi implements ChatRestApi {
 
   @override
   Future<List<Channel>> listChannels() async {
+    listChannelsCalls++;
     if (listChannelsThrows != null) throw listChannelsThrows!;
     return channels;
   }

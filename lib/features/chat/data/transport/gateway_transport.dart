@@ -38,6 +38,18 @@ class GatewayTransport implements ChatTransport {
   final _errors = StreamController<TransportError>.broadcast();
   final _connState = StreamController<ConnectionState>.broadcast();
 
+  /// The CURRENT connection state, replayed to every new [connectionState]
+  /// subscriber. Connection state is STATE, not an event log — a consumer that
+  /// mounts AFTER the `connected` emission (e.g. a repository rebuilt because a
+  /// gateway-recovery refetch changed the channel list) must still learn the
+  /// socket is live, or its connected-driven choreography never runs.
+  ConnectionState _lastConn = ConnectionState.disconnected;
+
+  void _setConn(ConnectionState s) {
+    _lastConn = s;
+    _connState.add(s);
+  }
+
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   final Set<String> _subscribed = {};
@@ -67,7 +79,16 @@ class GatewayTransport implements ChatTransport {
         _log = log;
 
   @override
-  Stream<ConnectionState> get connectionState => _connState.stream;
+  Stream<ConnectionState> get connectionState => Stream.multi((c) {
+        // Seed the current state, then forward live changes. Both happen
+        // synchronously inside this callback and all state mutations are
+        // event-loop-serialized, so no emission slips between seed and
+        // subscription.
+        c.add(_lastConn);
+        final sub = _connState.stream
+            .listen(c.add, onError: c.addError, onDone: c.close);
+        c.onCancel = sub.cancel;
+      });
   @override
   Stream<Message> get messages => _messages.stream;
   @override
@@ -86,7 +107,7 @@ class GatewayTransport implements ChatTransport {
     _wantConnected = false;
     _reconnectTimer?.cancel();
     await _cleanupChannel();
-    _connState.add(ConnectionState.disconnected);
+    _setConn(ConnectionState.disconnected);
   }
 
   @override
@@ -159,7 +180,7 @@ class GatewayTransport implements ChatTransport {
   Future<void> _openSocket() async {
     if (!_wantConnected || _connecting || _channel != null) return;
     _connecting = true;
-    _connState.add(ConnectionState.connecting);
+    _setConn(ConnectionState.connecting);
 
     String? token = await _tokens.currentAccessToken();
     token ??= await _safeRefresh();
@@ -181,7 +202,7 @@ class GatewayTransport implements ChatTransport {
       );
       _connecting = false;
       _backoffAttempt = 0;
-      _connState.add(ConnectionState.connected);
+      _setConn(ConnectionState.connected);
       _resubscribe();
     } catch (e) {
       _connecting = false;
@@ -212,7 +233,7 @@ class GatewayTransport implements ChatTransport {
   void _handleDrop() {
     _cleanupChannel();
     if (!_wantConnected) return;
-    _connState.add(ConnectionState.disconnected);
+    _setConn(ConnectionState.disconnected);
     _onConnectFailure();
   }
 
@@ -280,7 +301,7 @@ class GatewayTransport implements ChatTransport {
     _wantConnected = false;
     _reconnectTimer?.cancel();
     _cleanupChannel();
-    _connState.add(ConnectionState.unauthenticated);
+    _setConn(ConnectionState.unauthenticated);
   }
 
   Future<void> _cleanupChannel() async {

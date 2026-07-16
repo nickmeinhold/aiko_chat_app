@@ -44,6 +44,12 @@ class TransportError {
 /// **outlive reconnects** (a single `.listen` by the repository survives a
 /// dropped socket — review finding 3).
 abstract interface class ChatTransport {
+  /// The connection lifecycle as STATE, not an event log: every new subscriber
+  /// is immediately seeded with the CURRENT state, then receives live changes.
+  /// Consumers may therefore mount at any time (e.g. a repository rebuilt after
+  /// a gateway-recovery refetch, when `connected` already fired) and still
+  /// learn the socket is live — connected-driven choreography must not depend
+  /// on having been subscribed when the transition happened.
   Stream<ConnectionState> get connectionState;
   Stream<Message> get messages;
   Stream<AckResult> get acks;

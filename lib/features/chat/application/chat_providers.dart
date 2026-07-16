@@ -17,6 +17,7 @@ import '../../auth/domain/auth_models.dart';
 import '../../moderation/application/moderation_controller.dart';
 import '../data/chat_repository.dart';
 import '../data/chat_rest_api.dart' show NetworkUnavailable;
+import '../data/transport/chat_transport.dart' show ConnectionState;
 import '../data/logging_chat_telemetry.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
@@ -59,6 +60,22 @@ final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
     // user lands in cached chat instead of the "Could not load channels" screen
     // (task #19). Empty on a first-ever offline launch — an empty list, never a
     // raw error. The transport still connects/revalidates when the net returns.
+    //
+    // GATEWAY-recovery edge (Tesla, PR #72 residual): a server restart or DNS
+    // heal produces NO device-online edge (the interface never changed), so the
+    // deviceOnlineProvider watch above can't un-stick this fallback. The
+    // socket's own reconnect (transport backs off and retries on its own) is
+    // the recovery signal: on a transition TO connected, refetch. Armed ONLY
+    // while serving the fallback — a healthy fetched list never watches
+    // connection state, so routine socket blips cause no refetch churn. Loop-
+    // safe: a successful refetch arms no listener, and connect() on an already-
+    // open socket is a no-op (no fresh `connected` edge is emitted).
+    ref.listen(connectionStateProvider, (prev, next) {
+      if (next.value == ConnectionState.connected &&
+          prev?.value != ConnectionState.connected) {
+        ref.invalidateSelf();
+      }
+    });
     return cache.readChannels();
   }
 });
