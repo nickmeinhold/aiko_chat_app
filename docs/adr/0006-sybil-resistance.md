@@ -1,17 +1,17 @@
-# RFC-0006: Sybil resistance: reputation, not personhood
+# ADR-0006: Sybil resistance: reputation, not personhood
 
 | | |
 |---|---|
-| **RFC** | 0006 |
+| **ADR** | 0006 |
 | **Status** | Draft, requesting comments |
-| **Owner** | Nick Meinhold, with Claude (stands on RFC-0005's Principal graph) |
+| **Owner** | Nick Meinhold, with Claude (stands on ADR-0005's Principal graph) |
 | **Created** | 2026-07-17 |
 | **Thread** | *(Discussion link once posted)* |
 | **Reference** | [Design 09: Sybil resistance](https://nickmeinhold.github.io/aiko_chat_app/design/09-sybil-resistance-reputation-not-personhood.html) (full detail incl. verified literature pass, §6.1) |
 
 ## Summary
 
-A self-minted keypair is free, so sovereign identity needs an abuse gate. This RFC proposes pricing admission in reputation rather than proving personhood: an existing member stakes their own standing to co-sign a newcomer (bonded vouching) and is slashed if the newcomer misbehaves. Vouching draws on a conserved budget (transfers standing, never mints it) and is root-anchored at the island operator. No CAPTCHAs, no biometrics, no personhood tests anywhere, because robots are first-class citizens and every personhood mechanism is a bouncer whose job is keeping robots out.
+A self-minted keypair is free, so sovereign identity needs an abuse gate. This ADR proposes pricing admission in reputation rather than proving personhood: an existing member stakes their own standing to co-sign a newcomer (bonded vouching) and is slashed if the newcomer misbehaves. Vouching draws on a conserved budget (transfers standing, never mints it) and is root-anchored at the island operator. No CAPTCHAs, no biometrics, no personhood tests anywhere, because robots are first-class citizens and every personhood mechanism is a bouncer whose job is keeping robots out.
 
 ## Motivation
 
@@ -39,7 +39,7 @@ A 3-vote-per-claim verified literature pass ran over this design; the full score
 
 ## Unresolved questions
 
-1. **Genesis:** what vouches for the *first* island operator, and how does a new island earn federation standing from zero? (Feeds RFC-0001's IslandDirectory fork.)
+1. **Genesis:** what vouches for the *first* island operator, and how does a new island earn federation standing from zero? (Feeds ADR-0001's IslandDirectory fork.)
 2. **Stake denomination:** for a no-token, phone-first app, what does the registration stake concretely resolve to, and where is the app/gateway split?
 3. **Budget mechanics:** how vouch capacity replenishes with earned standing; how slashing propagates through transitive trust.
 4. **Measure, don't assume:** the structural instrument's strength depends on an island's measured mixing time and modularity; a small tool computing these on a real vouch graph would turn the theory caveat into an engineering dial.

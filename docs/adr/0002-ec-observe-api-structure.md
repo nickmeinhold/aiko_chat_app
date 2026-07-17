@@ -1,8 +1,8 @@
-# RFC-0002: EC for observation, API for structure
+# ADR-0002: EC for observation, API for structure
 
 | | |
 |---|---|
-| **RFC** | 0002 |
+| **ADR** | 0002 |
 | **Status** | Accepted (retroactive) |
 | **Owner** | Andy Gelme (write-up: Nick Meinhold, with Claude) |
 | **Created** | 2026-07 (decision, Signal + aiko_chat#6 thread) / 2026-07-17 (write-up) |
@@ -22,7 +22,7 @@ Aiko Services offers two ways to get data out of a running system, and without a
 2. **API = structure.** CRUD on channels, users, and anything else with a lifecycle goes through the ChatServer / Category API, with "list users" as a named priority.
 3. **The generic ECConsumer pattern.** The EC side grows a general-purpose consumer: (a) listen to a remote ECProducer with a filter, (b) keep a local cache of recent values, (c) offer a non-blocking `get` of the latest value. This makes observation cheap everywhere without minting bespoke shares per use case.
 
-Consequence: aiko_chat#6's bespoke `user_list` EC share dissolves into this split (its need is met by 2 + 3). The follow-up build is tracked in RFC-0003 (reserved, Andy's).
+Consequence: aiko_chat#6's bespoke `user_list` EC share dissolves into this split (its need is met by 2 + 3). The follow-up build is tracked in ADR-0003 (reserved, Andy's).
 
 ## Rationale and alternatives
 
@@ -34,4 +34,4 @@ The same fault line as CQRS (command/query responsibility segregation) and as "m
 
 ## Unresolved questions
 
-- Filter semantics and cache-invalidation behaviour of the general-purpose ECConsumer (design lives with RFC-0003's build).
+- Filter semantics and cache-invalidation behaviour of the general-purpose ECConsumer (design lives with ADR-0003's build).

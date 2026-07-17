@@ -1,8 +1,8 @@
-# RFC-0001: The federation vocabulary
+# ADR-0001: The federation vocabulary
 
 | | |
 |---|---|
-| **RFC** | 0001 |
+| **ADR** | 0001 |
 | **Status** | Accepted (retroactive; two named forks open) |
 | **Owner** | Andy Gelme (write-up: Nick Meinhold, with Claude) |
 | **Created** | 2026-07-10 (decision) / 2026-07-17 (write-up) |
@@ -35,9 +35,9 @@ Cross-family model consensus was the selection mechanism: two model families wit
 ## Unresolved questions (the two open forks)
 
 1. **ChatServer → ChatRouter.** Both passes see a rename coming; they differ on timing. Position of record: keep `ChatServer` / `chat_server:1` for now because it is a versioned protocol identity, and revisit only after HyperSpace/LLM/robot responsibilities are factored out.
-2. **IslandDirectory.** One pass names it (federated discovery of Islands, distinct from Registrar); the other folds it into future sibling services. Leaning toward naming it: two-level discovery (Registrar within an Island, IslandDirectory across the federation) is a real seam with different trust properties on each side. RFC-0006's genesis question is a further argument for naming it.
+2. **IslandDirectory.** One pass names it (federated discovery of Islands, distinct from Registrar); the other folds it into future sibling services. Leaning toward naming it: two-level discovery (Registrar within an Island, IslandDirectory across the federation) is a real seam with different trust properties on each side. ADR-0006's genesis question is a further argument for naming it.
 
 ## Rejected ideas
 
-- **`Self` as a code-level class.** It is a credential of a Principal, not a node of its own (elaborated in RFC-0005).
+- **`Self` as a code-level class.** It is a credential of a Principal, not a node of its own (elaborated in ADR-0005).
 - **A single "user" concept.** The Participant/Principal split is load-bearing; collapsing them re-imports every ambiguity this vocabulary exists to remove.
