@@ -4,7 +4,9 @@
 
 ---
 
-This project is accumulating design decisions faster than any one thread can hold them: vocabulary, the EC/API split, identity, sybil resistance, porting. This post proposes a lightweight RFC convention so each decision gets a number, a thread, and a status - and newcomers can reconstruct *why* things are the way they are by reading the series.
+On the 2026-07-16 call Andy proposed the approach this post puts into practice: use **OpenSpec** (spec-driven development for coding agents) with **RFCs as the document format**, so that documentation, APIs, protocols, and libraries all stay consistent and coding agents get a constitution to build against. This post bootstraps the RFC layer: each design decision gets a number, a thread, and a status, and newcomers can reconstruct *why* things are the way they are by reading the series.
+
+**How the layers relate:** an RFC records a *decision* (and the argument for it). Once Accepted, it feeds the OpenSpec specs in each implementation repo, which are what coding agents actually implement against. RFC = why; spec = what; code = derived.
 
 ## The convention (deliberately minimal)
 
@@ -19,7 +21,7 @@ This project is accumulating design decisions faster than any one thread can hol
 |-----|-------|--------|-------|
 | 0001 | The federation vocabulary | Accepted (two named forks open) | Andy (retroactive write-up: Nick) |
 | 0002 | EC for observation, API for structure | Accepted (retroactive) | Andy (retroactive write-up: Nick) |
-| 0003 | Users: ChatServer CRUD + general-purpose ECConsumer | Reserved - Andy's to write (supersedes issue #6) | Andy |
+| 0003 | Users: ChatServer CRUD + general-purpose ECConsumer | Reserved (supersedes issue #6; per the 2026-07-16 call the ChatServer CRUD example may be Nick's to build against the HyperSpace/Category API) | Andy + Nick |
 | 0004 | Sovereign identity federation | Reserved (design exists, not yet RFC'd) | Nick |
 | 0005 | The identity graph | Draft | Nick |
 | 0006 | Sybil resistance: reputation, not personhood | Draft | Nick |
