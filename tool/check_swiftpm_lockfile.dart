@@ -18,23 +18,35 @@
 // `Package.resolved` pins the full TRANSITIVE closure; the `.pbxproj` declares only
 // DIRECT remote packages (XCRemoteSwiftPackageReference). So a legitimate transitive
 // pin is NOT declared in the pbxproj — a naive "every pin must be declared" rule
-// would false-positive on it. Only two rules are provable from text alone:
+// would false-positive on it. Two rules over the committed text:
 //
 //   RULE 1 (the PR #69 disease): if a platform declares ZERO remote SwiftPM
-//     packages, it must have ZERO pins. With no declared root there is nothing to
-//     pull a transitive closure, so any pin is stale. This catches the exact
+//     packages, it must have ZERO pins — any pin is stale. This catches the exact
 //     historical failure (a complete dependency purge that left the lockfile).
 //
 //   RULE 2 (forgot-to-commit): every DIRECTLY-declared remote package must appear
-//     as a pin. `declared ⊆ pinned` has no transitive false-positives — a direct
-//     dep must be resolved. Catches "added a remote dep, didn't commit the lockfile".
+//     as a pin. `declared ⊆ pinned` has no false-positives — a direct dep must be
+//     resolved. Catches "added a remote dep, didn't commit the lockfile".
+//
+// RULE 1's SOUNDNESS ASSUMPTION (important): it assumes every remote SwiftPM dep is
+// declared as an XCRemoteSwiftPackageReference in the COMMITTED pbxproj. That holds
+// for app-direct deps — the PR #69 case (GoogleSignIn was a direct app reference).
+// It does NOT hold if a Flutter plugin (a *local* Swift package, whose generated,
+// uncommitted Package.swift can itself pull remote deps) introduces a remote
+// transitive: that pin would appear with no matching pbxproj reference, and RULE 1
+// would FALSE-POSITIVE. The failure is benign and loud (a blocked push, obvious and
+// `--no-verify`-recoverable, never a silent wrong pass), but if it fires on a real
+// plugin remote dep the fix is to teach this check about committed Package.swift
+// manifests (or scope RULE 1 to pins whose package left the pbxproj in git history)
+// — NOT to delete RULE 1. Today the repo is all-local (zero pins), so the assumption
+// holds exactly.
 //
 // It deliberately does NOT flag `pinned - declared` when packages ARE declared,
-// because that difference is (correctly) the transitive closure. The one drift it
+// because that difference is (correctly) the transitive closure. The drift it
 // therefore cannot see: a PARTIAL removal that leaves a stale pin while OTHER remote
 // deps remain — distinguishing a stale pin from a transitive one needs regeneration
-// (macOS). That case is documented as the follow-up in the task; do not "fix" it
-// here by reintroducing the unsound rule.
+// (macOS). Documented as the follow-up in the task; do not "fix" it here by
+// reintroducing the unsound rule.
 //
 // USAGE
 //   dart run tool/check_swiftpm_lockfile.dart        # exit 0 clean, 1 on drift
@@ -108,8 +120,11 @@ List<String> driftProblems({
         if (lf.pins.isNotEmpty) {
           problems.add(
             'STALE lockfile: ${lf.path} pins ${_fmt(lf.pins)} but the $platform '
-            'Xcode project declares NO remote SwiftPM packages. Regenerate or '
-            'delete the lockfile (this is the PR #69 stale-pin class).',
+            'Xcode project declares NO remote SwiftPM packages. Most likely a '
+            'stale leftover (the PR #69 class) — regenerate or delete the '
+            'lockfile. If instead a Flutter plugin legitimately introduced a '
+            'remote SwiftPM dependency, this check needs teaching about local '
+            'Package.swift manifests (see the script header).',
           );
         }
       }
