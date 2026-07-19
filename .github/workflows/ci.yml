@@ -32,6 +32,14 @@ jobs:
 
       - run: flutter pub get
 
+      # SwiftPM lockfile-freshness gate (task #1909): a committed Package.resolved
+      # left pinning a removed package is a "false green" — tests pass while the
+      # build rests on a stale committed artifact (PR #69). This is a text-only
+      # consistency check (declared remote refs vs committed pins), so it runs on
+      # this zero-cost ubuntu runner without xcodebuild. See the script header for
+      # the one drift case it cannot reach without macOS regeneration.
+      - run: dart run tool/check_swiftpm_lockfile.dart
+
       # Errors + warnings are fatal; infos are not. The 16 current infos are all
       # `prefer_initializing_formals` on named constructors where `this._field`
       # would leak the private name into the public API — an intentional style
