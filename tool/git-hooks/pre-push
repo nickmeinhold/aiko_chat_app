@@ -32,7 +32,10 @@ fi
 
 cd "$(git rev-parse --show-toplevel)"
 
-echo "▶ pre-push gate — mirrors .github/workflows/ci.yml (analyze + test)"
+echo "▶ pre-push gate — mirrors .github/workflows/ci.yml (swiftpm lockfile + analyze + test)"
+
+echo "  • dart run tool/check_swiftpm_lockfile.dart"
+dart run tool/check_swiftpm_lockfile.dart
 
 echo "  • flutter analyze --no-fatal-infos"
 flutter analyze --no-fatal-infos

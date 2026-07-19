@@ -16,9 +16,13 @@ runs it once. To confirm: `git config core.hooksPath` → `tool/git-hooks`.
 
 Zero-cost stand-in for the GitHub Actions workflow (`.github/workflows/ci.yml`),
 which is billing-blocked (we don't pay for Actions minutes). It runs the **same**
-`flutter analyze --no-fatal-infos` + `flutter test` checks before every push, so
-red code never reaches origin — the enforced merge gate for this solo-author repo.
+`dart run tool/check_swiftpm_lockfile.dart` + `flutter analyze --no-fatal-infos` +
+`flutter test` checks before every push, so red code never reaches origin — the
+enforced merge gate for this solo-author repo.
 
+- The SwiftPM lockfile gate (task #1909) catches a committed `Package.resolved` left
+  pinning a removed package — a "false green" where tests pass on a stale artifact
+  (PR #69). Text-only, so it runs identically on the ubuntu CI runner and here.
 - Errors + warnings are fatal; the intentional `prefer_initializing_formals` infos are not.
 - `flutter test` runs `test/` only (fast, device-free). `integration_test/` needs a
   real device and is exercised separately as on-device e2e.
