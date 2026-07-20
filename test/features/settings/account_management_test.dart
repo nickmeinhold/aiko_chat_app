@@ -56,7 +56,8 @@ void main() {
     // The auth guard redirected to /login (no chat, no settings).
     expect(find.widgetWithText(AppBar, 'general'), findsNothing);
     expect(find.widgetWithText(AppBar, 'Settings'), findsNothing);
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget); // login screen is back
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'),
+        findsOneWidget); // login screen is back
   });
 
   testWidgets('a sole-admin 409 keeps the user logged in with a message',
