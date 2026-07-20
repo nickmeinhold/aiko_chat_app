@@ -57,80 +57,89 @@ class LoginScreen extends ConsumerWidget {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Sign in')),
-      body: Column(
-        children: [
-          // Full-width network banner — the login screen is exactly where the
-          // DNS failure surfaced (PR #71), and pre-auth there is no socket, so
-          // this is the user's only connectivity signal here.
-          const NetworkStatusBanner(),
-          Expanded(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 360),
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Passkeys need a platform authenticator (iOS
-                      // Authentication Services / Android Credential Manager) —
-                      // no web target ships, so nothing renders on web.
-                      if (!kIsWeb) ...[
-                        FilledButton.icon(
-                          onPressed: busy ? null : passkeyRegister,
-                          icon: const Icon(Icons.fingerprint),
-                          label: const Text('Create a passkey'),
-                        ),
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: busy ? null : passkeySignIn,
-                          child: const Text('Already have a passkey? Sign in'),
-                        ),
-                      ],
-                      if (busy) ...[
-                        const SizedBox(height: 16),
-                        const Center(child: CircularProgressIndicator()),
-                      ],
-                      if (auth.hasError) ...[
-                        const SizedBox(height: 16),
+      // No AppBar — a passkey-first ingress doesn't need a Material title bar;
+      // the content stands on its own. SafeArea keeps it clear of the status bar
+      // now that nothing sits above it.
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Full-width network banner — the login screen is exactly where the
+            // DNS failure surfaced (PR #71), and pre-auth there is no socket, so
+            // this is the user's only connectivity signal here.
+            const NetworkStatusBanner(),
+            Expanded(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 360),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Passkeys need a platform authenticator (iOS
+                        // Authentication Services / Android Credential Manager) —
+                        // no web target ships, so nothing renders on web.
+                        if (!kIsWeb) ...[
+                          FilledButton.icon(
+                            onPressed: busy ? null : passkeyRegister,
+                            icon: const Icon(Icons.fingerprint),
+                            label: const Text('Create a passkey'),
+                          ),
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: busy ? null : passkeySignIn,
+                            child: const Text(
+                              'Already have a passkey? Sign in',
+                            ),
+                          ),
+                        ],
+                        if (busy) ...[
+                          const SizedBox(height: 16),
+                          const Center(child: CircularProgressIndicator()),
+                        ],
+                        if (auth.hasError) ...[
+                          const SizedBox(height: 16),
+                          Text(
+                            authErrorText(
+                              auth.error,
+                              host: gatewayHost,
+                              action: ref.watch(loginActionProvider),
+                            ),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
+                          // One-tap path for the genuinely-stuck: bundle device
+                          // specs + network state + a SAFE error label into the
+                          // share sheet (PR3).
+                          ReportProblemButton(error: auth.error),
+                        ],
+                        const SizedBox(height: 28),
                         Text(
-                          authErrorText(
-                            auth.error,
-                            host: gatewayHost,
-                            action: ref.watch(loginActionProvider),
-                          ),
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                          ),
+                          'Server: $gatewayHost',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
                         ),
-                        // One-tap path for the genuinely-stuck: bundle device
-                        // specs + network state + a SAFE error label into the
-                        // share sheet (PR3).
-                        ReportProblemButton(error: auth.error),
+                        TextButton(
+                          onPressed: busy
+                              ? null
+                              : () => context.push('/settings/gateway'),
+                          child: const Text('Change server'),
+                        ),
                       ],
-                      const SizedBox(height: 28),
-                      Text(
-                        'Server: $gatewayHost',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: busy
-                            ? null
-                            : () => context.push('/settings/gateway'),
-                        child: const Text('Change server'),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

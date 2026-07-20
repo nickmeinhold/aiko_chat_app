@@ -56,7 +56,8 @@ void main() {
     transport.emitConn(ConnectionState.unauthenticated);
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget); // back at login
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'),
+        findsOneWidget); // back at login
   });
 
   testWidgets('transient disconnected does NOT log out', (tester) async {
@@ -93,7 +94,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(transport.disconnectCalls, greaterThanOrEqualTo(1));
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
   });
 
   testWidgets('logout → different user → no cross-session messages', (tester) async {
@@ -118,7 +119,7 @@ void main() {
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
 
     rest.user = const AppUser(
         userId: 'u2', username: 'bob', displayName: 'Bob', aikoUsername: 'bob');

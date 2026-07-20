@@ -1,4 +1,5 @@
 import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/core/network/network_status_banner.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
@@ -30,12 +31,36 @@ void main() {
 
     await pumpApp(tester, container);
 
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    // Passkey-first ingress: no Material title bar (the content stands alone).
+    expect(find.byType(AppBar), findsNothing);
     expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
     expect(find.text('Already have a passkey? Sign in'), findsOneWidget);
     // Social sign-in is fully removed — no provider buttons, no password fields.
     expect(find.text('Continue with Google'), findsNothing);
     expect(find.byType(TextField), findsNothing);
+  });
+
+  testWidgets('login content clears the status-bar inset (SafeArea, no AppBar)',
+      (tester) async {
+    // With the AppBar gone, SafeArea is the ONLY thing keeping content clear of
+    // the status bar / notch. A plain widget test renders with zero insets and
+    // is blind to this, so simulate a 44px top inset and assert the flush-to-top
+    // child (the network banner) starts BELOW it. Delete SafeArea → this fails.
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.padding = const FakeViewPadding(top: 44);
+    addTearDown(tester.view.reset);
+
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+
+    expect(find.byType(NetworkStatusBanner), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byType(NetworkStatusBanner)).dy,
+      greaterThanOrEqualTo(44.0),
+    );
   });
 
   // --- #35: the gateway picker is a PRE-LOGIN act -------------------------
@@ -61,14 +86,14 @@ void main() {
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(TextButton, 'Change server'));
     await tester.pumpAndSettle();
 
     // Reached the picker (its AppBar title is "Server"), not bounced to login.
     expect(find.widgetWithText(AppBar, 'Server'), findsOneWidget);
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsNothing);
     // And the picker's presets render (it functions while logged out).
     expect(find.text('Production'), findsOneWidget);
   });
@@ -97,7 +122,7 @@ void main() {
     // Config re-pointed; still logged out; landed on the NEW gateway's login
     expect(container.read(configProvider).httpBaseUrl, 'http://localhost:8095');
     expect(container.read(authControllerProvider).value, isNull);
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
     expect(find.widgetWithText(AppBar, 'Server'), findsNothing); // left the picker
     expect(find.text('Server: localhost:8095'), findsOneWidget);
   });
@@ -173,7 +198,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(passkey.authenticateCalls, 1);
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget); // still login
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'),
+        findsOneWidget); // still login
     expect(find.textContaining('went wrong'), findsNothing); // no error banner
   });
 
@@ -209,7 +235,7 @@ void main() {
 
     // The Terms gate is up; login is NOT reachable behind it.
     expect(find.widgetWithText(AppBar, 'Terms of Use'), findsOneWidget);
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsNothing);
     expect(find.text('Accept & Continue'), findsOneWidget);
     expect(find.textContaining('no tolerance for objectionable content'),
         findsOneWidget);
@@ -255,7 +281,7 @@ void main() {
 
     expect(eula.accepted, isTrue); // persisted at the store seam
     expect(eula.setCalls, 1);
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
     expect(find.widgetWithText(AppBar, 'Terms of Use'), findsNothing);
   });
 
@@ -313,6 +339,6 @@ void main() {
     await pumpApp(tester, container);
 
     expect(find.widgetWithText(AppBar, 'Terms of Use'), findsNothing);
-    expect(find.widgetWithText(AppBar, 'Sign in'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
   });
 }
