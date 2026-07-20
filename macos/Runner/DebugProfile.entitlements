@@ -2,10 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.developer.applesignin</key>
-	<array>
-		<string>Default</string>
-	</array>
+	<!-- Sign in with Apple was removed app-wide in the passkeys pivot (PR #69),
+	     so its entitlement is dropped here (it was dead + un-backed on the Mac
+	     App ID). Associated Domains stays: macOS is a real passkey-testing
+	     surface (Touch ID / iCloud Keychain). The webcredentials association is
+	     the SAME one iOS uses — the live AASA at chat.imagineering.cc already
+	     serves SPL85G447K.cc.imagineering.aikoChatApp, which is platform-agnostic
+	     (same team + bundle id as macOS), so no server change is needed. -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>webcredentials:chat.imagineering.cc</string>
