@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Local pre-push gate for aiko_chat_app.
 #
-# Zero-cost stand-in for the GitHub Actions CI (.github/workflows/ci.yml) that is
-# billing-blocked: Nick does not pay for Actions minutes. This hook enforces the
-# SAME analyze + test checks locally so red code never reaches origin — the named,
-# enforced merge gate for a solo-author repo where PRs are admin-merged.
+# A fast, offline-friendly mirror of the GitHub Actions CI (.github/workflows/ci.yml),
+# which DOES run (public repo → free ubuntu minutes; we still avoid billed macOS
+# runners, hence the text-only SwiftPM check). This hook enforces the SAME analyze +
+# test checks locally so red code never reaches origin even before CI weighs in —
+# defense-in-depth for a solo-author repo where PRs are admin-merged.
 #
 # Install (one line, from repo root):
 #     git config core.hooksPath tool/git-hooks

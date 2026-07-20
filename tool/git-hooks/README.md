@@ -14,11 +14,14 @@ runs it once. To confirm: `git config core.hooksPath` → `tool/git-hooks`.
 
 ## `pre-push` — the local CI gate
 
-Zero-cost stand-in for the GitHub Actions workflow (`.github/workflows/ci.yml`),
-which is billing-blocked (we don't pay for Actions minutes). It runs the **same**
+A fast, offline-friendly mirror of the GitHub Actions workflow
+(`.github/workflows/ci.yml`), which **does run** — the repo is public, so its
+ubuntu-runner minutes are free (we still don't pay for billed macOS runners,
+which is why the SwiftPM check below is text-only). This hook runs the **same**
 `dart run tool/check_swiftpm_lockfile.dart` + `flutter analyze --no-fatal-infos` +
-`flutter test` checks before every push, so red code never reaches origin — the
-enforced merge gate for this solo-author repo.
+`flutter test` checks locally before every push, so red code never reaches origin
+even before CI weighs in — defense-in-depth for this solo-author repo, not a
+stand-in for absent CI.
 
 - The SwiftPM lockfile gate (task #1909) catches a committed `Package.resolved` left
   pinning a removed package — a "false green" where tests pass on a stale artifact
