@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nothing to Reconcile — one true log, and coming home is a catch-up</title>
+<style>
+:root{
+  --bg:#e7e0cf; --bg-panel:#f3eee1; --text:#16303a; --text-dim:#586d70;
+  --line:#c8bda3; --sea:#c4d0c9; --sea-2:#aebfb8;
+  --beacon:#bd7016; --signal:#227687; --alert:#b8402a;
+  --flag:#bd7016; --stamp:#b8402a;
+  --font-display:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,ui-serif,serif;
+  --font-body:ui-sans-serif,"Avenir Next","Segoe UI",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --maxw:64ch;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0a1720; --bg-panel:#102430; --text:#dce9eb; --text-dim:#83999f;
+    --line:#204049; --sea:#123039; --sea-2:#0d2530;
+    --beacon:#f0b649; --signal:#57c9d8; --alert:#ec7357;
+    --flag:#f0b649; --stamp:#ec7357;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#e7e0cf; --bg-panel:#f3eee1; --text:#16303a; --text-dim:#586d70;
+  --line:#c8bda3; --sea:#c4d0c9; --sea-2:#aebfb8;
+  --beacon:#bd7016; --signal:#227687; --alert:#b8402a; --flag:#bd7016; --stamp:#b8402a;
+}
+:root[data-theme="dark"]{
+  --bg:#0a1720; --bg-panel:#102430; --text:#dce9eb; --text-dim:#83999f;
+  --line:#204049; --sea:#123039; --sea-2:#0d2530;
+  --beacon:#f0b649; --signal:#57c9d8; --alert:#ec7357; --flag:#f0b649; --stamp:#ec7357;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:var(--font-body); line-height:1.6;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+#sea{position:fixed; inset:0; z-index:0; pointer-events:none}
+.wrap{position:relative; z-index:1}
+
+/* ---- top bar ---- */
+.topbar{
+  position:fixed; top:0; left:0; right:0; z-index:5;
+  display:flex; justify-content:space-between; align-items:center;
+  padding:14px clamp(16px,4vw,40px);
+  font-family:var(--font-mono); font-size:12px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--text-dim);
+}
+.topbar .brand{color:var(--text)}
+.theme-toggle{
+  background:transparent; border:1px solid var(--line); color:var(--text-dim);
+  border-radius:999px; padding:6px 12px; cursor:pointer; font:inherit;
+  letter-spacing:.12em; text-transform:uppercase;
+}
+.theme-toggle:hover{color:var(--text); border-color:var(--text-dim)}
+.theme-toggle:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+
+/* ---- voyage rail ---- */
+.rail{
+  position:fixed; left:clamp(14px,3vw,34px); top:50%; transform:translateY(-50%);
+  z-index:5; display:flex; flex-direction:column; gap:14px;
+}
+.rail a{
+  width:11px; height:11px; border-radius:50%; border:1.5px solid var(--text-dim);
+  background:transparent; transition:background .3s, border-color .3s, transform .3s;
+}
+.rail a.active{background:var(--beacon); border-color:var(--beacon); transform:scale(1.25)}
+.rail a:focus-visible{outline:2px solid var(--signal); outline-offset:3px}
+@media (max-width:720px){.rail{display:none}}
+
+/* ---- hero ---- */
+.hero{
+  min-height:100svh; display:flex; flex-direction:column; justify-content:center;
+  align-items:center; text-align:center; padding:96px clamp(20px,5vw,40px) 60px;
+  gap:26px;
+}
+.eyebrow{
+  font-family:var(--font-mono); font-size:12.5px; letter-spacing:.32em;
+  text-transform:uppercase; color:var(--signal);
+}
+.hero h1{
+  font-family:var(--font-display); font-weight:600;
+  font-size:clamp(2.6rem,8vw,5.4rem); line-height:1.02; margin:0;
+  text-wrap:balance; letter-spacing:-.01em; max-width:16ch;
+}
+.hero .sub{
+  max-width:46ch; font-size:clamp(1.05rem,2.4vw,1.3rem); color:var(--text-dim);
+  text-wrap:balance; margin:0;
+}
+.hero .island-mark{width:min(240px,60vw); height:auto; margin-bottom:8px}
+.scrollcue{
+  margin-top:14px; font-family:var(--font-mono); font-size:11px; letter-spacing:.28em;
+  text-transform:uppercase; color:var(--text-dim); display:flex; flex-direction:column;
+  align-items:center; gap:8px;
+}
+.scrollcue span{display:block; width:1px; height:34px;
+  background:linear-gradient(var(--text-dim),transparent); animation:drop 2.2s ease-in-out infinite}
+@keyframes drop{0%,100%{opacity:.2;transform:scaleY(.6)}50%{opacity:1;transform:scaleY(1)}}
+
+/* ---- scenes ---- */
+.scene{
+  min-height:100svh; display:grid; align-items:center;
+  grid-template-columns:1fr 1fr; gap:clamp(30px,6vw,80px);
+  padding:96px clamp(20px,6vw,90px);
+  max-width:1280px; margin:0 auto;
+}
+.scene .stage{display:flex; justify-content:center; align-items:center}
+.scene .stage svg{width:100%; height:auto; max-width:440px; overflow:visible}
+.scene.flip .copy{order:2} .scene.flip .stage{order:1}
+@media (max-width:820px){
+  .scene{grid-template-columns:1fr; gap:34px; text-align:left}
+  .scene .stage{order:-1 !important}
+  .scene .stage svg{max-width:300px}
+}
+.scene-num{
+  font-family:var(--font-mono); font-size:13px; letter-spacing:.2em; color:var(--beacon);
+  display:flex; align-items:center; gap:12px; margin-bottom:18px;
+}
+.scene-num::after{content:""; flex:1; height:1px; background:var(--line); max-width:120px}
+.scene h2{
+  font-family:var(--font-display); font-weight:600; font-size:clamp(1.7rem,4vw,2.7rem);
+  line-height:1.1; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;
+}
+.voice-label{
+  font-family:var(--font-mono); font-size:11px; letter-spacing:.24em; text-transform:uppercase;
+  color:var(--signal); display:block; margin-bottom:8px;
+}
+.voice{
+  font-size:clamp(1.02rem,2.1vw,1.18rem); color:var(--text); max-width:var(--maxw);
+  border-left:2px solid var(--line); padding-left:18px; margin:0 0 22px;
+}
+.takeaway{
+  font-family:var(--font-body); font-size:.96rem; color:var(--text-dim);
+  background:var(--bg-panel); border:1px solid var(--line); border-radius:10px;
+  padding:14px 16px; max-width:var(--maxw);
+}
+.takeaway b{color:var(--text); font-weight:600}
+.k{font-family:var(--font-mono); font-size:.86em; color:var(--beacon)}
+
+/* reveal */
+.reveal{opacity:0; transform:translateY(26px); transition:opacity .8s ease, transform .8s ease}
+.reveal.in{opacity:1; transform:none}
+.stage.reveal{transition-delay:.12s}
+@media (prefers-reduced-motion:reduce){
+  .reveal{opacity:1; transform:none; transition:none}
+  .scrollcue span{animation:none}
+  .anim *{animation:none !important}
+}
+
+/* closing */
+.closing{
+  min-height:100svh; display:flex; flex-direction:column; justify-content:center;
+  align-items:center; text-align:center; gap:26px; padding:96px clamp(20px,5vw,40px);
+}
+.closing .eyebrow{color:var(--beacon)}
+.closing h2{
+  font-family:var(--font-display); font-weight:600; font-size:clamp(2rem,5.5vw,3.6rem);
+  line-height:1.08; margin:0; max-width:20ch; text-wrap:balance;
+}
+.closing .voice{border-left:none; padding-left:0; text-align:center; max-width:52ch; font-size:clamp(1.05rem,2.3vw,1.28rem)}
+.andy{
+  background:var(--bg-panel); border:1px solid var(--line); border-radius:14px;
+  padding:22px 26px; max-width:52ch; color:var(--text-dim); font-size:1.02rem;
+}
+.andy b{color:var(--text)}
+.andy a{color:var(--signal); text-decoration:none; border-bottom:1px solid var(--line)}
+.andy a:hover{border-color:var(--signal)}
+footer{
+  text-align:center; padding:50px 20px 70px; color:var(--text-dim);
+  font-family:var(--font-mono); font-size:11.5px; letter-spacing:.14em; text-transform:uppercase;
+}
+footer a{color:var(--signal); text-decoration:none}
+footer a:hover{text-decoration:underline}
+
+/* svg helpers */
+.sea-fill{fill:var(--sea)}
+.sea-fill-2{fill:var(--sea-2)}
+.ink{fill:var(--text)}
+.ink-dim{fill:var(--text-dim)}
+.beacon{fill:var(--beacon)}
+.signal-st{stroke:var(--signal)}
+.signalf{fill:var(--signal)}
+.flagf{fill:var(--flag)}
+.panelf{fill:var(--bg-panel)}
+.linef{stroke:var(--line)}
+.alertf{fill:var(--alert)}
+.alerts{stroke:var(--alert)}
+.mono{font-family:var(--font-mono)}
+.disp{font-family:var(--font-display)}
+.wave{transform-box:fill-box; transform-origin:0% 50%; animation:flagwave 3.4s ease-in-out infinite}
+@keyframes flagwave{0%,100%{transform:skewY(0deg) scaleX(1)}50%{transform:skewY(-5deg) scaleX(.94)}}
+.beam{animation:beam 4s ease-in-out infinite}
+@keyframes beam{0%,100%{opacity:.25}50%{opacity:.75}}
+@media (prefers-reduced-motion:reduce){.wave,.beam{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="sea"></canvas>
+
+<div class="topbar">
+  <span class="brand">aiko chat · the reconcile engine</span>
+  <button class="theme-toggle" id="themeBtn" aria-label="Toggle day and night">Night</button>
+</div>
+
+<nav class="rail" aria-label="Scenes">
+  <a href="#hero" data-dot="hero" class="active" aria-label="Opening"></a>
+  <a href="#s1" data-dot="s1" aria-label="Scene 1"></a>
+  <a href="#s2" data-dot="s2" aria-label="Scene 2"></a>
+  <a href="#s3" data-dot="s3" aria-label="Scene 3"></a>
+  <a href="#s4" data-dot="s4" aria-label="Scene 4"></a>
+  <a href="#s5" data-dot="s5" aria-label="Scene 5"></a>
+  <a href="#end" data-dot="end" aria-label="Closing"></a>
+</nav>
+
+<div class="wrap">
+
+  <!-- HERO -->
+  <header class="hero" id="hero">
+    <svg class="island-mark" viewBox="0 0 240 160" role="img" aria-label="A boat carrying a small logbook sails home toward a lit lighthouse across the water">
+      <path class="sea-fill-2" d="M0 138 Q60 126 120 138 T240 138 V160 H0 Z"/>
+      <path class="sea-fill" d="M0 128 Q60 116 120 128 T240 128 V160 H0 Z"/>
+      <!-- harbour lighthouse: keeper of the one true log -->
+      <path class="ink-dim" d="M196 126 L200 74 L210 74 L214 126 Z"/>
+      <rect x="199" y="64" width="12" height="12" class="beacon"/>
+      <path class="beam" d="M199 70 L172 60 M211 70 L236 60" stroke="var(--beacon)" stroke-width="1.6" fill="none"/>
+      <!-- boat sailing home, carrying its logbook -->
+      <path class="ink" d="M40 118 L96 118 L86 134 L50 134 Z"/>
+      <line x1="68" y1="118" x2="68" y2="78" stroke="var(--text)" stroke-width="2.6"/>
+      <path class="flagf wave" d="M68 80 L100 89 L68 98 Z"/>
+      <rect x="58" y="104" width="18" height="12" rx="1.5" class="panelf" stroke="var(--signal)" stroke-width="1.4"/>
+      <line x1="67" y1="104" x2="67" y2="116" class="signal-st" stroke-width="1.2"/>
+    </svg>
+    <p class="eyebrow">A five-scene explainer</p>
+    <h1>Nothing to reconcile</h1>
+    <p class="sub">When your boat sails back in, there is one master log to catch up against &mdash; so coming home is a quick reconcile, never an argument about whose story is true.</p>
+    <div class="scrollcue">Scroll to explore<span></span></div>
+  </header>
+
+  <!-- SCENE 1 -->
+  <section class="scene" id="s1">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 01</div>
+      <h2>Coming home after a spell out of contact</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">A boat drops off the water mid-conversation &mdash; a robot on library wifi, a phone through a dead spot &mdash; then sails back in a minute later. That gap is not a disaster to this app; it is the <em>normal</em> passage. The moment the boat is back in the harbour, one small ritual runs: lay your own logbook beside the harbour&rsquo;s and bring the two into step. A homecoming, not a crisis.</p>
+      <div class="takeaway"><b>The whole job:</b> the <span class="k">B4 reconcile pass</span> is the ritual that runs on every return, walking a message through <span class="k">send &rarr; disconnect &rarr; reconnect &rarr; catch-up</span> with nothing lost and nothing doubled. Dropping and rejoining is the main case the app is built around, not an edge it merely survives.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="A small boat sails back into a lit harbour, carrying its own logbook to lay beside the harbour's">
+        <path class="sea-fill-2" d="M0 236 Q80 222 160 236 T320 236 V300 H0 Z"/>
+        <path class="sea-fill" d="M0 226 Q80 212 160 226 T320 226 V300 H0 Z"/>
+        <!-- harbour / lighthouse -->
+        <path class="ink-dim" d="M244 224 L250 150 L266 150 L272 224 Z"/>
+        <rect x="249" y="134" width="18" height="16" class="beacon"/>
+        <path class="beam" d="M249 142 L214 130 M267 142 L300 130" stroke="var(--beacon)" stroke-width="2" fill="none"/>
+        <text x="258" y="244" text-anchor="middle" class="mono" font-size="9" fill="var(--text-dim)">the harbour</text>
+        <!-- dotted return path -->
+        <path d="M70 210 Q150 196 236 206" fill="none" class="linef" stroke-width="1.4" stroke-dasharray="3 6"/>
+        <!-- returning boat with logbook -->
+        <path class="ink" d="M40 208 L118 208 L106 230 L52 230 Z"/>
+        <line x1="78" y1="208" x2="78" y2="150" stroke="var(--text)" stroke-width="2.8"/>
+        <path class="flagf wave" d="M78 152 L122 163 L78 174 Z"/>
+        <rect x="66" y="182" width="24" height="17" rx="2" class="panelf" stroke="var(--signal)" stroke-width="1.5"/>
+        <line x1="78" y1="182" x2="78" y2="199" class="signal-st" stroke-width="1.3"/>
+        <text x="78" y="250" text-anchor="middle" class="mono" font-size="9" fill="var(--text-dim)">your boat &middot; its logbook</text>
+        <text x="160" y="284" text-anchor="middle" class="mono" font-size="10" fill="var(--signal)" letter-spacing="1.4">BACK IN &mdash; TIME TO CATCH UP</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- SCENE 2 -->
+  <section class="scene flip" id="s2">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 02</div>
+      <h2>One master log, so there is nothing to argue</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">Why is the catch-up quick instead of a quarrel? Because the harbour keeps exactly one master log for the channel &mdash; first this was said, then that, then this &mdash; and everyone agrees it is <em>the</em> record. Reconciling against a single ordered ledger is just reading down it until you reach today. There are no two versions to weigh, no whose-story-wins, nothing to stitch together.</p>
+      <div class="takeaway"><b>The load-bearing rule:</b> one <span class="k">ordering authority</span> per channel keeps a <span class="k">single total order</span>. Because the order is decided in one place, catching up has <span class="k">nothing to merge</span> &mdash; the reconcile engine reads the sequence, it never negotiates it.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="A single bound master log with sequential stamped entries and a wax seal, labelled the one true order">
+        <!-- the one master log -->
+        <rect x="70" y="44" width="180" height="212" rx="9" class="panelf" stroke="var(--line)" stroke-width="2"/>
+        <!-- spine -->
+        <rect x="70" y="44" width="16" height="212" rx="6" class="sea-fill-2"/>
+        <text x="166" y="70" text-anchor="middle" class="mono" font-size="9.5" fill="var(--text-dim)" letter-spacing="1.2">THE HARBOUR&rsquo;S MASTER LOG</text>
+        <line x1="100" y1="82" x2="234" y2="82" class="linef" stroke-width="1"/>
+        <g class="mono" font-size="10.5" fill="var(--text)">
+          <text x="102" y="106"><tspan class="beacon" fill="var(--beacon)">1.</tspan> ava weighed anchor</text>
+          <text x="102" y="132"><tspan class="beacon" fill="var(--beacon)">2.</tspan> leo hailed the deck</text>
+          <text x="102" y="158"><tspan class="beacon" fill="var(--beacon)">3.</tspan> ava set a heading</text>
+          <text x="102" y="184"><tspan class="beacon" fill="var(--beacon)">4.</tspan> leo logged the wind</text>
+        </g>
+        <!-- wax seal -->
+        <circle cx="166" cy="216" r="15" class="flagf"/>
+        <circle cx="166" cy="216" r="15" fill="none" stroke="var(--bg)" stroke-width="1.3" stroke-dasharray="2 3"/>
+        <text x="166" y="244" text-anchor="middle" class="mono" font-size="9" fill="var(--signal)">one order &mdash; nothing to merge</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- SCENE 3 -->
+  <section class="scene" id="s3">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 03</div>
+      <h2>A ribbon marking exactly where you left off</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">You don&rsquo;t re-read the whole log from page one every homecoming &mdash; that would be slow and pointless. The harbourmaster keeps a ribbon tucked at the last line you and the log had already agreed on. Catch-up starts right at the ribbon and runs forward: read the new lines below it, then move the ribbon down to today. Everything above the ribbon you already hold; only what is below needs fetching.</p>
+      <div class="takeaway"><b>The bookmark:</b> a per-channel <span class="k">cursor</span> &mdash; the <span class="k">watermark</span> the reconcile pass advances &mdash; marks the last entry known to be contiguous. Catch-up fetches forward from the cursor, then moves it up. One writer owns that ribbon, so it can never point at a line the boat hasn&rsquo;t truly filled in yet.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="A log column with a ribbon bookmark: entries above are held, the watermark line marks up-to-date, entries below are still to fetch">
+        <rect x="48" y="40" width="224" height="224" rx="9" class="panelf" stroke="var(--line)" stroke-width="1.8"/>
+        <text x="160" y="62" text-anchor="middle" class="mono" font-size="9.5" fill="var(--text-dim)" letter-spacing="1.2">THE CATCH-UP CURSOR</text>
+        <!-- held entries (above the ribbon) -->
+        <g class="mono" font-size="10" fill="var(--text-dim)">
+          <text x="76" y="88">&check; entry 40</text>
+          <text x="76" y="108">&check; entry 41</text>
+          <text x="76" y="128">&check; entry 42</text>
+        </g>
+        <!-- ribbon / watermark line -->
+        <line x1="48" y1="142" x2="272" y2="142" class="signal-st" stroke-width="2" stroke-dasharray="5 4"/>
+        <path d="M244 128 L272 128 L272 156 L258 148 L244 156 Z" class="flagf"/>
+        <text x="160" y="156" text-anchor="middle" class="mono" font-size="8.5" fill="var(--signal)">up to date through here</text>
+        <!-- to-fetch entries (below the ribbon) -->
+        <g class="mono" font-size="10" fill="var(--text)">
+          <text x="76" y="184"><tspan class="beacon" fill="var(--beacon)">&darr;</tspan> entry 43 &mdash; fetch</text>
+          <text x="76" y="204"><tspan class="beacon" fill="var(--beacon)">&darr;</tspan> entry 44 &mdash; fetch</text>
+          <text x="76" y="224"><tspan class="beacon" fill="var(--beacon)">&darr;</tspan> entry 45 &mdash; fetch</text>
+        </g>
+        <text x="160" y="250" text-anchor="middle" class="mono" font-size="9" fill="var(--text-dim)">read forward, then move the ribbon</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- SCENE 4 -->
+  <section class="scene flip" id="s4">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 04</div>
+      <h2>A clean line between the written and the live</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">There is one seam that has to be exact, or a message could slip through it. When the boat re-hails the harbour, the harbourmaster names a single line in the log: everything up to <em>here</em> is already written down &mdash; go read it from the ledger. Everything after <em>here</em> will come to you live, called out across the water as it happens. A buoy marks the line, and nothing falls in the gap because there is no gap.</p>
+      <div class="takeaway"><b>The handoff fence:</b> on re-subscribe the island answers with a <span class="k">fence</span> &mdash; the newest entry at that instant. Everything <span class="k">&le; fence</span> is caught up from written history; everything <span class="k">&gt; fence</span> arrives on the live stream. The two partitions meet exactly at the buoy, so there is <span class="k">no gap</span> and no overlap.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="A buoy in the water marks the fence: to its left, sealed notes already in the ledger; to its right, a note arriving live over a wire">
+        <path class="sea-fill-2" d="M0 244 Q80 230 160 244 T320 244 V300 H0 Z"/>
+        <path class="sea-fill" d="M0 234 Q80 220 160 234 T320 234 V300 H0 Z"/>
+        <text x="160" y="36" text-anchor="middle" class="mono" font-size="10" fill="var(--text-dim)" letter-spacing="1.4">THE HANDOFF FENCE</text>
+        <!-- fence line + buoy -->
+        <line x1="160" y1="52" x2="160" y2="238" class="linef" stroke-width="1.3" stroke-dasharray="4 5"/>
+        <path d="M152 208 L168 208 L163 232 L157 232 Z" class="flagf"/>
+        <circle cx="160" cy="200" r="9" class="beacon"/>
+        <text x="160" y="204" text-anchor="middle" class="mono" font-size="8" fill="var(--bg)">F</text>
+        <!-- left: written history (<= fence) -->
+        <g>
+          <rect x="34" y="78" width="96" height="26" rx="4" class="panelf" stroke="var(--line)" stroke-width="1.4"/>
+          <rect x="34" y="110" width="96" height="26" rx="4" class="panelf" stroke="var(--line)" stroke-width="1.4"/>
+          <rect x="34" y="142" width="96" height="26" rx="4" class="panelf" stroke="var(--line)" stroke-width="1.4"/>
+          <path d="M44 91 h10 M44 123 h10 M44 155 h10" class="signal-st" stroke-width="2" stroke-linecap="round"/>
+        </g>
+        <text x="82" y="190" text-anchor="middle" class="mono" font-size="8.5" fill="var(--text)">&le; fence &middot; in the ledger</text>
+        <!-- right: live arrival (> fence) -->
+        <path d="M196 96 L262 96" class="signal-st" stroke-width="1.8" marker-end="url(#a4)"/>
+        <rect x="238" y="84" width="26" height="24" rx="3" class="panelf" stroke="var(--signal)" stroke-width="1.6"/>
+        <path d="M238 90 l13 9 l13 -9" fill="none" class="signal-st" stroke-width="1.3"/>
+        <text x="228" y="140" text-anchor="middle" class="mono" font-size="8.5" fill="var(--text)">&gt; fence &middot; called live</text>
+        <text x="228" y="158" text-anchor="middle" class="mono" font-size="8" fill="var(--text-dim)">as it happens</text>
+        <defs><marker id="a4" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+          <path d="M0 0 L8 4 L0 8 z" class="signalf"/></marker></defs>
+      </svg>
+    </div>
+  </section>
+
+  <!-- SCENE 5 -->
+  <section class="scene" id="s5">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 05</div>
+      <h2>Say it twice, it&rsquo;s logged once</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">One more worry to put to rest. A boat that lost contact mid-send can&rsquo;t be sure its last line ever reached the log, so on return it simply says it again. The harbourmaster doesn&rsquo;t panic or write a second entry &mdash; he sees it already sits in the log under the same mark, ticks it off, and moves on. Repeating yourself is safe by design: the same line lands in the same place, every time.</p>
+      <div class="takeaway"><b>Idempotent catch-up:</b> a re-sent message carries its original mark, so the log recognises it and keeps the <span class="k">same entry</span> rather than minting a new one. The reconcile pass can re-send freely and read forward freely and still land on <span class="k">exactly one row</span> &mdash; no duplicate, no loss, whatever order things arrive.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="A ship's logbook line and the master log line bearing the same mark are matched with a tick and collapse into one entry">
+        <text x="160" y="34" text-anchor="middle" class="mono" font-size="10" fill="var(--text-dim)" letter-spacing="1.3">SAID TWICE &middot; LOGGED ONCE</text>
+        <!-- ship's re-said line -->
+        <rect x="28" y="66" width="112" height="52" rx="7" class="panelf" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="84" y="86" text-anchor="middle" class="mono" font-size="8.5" fill="var(--text-dim)">the boat re-says</text>
+        <text x="84" y="104" text-anchor="middle" class="mono" font-size="10" fill="var(--text)">mark u&middot;042</text>
+        <!-- master log line -->
+        <rect x="180" y="66" width="112" height="52" rx="7" class="panelf" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="236" y="86" text-anchor="middle" class="mono" font-size="8.5" fill="var(--text-dim)">already in the log</text>
+        <text x="236" y="104" text-anchor="middle" class="mono" font-size="10" fill="var(--text)">mark u&middot;042</text>
+        <!-- match tick -->
+        <circle cx="160" cy="92" r="15" class="panelf" stroke="var(--signal)" stroke-width="1.6"/>
+        <path d="M153 92 l5 6 l10 -12" fill="none" class="signal-st" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <!-- collapse arrows -->
+        <path d="M96 130 L150 168" class="linef" stroke-width="1.4" marker-end="url(#a5)"/>
+        <path d="M224 130 L170 168" class="linef" stroke-width="1.4" marker-end="url(#a5)"/>
+        <!-- the single resulting entry -->
+        <rect x="96" y="176" width="128" height="46" rx="8" class="panelf" stroke="var(--beacon)" stroke-width="1.8"/>
+        <text x="160" y="197" text-anchor="middle" class="mono" font-size="9" fill="var(--text-dim)">one entry</text>
+        <text x="160" y="213" text-anchor="middle" class="mono" font-size="10.5" fill="var(--beacon)">u&middot;042 &mdash; kept</text>
+        <text x="160" y="248" text-anchor="middle" class="mono" font-size="9" fill="var(--signal)">no duplicate, no loss</text>
+        <defs><marker id="a5" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+          <path d="M0 0 L8 4 L0 8 z" class="linef" fill="var(--line)"/></marker></defs>
+      </svg>
+    </div>
+  </section>
+
+  <!-- CLOSING -->
+  <section class="closing" id="end">
+    <p class="eyebrow">The whole thing, in one breath</p>
+    <h2>One true order to come home to, so the catch-up is quick and the truth is never in doubt.</h2>
+    <p class="voice">Because a channel keeps a single ordered log, a boat that drops and rejoins never has to argue its way back in. It reads forward from a ribbon, meets the live stream at a clean fence, and re-says anything it isn&rsquo;t sure of &mdash; and lands on exactly one true record. Reconciling turns out to be the easy part, precisely because there is only ever one order to reconcile against.</p>
+    <div class="andy">The magic isn&rsquo;t a clever merge algorithm &mdash; it&rsquo;s the <b>absence</b> of one. Give every channel a single harbourmaster whose log is <em>the</em> order, and the hardest problem in distributed chat &mdash; whose version of events is real &mdash; simply never gets asked. The reconcile engine spends its cleverness on the return journey, not on refereeing the truth.</div>
+  </section>
+
+  <footer>
+    Companion to design note 04 &middot; the reconcile engine &middot; <a href="https://nickmeinhold.github.io/aiko-chat-island/">the islands, over here &rarr;</a>
+  </footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* theme toggle: day (parchment) / night (sea) */
+  var btn = document.getElementById("themeBtn");
+  function currentDark(){
+    var t = document.documentElement.getAttribute("data-theme");
+    if(t) return t === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  function sync(){ btn.textContent = currentDark() ? "Day" : "Night"; }
+  btn.addEventListener("click", function(){
+    document.documentElement.setAttribute("data-theme", currentDark() ? "light" : "dark");
+    sync();
+  });
+  sync();
+
+  /* scroll reveals */
+  var revs = document.querySelectorAll(".reveal");
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting) e.target.classList.add("in"); });
+  }, {threshold:0.18});
+  revs.forEach(function(r){ io.observe(r); });
+
+  /* active rail dot */
+  var dots = {};
+  document.querySelectorAll(".rail a").forEach(function(a){ dots[a.dataset.dot]=a; });
+  var spy = new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting && dots[e.target.id]){
+        Object.keys(dots).forEach(function(k){ dots[k].classList.remove("active"); });
+        dots[e.target.id].classList.add("active");
+      }
+    });
+  }, {threshold:0.5});
+  ["hero","s1","s2","s3","s4","s5","end"].forEach(function(id){
+    var el=document.getElementById(id); if(el) spy.observe(el);
+  });
+
+  /* ambient sea shimmer */
+  var cv = document.getElementById("sea");
+  if(cv && !reduce){
+    var ctx = cv.getContext("2d"), W,H, lines=[];
+    function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+    function resize(){
+      W = cv.width = window.innerWidth * devicePixelRatio;
+      H = cv.height = window.innerHeight * devicePixelRatio;
+      cv.style.width = window.innerWidth+"px"; cv.style.height = window.innerHeight+"px";
+      lines = [];
+      var n = Math.round(window.innerHeight/70);
+      for(var i=0;i<n;i++){
+        lines.push({ y:(i+0.5)/n, amp: (6+Math.random()*10)*devicePixelRatio,
+          len:(40+Math.random()*80)*devicePixelRatio, x:Math.random(), sp:0.02+Math.random()*0.04, ph:Math.random()*6.28 });
+      }
+    }
+    var t=0;
+    function frame(){
+      t += 0.006;
+      ctx.clearRect(0,0,W,H);
+      var col = css("--sea-2") || "#123039";
+      ctx.strokeStyle = col; ctx.globalAlpha = 0.28; ctx.lineWidth = 1*devicePixelRatio;
+      lines.forEach(function(l){
+        var y = l.y*H + Math.sin(t + l.ph)*l.amp;
+        var x = ((l.x + t*l.sp) % 1.2 - 0.1) * W;
+        ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+l.len, y); ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+      requestAnimationFrame(frame);
+    }
+    resize(); window.addEventListener("resize", resize); frame();
+  }
+})();
+</script>
+</body>
+</html>
