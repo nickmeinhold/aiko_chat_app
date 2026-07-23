@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Chart, Not the Stamp — an identity is a web of ties</title>
+<style>
+:root{
+  --bg:#e7e0cf; --bg-panel:#f3eee1; --text:#16303a; --text-dim:#586d70;
+  --line:#c8bda3; --sea:#c4d0c9; --sea-2:#aebfb8;
+  --beacon:#bd7016; --signal:#227687; --alert:#b8402a;
+  --flag:#bd7016; --stamp:#b8402a;
+  --font-display:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,ui-serif,serif;
+  --font-body:ui-sans-serif,"Avenir Next","Segoe UI",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --maxw:64ch;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0a1720; --bg-panel:#102430; --text:#dce9eb; --text-dim:#83999f;
+    --line:#204049; --sea:#123039; --sea-2:#0d2530;
+    --beacon:#f0b649; --signal:#57c9d8; --alert:#ec7357;
+    --flag:#f0b649; --stamp:#ec7357;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#e7e0cf; --bg-panel:#f3eee1; --text:#16303a; --text-dim:#586d70;
+  --line:#c8bda3; --sea:#c4d0c9; --sea-2:#aebfb8;
+  --beacon:#bd7016; --signal:#227687; --alert:#b8402a; --flag:#bd7016; --stamp:#b8402a;
+}
+:root[data-theme="dark"]{
+  --bg:#0a1720; --bg-panel:#102430; --text:#dce9eb; --text-dim:#83999f;
+  --line:#204049; --sea:#123039; --sea-2:#0d2530;
+  --beacon:#f0b649; --signal:#57c9d8; --alert:#ec7357; --flag:#f0b649; --stamp:#ec7357;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:var(--font-body); line-height:1.6;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+#sea{position:fixed; inset:0; z-index:0; pointer-events:none}
+.wrap{position:relative; z-index:1}
+
+/* ---- top bar ---- */
+.topbar{
+  position:fixed; top:0; left:0; right:0; z-index:5;
+  display:flex; justify-content:space-between; align-items:center;
+  padding:14px clamp(16px,4vw,40px);
+  font-family:var(--font-mono); font-size:12px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--text-dim);
+}
+.topbar .brand{color:var(--text)}
+.theme-toggle{
+  background:transparent; border:1px solid var(--line); color:var(--text-dim);
+  border-radius:999px; padding:6px 12px; cursor:pointer; font:inherit;
+  letter-spacing:.12em; text-transform:uppercase;
+}
+.theme-toggle:hover{color:var(--text); border-color:var(--text-dim)}
+.theme-toggle:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+
+/* ---- voyage rail ---- */
+.rail{
+  position:fixed; left:clamp(14px,3vw,34px); top:50%; transform:translateY(-50%);
+  z-index:5; display:flex; flex-direction:column; gap:14px;
+}
+.rail a{
+  width:11px; height:11px; border-radius:50%; border:1.5px solid var(--text-dim);
+  background:transparent; transition:background .3s, border-color .3s, transform .3s;
+}
+.rail a.active{background:var(--beacon); border-color:var(--beacon); transform:scale(1.25)}
+.rail a:focus-visible{outline:2px solid var(--signal); outline-offset:3px}
+@media (max-width:720px){.rail{display:none}}
+
+/* ---- hero ---- */
+.hero{
+  min-height:100svh; display:flex; flex-direction:column; justify-content:center;
+  align-items:center; text-align:center; padding:96px clamp(20px,5vw,40px) 60px;
+  gap:26px;
+}
+.eyebrow{
+  font-family:var(--font-mono); font-size:12.5px; letter-spacing:.32em;
+  text-transform:uppercase; color:var(--signal);
+}
+.hero h1{
+  font-family:var(--font-display); font-weight:600;
+  font-size:clamp(2.6rem,8vw,5.4rem); line-height:1.02; margin:0;
+  text-wrap:balance; letter-spacing:-.01em; max-width:16ch;
+}
+.hero .sub{
+  max-width:46ch; font-size:clamp(1.05rem,2.4vw,1.3rem); color:var(--text-dim);
+  text-wrap:balance; margin:0;
+}
+.hero .island-mark{width:min(240px,60vw); height:auto; margin-bottom:8px}
+.scrollcue{
+  margin-top:14px; font-family:var(--font-mono); font-size:11px; letter-spacing:.28em;
+  text-transform:uppercase; color:var(--text-dim); display:flex; flex-direction:column;
+  align-items:center; gap:8px;
+}
+.scrollcue span{display:block; width:1px; height:34px;
+  background:linear-gradient(var(--text-dim),transparent); animation:drop 2.2s ease-in-out infinite}
+@keyframes drop{0%,100%{opacity:.2;transform:scaleY(.6)}50%{opacity:1;transform:scaleY(1)}}
+
+/* ---- scenes ---- */
+.scene{
+  min-height:100svh; display:grid; align-items:center;
+  grid-template-columns:1fr 1fr; gap:clamp(30px,6vw,80px);
+  padding:96px clamp(20px,6vw,90px);
+  max-width:1280px; margin:0 auto;
+}
+.scene .stage{display:flex; justify-content:center; align-items:center}
+.scene .stage svg{width:100%; height:auto; max-width:440px; overflow:visible}
+.scene.flip .copy{order:2} .scene.flip .stage{order:1}
+@media (max-width:820px){
+  .scene{grid-template-columns:1fr; gap:34px; text-align:left}
+  .scene .stage{order:-1 !important}
+  .scene .stage svg{max-width:300px}
+}
+.scene-num{
+  font-family:var(--font-mono); font-size:13px; letter-spacing:.2em; color:var(--beacon);
+  display:flex; align-items:center; gap:12px; margin-bottom:18px;
+}
+.scene-num::after{content:""; flex:1; height:1px; background:var(--line); max-width:120px}
+.scene h2{
+  font-family:var(--font-display); font-weight:600; font-size:clamp(1.7rem,4vw,2.7rem);
+  line-height:1.1; margin:0 0 20px; text-wrap:balance; letter-spacing:-.01em;
+}
+.voice-label{
+  font-family:var(--font-mono); font-size:11px; letter-spacing:.24em; text-transform:uppercase;
+  color:var(--signal); display:block; margin-bottom:8px;
+}
+.voice{
+  font-size:clamp(1.02rem,2.1vw,1.18rem); color:var(--text); max-width:var(--maxw);
+  border-left:2px solid var(--line); padding-left:18px; margin:0 0 22px;
+}
+.takeaway{
+  font-family:var(--font-body); font-size:.96rem; color:var(--text-dim);
+  background:var(--bg-panel); border:1px solid var(--line); border-radius:10px;
+  padding:14px 16px; max-width:var(--maxw);
+}
+.takeaway b{color:var(--text); font-weight:600}
+.k{font-family:var(--font-mono); font-size:.86em; color:var(--beacon)}
+
+/* reveal */
+.reveal{opacity:0; transform:translateY(26px); transition:opacity .8s ease, transform .8s ease}
+.reveal.in{opacity:1; transform:none}
+.stage.reveal{transition-delay:.12s}
+@media (prefers-reduced-motion:reduce){
+  .reveal{opacity:1; transform:none; transition:none}
+  .scrollcue span{animation:none}
+  .anim *{animation:none !important}
+}
+
+/* closing */
+.closing{
+  min-height:100svh; display:flex; flex-direction:column; justify-content:center;
+  align-items:center; text-align:center; gap:26px; padding:96px clamp(20px,5vw,40px);
+}
+.closing .eyebrow{color:var(--beacon)}
+.closing h2{
+  font-family:var(--font-display); font-weight:600; font-size:clamp(2rem,5.5vw,3.6rem);
+  line-height:1.08; margin:0; max-width:20ch; text-wrap:balance;
+}
+.closing .voice{border-left:none; padding-left:0; text-align:center; max-width:52ch; font-size:clamp(1.05rem,2.3vw,1.28rem)}
+.andy{
+  background:var(--bg-panel); border:1px solid var(--line); border-radius:14px;
+  padding:22px 26px; max-width:52ch; color:var(--text-dim); font-size:1.02rem;
+}
+.andy b{color:var(--text)}
+.andy a{color:var(--signal); text-decoration:none; border-bottom:1px solid var(--line)}
+.andy a:hover{border-color:var(--signal)}
+footer{
+  text-align:center; padding:50px 20px 70px; color:var(--text-dim);
+  font-family:var(--font-mono); font-size:11.5px; letter-spacing:.14em; text-transform:uppercase;
+}
+footer a{color:var(--signal); text-decoration:none}
+footer a:hover{text-decoration:underline}
+
+/* svg helpers */
+.sea-fill{fill:var(--sea)}
+.sea-fill-2{fill:var(--sea-2)}
+.ink{fill:var(--text)}
+.ink-dim{fill:var(--text-dim)}
+.beacon{fill:var(--beacon)}
+.signal-st{stroke:var(--signal)}
+.signalf{fill:var(--signal)}
+.flagf{fill:var(--flag)}
+.panelf{fill:var(--bg-panel)}
+.linef{stroke:var(--line)}
+.alertf{fill:var(--alert)}
+.alerts{stroke:var(--alert)}
+.mono{font-family:var(--font-mono)}
+.disp{font-family:var(--font-display)}
+.wave{transform-box:fill-box; transform-origin:0% 50%; animation:flagwave 3.4s ease-in-out infinite}
+@keyframes flagwave{0%,100%{transform:skewY(0deg) scaleX(1)}50%{transform:skewY(-5deg) scaleX(.94)}}
+.beam{animation:beam 4s ease-in-out infinite}
+@keyframes beam{0%,100%{opacity:.25}50%{opacity:.75}}
+@media (prefers-reduced-motion:reduce){.wave,.beam{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="sea"></canvas>
+
+<div class="topbar">
+  <span class="brand">aiko chat · the chart of ties</span>
+  <button class="theme-toggle" id="themeBtn" aria-label="Toggle day and night">Night</button>
+</div>
+
+<nav class="rail" aria-label="Scenes">
+  <a href="#hero" data-dot="hero" class="active" aria-label="Opening"></a>
+  <a href="#s1" data-dot="s1" aria-label="Scene 1"></a>
+  <a href="#s2" data-dot="s2" aria-label="Scene 2"></a>
+  <a href="#s3" data-dot="s3" aria-label="Scene 3"></a>
+  <a href="#s4" data-dot="s4" aria-label="Scene 4"></a>
+  <a href="#s5" data-dot="s5" aria-label="Scene 5"></a>
+  <a href="#end" data-dot="end" aria-label="Closing"></a>
+</nav>
+
+<div class="wrap">
+
+  <!-- HERO -->
+  <header class="hero" id="hero">
+    <svg class="island-mark" viewBox="0 0 240 160" role="img" aria-label="Two flagged boats tied by a rope beside a lit lighthouse: identity as a web of ties">
+      <path class="sea-fill-2" d="M0 138 Q60 126 120 138 T240 138 V160 H0 Z"/>
+      <path class="sea-fill" d="M0 128 Q60 116 120 128 T240 128 V160 H0 Z"/>
+      <!-- lighthouse (a harbour on the chart) -->
+      <path class="ink-dim" d="M196 126 L200 78 L210 78 L214 126 Z"/>
+      <rect x="199" y="68" width="12" height="10" class="beacon"/>
+      <path class="beam" d="M199 73 L176 64 M211 73 L234 64" stroke="var(--beacon)" stroke-width="1.6" fill="none"/>
+      <!-- rope tie between the two boats (a vouching edge) -->
+      <path d="M52 112 Q100 92 140 116" fill="none" class="signal-st" stroke-width="1.8" stroke-dasharray="2 5"/>
+      <!-- boat 1 -->
+      <path class="ink" d="M28 112 L60 112 L55 122 L33 122 Z"/>
+      <line x1="44" y1="112" x2="44" y2="86" stroke="var(--text)" stroke-width="2.4"/>
+      <path class="flagf wave" d="M44 88 L66 94 L44 100 Z"/>
+      <!-- boat 2 -->
+      <path class="ink" d="M124 116 L156 116 L151 126 L129 126 Z"/>
+      <line x1="140" y1="116" x2="140" y2="92" stroke="var(--text)" stroke-width="2.4"/>
+      <path class="flagf wave" d="M140 94 L162 100 L140 106 Z"/>
+    </svg>
+    <p class="eyebrow">A five-scene explainer</p>
+    <h1>The chart, not the stamp</h1>
+    <p class="sub">An identity isn&rsquo;t one official mark on your hull. It&rsquo;s a living chart of ties &mdash; who vouches for whom, who keeps a harbour lit, who puts up a bond. Read the lines and you can see the trust.</p>
+    <div class="scrollcue">Scroll to explore<span></span></div>
+  </header>
+
+  <!-- SCENE 1 -->
+  <section class="scene" id="s1">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 01</div>
+      <h2>Trust is a chart, not a stamp</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">A single stamp on a hull tells you almost nothing &mdash; anyone can carve a stamp. What actually tells you who a boat is are the <em>lines around it</em>: which harbours it has sailed from, who has tied a rope to it, who lets it dock. Lay all those lines on one sea-chart and identity stops being a mark you hold and becomes a web you&rsquo;re part of. That web is the thing worth trusting.</p>
+      <div class="takeaway"><b>The reframe:</b> aiko chat models identity as an <span class="k">identity graph</span> &mdash; <span class="k">nodes</span> are substrate-agnostic identities (a person, a robot, a running island alike), and the <span class="k">edges</span> are the real relationships between them: who speaks, who vouches, who runs. You read trust off the edges, never off a lone credential.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="A sea-chart with flagged boats and a lit harbour tied together by rope lines: an identity is a web of relationships, not a single stamp">
+        <rect x="24" y="30" width="272" height="240" rx="10" class="panelf" stroke="var(--line)" stroke-width="1.4"/>
+        <text x="160" y="52" text-anchor="middle" class="mono" font-size="9.5" fill="var(--text-dim)" letter-spacing="1.6">THE CHART OF TIES</text>
+        <!-- edges (ropes), behind the nodes -->
+        <g fill="none" class="signal-st" stroke-width="1.6" stroke-dasharray="2 5" opacity=".85">
+          <path d="M92 104 Q140 70 214 118"/>
+          <path d="M92 104 Q96 170 150 208"/>
+          <path d="M214 118 Q210 176 168 208"/>
+          <path d="M108 196 Q130 150 150 208"/>
+        </g>
+        <!-- node A boat (top-left) -->
+        <path class="ink" d="M76 104 L108 104 L103 113 L81 113 Z"/>
+        <line x1="92" y1="104" x2="92" y2="84" stroke="var(--text)" stroke-width="2.2"/>
+        <path class="flagf wave" d="M92 84 L110 89 L92 94 Z"/>
+        <!-- node B boat (right) -->
+        <path class="ink" d="M198 118 L230 118 L225 127 L203 127 Z"/>
+        <line x1="214" y1="118" x2="214" y2="98" stroke="var(--text)" stroke-width="2.2"/>
+        <path class="flagf wave" d="M214 98 L232 103 L214 108 Z"/>
+        <!-- node C boat (lower-left) -->
+        <path class="ink-dim" d="M92 196 L124 196 L119 205 L97 205 Z"/>
+        <line x1="108" y1="196" x2="108" y2="178" stroke="var(--text-dim)" stroke-width="2"/>
+        <path class="flagf wave" d="M108 178 L124 182 L108 186 Z"/>
+        <!-- harbour node (lighthouse, bottom-centre) -->
+        <path class="ink-dim" d="M150 208 L154 176 L166 176 L170 208 Z"/>
+        <rect x="153" y="164" width="14" height="12" class="beacon"/>
+        <path class="beam" d="M153 170 L134 162 M167 170 L186 162" stroke="var(--beacon)" stroke-width="1.6" fill="none"/>
+        <text x="160" y="252" text-anchor="middle" class="mono" font-size="9" fill="var(--signal)">the ties are the identity</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- SCENE 2 -->
+  <section class="scene flip" id="s2">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 02</div>
+      <h2>The name behind the boat</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">Look at any boat in a channel and you&rsquo;re really seeing three things stacked. There&rsquo;s the accountable <em>name</em> that can post a bond and be held to it &mdash; the durable thing that answers for what the boat does. There&rsquo;s the boat you actually <em>see</em> chatting. And there&rsquo;s the chalk berth-tag saying where it happens to be docked right now, which changes every time it sails. Only the first one is worth trusting; the other two just point at it.</p>
+      <div class="takeaway"><b>Three layers, one identity:</b> the <span class="k">Principal</span> is the accountable name that stakes and can be slashed; the <span class="k">Participant</span> is the <span class="k">@human</span>/<span class="k">@@bot</span> you see in a channel; the runtime <span class="k">address</span> is an ephemeral berth-tag that a restart re-mints. Every stake, vouch and slash attaches to the Principal &mdash; nothing else.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="Three stacked layers of one identity: a durable name-plate that bonds and stakes, the visible flagged boat in a channel, and a chalk berth-tag that changes every docking">
+        <text x="160" y="30" text-anchor="middle" class="mono" font-size="10" fill="var(--text-dim)" letter-spacing="1.4">ONE IDENTITY &middot; THREE LAYERS</text>
+        <!-- layer 1: accountability (durable name-plate + bond) -->
+        <rect x="40" y="46" width="240" height="60" rx="8" class="panelf" stroke="var(--beacon)" stroke-width="1.6"/>
+        <path d="M76 66 v18 M70 80 a6 6 0 0 0 12 0 M76 64 a2.2 2.2 0 1 0 .01 0 M71 70 h10" fill="none" stroke="var(--beacon)" stroke-width="1.6" stroke-linecap="round"/>
+        <text x="102" y="72" class="mono" font-size="10.5" fill="var(--text)">the accountable name</text>
+        <text x="102" y="88" class="mono" font-size="9" fill="var(--beacon)">bonds &middot; stakes &middot; can be slashed</text>
+        <text x="272" y="60" text-anchor="end" class="mono" font-size="8" fill="var(--text-dim)">durable</text>
+        <!-- layer 2: presence (visible boat) -->
+        <rect x="40" y="116" width="240" height="60" rx="8" class="panelf" stroke="var(--signal)" stroke-width="1.5"/>
+        <path class="ink" d="M58 152 L90 152 L85 161 L63 161 Z"/>
+        <line x1="74" y1="152" x2="74" y2="132" stroke="var(--text)" stroke-width="2.2"/>
+        <path class="flagf wave" d="M74 132 L92 137 L74 142 Z"/>
+        <text x="106" y="144" class="mono" font-size="10.5" fill="var(--text)">the boat you see</text>
+        <text x="106" y="160" class="mono" font-size="9" fill="var(--signal)">@human &middot; @@bot in a channel</text>
+        <text x="272" y="130" text-anchor="end" class="mono" font-size="8" fill="var(--text-dim)">visible</text>
+        <!-- layer 3: runtime address (chalk berth tag) -->
+        <rect x="40" y="186" width="240" height="58" rx="8" class="panelf" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="4 4"/>
+        <rect x="56" y="202" width="42" height="26" rx="3" fill="var(--bg)" stroke="var(--text-dim)" stroke-width="1.2"/>
+        <text x="77" y="219" text-anchor="middle" class="mono" font-size="8" fill="var(--text-dim)">host/pid</text>
+        <text x="110" y="210" class="mono" font-size="10.5" fill="var(--text)">the berth tag</text>
+        <text x="110" y="226" class="mono" font-size="8.5" fill="var(--text-dim)">re-chalked every docking &mdash; never trusted</text>
+        <text x="272" y="200" text-anchor="end" class="mono" font-size="8" fill="var(--text-dim)">ephemeral</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- SCENE 3 -->
+  <section class="scene" id="s3">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 03</div>
+      <h2>Ropes of vouching</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">Here is the strongest line on the chart. When one name vouches for another, it ties a real rope between them and posts a bond on the knot. The rope is not a kind word &mdash; it&rsquo;s shared fate: if the boat you vouched for fouls the harbour, your bond is cut too. And you can only pay out rope from a finite coil, so vouching is never free and never infinite. That is exactly what makes a vouch mean something.</p>
+      <div class="takeaway"><b>The vouching edge:</b> <span class="k">bonded</span> (the voucher loses standing if the vouchee misbehaves), <span class="k">conserved</span> (it transfers standing from a finite budget, never mints new), and <span class="k">root-anchored</span> at the island operator. Sybil boats aren&rsquo;t forbidden &mdash; they&rsquo;re <em>priced</em>: fifty flags cost fifty bonds from one coil.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="Two boats tied by a vouching rope carrying a posted bond; the voucher pays from a finite coil and shares the vouchee's fate">
+        <path class="sea-fill-2" d="M0 232 Q80 218 160 232 T320 232 V300 H0 Z"/>
+        <path class="sea-fill" d="M0 222 Q80 208 160 222 T320 222 V300 H0 Z"/>
+        <text x="160" y="34" text-anchor="middle" class="mono" font-size="10" fill="var(--text-dim)" letter-spacing="1.4">A ROPE OF VOUCHING</text>
+        <!-- voucher boat (left) -->
+        <path class="ink" d="M34 176 L104 176 L92 196 L46 196 Z"/>
+        <line x1="66" y1="176" x2="66" y2="130" stroke="var(--text)" stroke-width="2.6"/>
+        <path class="flagf wave" d="M66 132 L100 142 L66 152 Z"/>
+        <text x="66" y="214" text-anchor="middle" class="mono" font-size="9" fill="var(--text-dim)">the voucher</text>
+        <!-- vouchee boat (right) -->
+        <path class="ink" d="M214 182 L284 182 L272 202 L226 202 Z"/>
+        <line x1="246" y1="182" x2="246" y2="140" stroke="var(--text)" stroke-width="2.4"/>
+        <path class="flagf wave" d="M246 142 L278 151 L246 160 Z"/>
+        <text x="248" y="220" text-anchor="middle" class="mono" font-size="9" fill="var(--text-dim)">the vouchee</text>
+        <!-- the rope -->
+        <path d="M92 184 Q160 150 220 188" fill="none" class="signal-st" stroke-width="2" stroke-linecap="round"/>
+        <!-- posted bond on the knot -->
+        <circle cx="156" cy="163" r="13" class="panelf" stroke="var(--beacon)" stroke-width="1.6"/>
+        <path d="M156 156 v12 M150 165 a6 6 0 0 0 12 0 M156 154 a2 2 0 1 0 .01 0 M151 159 h10" fill="none" stroke="var(--beacon)" stroke-width="1.5" stroke-linecap="round"/>
+        <text x="160" y="196" text-anchor="middle" class="mono" font-size="8.5" fill="var(--beacon)">a posted bond</text>
+        <!-- captions -->
+        <text x="66" y="250" text-anchor="middle" class="mono" font-size="8" fill="var(--signal)">paid from a finite coil</text>
+        <text x="248" y="250" text-anchor="middle" class="mono" font-size="8" fill="var(--alert)">they foul &rarr; your rope is cut too</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- SCENE 4 -->
+  <section class="scene flip" id="s4">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 04</div>
+      <h2>Who speaks, who runs, who stakes</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">Once the ties are drawn, three roles jump straight off the chart &mdash; and none of them is a badge you pin on, each is just a line you can trace. There&rsquo;s the flag flying in a channel: <em>who is speaking</em>. There&rsquo;s the keeper who holds a harbour&rsquo;s light through the night: <em>who runs the island</em>. And there&rsquo;s the anchor of a posted bond: <em>who is staking</em>. Same chart, read three ways.</p>
+      <div class="takeaway"><b>Roles are edges, not stamps:</b> <span class="k">speaks-as</span> (a Participant flies a flag under some Principal), <span class="k">runs</span> (a Principal keeps an <span class="k">island</span> lit &mdash; the operator, the keeper of the light), and <span class="k">stakes</span> (a Principal posts a bond or vouches). A robot can hold any of them &mdash; the roles are substrate-agnostic.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="Three marks read off one chart: a flag for who speaks, a lit beacon for who runs the island, an anchor-bond for who stakes">
+        <rect x="26" y="34" width="268" height="232" rx="10" class="panelf" stroke="var(--line)" stroke-width="1.4"/>
+        <text x="160" y="56" text-anchor="middle" class="mono" font-size="9.5" fill="var(--text-dim)" letter-spacing="1.4">THREE THINGS THE CHART SHOWS</text>
+        <line x1="46" y1="68" x2="274" y2="68" class="linef" stroke-width="1"/>
+        <!-- role 1: speaks -->
+        <line x1="70" y1="118" x2="70" y2="88" stroke="var(--text)" stroke-width="2.4"/>
+        <path class="flagf wave" d="M70 90 L96 97 L70 104 Z"/>
+        <circle cx="70" cy="84" r="3" class="beacon"/>
+        <text x="118" y="98" class="mono" font-size="11" fill="var(--text)">who speaks</text>
+        <text x="118" y="113" class="mono" font-size="9" fill="var(--signal)">flies a flag in a channel</text>
+        <!-- role 2: runs the island -->
+        <path class="ink-dim" d="M60 178 L64 150 L78 150 L82 178 Z"/>
+        <rect x="63" y="140" width="16" height="10" class="beacon"/>
+        <path class="beam" d="M63 145 L46 138 M79 145 L96 138" stroke="var(--beacon)" stroke-width="1.5" fill="none"/>
+        <text x="118" y="160" class="mono" font-size="11" fill="var(--text)">who runs the island</text>
+        <text x="118" y="175" class="mono" font-size="9" fill="var(--beacon)">keeps the light lit</text>
+        <!-- role 3: stakes -->
+        <path d="M71 214 v20 M63 228 a8 8 0 0 0 16 0 M71 210 a3 3 0 1 0 .01 0 M64 218 h14" fill="none" stroke="var(--text)" stroke-width="2" stroke-linecap="round"/>
+        <text x="118" y="222" class="mono" font-size="11" fill="var(--text)">who stakes</text>
+        <text x="118" y="237" class="mono" font-size="9" fill="var(--text-dim)">posts a bond, vouches</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- SCENE 5 -->
+  <section class="scene" id="s5">
+    <div class="copy reveal">
+      <div class="scene-num">Scene 05</div>
+      <h2>A robot flies its own flag</h2>
+      <span class="voice-label">The idea</span>
+      <p class="voice">On this chart a robot is a boat like any other &mdash; not an appendage stitched to its maker&rsquo;s hull. It gets its own flag and its own place to post a bond, with a vouching rope run out from whoever built it. Behave well and its own standing grows on its own name. One day that rope can be cut and the boat still floats on what it has earned. A first-class citizen can, in the end, stand alone.</p>
+      <div class="takeaway"><b>Robots are first-class nodes:</b> a bot holds its <em>own</em> identity node, its maker <span class="k">vouches</span> with a bond, and good behaviour lets it accrue <span class="k">standing</span> until it can stand without the vouch. Sybil fleets stay <span class="k">priced by conserved vouching</span>, not fenced out by a personhood test &mdash; the graph counts ties, not people.</div>
+    </div>
+    <div class="stage reveal" aria-hidden="true">
+      <svg viewBox="0 0 320 300" role="img" aria-label="A robot-flagged boat carries its own bond and a vouching rope from its maker; behaving well, it can one day cut the rope and still float on its own standing">
+        <path class="sea-fill-2" d="M0 236 Q80 222 160 236 T320 236 V300 H0 Z"/>
+        <path class="sea-fill" d="M0 226 Q80 212 160 226 T320 226 V300 H0 Z"/>
+        <text x="160" y="34" text-anchor="middle" class="mono" font-size="10" fill="var(--text-dim)" letter-spacing="1.4">A ROBOT WITH ITS OWN FLAG</text>
+        <!-- maker boat (left) -->
+        <path class="ink-dim" d="M30 176 L92 176 L81 194 L41 194 Z"/>
+        <line x1="60" y1="176" x2="60" y2="136" stroke="var(--text-dim)" stroke-width="2.4"/>
+        <path class="flagf wave" d="M60 138 L90 147 L60 156 Z"/>
+        <text x="60" y="212" text-anchor="middle" class="mono" font-size="9" fill="var(--text-dim)">the maker</text>
+        <!-- robot boat (right), own flag marked @@ -->
+        <path class="ink" d="M212 182 L282 182 L271 200 L223 200 Z"/>
+        <line x1="242" y1="182" x2="242" y2="138" stroke="var(--text)" stroke-width="2.6"/>
+        <path class="signalf wave" d="M242 140 L276 150 L242 160 Z"/>
+        <text x="252" y="153" text-anchor="middle" class="mono" font-size="8" fill="var(--bg)">@@</text>
+        <text x="247" y="218" text-anchor="middle" class="mono" font-size="9" fill="var(--signal)">the robot &middot; first-class</text>
+        <!-- its own bond/anchor -->
+        <path d="M247 200 v14 M241 210 a6 6 0 0 0 12 0 M247 198 a2 2 0 1 0 .01 0 M242 204 h10" fill="none" stroke="var(--beacon)" stroke-width="1.5" stroke-linecap="round"/>
+        <!-- vouch rope from maker, shown cuttable -->
+        <path d="M84 178 Q160 150 214 186" fill="none" class="linef" stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round"/>
+        <text x="150" y="150" text-anchor="middle" class="mono" font-size="8" fill="var(--text-dim)">vouch &mdash; cuttable one day</text>
+        <text x="160" y="256" text-anchor="middle" class="mono" font-size="8.5" fill="var(--beacon)">earns standing &rarr; can stand alone</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- CLOSING -->
+  <section class="closing" id="end">
+    <p class="eyebrow">The whole thing, in one breath</p>
+    <h2>Trust flows along the lines, never from a stamp.</h2>
+    <p class="voice">An identity is the web of ties around it: the name that answers, the ropes of vouching, the roles you can trace on the chart. People and robots are the same kind of node; standing is something you earn along an edge, not a badge you&rsquo;re handed. Read the chart and the trust is legible.</p>
+    <div class="andy">The chart doesn&rsquo;t end at one island&rsquo;s waters. A name you earn is a portable key you can carry to another harbour &mdash; and the lines of vouching are how a new harbour decides, at a glance, whether to let your flag fly. That is what turns a scatter of islands into a federation you can sail across: <a href="https://nickmeinhold.github.io/aiko-chat-island/">the islands, over here &rarr;</a></div>
+  </section>
+
+  <footer>
+    Companion to design note 12 &middot; the identity graph &middot; <a href="https://nickmeinhold.github.io/aiko-chat-island/">the islands, over here &rarr;</a>
+  </footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* theme toggle: day (parchment) / night (sea) */
+  var btn = document.getElementById("themeBtn");
+  function currentDark(){
+    var t = document.documentElement.getAttribute("data-theme");
+    if(t) return t === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  function sync(){ btn.textContent = currentDark() ? "Day" : "Night"; }
+  btn.addEventListener("click", function(){
+    document.documentElement.setAttribute("data-theme", currentDark() ? "light" : "dark");
+    sync();
+  });
+  sync();
+
+  /* scroll reveals */
+  var revs = document.querySelectorAll(".reveal");
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting) e.target.classList.add("in"); });
+  }, {threshold:0.18});
+  revs.forEach(function(r){ io.observe(r); });
+
+  /* active rail dot */
+  var dots = {};
+  document.querySelectorAll(".rail a").forEach(function(a){ dots[a.dataset.dot]=a; });
+  var spy = new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting && dots[e.target.id]){
+        Object.keys(dots).forEach(function(k){ dots[k].classList.remove("active"); });
+        dots[e.target.id].classList.add("active");
+      }
+    });
+  }, {threshold:0.5});
+  ["hero","s1","s2","s3","s4","s5","end"].forEach(function(id){
+    var el=document.getElementById(id); if(el) spy.observe(el);
+  });
+
+  /* ambient sea shimmer */
+  var cv = document.getElementById("sea");
+  if(cv && !reduce){
+    var ctx = cv.getContext("2d"), W,H, lines=[];
+    function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+    function resize(){
+      W = cv.width = window.innerWidth * devicePixelRatio;
+      H = cv.height = window.innerHeight * devicePixelRatio;
+      cv.style.width = window.innerWidth+"px"; cv.style.height = window.innerHeight+"px";
+      lines = [];
+      var n = Math.round(window.innerHeight/70);
+      for(var i=0;i<n;i++){
+        lines.push({ y:(i+0.5)/n, amp: (6+Math.random()*10)*devicePixelRatio,
+          len:(40+Math.random()*80)*devicePixelRatio, x:Math.random(), sp:0.02+Math.random()*0.04, ph:Math.random()*6.28 });
+      }
+    }
+    var t=0;
+    function frame(){
+      t += 0.006;
+      ctx.clearRect(0,0,W,H);
+      var col = css("--sea-2") || "#123039";
+      ctx.strokeStyle = col; ctx.globalAlpha = 0.28; ctx.lineWidth = 1*devicePixelRatio;
+      lines.forEach(function(l){
+        var y = l.y*H + Math.sin(t + l.ph)*l.amp;
+        var x = ((l.x + t*l.sp) % 1.2 - 0.1) * W;
+        ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+l.len, y); ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+      requestAnimationFrame(frame);
+    }
+    resize(); window.addEventListener("resize", resize); frame();
+  }
+})();
+</script>
+</body>
+</html>
