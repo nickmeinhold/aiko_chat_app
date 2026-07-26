@@ -159,6 +159,45 @@ void main() {
       expect(page.nextAfter, '01K');
     });
 
+    // task #1896 — the HTTP path of getCapabilities, the branch prod is in TODAY
+    // (/capabilities 404s). Cage-match Maxwell + Tesla + Carnot all flagged it
+    // untested. Three-state at the wire: explicit bool → value; every "can't
+    // determine" path (404, non-Map, missing field) → null.
+    test('getCapabilities: explicit {carriage:{origin:true}} → carriesOrigin',
+        () async {
+      final api = apiWith((_) => jsonBody(200, '{"carriage":{"origin":true}}'));
+      final caps = await api.getCapabilities();
+      expect(caps?.carriesOrigin, isTrue);
+    });
+
+    test('getCapabilities: explicit origin:false → carriesOrigin false',
+        () async {
+      final api = apiWith((_) => jsonBody(200, '{"carriage":{"origin":false}}'));
+      final caps = await api.getCapabilities();
+      expect(caps?.carriesOrigin, isFalse);
+    });
+
+    test('getCapabilities: 404 → null (the live prod branch)', () async {
+      final api = apiWith((_) => jsonBody(404, '{"detail":"not found"}'));
+      expect(await api.getCapabilities(), isNull);
+    });
+
+    test('getCapabilities: stub 200 with missing origin → null (NOT false)',
+        () async {
+      // The bug: this must be unknown, so the resolver keeps the seed.
+      final api = apiWith((_) => jsonBody(200, '{"carriage":{}}'));
+      expect(await api.getCapabilities(), isNull);
+      final api2 = apiWith((_) => jsonBody(200, '{}'));
+      expect(await api2.getCapabilities(), isNull);
+    });
+
+    test('getCapabilities: non-object / non-JSON body → null', () async {
+      final api = apiWith((_) => jsonBody(200, '"just a string"'));
+      expect(await api.getCapabilities(), isNull);
+      final api2 = apiWith((_) => jsonBody(200, 'not json at all'));
+      expect(await api2.getCapabilities(), isNull);
+    });
+
     test('getHistory forwards the `after` cursor as a query param', () async {
       RequestOptions? captured;
       final api = apiWith((opts) {
@@ -310,6 +349,7 @@ void main() {
         wsBaseUrl: 'ws://host',
         tokens: tokens(),
         channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => true, // gate open (default is now fail-closed)
       );
       await t.connect();
       t.sendMessage(OutgoingMessage(
@@ -339,6 +379,7 @@ void main() {
         wsBaseUrl: 'ws://host',
         tokens: tokens(),
         channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => true, // gate open, so we exercise the STRIP path
       );
       await t.connect();
       // 10-byte key → encodeMultikey (inside toWire) throws OriginError.

@@ -98,8 +98,13 @@ class GatewayRestApi implements ChatRestApi {
     try {
       final r = await _bare.get('/capabilities');
       final data = r.data is String ? jsonDecode(r.data as String) : r.data;
+      // parse() is itself three-state: a Map missing/malforming carriage.origin
+      // returns null (unknown), same as a non-Map body or a 404 below. Every
+      // "can't determine" path collapses to null uniformly, so the resolver
+      // keeps the seed rather than flipping an allowlisted host off on a stub
+      // 200 (cage-match Tesla + Carnot — the malformed-200 inconsistency).
       if (data is Map) {
-        return GatewayCapabilities.fromJson(Map<String, dynamic>.from(data));
+        return GatewayCapabilities.parse(Map<String, dynamic>.from(data));
       }
       return null;
     } catch (_) {

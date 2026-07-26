@@ -36,7 +36,19 @@ class CarriageCapability {
     void Function(String message)? log,
   })  : _fetch = fetch,
         _log = log,
-        _carriesOrigin = knownCarriageHosts.contains(host);
+        // Normalize before the allowlist match so a case/trailing-dot variant of
+        // the known host doesn't silently seed false and drop origin against the
+        // one island that still 404s (cage-match Tesla). Uri.host already
+        // lowercases, but this is the single door for the match, so normalize
+        // here regardless of how the caller derived `host`.
+        _carriesOrigin =
+            knownCarriageHosts.contains(_normalizeHost(host));
+
+  static String _normalizeHost(String host) {
+    var h = host.toLowerCase();
+    if (h.endsWith('.')) h = h.substring(0, h.length - 1); // strip FQDN root dot
+    return h;
+  }
 
   /// The synchronous gate the transport reads per-send.
   bool get carriesOrigin => _carriesOrigin;

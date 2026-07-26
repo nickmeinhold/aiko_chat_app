@@ -36,8 +36,10 @@ class GatewayTransport implements ChatTransport {
   /// The capability gate for sovereign `origin` emit (task #1896). Read
   /// synchronously per-send: when it returns false the `origin` envelope is
   /// stripped and the message is sent unsigned — a non-carriage gateway would
-  /// otherwise `bad_origin`-reject the whole message. Defaults to always-emit so
-  /// the pre-capability behaviour (and every existing test) is preserved.
+  /// otherwise `bad_origin`-reject the whole message. Defaults to **fail-closed
+  /// (never emit)** so a caller that forgets to wire the capability degrades to
+  /// safe unsigned delivery, not origin-at-every-island (cage-match Tesla). The
+  /// production site (`transportProvider`) always injects the real predicate.
   final bool Function() _carriesOrigin;
 
   /// Fired (fire-and-forget) each time the socket reaches `connected`, so the
@@ -95,7 +97,7 @@ class GatewayTransport implements ChatTransport {
         _tokens = tokens,
         _channelFactory = channelFactory ?? _defaultChannelFactory,
         _log = log,
-        _carriesOrigin = carriesOrigin ?? (() => true),
+        _carriesOrigin = carriesOrigin ?? (() => false),
         _onConnected = onConnected;
 
   @override
@@ -231,6 +233,13 @@ class GatewayTransport implements ChatTransport {
       // Re-resolve carriage capability against the (possibly changed) gateway.
       // Fire-and-forget: the socket is live now; the gate reads the refreshed
       // value on subsequent sends (task #1896).
+      //
+      // Named one-window tradeoff (cage-match Tesla): a send BETWEEN this connect
+      // and the refresh landing uses the seed value. Both directions are bounded
+      // and acceptable: a stranger seeds false (safe — no emit until proven), and
+      // the only host that seeds true is one we've allowlisted as known-carriage,
+      // so at worst it keeps emitting for one window until an explicit `false`
+      // lands — never a regression for a host that actually carries.
       _onConnected?.call();
     } catch (e) {
       _connecting = false;
