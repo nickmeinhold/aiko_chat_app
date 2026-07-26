@@ -33,6 +33,19 @@ class GatewayTransport implements ChatTransport {
   final ChannelFactory _channelFactory;
   final void Function(String message)? _log;
 
+  /// The capability gate for sovereign `origin` emit (task #1896). Read
+  /// synchronously per-send: when it returns false the `origin` envelope is
+  /// stripped and the message is sent unsigned — a non-carriage gateway would
+  /// otherwise `bad_origin`-reject the whole message. Defaults to always-emit so
+  /// the pre-capability behaviour (and every existing test) is preserved.
+  final bool Function() _carriesOrigin;
+
+  /// Fired (fire-and-forget) each time the socket reaches `connected`, so the
+  /// carriage capability can be (re)resolved against the live gateway. The gate
+  /// reads the freshest value on subsequent sends; the current send uses
+  /// whatever was already resolved (allowlist-seeded on first connect).
+  final Future<void> Function()? _onConnected;
+
   final _messages = StreamController<Message>.broadcast();
   final _acks = StreamController<AckResult>.broadcast();
   final _errors = StreamController<TransportError>.broadcast();
@@ -76,10 +89,14 @@ class GatewayTransport implements ChatTransport {
     required TokenProvider tokens,
     ChannelFactory? channelFactory,
     void Function(String message)? log,
+    bool Function()? carriesOrigin,
+    Future<void> Function()? onConnected,
   })  : _wsBaseUrl = wsBaseUrl,
         _tokens = tokens,
         _channelFactory = channelFactory ?? _defaultChannelFactory,
-        _log = log;
+        _log = log,
+        _carriesOrigin = carriesOrigin ?? (() => true),
+        _onConnected = onConnected;
 
   @override
   Stream<ConnectionState> get connectionState => Stream.multi((c) {
@@ -168,6 +185,10 @@ class GatewayTransport implements ChatTransport {
   Map<String, dynamic>? _originWire(OutgoingMessage message) {
     final o = message.origin;
     if (o == null) return null;
+    // Capability gate (task #1896): a gateway that does not advertise `origin`
+    // carriage would `bad_origin`-reject the whole message, so withhold the
+    // envelope and send unsigned rather than risk the drop.
+    if (!_carriesOrigin()) return null;
     try {
       final wire = o.toWire();
       validateOrigin(wire, frameClientMsgId: message.clientTempId);
@@ -207,6 +228,10 @@ class GatewayTransport implements ChatTransport {
       _backoffAttempt = 0;
       _setConn(ConnectionState.connected);
       _resubscribe();
+      // Re-resolve carriage capability against the (possibly changed) gateway.
+      // Fire-and-forget: the socket is live now; the gate reads the refreshed
+      // value on subsequent sends (task #1896).
+      _onConnected?.call();
     } catch (e) {
       _connecting = false;
       _log?.call('ws connect failed: $e');

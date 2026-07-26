@@ -2,6 +2,7 @@ import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../domain/channel.dart';
+import '../domain/gateway_capabilities.dart';
 import '../domain/message.dart';
 
 /// A page of history (always ascending). Carries both cursors so either
@@ -148,6 +149,13 @@ abstract interface class ChatRestApi {
   /// Exchange a refresh token for a fresh access token (the refresh token is
   /// NOT rotated by the gateway). Returns the new access token.
   Future<String> refresh(String refreshToken);
+
+  /// Fetch the gateway's advertised capabilities from the public `GET
+  /// /capabilities` endpoint (task #1896). Returns `null` when the endpoint is
+  /// absent (404) or unreachable — the caller treats null as "unknown" and falls
+  /// back to the transitional carriage allowlist, never flipping a known host
+  /// off. Token-less: capability discovery must work before/without a session.
+  Future<GatewayCapabilities?> getCapabilities();
 
   Future<AppUser> me();
 

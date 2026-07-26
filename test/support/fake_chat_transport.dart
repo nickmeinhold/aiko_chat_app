@@ -6,6 +6,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
+import 'package:aiko_chat_app/features/chat/domain/gateway_capabilities.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 
@@ -154,6 +155,9 @@ class FakeChatRestApi implements ChatRestApi {
 
   @override
   Future<String> refresh(String refreshToken) => throw UnimplementedError();
+
+  @override
+  Future<GatewayCapabilities?> getCapabilities() async => null;
   @override
   Future<AppUser> me() => throw UnimplementedError();
   @override

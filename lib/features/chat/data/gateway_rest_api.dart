@@ -8,6 +8,7 @@ import '../../moderation/domain/moderation_models.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
+import '../domain/gateway_capabilities.dart';
 import '../domain/message.dart';
 import 'chat_rest_api.dart';
 
@@ -86,6 +87,24 @@ class GatewayRestApi implements ChatRestApi {
       data: {'refresh_token': refreshToken},
     );
     return _map(r.data)['access_token'] as String;
+  }
+
+  @override
+  Future<GatewayCapabilities?> getCapabilities() async {
+    // Best-effort + token-less on the bare client. A 404 (endpoint not deployed
+    // yet), a network error, or a non-object body all yield `null` = "unknown",
+    // which the carriage resolver reads as "fall back to the allowlist". Never
+    // throws — capability discovery must not break connect.
+    try {
+      final r = await _bare.get('/capabilities');
+      final data = r.data is String ? jsonDecode(r.data as String) : r.data;
+      if (data is Map) {
+        return GatewayCapabilities.fromJson(Map<String, dynamic>.from(data));
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override

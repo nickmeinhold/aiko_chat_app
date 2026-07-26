@@ -361,6 +361,78 @@ void main() {
       expect(sent.contains('"body":"hello"'), isTrue);
     });
 
+    // task #1896: a gateway that does NOT advertise `origin` carriage would
+    // `bad_origin`-reject the whole message. The capability gate WITHHOLDS a
+    // perfectly valid origin and sends the message unsigned instead.
+    test('sendMessage WITHHOLDS a well-formed origin when the gateway does '
+        'not carry it (capability gate, #1896)', () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => false, // gateway advertises NO origin carriage
+      );
+      await t.connect();
+      final id = t.sendMessage(OutgoingMessage(
+        clientTempId: 'tmp1',
+        channelId: 'c1',
+        body: 'hello',
+        origin: OriginEnvelope(
+          keyVersion: 1,
+          rawPublicKey: Uint8List(32), // a VALID origin — gate, not malformation
+          clientMsgId: 'tmp1',
+          signedAtMs: 1,
+          sig: Uint8List(64),
+        ),
+      ));
+      expect(id, 'tmp1', reason: 'the message still sends, just unsigned');
+      final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
+      expect(sent.contains('"origin"'), isFalse,
+          reason: 'non-carriage gateway → origin withheld, message unsigned');
+      expect(sent.contains('"body":"hello"'), isTrue);
+    });
+
+    test('sendMessage EMITS a well-formed origin when the gateway carries it '
+        '(gate open, #1896)', () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => true,
+      );
+      await t.connect();
+      t.sendMessage(OutgoingMessage(
+        clientTempId: 'tmp1',
+        channelId: 'c1',
+        body: 'hello',
+        origin: OriginEnvelope(
+          keyVersion: 1,
+          rawPublicKey: Uint8List(32),
+          clientMsgId: 'tmp1',
+          signedAtMs: 1,
+          sig: Uint8List(64),
+        ),
+      ));
+      final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
+      expect(sent.contains('"origin"'), isTrue);
+    });
+
+    // The transport TRIGGERS a capability re-resolve on each connect so the gate
+    // reads a value that tracks the live (possibly switched) gateway (#1896).
+    test('onConnected fires when the socket reaches connected', () async {
+      var refreshed = 0;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => FakeWebSocketChannel(),
+        onConnected: () async => refreshed++,
+      );
+      await t.connect();
+      expect(refreshed, 1, reason: 'capability refresh triggered on connect');
+    });
+
     test('subscribe awaits the suback and returns the per-channel fence map',
         () async {
       late FakeWebSocketChannel fake;
