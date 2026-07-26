@@ -489,6 +489,39 @@ void main() {
       expect(await t.connectionState.first, ConnectionState.connected);
     });
 
+    // cage-match Carnot: prove the full loop — a stranger seeds OFF, the
+    // on-connect refresh flips the gate ON, and a subsequent send then emits.
+    test('onConnected refresh flips the gate → a later send emits origin',
+        () async {
+      late FakeWebSocketChannel fake;
+      var carries = false; // stranger seed: OFF until proven
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => carries,
+        onConnected: () async => carries = true, // endpoint proves carriage
+      );
+      await t.connect();
+      await Future<void>.delayed(Duration.zero); // let the fire-and-forget hook run
+      OutgoingMessage msg(String id) => OutgoingMessage(
+            clientTempId: id,
+            channelId: 'c1',
+            body: 'hi',
+            origin: OriginEnvelope(
+              keyVersion: 1,
+              rawPublicKey: Uint8List(32),
+              clientMsgId: id,
+              signedAtMs: 1,
+              sig: Uint8List(64),
+            ),
+          );
+      t.sendMessage(msg('after'));
+      final sent = fake.sent.lastWhere((f) => f.contains('"type":"send"'));
+      expect(sent.contains('"origin"'), isTrue,
+          reason: 'gate flipped ON by the refresh → this send carries origin');
+    });
+
     test('subscribe awaits the suback and returns the per-channel fence map',
         () async {
       late FakeWebSocketChannel fake;

@@ -104,13 +104,62 @@ void main() {
           reason: 'a 404 must never flip the live carriage host OFF');
     });
 
-    test('a fetch THROWING keeps the prior (seeded) value', () async {
+    test('a fetch THROWING resolves to the allowlist seed', () async {
       final c = CarriageCapability(
         host: 'chat.imagineering.cc',
         fetch: () async => throw Exception('network down'),
       );
       await c.refresh();
-      expect(c.carriesOrigin, isTrue);
+      expect(c.carriesOrigin, isTrue, reason: 'unknown → seed (allowlisted)');
+    });
+
+    // Option B (cage-match Tesla + Carnot): the allowlist is a LIVE fallback,
+    // not a one-shot seed. A transient explicit false must NOT stick forever.
+    test('allowlisted host: explicit false then null RE-SEEDS to ON '
+        '(no sticky sovereignty-off)', () async {
+      final answers = <GatewayCapabilities?>[
+        const GatewayCapabilities(carriesOrigin: false), // canary/misdeploy
+        null, // endpoint reverts to 404/stub → unknown
+      ];
+      var i = 0;
+      final c = CarriageCapability(
+        host: 'chat.imagineering.cc',
+        fetch: () async => answers[i++],
+      );
+      await c.refresh();
+      expect(c.carriesOrigin, isFalse, reason: 'explicit false is authoritative');
+      await c.refresh();
+      expect(c.carriesOrigin, isTrue,
+          reason: 'unknown after a transient false re-seeds to the allowlist');
+    });
+
+    test('stranger: explicit true then null RE-SEEDS to OFF '
+        '(no sticky emit an island would bad_origin-drop)', () async {
+      final answers = <GatewayCapabilities?>[
+        const GatewayCapabilities(carriesOrigin: true),
+        null,
+      ];
+      var i = 0;
+      final c = CarriageCapability(
+        host: 'new-island.example',
+        fetch: () async => answers[i++],
+      );
+      await c.refresh();
+      expect(c.carriesOrigin, isTrue, reason: 'stranger proved carriage');
+      await c.refresh();
+      expect(c.carriesOrigin, isFalse,
+          reason: 'endpoint went dark → re-seed to stranger seed (false)');
+    });
+
+    test('injected allowlist entries are normalized too (cage-match Carnot)',
+        () {
+      final c = CarriageCapability(
+        host: 'chat.imagineering.cc',
+        knownCarriageHosts: const {'CHAT.IMAGINEERING.CC'},
+        fetch: () async => null,
+      );
+      expect(c.carriesOrigin, isTrue,
+          reason: 'a mixed-case allowlist entry must still match');
     });
 
     test('stranger island that PROVES carriage flips on', () async {
