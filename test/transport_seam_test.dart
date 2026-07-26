@@ -159,6 +159,45 @@ void main() {
       expect(page.nextAfter, '01K');
     });
 
+    // task #1896 — the HTTP path of getCapabilities, the branch prod is in TODAY
+    // (/capabilities 404s). Cage-match Maxwell + Tesla + Carnot all flagged it
+    // untested. Three-state at the wire: explicit bool → value; every "can't
+    // determine" path (404, non-Map, missing field) → null.
+    test('getCapabilities: explicit {carriage:{origin:true}} → carriesOrigin',
+        () async {
+      final api = apiWith((_) => jsonBody(200, '{"carriage":{"origin":true}}'));
+      final caps = await api.getCapabilities();
+      expect(caps?.carriesOrigin, isTrue);
+    });
+
+    test('getCapabilities: explicit origin:false → carriesOrigin false',
+        () async {
+      final api = apiWith((_) => jsonBody(200, '{"carriage":{"origin":false}}'));
+      final caps = await api.getCapabilities();
+      expect(caps?.carriesOrigin, isFalse);
+    });
+
+    test('getCapabilities: 404 → null (the live prod branch)', () async {
+      final api = apiWith((_) => jsonBody(404, '{"detail":"not found"}'));
+      expect(await api.getCapabilities(), isNull);
+    });
+
+    test('getCapabilities: stub 200 with missing origin → null (NOT false)',
+        () async {
+      // The bug: this must be unknown, so the resolver keeps the seed.
+      final api = apiWith((_) => jsonBody(200, '{"carriage":{}}'));
+      expect(await api.getCapabilities(), isNull);
+      final api2 = apiWith((_) => jsonBody(200, '{}'));
+      expect(await api2.getCapabilities(), isNull);
+    });
+
+    test('getCapabilities: non-object / non-JSON body → null', () async {
+      final api = apiWith((_) => jsonBody(200, '"just a string"'));
+      expect(await api.getCapabilities(), isNull);
+      final api2 = apiWith((_) => jsonBody(200, 'not json at all'));
+      expect(await api2.getCapabilities(), isNull);
+    });
+
     test('getHistory forwards the `after` cursor as a query param', () async {
       RequestOptions? captured;
       final api = apiWith((opts) {
@@ -310,6 +349,7 @@ void main() {
         wsBaseUrl: 'ws://host',
         tokens: tokens(),
         channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => true, // gate open (default is now fail-closed)
       );
       await t.connect();
       t.sendMessage(OutgoingMessage(
@@ -339,6 +379,7 @@ void main() {
         wsBaseUrl: 'ws://host',
         tokens: tokens(),
         channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => true, // gate open, so we exercise the STRIP path
       );
       await t.connect();
       // 10-byte key → encodeMultikey (inside toWire) throws OriginError.
@@ -359,6 +400,126 @@ void main() {
       expect(sent.contains('"origin"'), isFalse,
           reason: 'malformed origin stripped; message emitted unsigned');
       expect(sent.contains('"body":"hello"'), isTrue);
+    });
+
+    // task #1896: a gateway that does NOT advertise `origin` carriage would
+    // `bad_origin`-reject the whole message. The capability gate WITHHOLDS a
+    // perfectly valid origin and sends the message unsigned instead.
+    test('sendMessage WITHHOLDS a well-formed origin when the gateway does '
+        'not carry it (capability gate, #1896)', () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => false, // gateway advertises NO origin carriage
+      );
+      await t.connect();
+      final id = t.sendMessage(OutgoingMessage(
+        clientTempId: 'tmp1',
+        channelId: 'c1',
+        body: 'hello',
+        origin: OriginEnvelope(
+          keyVersion: 1,
+          rawPublicKey: Uint8List(32), // a VALID origin — gate, not malformation
+          clientMsgId: 'tmp1',
+          signedAtMs: 1,
+          sig: Uint8List(64),
+        ),
+      ));
+      expect(id, 'tmp1', reason: 'the message still sends, just unsigned');
+      final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
+      expect(sent.contains('"origin"'), isFalse,
+          reason: 'non-carriage gateway → origin withheld, message unsigned');
+      expect(sent.contains('"body":"hello"'), isTrue);
+    });
+
+    test('sendMessage EMITS a well-formed origin when the gateway carries it '
+        '(gate open, #1896)', () async {
+      late FakeWebSocketChannel fake;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => true,
+      );
+      await t.connect();
+      t.sendMessage(OutgoingMessage(
+        clientTempId: 'tmp1',
+        channelId: 'c1',
+        body: 'hello',
+        origin: OriginEnvelope(
+          keyVersion: 1,
+          rawPublicKey: Uint8List(32),
+          clientMsgId: 'tmp1',
+          signedAtMs: 1,
+          sig: Uint8List(64),
+        ),
+      ));
+      final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
+      expect(sent.contains('"origin"'), isTrue);
+    });
+
+    // The transport TRIGGERS a capability re-resolve on each connect so the gate
+    // reads a value that tracks the live (possibly switched) gateway (#1896).
+    test('onConnected fires when the socket reaches connected', () async {
+      var refreshed = 0;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => FakeWebSocketChannel(),
+        onConnected: () async => refreshed++,
+      );
+      await t.connect();
+      expect(refreshed, 1, reason: 'capability refresh triggered on connect');
+    });
+
+    // cage-match Carnot: a throwing onConnected hook must NOT corrupt the live
+    // socket — it runs isolated from the connect try, so no spurious reconnect.
+    test('a throwing onConnected hook leaves the socket connected', () async {
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => FakeWebSocketChannel(),
+        onConnected: () async => throw StateError('hook boom'),
+      );
+      await t.connect();
+      // The connect completed and the state is connected, not thrown back into
+      // a reconnect cycle by the hook's failure.
+      expect(await t.connectionState.first, ConnectionState.connected);
+    });
+
+    // cage-match Carnot: prove the full loop — a stranger seeds OFF, the
+    // on-connect refresh flips the gate ON, and a subsequent send then emits.
+    test('onConnected refresh flips the gate → a later send emits origin',
+        () async {
+      late FakeWebSocketChannel fake;
+      var carries = false; // stranger seed: OFF until proven
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        carriesOrigin: () => carries,
+        onConnected: () async => carries = true, // endpoint proves carriage
+      );
+      await t.connect();
+      await Future<void>.delayed(Duration.zero); // let the fire-and-forget hook run
+      OutgoingMessage msg(String id) => OutgoingMessage(
+            clientTempId: id,
+            channelId: 'c1',
+            body: 'hi',
+            origin: OriginEnvelope(
+              keyVersion: 1,
+              rawPublicKey: Uint8List(32),
+              clientMsgId: id,
+              signedAtMs: 1,
+              sig: Uint8List(64),
+            ),
+          );
+      t.sendMessage(msg('after'));
+      final sent = fake.sent.lastWhere((f) => f.contains('"type":"send"'));
+      expect(sent.contains('"origin"'), isTrue,
+          reason: 'gate flipped ON by the refresh → this send carries origin');
     });
 
     test('subscribe awaits the suback and returns the per-channel fence map',

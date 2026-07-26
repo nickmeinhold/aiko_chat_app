@@ -5,6 +5,7 @@ import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
+import 'package:aiko_chat_app/features/chat/domain/gateway_capabilities.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 
 /// A full-surface [ChatRestApi] fake for the widget/app-shell tests (the shipped
@@ -64,6 +65,9 @@ class FakeRestApi implements ChatRestApi {
 
   @override
   Future<String> refresh(String refreshToken) async => 'access2';
+
+  @override
+  Future<GatewayCapabilities?> getCapabilities() async => null;
 
   @override
   Future<AppUser> me() async {

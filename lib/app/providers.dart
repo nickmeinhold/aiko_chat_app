@@ -13,6 +13,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -21,6 +22,7 @@ import '../features/auth/application/auth_controller.dart';
 import '../features/auth/data/cached_user_store.dart';
 import '../features/auth/data/passkey_auth_client.dart';
 import '../features/chat/data/cache/cache_database.dart';
+import '../features/chat/data/carriage_capability.dart';
 import '../features/chat/data/cache/drift_cache.dart';
 import '../features/chat/data/chat_rest_api.dart';
 import '../features/chat/data/gateway_rest_api.dart';
@@ -165,9 +167,24 @@ final passkeyAuthClientProvider = Provider<PasskeyAuthClient>(
 final transportProvider = Provider<ChatTransport>((ref) {
   final config = ref.watch(configProvider);
   final tokens = ref.watch(tokenProviderProvider);
+  final restApi = ref.watch(restApiProvider);
+  // Capability gate for sovereign `origin` emit (task #1896). Seeded from the
+  // transitional carriage allowlist for this host, then re-resolved from the
+  // gateway's `GET /capabilities` on every (re)connect. Rebuilt with this
+  // provider when the gateway URL changes (switchGateway), so the host seed
+  // always matches the active gateway.
+  final carriage = CarriageCapability(
+    host: Uri.parse(config.httpBaseUrl).host,
+    fetch: restApi.getCapabilities,
+    // Observability (cage-match Tesla): without a sink a stuck/failed refresh is
+    // invisible in production, so a seed-stuck carriage state can't be diagnosed.
+    log: (m) => debugPrint('[carriage] $m'),
+  );
   final transport = GatewayTransport(
     wsBaseUrl: config.wsBaseUrl,
     tokens: tokens,
+    carriesOrigin: () => carriage.carriesOrigin,
+    onConnected: carriage.refresh,
   );
   ref.onDispose(transport.disconnect);
   return transport;

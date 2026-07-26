@@ -33,6 +33,21 @@ class GatewayTransport implements ChatTransport {
   final ChannelFactory _channelFactory;
   final void Function(String message)? _log;
 
+  /// The capability gate for sovereign `origin` emit (task #1896). Read
+  /// synchronously per-send: when it returns false the `origin` envelope is
+  /// stripped and the message is sent unsigned — a non-carriage gateway would
+  /// otherwise `bad_origin`-reject the whole message. Defaults to **fail-closed
+  /// (never emit)** so a caller that forgets to wire the capability degrades to
+  /// safe unsigned delivery, not origin-at-every-island (cage-match Tesla). The
+  /// production site (`transportProvider`) always injects the real predicate.
+  final bool Function() _carriesOrigin;
+
+  /// Fired (fire-and-forget) each time the socket reaches `connected`, so the
+  /// carriage capability can be (re)resolved against the live gateway. The gate
+  /// reads the freshest value on subsequent sends; the current send uses
+  /// whatever was already resolved (allowlist-seeded on first connect).
+  final Future<void> Function()? _onConnected;
+
   final _messages = StreamController<Message>.broadcast();
   final _acks = StreamController<AckResult>.broadcast();
   final _errors = StreamController<TransportError>.broadcast();
@@ -76,10 +91,14 @@ class GatewayTransport implements ChatTransport {
     required TokenProvider tokens,
     ChannelFactory? channelFactory,
     void Function(String message)? log,
+    bool Function()? carriesOrigin,
+    Future<void> Function()? onConnected,
   })  : _wsBaseUrl = wsBaseUrl,
         _tokens = tokens,
         _channelFactory = channelFactory ?? _defaultChannelFactory,
-        _log = log;
+        _log = log,
+        _carriesOrigin = carriesOrigin ?? (() => false),
+        _onConnected = onConnected;
 
   @override
   Stream<ConnectionState> get connectionState => Stream.multi((c) {
@@ -168,6 +187,10 @@ class GatewayTransport implements ChatTransport {
   Map<String, dynamic>? _originWire(OutgoingMessage message) {
     final o = message.origin;
     if (o == null) return null;
+    // Capability gate (task #1896): a gateway that does not advertise `origin`
+    // carriage would `bad_origin`-reject the whole message, so withhold the
+    // envelope and send unsigned rather than risk the drop.
+    if (!_carriesOrigin()) return null;
     try {
       final wire = o.toWire();
       validateOrigin(wire, frameClientMsgId: message.clientTempId);
@@ -179,6 +202,23 @@ class GatewayTransport implements ChatTransport {
   }
 
   // --- internals -----------------------------------------------------------
+
+  /// Run the on-connect capability refresh in isolation from the connect path,
+  /// so neither a synchronous throw nor an async rejection can corrupt the live
+  /// socket's state machine (cage-match Carnot). Fire-and-forget by design.
+  void _fireOnConnected() {
+    final hook = _onConnected;
+    if (hook == null) return;
+    // The `async` wrapper turns a sync throw inside hook() into a future error
+    // too, so the single catch covers both failure modes.
+    () async {
+      try {
+        await hook();
+      } catch (e) {
+        _log?.call('onConnected capability refresh failed: $e');
+      }
+    }();
+  }
 
   Future<void> _openSocket() async {
     if (!_wantConnected || _connecting || _channel != null) return;
@@ -207,6 +247,20 @@ class GatewayTransport implements ChatTransport {
       _backoffAttempt = 0;
       _setConn(ConnectionState.connected);
       _resubscribe();
+      // Re-resolve carriage capability against the (possibly changed) gateway.
+      // ISOLATED fire-and-forget (cage-match Carnot): the hook must NOT run in
+      // the connect `try` — a synchronous throw would be caught below and
+      // reclassify an already-live socket as a connect failure (spurious
+      // reconnect while `_channel` is non-null), and an async error would be
+      // unhandled. `_fireOnConnected` swallows both into the log.
+      //
+      // Named one-window tradeoff (cage-match Tesla): a send BETWEEN this connect
+      // and the refresh landing uses the seed value. Both directions are bounded
+      // and acceptable: a stranger seeds false (safe — no emit until proven), and
+      // the only host that seeds true is one we've allowlisted as known-carriage,
+      // so at worst it keeps emitting for one window until an explicit `false`
+      // lands — never a regression for a host that actually carries.
+      _fireOnConnected();
     } catch (e) {
       _connecting = false;
       _log?.call('ws connect failed: $e');
