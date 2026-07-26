@@ -85,6 +85,14 @@ class CarriageCapability {
           ? 'carriage=${caps.carriesOrigin} (endpoint authoritative)'
           : 'carriage=$_seed (unknown → allowlist seed)');
     } catch (e) {
+      // Belt-and-braces: the production fetch (GatewayRestApi.getCapabilities)
+      // catches all transport errors and returns null, so a transient DNS/
+      // timeout arrives at the null branch above, NOT here — this catch only
+      // fires for an injected/future fetch that itself throws. Either way the
+      // resolution is the same: unknown → seed. That is deliberately fail-closed
+      // over keep-prior, because if the gateway has silently stopped carrying,
+      // keeping emit ON causes a `bad_origin` DROP (data loss), which is strictly
+      // worse than the unsigned-but-delivered message a re-seed-to-false yields.
       _carriesOrigin = _seed;
       _log?.call('carriage refresh failed, resolved to seed=$_seed: $e');
     }

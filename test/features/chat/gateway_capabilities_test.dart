@@ -151,6 +151,25 @@ void main() {
           reason: 'endpoint went dark → re-seed to stranger seed (false)');
     });
 
+    test('stranger: proved true then a THROWING fetch resolves to seed=false '
+        '(deliberate fail-closed, cage-match Carnot)', () async {
+      var throwNow = false;
+      final c = CarriageCapability(
+        host: 'new-island.example',
+        fetch: () async {
+          if (throwNow) throw Exception('boom');
+          return const GatewayCapabilities(carriesOrigin: true);
+        },
+      );
+      await c.refresh();
+      expect(c.carriesOrigin, isTrue);
+      throwNow = true;
+      await c.refresh();
+      expect(c.carriesOrigin, isFalse,
+          reason: 'unknown (throw) → seed; a dropped bad_origin message is '
+              'worse than an unsigned one');
+    });
+
     test('injected allowlist entries are normalized too (cage-match Carnot)',
         () {
       final c = CarriageCapability(
