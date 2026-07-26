@@ -203,6 +203,23 @@ class GatewayTransport implements ChatTransport {
 
   // --- internals -----------------------------------------------------------
 
+  /// Run the on-connect capability refresh in isolation from the connect path,
+  /// so neither a synchronous throw nor an async rejection can corrupt the live
+  /// socket's state machine (cage-match Carnot). Fire-and-forget by design.
+  void _fireOnConnected() {
+    final hook = _onConnected;
+    if (hook == null) return;
+    // The `async` wrapper turns a sync throw inside hook() into a future error
+    // too, so the single catch covers both failure modes.
+    () async {
+      try {
+        await hook();
+      } catch (e) {
+        _log?.call('onConnected capability refresh failed: $e');
+      }
+    }();
+  }
+
   Future<void> _openSocket() async {
     if (!_wantConnected || _connecting || _channel != null) return;
     _connecting = true;
@@ -231,8 +248,11 @@ class GatewayTransport implements ChatTransport {
       _setConn(ConnectionState.connected);
       _resubscribe();
       // Re-resolve carriage capability against the (possibly changed) gateway.
-      // Fire-and-forget: the socket is live now; the gate reads the refreshed
-      // value on subsequent sends (task #1896).
+      // ISOLATED fire-and-forget (cage-match Carnot): the hook must NOT run in
+      // the connect `try` — a synchronous throw would be caught below and
+      // reclassify an already-live socket as a connect failure (spurious
+      // reconnect while `_channel` is non-null), and an async error would be
+      // unhandled. `_fireOnConnected` swallows both into the log.
       //
       // Named one-window tradeoff (cage-match Tesla): a send BETWEEN this connect
       // and the refresh landing uses the seed value. Both directions are bounded
@@ -240,7 +260,7 @@ class GatewayTransport implements ChatTransport {
       // the only host that seeds true is one we've allowlisted as known-carriage,
       // so at worst it keeps emitting for one window until an explicit `false`
       // lands — never a regression for a host that actually carries.
-      _onConnected?.call();
+      _fireOnConnected();
     } catch (e) {
       _connecting = false;
       _log?.call('ws connect failed: $e');

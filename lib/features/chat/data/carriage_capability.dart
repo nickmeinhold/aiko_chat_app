@@ -53,10 +53,18 @@ class CarriageCapability {
   /// The synchronous gate the transport reads per-send.
   bool get carriesOrigin => _carriesOrigin;
 
-  /// Re-resolve from the live endpoint; called on every (re)connect. A null
-  /// result (404 / unreachable) or a thrown error KEEPS the current
-  /// (allowlist-seeded) value — never a regression to origin-off for a host that
-  /// was carrying.
+  /// Re-resolve from the live endpoint; called on every (re)connect.
+  ///
+  /// Only an EXPLICIT bool from the endpoint (`GatewayCapabilities.parse` →
+  /// non-null) moves the gate. A null result — 404, unreachable, a thrown error,
+  /// OR a stub/partial/malformed 200 (parse returns null) — KEEPS the current
+  /// (allowlist-seeded) value. This is deliberate and load-bearing: treating a
+  /// malformed 200 as an authoritative `false` (the tempting "fail-closed"
+  /// reading) would flip an allowlisted, already-carrying host off during the
+  /// island's `/capabilities` rollout — the exact no-regression break this
+  /// design exists to prevent. Fail-closed lives in the DECODE (only `== true`
+  /// enables) and in the stranger SEED (unknown → false for a non-allowlisted
+  /// host), not in the resolution of an ambiguous answer.
   Future<void> refresh() async {
     try {
       final caps = await _fetch();

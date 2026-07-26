@@ -13,6 +13,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -175,6 +176,9 @@ final transportProvider = Provider<ChatTransport>((ref) {
   final carriage = CarriageCapability(
     host: Uri.parse(config.httpBaseUrl).host,
     fetch: restApi.getCapabilities,
+    // Observability (cage-match Tesla): without a sink a stuck/failed refresh is
+    // invisible in production, so a seed-stuck carriage state can't be diagnosed.
+    log: (m) => debugPrint('[carriage] $m'),
   );
   final transport = GatewayTransport(
     wsBaseUrl: config.wsBaseUrl,

@@ -474,6 +474,21 @@ void main() {
       expect(refreshed, 1, reason: 'capability refresh triggered on connect');
     });
 
+    // cage-match Carnot: a throwing onConnected hook must NOT corrupt the live
+    // socket — it runs isolated from the connect try, so no spurious reconnect.
+    test('a throwing onConnected hook leaves the socket connected', () async {
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: tokens(),
+        channelFactory: (uri) => FakeWebSocketChannel(),
+        onConnected: () async => throw StateError('hook boom'),
+      );
+      await t.connect();
+      // The connect completed and the state is connected, not thrown back into
+      // a reconnect cycle by the hook's failure.
+      expect(await t.connectionState.first, ConnectionState.connected);
+    });
+
     test('subscribe awaits the suback and returns the per-channel fence map',
         () async {
       late FakeWebSocketChannel fake;
