@@ -52,6 +52,28 @@ class PendingHandleNotifier extends Notifier<PendingHandle?> {
   void clear() => state = null;
 }
 
+/// Whether THIS island has suspended the current account (a ban — the gateway's
+/// `403 {"detail":"account suspended"}`, surfaced as [AccountSuspended]). Like
+/// [pendingHandleProvider] it lives ALONGSIDE the `AppUser?` machine rather than
+/// inside it, and drives a dedicated router zone (`/suspended`) — a ban is a
+/// terminal-for-this-island state, NOT "logged out, please sign in again"
+/// (which loops). It is a SOFT gate: because suspension clears the (dead) tokens
+/// like any terminal auth, the suspended screen lets the user DISMISS it — "try
+/// again" clears the flag → /login (a re-auth re-flags if still banned, or lands
+/// the user in if the ban lifted), "switch island" clears it via a gateway
+/// switch. In-memory only: a cold restart re-discovers the ban on the next auth
+/// attempt (task #29). The host to display is read from [configProvider], so
+/// this stays a bare flag with a single owner for the host.
+final suspendedProvider =
+    NotifierProvider<SuspendedNotifier, bool>(SuspendedNotifier.new);
+
+class SuspendedNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+  void flag() => state = true;
+  void clear() => state = false;
+}
+
 class AuthController extends AsyncNotifier<AppUser?> {
   ChatRestApi get _rest => ref.read(restApiProvider);
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
@@ -116,7 +138,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
     try {
       final user = await _rest.me();
       await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
-      return user;
+      _clearSuspended(); // a successful me() means the ban (if any) has lifted
+      return user; // (clear is microtask-deferred — safe during build)
+    } on AccountSuspended {
+      // BAN (403) — a terminal-for-this-island state, distinct from a revoked
+      // session. Must be caught BEFORE `on Unauthorized` (its supertype). Clear
+      // the dead tokens like any terminal auth, then flag the suspended zone so
+      // the router shows /suspended instead of /login (which would loop: a
+      // re-auth 403s again). Deferred to a microtask so we never mutate a sibling
+      // provider DURING this AsyncNotifier's build.
+      await _tokens.clearTokens();
+      await _cachedUser.clear();
+      Future.microtask(() => ref.read(suspendedProvider.notifier).flag());
+      return null;
     } on Unauthorized {
       await _tokens.clearTokens(); // tokens are genuinely dead
       await _cachedUser.clear();
@@ -190,7 +224,21 @@ class AuthController extends AsyncNotifier<AppUser?> {
     final prior = state.value;
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() => ceremony(prior));
+    // A sign-in attempt against a banned account surfaces AccountSuspended here
+    // (the ceremony's finish/authenticate 403s). Flag the suspended zone so the
+    // login screen's inline error gives way to the dedicated /suspended screen.
+    // Not during build, so a direct set is safe.
+    if (state.error is AccountSuspended) {
+      ref.read(suspendedProvider.notifier).flag();
+    }
   }
+
+  /// Clear the suspended flag (ban lifted / session ended / gateway switched).
+  /// Microtask-deferred so it is uniformly safe to call from the build-time
+  /// restore path as well as user-action paths — never a sibling-provider
+  /// mutation mid-build.
+  void _clearSuspended() =>
+      Future.microtask(() => ref.read(suspendedProvider.notifier).clear());
 
   /// Sign in with an EXISTING passkey (WebAuthn). The ingress is a gateway
   /// challenge + an on-device authenticator assertion: fetch the request
@@ -292,6 +340,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       case Authenticated(:final session):
         await _tokens.setTokens(session.tokens);
         await _writeCachedUser(session.user); // enable offline restore
+        _clearSuspended(); // signed in successfully → not suspended here
         return session.user;
       case PendingHandle pending:
         ref.read(pendingHandleProvider.notifier).set(pending);
@@ -317,6 +366,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       await _tokens.setTokens(session.tokens);
       await _writeCachedUser(session.user); // enable offline restore
       ref.read(pendingHandleProvider.notifier).clear();
+      _clearSuspended();
       return session.user;
     });
   }
@@ -402,6 +452,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // silently absorbed (Carnot) — a clear failure propagates to the picker's
       // error UI. Only the disconnect is best-effort.
       ref.read(pendingHandleProvider.notifier).clear();
+      _clearSuspended(); // a different island may not have banned this account
       await _tokens.clearTokens(); // security-critical: old credential gone first
       await _cachedUser.clear(); // old identity gone with the old credential
       try {

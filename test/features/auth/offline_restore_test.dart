@@ -3,7 +3,7 @@ import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show Unauthorized, NetworkUnavailable;
+    show AccountSuspended, Unauthorized, NetworkUnavailable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -167,6 +167,66 @@ void main() {
 
       expect(await c.read(authControllerProvider.future), isNull);
       expect(rest.meCalls, 0);
+    });
+  });
+
+  group('account suspended (ban) drives the /suspended zone', () {
+    test('me() → AccountSuspended: flags suspended, clears dead tokens, logged out',
+        () async {
+      // A ban (403 account suspended) is terminal-for-this-island — the router
+      // must send it to /suspended, NOT /login (which loops on re-auth). Tokens
+      // are cleared like any terminal auth; the flag is what distinguishes it.
+      final rest = FakeRestApi(meThrows: const AccountSuspended());
+      final cache = InMemoryCachedUserStore(cachedUser);
+      final store = InMemoryTokenStore(seededTokens);
+      final c = makeContainer(rest: rest, store: store, cached: cache);
+      addTearDown(c.dispose);
+
+      final user = await c.read(authControllerProvider.future);
+      await Future<void>.microtask(() {}); // let the deferred flag land
+
+      expect(user, isNull);
+      expect(c.read(suspendedProvider), isTrue,
+          reason: 'ban → /suspended zone, not /login');
+      expect(store.current, isNull,
+          reason: 'dead tokens cleared like any terminal auth');
+      expect(cache.cleared, isTrue);
+    });
+
+    test('a later successful me() (ban lifted) clears the suspended flag',
+        () async {
+      final rest = FakeRestApi(); // me() ok — the ban has lifted
+      final c = makeContainer(
+          rest: rest,
+          store: InMemoryTokenStore(seededTokens),
+          cached: InMemoryCachedUserStore());
+      addTearDown(c.dispose);
+      c.read(suspendedProvider.notifier).flag(); // pretend a prior ban
+
+      final user = await c.read(authControllerProvider.future);
+      await Future<void>.microtask(() {});
+
+      expect(user, FakeRestApi.defaultUser);
+      expect(c.read(suspendedProvider), isFalse,
+          reason: 'a successful me() means the ban lifted → leave /suspended');
+    });
+
+    test('a plain terminal Unauthorized does NOT flag suspended (revoked ≠ ban)',
+        () async {
+      // The subtype must not smear: a 401 revoked session is logged-out, not
+      // suspended. Only AccountSuspended flags the zone.
+      final rest = FakeRestApi(meThrows: const Unauthorized(401));
+      final c = makeContainer(
+          rest: rest,
+          store: InMemoryTokenStore(seededTokens),
+          cached: InMemoryCachedUserStore(cachedUser));
+      addTearDown(c.dispose);
+
+      await c.read(authControllerProvider.future);
+      await Future<void>.microtask(() {});
+
+      expect(c.read(suspendedProvider), isFalse,
+          reason: 'a revoked 401 is logged-out, not suspended');
     });
   });
 

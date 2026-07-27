@@ -18,6 +18,7 @@ import 'package:go_router/go_router.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/auth/presentation/claim_handle_screen.dart';
 import '../features/auth/presentation/login_screen.dart';
+import '../features/auth/presentation/suspended_screen.dart';
 import '../features/chat/presentation/chat_screen.dart';
 import '../features/chat/presentation/splash_screen.dart';
 import '../features/legal/application/eula_controller.dart';
@@ -34,6 +35,8 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.listen(authControllerProvider, (_, _) => refresh.value++);
   // A new identity awaiting its handle is a redirect trigger too.
   ref.listen(pendingHandleProvider, (_, _) => refresh.value++);
+  // A ban on this island (→ /suspended) is a redirect trigger too.
+  ref.listen(suspendedProvider, (_, _) => refresh.value++);
   // Accepting the Terms is a redirect trigger (gate → login/chat).
   ref.listen(eulaAcceptanceProvider, (_, _) => refresh.value++);
 
@@ -65,6 +68,15 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (auth.isLoading) {
         if (loc == '/login' || loc == '/claim-handle') return null;
         return loc == '/splash' ? null : '/splash';
+      }
+
+      // Ban on THIS island (→ /suspended). A terminal-for-this-island state,
+      // ahead of the logged-out routing so a banned account never lands on
+      // /login to loop on re-auth. The gateway picker stays reachable so the
+      // user can switch to a different island (switchGateway clears the flag).
+      if (ref.read(suspendedProvider)) {
+        if (loc == '/settings/gateway') return null;
+        return loc == '/suspended' ? null : '/suspended';
       }
 
       final loggedIn = auth.value != null;
@@ -103,6 +115,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/eula', builder: (_, _) => const EulaScreen()),
       GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
+      GoRoute(
+          path: '/suspended', builder: (_, _) => const SuspendedScreen()),
       GoRoute(
           path: '/claim-handle', builder: (_, _) => const ClaimHandleScreen()),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
