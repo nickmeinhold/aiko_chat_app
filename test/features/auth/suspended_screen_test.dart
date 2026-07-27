@@ -53,4 +53,26 @@ void main() {
     expect(find.text('Account suspended'), findsNothing);
     expect(find.text('Already have a passkey? Sign in'), findsOneWidget);
   });
+
+  testWidgets('a logged-in user is ejected off /suspended, never idles on it while live',
+      (tester) async {
+    // Tesla's dead-node: suspended ⊥ logged-in. If the flag is ever set while a
+    // session is live (a deferred-clear race, a stale deep link), the router
+    // must bounce to chat, not sit on the ban screen while authenticated.
+    final c = makeContainer(
+      rest: FakeRestApi(), // me() ok → logged in → chat
+      transport: FakeChatTransport(),
+      store: InMemoryTokenStore(seededTokens),
+    );
+    addTearDown(c.dispose);
+    await pumpApp(tester, c);
+    expect(c.read(authControllerProvider).value, isNotNull); // logged in
+
+    // Force the artificial dead-node state and let the router re-evaluate.
+    c.read(suspendedProvider.notifier).flag();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Account suspended'), findsNothing,
+        reason: 'the logged-in eject wins over the suspended zone');
+  });
 }
