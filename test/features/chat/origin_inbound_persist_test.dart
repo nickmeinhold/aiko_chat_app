@@ -311,27 +311,18 @@ void main() {
     });
   });
 
-  test('upsertInbound seals the newly-invalid contract: origin present but '
-      'verdict UNSET returns false and stores null (cage-match Tesla R2)', () async {
+  test('upsertInbound REJECTS a carried origin with no verdict — the illegal '
+      'state is unrepresentable, not coerced (cage-match R2-R4)', () async {
     // A fromView message carries the origin but NO verdict (verify is async and
-    // has not run). The insert path stores that as null (the outbound-local-sig
-    // representation), so the "newly invalid" return must be false — never a
-    // phantom transition that would over-count the base-rate probe.
+    // has not run). Persisting it directly would bypass the ingest verify — an
+    // illegal input the mutator now rejects rather than coercing or clearing
+    // (every attempt to "handle" it leaked a different bug across rounds). The
+    // production door `_persistInbound` always computes the verdict first, so this
+    // is unreachable in the real app; the guard makes the contract caller-proof.
     final m = Message.fromView(
         await signedView(ulid: '01SEAL', signedCmid: 'c', signedBody: 'hi'));
     expect(m.originCryptoValid, isNull, reason: 'verify has not run');
-    final newlyInvalid = await cache.upsertInbound(m); // insert path
-    expect(newlyInvalid, isFalse,
-        reason: 'null verdict stores as null, not false — the return matches storage');
-    expect((await rawRow('01SEAL')).originCryptoValid, isNull);
-
-    // Redeliver the SAME unverified message → the UPDATE path must seal too: it
-    // must NOT coerce null→0 and phantom-fire a transition crypto never produced
-    // (cage-match Carnot R3 — both branches, not just insert).
-    final newlyInvalid2 = await cache.upsertInbound(m);
-    expect(newlyInvalid2, isFalse,
-        reason: 'update path also preserves null, no phantom false');
-    expect((await rawRow('01SEAL')).originCryptoValid, isNull);
+    await expectLater(cache.upsertInbound(m), throwsArgumentError);
   });
 
   test('an unsigned inbound message stores no origin, no verdict', () async {

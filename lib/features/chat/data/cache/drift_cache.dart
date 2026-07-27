@@ -493,6 +493,18 @@ class DriftCache extends _$DriftCache {
     if (u == null) {
       throw ArgumentError('upsertInbound requires a server ULID (id != null)');
     }
+    // Invariant (production-true via the single door `_persistInbound`, which
+    // computes the verdict before persisting): a CARRIED origin arrives WITH its
+    // ingest-time verdict. Reject the illegal origin-present/verdict-null input at
+    // the mutator rather than trying to coerce/preserve/clear it — that ill-defined
+    // state (new origin fields but no verdict for them) has no coherent storage,
+    // and every attempt to paper over it leaked a different bug (cage-match R2–R4).
+    // Making it unrepresentable dissolves the class (consistent with the id guard).
+    if (serverMsg.origin != null && serverMsg.originCryptoValid == null) {
+      throw ArgumentError('upsertInbound: a carried origin must arrive with its '
+          'ingest-time verdict (verify runs before persist in _persistInbound); '
+          'origin-present with a null verdict is illegal');
+    }
     return transaction(() async {
       final existing = await (select(messages)
             ..where((t) => t.serverUlid.equals(u)))
@@ -540,40 +552,26 @@ class DriftCache extends _$DriftCache {
             // Store the signed id only when it differs from the PK (inbound).
             signedClientMsgId:
                 str((e) => e.clientMsgId != existing.clientTempId ? e.clientMsgId : null),
-            // Verdict comes from the ingest-time verify (serverMsg), not the raw
-            // envelope. Via `_persistInbound` (the single door) it is always
-            // non-null when origin is present; but a direct caller can pass a null
-            // verdict with an origin (an unverified `fromView`). Store that
-            // HONESTLY as null — same as the insert path (`_fromDomain`) — rather
-            // than coercing null→0, so the mutator never fabricates a false verdict
-            // crypto never produced (cage-match Carnot R3: seal BOTH branches, not
-            // just insert).
+            // Origin present ⟹ verdict non-null (guarded at method entry). Store
+            // the ingest-time verdict; an incoming origin REPLACES, and the verdict
+            // is cleared only when no origin arrives and a signed field changed.
             originCryptoValid: o != null
-                ? (serverMsg.originCryptoValid == null
-                    ? const Value<int?>(null)
-                    : Value(serverMsg.originCryptoValid! ? 1 : 0))
+                ? Value(serverMsg.originCryptoValid! ? 1 : 0)
                 : (signedFieldChanged ? const Value(null) : const Value.absent()),
           ),
         );
-        // Newly-invalid: the row's stored verdict transitions INTO false — origin
-        // present + verdict == false (matching the honest write above) — and was
-        // not already false. `== false` (not `!= true`) keeps a null verdict from
-        // phantom-firing, symmetric with the insert branch. A re-echo of an
+        // Newly-invalid: the row's stored verdict transitions INTO false (origin
+        // present + verdict false) AND was not already false. A re-echo of an
         // already-false row (existing == 0), including a false→false re-sign, is
-        // suppressed: the unit is the server ULID (one count per message), by
+        // suppressed — the unit is the server ULID (one count per message), by
         // design for a base-rate meter.
         return o != null &&
             serverMsg.originCryptoValid == false &&
             existing.originCryptoValid != 0;
       } else {
         await into(messages).insert(_fromDomain(serverMsg, localSeq: 0));
-        // First insert: newly-invalid iff a carried origin verified false.
-        // `== false` (not `!= true`) so the return matches what _fromDomain
-        // actually STORES: a null verdict is stored as null (the outbound-local-sig
-        // representation), NOT coerced to 0 like the update branch does — so a
-        // null-verdict insert must report "not newly invalid", never a phantom
-        // transition. Seals the contract at the mutator regardless of caller
-        // (cage-match Tesla R2): "newly invalid" ⇔ a false verdict was durably stored.
+        // First insert: newly-invalid iff a carried origin verified false (origin
+        // present ⟹ verdict non-null, guarded at method entry).
         return serverMsg.origin != null && serverMsg.originCryptoValid == false;
       }
     });
