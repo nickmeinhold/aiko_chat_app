@@ -85,15 +85,18 @@ class LoggingChatTelemetry extends ChatTelemetry {
   void originVerificationFailed({
     String? senderUserId,
     required String channelId,
+    required String serverUlid,
     required String clientMsgId,
   }) =>
       // #1896 verified-sender PROBE. WARNING, not SEVERE: carried-but-invalid is
       // suspicious but, during rollout, likelier our own signing/verify drift
       // than a confirmed tamper — measure the base rate before promoting it to a
       // user-facing alarm. Opaque ids only (PII discipline): never body/pubkey/sig.
+      // serverUlid is the stable dedup/correlation key; clientMsgId is content-bound.
       developer.log(
         'carried-but-invalid origin (verified-sender probe #1896): '
-        'sender=${senderUserId ?? "-"} channel=$channelId msg=$clientMsgId',
+        'sender=${senderUserId ?? "-"} channel=$channelId ulid=$serverUlid '
+        'msg=$clientMsgId',
         name: _name,
         level: 900,
       );

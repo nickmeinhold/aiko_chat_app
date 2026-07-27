@@ -171,6 +171,14 @@ own signing/verify drift than a real tamper, and a malicious island never SENDS 
 forges a valid one) — so alarm only once the base rate is known. (`chat_repository.dart`
 `_persistInbound`; test `origin_verification_probe_test.dart`.)
 
+The probe fires **once per message, not once per delivery**: `upsertInbound` reports whether the
+write transitioned the stored verdict *to* false, and the probe gates on that — so a live+history
+dual delivery, a reconnect replay, or a history re-walk of the same invalid row is NOT re-counted
+(cage-match Carnot + Tesla, PR #93 R1). This is load-bearing: without it the dashboard measures
+replay heat, not invalid-origin work, and the future alarm threshold would be set against an
+inflated meter. No per-session cap is applied on purpose — N distinct invalid messages *should*
+read as base rate N; suppressing that would hide a real elevation.
+
 **The unblock for a meaningful ✓ is KEY CONTINUITY**, itself gated on the multi-device identity
 model (#17) and rotation semantics (#21 / island #1865): a naive pin-and-warn false-positives on
 every legit second device or recovery re-key. Scoped as its own slice; do not ship a ✓ before it.

@@ -481,12 +481,19 @@ class DriftCache extends _$DriftCache {
   /// `serverUlid`: if present, UPDATE with server fields (never blind-drop);
   /// else INSERT. Identity guard: a matched row in a *different* channel is
   /// corruption (ULIDs are globally unique) — fail loudly, never overwrite.
-  Future<void> upsertInbound(Message serverMsg) async {
+  /// Returns `true` iff this write NEWLY recorded a carried-but-invalid origin —
+  /// the row's stored verdict transitioned to false (a first insert of an invalid
+  /// origin, or a re-signed divergence), and was not already false. A re-delivery
+  /// of an already-invalid row (live+history dual delivery, reconnect replay,
+  /// history re-walk) returns `false`, so a per-message base-rate probe can fire
+  /// once per message instead of once per delivery (PR #93 R1, cage-match
+  /// Carnot + Tesla).
+  Future<bool> upsertInbound(Message serverMsg) async {
     final u = serverMsg.id;
     if (u == null) {
       throw ArgumentError('upsertInbound requires a server ULID (id != null)');
     }
-    await transaction(() async {
+    return transaction(() async {
       final existing = await (select(messages)
             ..where((t) => t.serverUlid.equals(u)))
           .getSingleOrNull();
@@ -540,8 +547,17 @@ class DriftCache extends _$DriftCache {
                 : (signedFieldChanged ? const Value(null) : const Value.absent()),
           ),
         );
+        // Newly-invalid: the row ends with a stored verdict of false (origin
+        // present + verdict != true, matching the write above) AND was not already
+        // false. An identical re-echo of an already-invalid row returns false, so
+        // the probe is not re-counted on re-delivery.
+        return o != null &&
+            serverMsg.originCryptoValid != true &&
+            existing.originCryptoValid != 0;
       } else {
         await into(messages).insert(_fromDomain(serverMsg, localSeq: 0));
+        // First insert: newly-invalid iff a carried origin verified false.
+        return serverMsg.origin != null && serverMsg.originCryptoValid != true;
       }
     });
   }

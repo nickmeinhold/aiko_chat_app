@@ -214,8 +214,8 @@ class SpyTelemetry extends ChatTelemetry {
   final List<(bool, int)> backpressure = [];
 
   /// Carried-but-invalid origin probes (#1896): `(senderUserId, channelId,
-  /// clientMsgId)` in arrival order.
-  final List<(String?, String, String)> originVerificationFailures = [];
+  /// serverUlid, clientMsgId)` in arrival order.
+  final List<(String?, String, String, String)> originVerificationFailures = [];
 
   @override
   void orphanAck(String clientMsgId, String serverUlid) =>
@@ -240,7 +240,9 @@ class SpyTelemetry extends ChatTelemetry {
   void originVerificationFailed({
     String? senderUserId,
     required String channelId,
+    required String serverUlid,
     required String clientMsgId,
   }) =>
-      originVerificationFailures.add((senderUserId, channelId, clientMsgId));
+      originVerificationFailures
+          .add((senderUserId, channelId, serverUlid, clientMsgId));
 }

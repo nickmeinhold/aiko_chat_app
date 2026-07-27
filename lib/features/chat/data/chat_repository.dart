@@ -73,11 +73,18 @@ abstract class ChatTelemetry {
   /// forge a valid one), so this primarily catches transit tampering, corruption,
   /// and our own bugs — never the operator.
   ///
+  /// Fires once per MESSAGE, not per delivery: the caller gates on the
+  /// persistence transition to false (see [_persistInbound] / `upsertInbound`), so
+  /// a re-delivered invalid origin is not re-counted.
+  ///
   /// PII: opaque ids ONLY. [senderUserId] is the account id, never the handle;
-  /// [channelId]/[clientMsgId] are opaque. NEVER the body, pubkey, or signature.
+  /// [serverUlid] (stable server message id, for dedup/correlation) and
+  /// [clientMsgId] (the content-bound signed id) are opaque. NEVER the body,
+  /// pubkey, or signature.
   void originVerificationFailed({
     String? senderUserId,
     required String channelId,
+    required String serverUlid,
     required String clientMsgId,
   }) {}
 }
@@ -490,14 +497,24 @@ class ChatRepository {
     }
     final valid = await verifyOrigin(o,
         channelId: m.channelId, body: m.body, replyTo: m.replyToId);
-    if (!valid) {
+    // Fire the probe ONLY when the persist actually records a newly-invalid
+    // verdict. upsertInbound returns true iff this write transitioned the row's
+    // stored verdict to false (a first insert, or a re-signed divergence) — NOT on
+    // a re-delivery of an already-invalid row (live+history dual delivery,
+    // reconnect replay, history re-walk). Gating on the persistence transition,
+    // and firing AFTER the durable write, is what makes this a per-MESSAGE
+    // base-rate probe rather than a per-DELIVERY one, and stops a failed write
+    // from counting a ghost (cage-match Carnot + Tesla, PR #93 R1).
+    final newlyInvalid =
+        await _cache.upsertInbound(m.copyWith(originCryptoValid: valid));
+    if (newlyInvalid) {
       _telemetry.originVerificationFailed(
         senderUserId: m.sender.userId,
         channelId: m.channelId,
+        serverUlid: m.id!, // non-null for inbound (upsertInbound just asserted it)
         clientMsgId: o.clientMsgId,
       );
     }
-    await _cache.upsertInbound(m.copyWith(originCryptoValid: valid));
   }
 
   Future<void> _onError(TransportError e) async {

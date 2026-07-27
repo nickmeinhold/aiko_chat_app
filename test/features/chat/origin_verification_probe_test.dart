@@ -95,13 +95,47 @@ void main() {
     await pump();
 
     expect(spy.originVerificationFailures, hasLength(1));
-    final (sender, channel, msg) = spy.originVerificationFailures.single;
+    final (sender, channel, ulid, msg) = spy.originVerificationFailures.single;
     expect(sender, 'other', reason: 'opaque account id, for base-rate triage');
     expect(channel, _chan);
+    expect(ulid, '01BAD', reason: 'stable server id, for dedup/correlation');
     expect(msg, 'sig-01BAD');
     // The probe does not change persistence: the verdict is still stored.
     final m = (await rows()).firstWhere((m) => m.id == '01BAD');
     expect(m.originCryptoValid, isFalse);
+  });
+
+  test('a re-delivered carried-but-invalid origin fires the probe ONLY ONCE '
+      '(per-message base rate, not per-delivery)', () async {
+    // The exact double-count the probe must NOT do: live fanout, then a history
+    // re-page / reconnect replay of the SAME server ULID (cage-match Carnot + Tesla).
+    final bad = await signedInbound(
+        ulid: '01DUP', signedBody: 'real', viewBody: 'tampered');
+    transport.emitMessage(bad);
+    await pump();
+    transport.emitMessage(bad); // identical re-delivery (history re-sync)
+    await pump();
+
+    expect(spy.originVerificationFailures, hasLength(1),
+        reason: 'the second delivery is a no-op update, not a newly-invalid '
+            'transition — the probe counts the message once');
+    expect((await rows()).firstWhere((m) => m.id == '01DUP').originCryptoValid,
+        isFalse);
+  });
+
+  test('a verified message re-signed to INVALID fires the probe on the '
+      'transition (not over-suppressed)', () async {
+    // First a VALID signed message: verdict true, no probe.
+    transport.emitMessage(await signedInbound(ulid: '01T', signedBody: 'v1'));
+    await pump();
+    expect(spy.originVerificationFailures, isEmpty);
+    // Then the SAME ULID re-echoed with a diverged body the origin doesn't sign
+    // → verdict flips true→false → a genuinely new invalid observation fires once.
+    transport.emitMessage(
+        await signedInbound(ulid: '01T', signedBody: 'v1', viewBody: 'v2'));
+    await pump();
+    expect(spy.originVerificationFailures, hasLength(1),
+        reason: 'true→false is a newly-invalid transition, not a replay');
   });
 
   test('a VALID carried origin does NOT fire the probe (verdict=true)', () async {

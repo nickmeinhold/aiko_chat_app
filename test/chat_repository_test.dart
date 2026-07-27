@@ -1092,14 +1092,15 @@ class _GatedCache extends DriftCache {
   bool _gated = false;
 
   @override
-  Future<void> upsertInbound(Message serverMsg) async {
+  Future<bool> upsertInbound(Message serverMsg) async {
     log.add('upsert:${serverMsg.id}-start');
     if (!_gated) {
       _gated = true;
       await firstUpsertGate.future; // freeze the first message write
     }
-    await super.upsertInbound(serverMsg);
+    final newlyInvalid = await super.upsertInbound(serverMsg);
     log.add('upsert:${serverMsg.id}-done');
+    return newlyInvalid;
   }
 
   @override
