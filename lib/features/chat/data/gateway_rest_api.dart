@@ -244,16 +244,21 @@ class GatewayRestApi implements ChatRestApi {
   /// True iff this is the island's account-ban response — `403 {"detail":
   /// "account suspended"}` (handoff 2026-07-27). Keyed on the body, not the bare
   /// 403, so an unrelated forbidden (e.g. a moderator-only endpoint) is NOT
-  /// mislabelled as a ban. Robust to a Map body (dio-decoded JSON) or a raw JSON
-  /// string. Any parse hiccup falls through to the generic 401/403 → Unauthorized
-  /// path — a suspended user then simply sees the re-auth copy, never a crash.
+  /// mislabelled as a ban. Matches the island's exact phrase (case-insensitive,
+  /// tolerant of surrounding text/punctuation) rather than a bare `suspend`
+  /// substring — so a future 403 whose prose merely *mentions* suspend/suspension
+  /// ("cannot suspend this operation") is not baptised a ban (cage-match Tesla).
+  /// Robust to a Map body (dio-decoded JSON) or a raw JSON string. Any parse
+  /// hiccup falls through to the generic 401/403 → Unauthorized path — a
+  /// suspended user then sees the re-auth copy, never a crash.
   static bool _isSuspended(DioException e) {
     if (e.response?.statusCode != 403) return false;
     final data = e.response?.data;
     final Object? body =
         data is String && data.isNotEmpty ? _tryJson(data) : data;
     final detail = body is Map ? body['detail'] : null;
-    return detail is String && detail.toLowerCase().contains('suspend');
+    return detail is String &&
+        detail.toLowerCase().contains('account suspended');
   }
 
   static Object? _tryJson(String s) {

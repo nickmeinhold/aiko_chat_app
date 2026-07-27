@@ -181,11 +181,15 @@ void main() {
   // ingress (handoff 2026-07-27, island #1914). Must map to the AccountSuspended
   // REFINEMENT of Unauthorized so the UI says "suspended," not "session expired"
   // (which loops: re-auth 403s again). Keyed on the BODY, not the bare 403, so an
-  // unrelated forbidden stays a plain Unauthorized. Both REST boundaries covered:
-  // authed routes (`_authedCall`, via listBlocks) and bare auth calls
-  // (`_throwIfAuthTerminal`, via addPasskey).
+  // unrelated forbidden stays a plain Unauthorized. BOTH REST boundaries are
+  // covered by DISTINCT wire paths (cage-match Tesla P1 — an earlier revision
+  // tested `_authedCall` twice and left the login door unproven):
+  //   - authed routes  → `_authedCall`          (via listBlocks)
+  //   - bare login door → `_throwIfAuthTerminal` (via finishPasskeyRegistration,
+  //     the passkey-finish path that surfaces a revoked/expired provisioning 403)
   group('account-ban 403 → AccountSuspended', () {
-    test('authed route: 403 account suspended → AccountSuspended', () async {
+    test('authed route (_authedCall): 403 account suspended → AccountSuspended',
+        () async {
       final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
       await expectLater(api.listBlocks(), throwsA(isA<AccountSuspended>()));
     });
@@ -196,15 +200,30 @@ void main() {
       await expectLater(api.listBlocks(), throwsA(isA<Unauthorized>()));
     });
 
-    test('bare auth call: 403 account suspended → AccountSuspended', () async {
+    test('login door (_throwIfAuthTerminal): 403 suspended → AccountSuspended',
+        () async {
+      // finishPasskeyRegistration posts on the token-less _bare client, so its
+      // terminal 401/403 maps via _throwIfAuthTerminal — the login/claim door,
+      // NOT _authedCall. This is where a banned user's re-auth attempt lands.
       final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
-      await expectLater(
-          api.addPasskey('st', '{"id":"c"}'), throwsA(isA<AccountSuspended>()));
+      await expectLater(api.finishPasskeyRegistration('st', '{"id":"c"}'),
+          throwsA(isA<AccountSuspended>()));
     });
 
     test('a NON-suspended 403 stays a plain Unauthorized (not a ban)', () async {
       // e.g. a moderator-only endpoint's forbidden — must not be mislabelled.
       final api = apiWith((_) => jsonBody(403, '{"detail":"forbidden"}'));
+      await expectLater(
+        api.listBlocks(),
+        throwsA(allOf(isA<Unauthorized>(), isNot(isA<AccountSuspended>()))),
+      );
+    });
+
+    test('a 403 that merely mentions "suspend" is NOT a ban (exact-phrase key)',
+        () async {
+      // Tesla P2: the body key matches the island's phrase, not any "suspend".
+      final api =
+          apiWith((_) => jsonBody(403, '{"detail":"cannot suspend operation"}'));
       await expectLater(
         api.listBlocks(),
         throwsA(allOf(isA<Unauthorized>(), isNot(isA<AccountSuspended>()))),

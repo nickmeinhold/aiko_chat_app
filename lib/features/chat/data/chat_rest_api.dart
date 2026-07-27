@@ -60,6 +60,15 @@ class Unauthorized implements Exception {
 /// keep working unchanged. Only surfaced at the two direct REST boundaries where
 /// the 403 body is in hand — the refresh ingress leaves it as a generic terminal
 /// rejection (→ logout → login), where the re-login attempt re-surfaces it.
+///
+/// NAMED TRADEOFF (do NOT "fix" this into the interceptor's `catch (_)`): a ban
+/// arriving mid-session on a REFRESH (access token already expired) shows one
+/// hop of "session expired" before the honest suspended copy lands on re-login.
+/// That one-hop is the deliberate price of NOT threading `AccountSuspended`
+/// through the refresh taxonomy — where a broad catch would risk mislabelling it
+/// `auth_transient` (a network blip), the exact failure design-02 exists to
+/// prevent. A passive suspended banner that closes the one-hop is tracked
+/// separately (app task #29), NOT via the interceptor.
 class AccountSuspended extends Unauthorized {
   const AccountSuspended() : super(403);
   @override
