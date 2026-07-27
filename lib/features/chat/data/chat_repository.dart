@@ -61,6 +61,32 @@ abstract class ChatTelemetry {
   /// or sticky engagement as a signal to investigate (a flood, a wedged writer),
   /// not just log it — see [LoggingChatTelemetry].
   void inboundBackpressure({required bool engaged, required int depth}) {}
+
+  /// A carried inbound `origin` verified as INVALID (`originCryptoValid == false`
+  /// — a well-formed signature envelope whose signature did NOT verify over the
+  /// message content). This is the #1896 verified-sender PROBE: surfaced to
+  /// MEASURE the base rate of carried-but-invalid BEFORE any user-facing
+  /// integrity warning ships. Early in rollout a `false` verdict is far likelier
+  /// to be our own signing/verify drift (encoding, `reply_to` normalization,
+  /// golden-vector skew) than a real tamper — instrument first, alarm only once
+  /// the base rate is known. A malicious island never SENDS a `false` (it would
+  /// forge a valid one), so this primarily catches transit tampering, corruption,
+  /// and our own bugs — never the operator.
+  ///
+  /// Fires once per MESSAGE, not per delivery: the caller gates on the
+  /// persistence transition to false (see [_persistInbound] / `upsertInbound`), so
+  /// a re-delivered invalid origin is not re-counted.
+  ///
+  /// PII: opaque ids ONLY. [senderUserId] is the account id, never the handle;
+  /// [serverUlid] (stable server message id, for dedup/correlation) and
+  /// [clientMsgId] (the content-bound signed id) are opaque. NEVER the body,
+  /// pubkey, or signature.
+  void originVerificationFailed({
+    String? senderUserId,
+    required String channelId,
+    required String serverUlid,
+    required String clientMsgId,
+  }) {}
 }
 
 class _NoopTelemetry extends ChatTelemetry {
@@ -456,16 +482,39 @@ class ChatRepository {
   /// history sync) so the cache never runs crypto and the verdict is computed
   /// exactly once. A malformed origin was already dropped at parse (fromView);
   /// an unverifiable-but-well-formed origin persists with originCryptoValid=false
-  /// (carried-but-invalid), which is DATA — no UI ships from it (wire-half T5).
+  /// (carried-but-invalid), which is DATA — no affirmative UI ships from it
+  /// (wire-half T5; the ✓ is held until key-continuity exists, #1896).
+  ///
+  /// A `false` verdict is PROBED (never yet alarmed) via
+  /// [ChatTelemetry.originVerificationFailed] so we can measure its base rate
+  /// before any user-facing integrity warning ships — early in rollout it is
+  /// likelier our own signing/verify drift than a real tamper.
   Future<void> _persistInbound(Message m) async {
     final o = m.origin;
-    final verified = o == null
-        ? m
-        : m.copyWith(
-            originCryptoValid: await verifyOrigin(o,
-                channelId: m.channelId, body: m.body, replyTo: m.replyToId),
-          );
-    await _cache.upsertInbound(verified);
+    if (o == null) {
+      await _cache.upsertInbound(m);
+      return;
+    }
+    final valid = await verifyOrigin(o,
+        channelId: m.channelId, body: m.body, replyTo: m.replyToId);
+    // Fire the probe ONLY when the persist actually records a newly-invalid
+    // verdict. upsertInbound returns true iff this write transitioned the row's
+    // stored verdict to false (a first insert, or a re-signed divergence) — NOT on
+    // a re-delivery of an already-invalid row (live+history dual delivery,
+    // reconnect replay, history re-walk). Gating on the persistence transition,
+    // and firing AFTER the durable write, is what makes this a per-MESSAGE
+    // base-rate probe rather than a per-DELIVERY one, and stops a failed write
+    // from counting a ghost (cage-match Carnot + Tesla, PR #93 R1).
+    final newlyInvalid =
+        await _cache.upsertInbound(m.copyWith(originCryptoValid: valid));
+    if (newlyInvalid) {
+      _telemetry.originVerificationFailed(
+        senderUserId: m.sender.userId,
+        channelId: m.channelId,
+        serverUlid: m.id!, // non-null for inbound (upsertInbound just asserted it)
+        clientMsgId: o.clientMsgId,
+      );
+    }
   }
 
   Future<void> _onError(TransportError e) async {

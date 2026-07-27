@@ -146,6 +146,43 @@ signature never masquerades as a carried origin. Also named: `copyWith` cannot C
 `origin`/`originCryptoValid` (null == preserve) — fine today (only `_persistInbound` writes them,
 always-set); a future clear-transition needs an explicit mutator, not `copyWith`.
 
+## Verified-sender update — 2026-07-27 (post island cross-check)
+
+Tradeoff #1's premise has moved. The island's `pubkey → account` binding (formerly "peer PR
+B") is **shipped and live on both prod islands** — TOFU on every signed send + a `/v1/keys`
+management API — verified against running prod from the island session (`HANDOFF-from-island-tab.md`).
+So "no verified-sender UI" is **no longer gated on a missing binding**; the binding exists.
+
+**Decision (Nick, 2026-07-27): still hold the affirmative ✓.** The gate is now KEY CONTINUITY,
+not the binding. Two independent reasons the badge would overclaim today:
+
+- **The binding is island-sourced.** The app verifies the SIGNATURE itself (`verifyOrigin`) but
+  takes `sender_pubkey → user_id` on the island's word — it never queries `/v1/keys` or
+  cross-references. A malicious/compromised island can mint its own key, TOFU-register it as any
+  user, sign, and the app would render ✓. The ✓ only becomes a check on the OPERATOR once the app
+  knows a sender's key from a source that ISN'T the island (pin-on-first-see + warn-on-change).
+- **Content-integrity, not position-binding** (the named limitation above): a valid origin
+  verifies for any row with identical channel/body/reply.
+
+**What ships now (verified-sender-v1):** the carried-but-invalid (`originCryptoValid == false`)
+state is INSTRUMENTED, not alarmed — `ChatTelemetry.originVerificationFailed` probes it so we can
+measure its base rate before any user-facing warning. Early in rollout a `false` is likelier our
+own signing/verify drift than a real tamper, and a malicious island never SENDS a `false` (it
+forges a valid one) — so alarm only once the base rate is known. (`chat_repository.dart`
+`_persistInbound`; test `origin_verification_probe_test.dart`.)
+
+The probe fires **once per message, not once per delivery**: `upsertInbound` reports whether the
+write transitioned the stored verdict *to* false, and the probe gates on that — so a live+history
+dual delivery, a reconnect replay, or a history re-walk of the same invalid row is NOT re-counted
+(cage-match Carnot + Tesla, PR #93 R1). This is load-bearing: without it the dashboard measures
+replay heat, not invalid-origin work, and the future alarm threshold would be set against an
+inflated meter. No per-session cap is applied on purpose — N distinct invalid messages *should*
+read as base rate N; suppressing that would hide a real elevation.
+
+**The unblock for a meaningful ✓ is KEY CONTINUITY**, itself gated on the multi-device identity
+model (#17) and rotation semantics (#21 / island #1865): a naive pin-and-warn false-positives on
+every legit second device or recovery re-key. Scoped as its own slice; do not ship a ✓ before it.
+
 ## Claims to falsify (v2)
 
 - **C1.** The 7-key `toWire()` passes `validateOrigin` and the gateway's `validate_origin`

@@ -311,6 +311,20 @@ void main() {
     });
   });
 
+  test('upsertInbound REJECTS a carried origin with no verdict — the illegal '
+      'state is unrepresentable, not coerced (cage-match R2-R4)', () async {
+    // A fromView message carries the origin but NO verdict (verify is async and
+    // has not run). Persisting it directly would bypass the ingest verify — an
+    // illegal input the mutator now rejects rather than coercing or clearing
+    // (every attempt to "handle" it leaked a different bug across rounds). The
+    // production door `_persistInbound` always computes the verdict first, so this
+    // is unreachable in the real app; the guard makes the contract caller-proof.
+    final m = Message.fromView(
+        await signedView(ulid: '01SEAL', signedCmid: 'c', signedBody: 'hi'));
+    expect(m.originCryptoValid, isNull, reason: 'verify has not run');
+    await expectLater(cache.upsertInbound(m), throwsArgumentError);
+  });
+
   test('an unsigned inbound message stores no origin, no verdict', () async {
     await persist({
       'msg_id': '01G',

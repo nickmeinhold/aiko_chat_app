@@ -481,12 +481,31 @@ class DriftCache extends _$DriftCache {
   /// `serverUlid`: if present, UPDATE with server fields (never blind-drop);
   /// else INSERT. Identity guard: a matched row in a *different* channel is
   /// corruption (ULIDs are globally unique) — fail loudly, never overwrite.
-  Future<void> upsertInbound(Message serverMsg) async {
+  /// Returns `true` iff this write NEWLY recorded a carried-but-invalid origin —
+  /// the row's stored verdict transitioned to false (a first insert of an invalid
+  /// origin, or a re-signed divergence), and was not already false. A re-delivery
+  /// of an already-invalid row (live+history dual delivery, reconnect replay,
+  /// history re-walk) returns `false`, so a per-message base-rate probe can fire
+  /// once per message instead of once per delivery (PR #93 R1, cage-match
+  /// Carnot + Tesla).
+  Future<bool> upsertInbound(Message serverMsg) async {
     final u = serverMsg.id;
     if (u == null) {
       throw ArgumentError('upsertInbound requires a server ULID (id != null)');
     }
-    await transaction(() async {
+    // Invariant (production-true via the single door `_persistInbound`, which
+    // computes the verdict before persisting): a CARRIED origin arrives WITH its
+    // ingest-time verdict. Reject the illegal origin-present/verdict-null input at
+    // the mutator rather than trying to coerce/preserve/clear it — that ill-defined
+    // state (new origin fields but no verdict for them) has no coherent storage,
+    // and every attempt to paper over it leaked a different bug (cage-match R2–R4).
+    // Making it unrepresentable dissolves the class (consistent with the id guard).
+    if (serverMsg.origin != null && serverMsg.originCryptoValid == null) {
+      throw ArgumentError('upsertInbound: a carried origin must arrive with its '
+          'ingest-time verdict (verify runs before persist in _persistInbound); '
+          'origin-present with a null verdict is illegal');
+    }
+    return transaction(() async {
       final existing = await (select(messages)
             ..where((t) => t.serverUlid.equals(u)))
           .getSingleOrNull();
@@ -533,15 +552,27 @@ class DriftCache extends _$DriftCache {
             // Store the signed id only when it differs from the PK (inbound).
             signedClientMsgId:
                 str((e) => e.clientMsgId != existing.clientTempId ? e.clientMsgId : null),
-            // Verdict comes from the ingest-time verify (serverMsg), not the raw
-            // envelope; when origin is present it is always non-null.
+            // Origin present ⟹ verdict non-null (guarded at method entry). Store
+            // the ingest-time verdict; an incoming origin REPLACES, and the verdict
+            // is cleared only when no origin arrives and a signed field changed.
             originCryptoValid: o != null
-                ? Value(serverMsg.originCryptoValid == true ? 1 : 0)
+                ? Value(serverMsg.originCryptoValid! ? 1 : 0)
                 : (signedFieldChanged ? const Value(null) : const Value.absent()),
           ),
         );
+        // Newly-invalid: the row's stored verdict transitions INTO false (origin
+        // present + verdict false) AND was not already false. A re-echo of an
+        // already-false row (existing == 0), including a false→false re-sign, is
+        // suppressed — the unit is the server ULID (one count per message), by
+        // design for a base-rate meter.
+        return o != null &&
+            serverMsg.originCryptoValid == false &&
+            existing.originCryptoValid != 0;
       } else {
         await into(messages).insert(_fromDomain(serverMsg, localSeq: 0));
+        // First insert: newly-invalid iff a carried origin verified false (origin
+        // present ⟹ verdict non-null, guarded at method entry).
+        return serverMsg.origin != null && serverMsg.originCryptoValid == false;
       }
     });
   }

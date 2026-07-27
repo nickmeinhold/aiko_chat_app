@@ -213,6 +213,10 @@ class SpyTelemetry extends ChatTelemetry {
   /// = inbound paused at the high-water mark; `false` = resumed at low-water.
   final List<(bool, int)> backpressure = [];
 
+  /// Carried-but-invalid origin probes (#1896): `(senderUserId, channelId,
+  /// serverUlid, clientMsgId)` in arrival order.
+  final List<(String?, String, String, String)> originVerificationFailures = [];
+
   @override
   void orphanAck(String clientMsgId, String serverUlid) =>
       orphans.add((clientMsgId, serverUlid));
@@ -232,4 +236,13 @@ class SpyTelemetry extends ChatTelemetry {
   @override
   void inboundBackpressure({required bool engaged, required int depth}) =>
       backpressure.add((engaged, depth));
+  @override
+  void originVerificationFailed({
+    String? senderUserId,
+    required String channelId,
+    required String serverUlid,
+    required String clientMsgId,
+  }) =>
+      originVerificationFailures
+          .add((senderUserId, channelId, serverUlid, clientMsgId));
 }
