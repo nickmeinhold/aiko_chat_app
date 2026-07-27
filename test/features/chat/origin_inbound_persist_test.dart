@@ -320,9 +320,17 @@ void main() {
     final m = Message.fromView(
         await signedView(ulid: '01SEAL', signedCmid: 'c', signedBody: 'hi'));
     expect(m.originCryptoValid, isNull, reason: 'verify has not run');
-    final newlyInvalid = await cache.upsertInbound(m);
+    final newlyInvalid = await cache.upsertInbound(m); // insert path
     expect(newlyInvalid, isFalse,
         reason: 'null verdict stores as null, not false — the return matches storage');
+    expect((await rawRow('01SEAL')).originCryptoValid, isNull);
+
+    // Redeliver the SAME unverified message → the UPDATE path must seal too: it
+    // must NOT coerce null→0 and phantom-fire a transition crypto never produced
+    // (cage-match Carnot R3 — both branches, not just insert).
+    final newlyInvalid2 = await cache.upsertInbound(m);
+    expect(newlyInvalid2, isFalse,
+        reason: 'update path also preserves null, no phantom false');
     expect((await rawRow('01SEAL')).originCryptoValid, isNull);
   });
 

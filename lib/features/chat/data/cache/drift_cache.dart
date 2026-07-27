@@ -541,18 +541,29 @@ class DriftCache extends _$DriftCache {
             signedClientMsgId:
                 str((e) => e.clientMsgId != existing.clientTempId ? e.clientMsgId : null),
             // Verdict comes from the ingest-time verify (serverMsg), not the raw
-            // envelope; when origin is present it is always non-null.
+            // envelope. Via `_persistInbound` (the single door) it is always
+            // non-null when origin is present; but a direct caller can pass a null
+            // verdict with an origin (an unverified `fromView`). Store that
+            // HONESTLY as null — same as the insert path (`_fromDomain`) — rather
+            // than coercing null→0, so the mutator never fabricates a false verdict
+            // crypto never produced (cage-match Carnot R3: seal BOTH branches, not
+            // just insert).
             originCryptoValid: o != null
-                ? Value(serverMsg.originCryptoValid == true ? 1 : 0)
+                ? (serverMsg.originCryptoValid == null
+                    ? const Value<int?>(null)
+                    : Value(serverMsg.originCryptoValid! ? 1 : 0))
                 : (signedFieldChanged ? const Value(null) : const Value.absent()),
           ),
         );
-        // Newly-invalid: the row ends with a stored verdict of false (origin
-        // present + verdict != true, matching the write above) AND was not already
-        // false. An identical re-echo of an already-invalid row returns false, so
-        // the probe is not re-counted on re-delivery.
+        // Newly-invalid: the row's stored verdict transitions INTO false — origin
+        // present + verdict == false (matching the honest write above) — and was
+        // not already false. `== false` (not `!= true`) keeps a null verdict from
+        // phantom-firing, symmetric with the insert branch. A re-echo of an
+        // already-false row (existing == 0), including a false→false re-sign, is
+        // suppressed: the unit is the server ULID (one count per message), by
+        // design for a base-rate meter.
         return o != null &&
-            serverMsg.originCryptoValid != true &&
+            serverMsg.originCryptoValid == false &&
             existing.originCryptoValid != 0;
       } else {
         await into(messages).insert(_fromDomain(serverMsg, localSeq: 0));
