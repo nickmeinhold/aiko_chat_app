@@ -266,6 +266,10 @@ void main() {
           reason: 'a banned claim routes to /suspended, not a claim-screen error');
       expect(c.read(authControllerProvider).hasError, isFalse,
           reason: 'clean logged-out, not AsyncError(ban)');
+      expect(c.read(pendingHandleProvider), isNull,
+          reason: 'a terminal ban clears the provisioning path too — so a '
+              'soft-gate dismiss lands on /login, NOT /claim-handle (cage-match '
+              'Carnot + Tesla: the reservoir must be fully empty)');
     });
 
     test('a plain terminal Unauthorized does NOT flag suspended (revoked ≠ ban)',

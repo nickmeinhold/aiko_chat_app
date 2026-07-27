@@ -138,8 +138,10 @@ class AuthController extends AsyncNotifier<AppUser?> {
     try {
       final user = await _rest.me();
       await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
-      _clearSuspended(); // a successful me() means the ban (if any) has lifted
-      return user; // (clear is microtask-deferred — safe during build)
+      // A successful me() means the ban (if any) lifted. Deferred INLINE (not
+      // via the now-synchronous _clearSuspended) because this runs during build.
+      Future.microtask(() => ref.read(suspendedProvider.notifier).clear());
+      return user;
     } on AccountSuspended {
       // BAN (403) — a terminal-for-this-island state, distinct from a revoked
       // session. Must be caught BEFORE `on Unauthorized` (its supertype). Clear
@@ -247,17 +249,29 @@ class AuthController extends AsyncNotifier<AppUser?> {
     if (state.error is! AccountSuspended) return false;
     await _tokens.clearTokens();
     await _cachedUser.clear();
+    // Clear EVERY partial auth state, not just the tokens: a claimHandle ban
+    // leaves a live provisioning token in pendingHandleProvider, and the router
+    // orders suspended → pendingHandle, so a soft-gate dismiss would land on
+    // /claim-handle (re-opening the provisioning path) instead of a clean /login
+    // (cage-match Carnot + Tesla converged: a reservoir isn't empty while a
+    // hidden state variable still holds usable work).
+    ref.read(pendingHandleProvider.notifier).clear();
     state = const AsyncValue.data(null);
     ref.read(suspendedProvider.notifier).flag();
     return true;
   }
 
   /// Clear the suspended flag (ban lifted / session ended / gateway switched).
-  /// Microtask-deferred so it is uniformly safe to call from the build-time
-  /// restore path as well as user-action paths — never a sibling-provider
-  /// mutation mid-build.
-  void _clearSuspended() =>
-      Future.microtask(() => ref.read(suspendedProvider.notifier).clear());
+  /// SYNCHRONOUS, matching the sibling `pendingHandleProvider.clear()` it sits
+  /// beside in every caller (_teardownResources / switchGateway / success). This
+  /// is load-bearing for the cold-start race (cage-match Tesla): the ban's
+  /// `flag()` on the restore path is microtask-DEFERRED, so if a concurrent
+  /// terminal signal tears down during that restore, a synchronous clear here
+  /// runs FIRST and the deferred flag lands LAST — flag wins, the ban zone shows.
+  /// The only build-time callers (restore success/ban) defer their own
+  /// mutation inline; every other caller runs post-build where a direct set is
+  /// safe (same window the adjacent pendingHandle.clear already mutates in).
+  void _clearSuspended() => ref.read(suspendedProvider.notifier).clear();
 
   /// Sign in with an EXISTING passkey (WebAuthn). The ingress is a gateway
   /// challenge + an on-device authenticator assertion: fetch the request
