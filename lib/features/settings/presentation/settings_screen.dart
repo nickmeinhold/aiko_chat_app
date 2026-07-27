@@ -3,6 +3,7 @@
 /// #4; a blocked-users list, #7) can slot in as new sections without rework.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -49,8 +50,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.key_outlined),
             title: const Text('Add a passkey'),
-            subtitle: const Text(
-                'Sign in next time with Face ID, Touch ID, or your device PIN.'),
+            subtitle: Text(_passkeyBiometricHint()),
             enabled: !_addingPasskey,
             trailing: _addingPasskey
                 ? const SizedBox(
@@ -179,6 +179,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static String _hostOf(String httpBaseUrl) {
     final host = Uri.tryParse(httpBaseUrl)?.host;
     return (host == null || host.isEmpty) ? httpBaseUrl : host;
+  }
+
+  /// Passkey-unlock hint, named for the local platform's authenticators.
+  /// Uses [defaultTargetPlatform] (not `dart:io`) to stay web-safe, matching
+  /// the diagnostics code — Face ID/Touch ID are Apple-only names and must not
+  /// surface on Android.
+  static String _passkeyBiometricHint() {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+      case TargetPlatform.macOS:
+        return 'Sign in next time with Face ID, Touch ID, or your device '
+            'passcode.';
+      case TargetPlatform.android:
+        return 'Sign in next time with your fingerprint, face unlock, or '
+            'device PIN.';
+      default:
+        return 'Sign in next time with your device biometrics or PIN.';
+    }
   }
 }
 
