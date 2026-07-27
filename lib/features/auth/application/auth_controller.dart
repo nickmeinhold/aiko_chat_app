@@ -143,17 +143,21 @@ class AuthController extends AsyncNotifier<AppUser?> {
     } on AccountSuspended {
       // BAN (403) — a terminal-for-this-island state, distinct from a revoked
       // session. Must be caught BEFORE `on Unauthorized` (its supertype). Clear
-      // the dead tokens like any terminal auth, then flag the suspended zone so
-      // the router shows /suspended instead of /login (which would loop: a
-      // re-auth 403s again). Deferred to a microtask so we never mutate a sibling
-      // provider DURING this AsyncNotifier's build.
+      // the dead tokens + all partial auth state like any terminal auth, then
+      // flag the suspended zone so the router shows /suspended instead of /login
+      // (which would loop: a re-auth 403s again).
       await _tokens.clearTokens();
       await _cachedUser.clear();
-      // Flag SYNCHRONOUSLY (post-await, before return) so the flag lands atomically
-      // with build resolving to data(null) — the first non-loading redirect already
-      // sees the ban zone, no /login flash (cage-match Tesla). Safe: this is past
-      // build's first await, the window the file already trusts for sibling
-      // mutation (the _becomeUnauthenticated teardown clears pendingHandle here too).
+      // Clear EVERY partial auth state, symmetric with _settleSuspension (cage-match
+      // Carnot): a stale in-memory pending handle during a rebuild-then-ban would
+      // otherwise send a soft-gate dismiss to /claim-handle instead of /login (router
+      // order: suspended → pendingHandle → login).
+      ref.read(pendingHandleProvider.notifier).clear();
+      // Flag SYNCHRONOUSLY (post-await, before return) so it lands atomically with
+      // build resolving to data(null) — the first non-loading redirect already sees
+      // the ban zone, no /login flash (cage-match Tesla). Safe: past build's first
+      // await, the window the file already trusts for sibling mutation (the
+      // _becomeUnauthenticated teardown clears pendingHandle here too).
       ref.read(suspendedProvider.notifier).flag();
       return null;
     } on Unauthorized {
@@ -263,9 +267,15 @@ class AuthController extends AsyncNotifier<AppUser?> {
     //     state variable still holds usable work);
     //   - reset the machine to clean AsyncData(null) (no lingering ban error);
     //   - flag the suspended zone.
+    // Flag BEFORE publishing the clean logged-out state (cage-match Carnot): the
+    // router listens to BOTH providers, so if the auth-state notification ran the
+    // redirect before `suspended` were true, an intermediate `(loggedOut,
+    // suspended=false)` from /claim-handle would hop to /login. Flagging first
+    // makes settlement order-INDEPENDENT — whichever notification the router
+    // processes first, it already sees `suspended == true`.
     ref.read(pendingHandleProvider.notifier).clear();
-    state = const AsyncValue.data(null);
     ref.read(suspendedProvider.notifier).flag();
+    state = const AsyncValue.data(null);
     // The dead credential/cache drain is routing-irrelevant, so it runs AFTER —
     // the user is already parked on /suspended and can take no authed action.
     await _tokens.clearTokens();
@@ -275,14 +285,14 @@ class AuthController extends AsyncNotifier<AppUser?> {
 
   /// Clear the suspended flag (ban lifted / session ended / gateway switched).
   /// SYNCHRONOUS, matching the sibling `pendingHandleProvider.clear()` it sits
-  /// beside in every caller (_teardownResources / switchGateway / success). This
-  /// is load-bearing for the cold-start race (cage-match Tesla): the ban's
-  /// `flag()` on the restore path is microtask-DEFERRED, so if a concurrent
-  /// terminal signal tears down during that restore, a synchronous clear here
-  /// runs FIRST and the deferred flag lands LAST — flag wins, the ban zone shows.
-  /// The only build-time callers (restore success/ban) defer their own
-  /// mutation inline; every other caller runs post-build where a direct set is
-  /// safe (same window the adjacent pendingHandle.clear already mutates in).
+  /// beside in every caller (_teardownResources / switchGateway / success /
+  /// restore-success). Every mutation of the suspended flag is now synchronous,
+  /// so ordering is by execution order, not event-loop timing: the cold-start
+  /// ban flags as the LAST statement before `_restoreSession` returns (no await
+  /// after it), and a concurrent terminal signal either fired earlier — clearing
+  /// a still-false flag (no-op) — or fires after build resolves, where
+  /// `_becomeUnauthenticated`'s `state.value == null && !isLoading` guard
+  /// early-returns before it can reach a teardown clear. So the flag always wins.
   void _clearSuspended() => ref.read(suspendedProvider.notifier).clear();
 
   /// Sign in with an EXISTING passkey (WebAuthn). The ingress is a gateway
