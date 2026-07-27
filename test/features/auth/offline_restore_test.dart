@@ -185,7 +185,6 @@ void main() {
       addTearDown(c.dispose);
 
       final user = await c.read(authControllerProvider.future);
-      await Future<void>.microtask(() {}); // let the deferred flag land
 
       expect(user, isNull);
       expect(c.read(suspendedProvider), isTrue,
@@ -206,7 +205,6 @@ void main() {
       c.read(suspendedProvider.notifier).flag(); // pretend a prior ban
 
       final user = await c.read(authControllerProvider.future);
-      await Future<void>.microtask(() {});
 
       expect(user, FakeRestApi.defaultUser);
       expect(c.read(suspendedProvider), isFalse,
@@ -284,7 +282,6 @@ void main() {
       addTearDown(c.dispose);
 
       await c.read(authControllerProvider.future);
-      await Future<void>.microtask(() {});
 
       expect(c.read(suspendedProvider), isFalse,
           reason: 'a revoked 401 is logged-out, not suspended');

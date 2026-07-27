@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/auth/application/auth_controller.dart';
+import '../features/chat/data/chat_rest_api.dart' show AccountSuspended;
 import '../features/auth/presentation/claim_handle_screen.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/auth/presentation/suspended_screen.dart';
@@ -84,6 +85,17 @@ final routerProvider = Provider<GoRouter>((ref) {
       // see [pendingHandleProvider]).
       final pendingHandle = ref.read(pendingHandleProvider) != null;
 
+      // A ban is EITHER the settled flag OR a transient AsyncError(AccountSuspended)
+      // still on the machine. The ceremony doors (_ingress / claimHandle) publish
+      // the ban as AsyncValue.guard error state for an instant before the
+      // controller settles it to data(null)+flag; treating that error as the
+      // suspended zone here makes routing correct REGARDLESS of whether the router
+      // observes that transient — no one-frame /login flash on ban arrival, no
+      // dependence on Riverpod/GoRouter notification timing (cage-match Carnot +
+      // Tesla converged: the forbidden intermediate must not route to /login).
+      final banned = ref.read(suspendedProvider) ||
+          (auth.hasError && auth.error is AccountSuspended);
+
       // Ban on THIS island (→ /suspended), ahead of the logged-out routing so a
       // banned account never lands on /login to loop on re-auth. Guarded on
       // `!loggedIn`: a LIVE session wins (suspended ⊥ logged-in — cage-match
@@ -92,7 +104,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // normal ban path tokens are cleared, so loggedIn is already false. The
       // gateway picker stays reachable so the user can switch islands
       // (switchGateway clears the flag).
-      if (!loggedIn && ref.read(suspendedProvider)) {
+      if (!loggedIn && banned) {
         if (loc == '/settings/gateway') return null;
         return loc == '/suspended' ? null : '/suspended';
       }
