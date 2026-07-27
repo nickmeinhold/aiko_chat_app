@@ -557,7 +557,13 @@ class DriftCache extends _$DriftCache {
       } else {
         await into(messages).insert(_fromDomain(serverMsg, localSeq: 0));
         // First insert: newly-invalid iff a carried origin verified false.
-        return serverMsg.origin != null && serverMsg.originCryptoValid != true;
+        // `== false` (not `!= true`) so the return matches what _fromDomain
+        // actually STORES: a null verdict is stored as null (the outbound-local-sig
+        // representation), NOT coerced to 0 like the update branch does — so a
+        // null-verdict insert must report "not newly invalid", never a phantom
+        // transition. Seals the contract at the mutator regardless of caller
+        // (cage-match Tesla R2): "newly invalid" ⇔ a false verdict was durably stored.
+        return serverMsg.origin != null && serverMsg.originCryptoValid == false;
       }
     });
   }

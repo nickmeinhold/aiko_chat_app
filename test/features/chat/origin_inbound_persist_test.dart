@@ -311,6 +311,21 @@ void main() {
     });
   });
 
+  test('upsertInbound seals the newly-invalid contract: origin present but '
+      'verdict UNSET returns false and stores null (cage-match Tesla R2)', () async {
+    // A fromView message carries the origin but NO verdict (verify is async and
+    // has not run). The insert path stores that as null (the outbound-local-sig
+    // representation), so the "newly invalid" return must be false — never a
+    // phantom transition that would over-count the base-rate probe.
+    final m = Message.fromView(
+        await signedView(ulid: '01SEAL', signedCmid: 'c', signedBody: 'hi'));
+    expect(m.originCryptoValid, isNull, reason: 'verify has not run');
+    final newlyInvalid = await cache.upsertInbound(m);
+    expect(newlyInvalid, isFalse,
+        reason: 'null verdict stores as null, not false — the return matches storage');
+    expect((await rawRow('01SEAL')).originCryptoValid, isNull);
+  });
+
   test('an unsigned inbound message stores no origin, no verdict', () async {
     await persist({
       'msg_id': '01G',
