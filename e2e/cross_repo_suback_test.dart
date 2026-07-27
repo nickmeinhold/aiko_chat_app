@@ -268,6 +268,40 @@ class _Gateway {
     final dbFile = File(
         '${Directory.systemTemp.path}/aiko_xrepo_${port}_${DateTime.now().microsecondsSinceEpoch}.db');
 
+    // Shared by the migrate step AND uvicorn: both must see the SAME DB_URL so the
+    // schema is built on the exact file uvicorn then serves.
+    final gatewayEnv = {
+      // Declare a non-prod environment. The gateway defaults `environment` to
+      // "production", which FAIL-CLOSES the boot on the dev jwt_secret (and
+      // closes registration). This harness is a test, so it declares itself —
+      // exactly as the gateway's own tests/conftest.py does. Keeping the
+      // gateway checkout HEAD-following means a genuine contract break still
+      // turns this gate red; only the harness's own setup is fixed here.
+      'ENVIRONMENT': 'test',
+      // Four slashes = absolute path → file-backed sqlite shared across the
+      // app's many SessionLocal connections (`:memory:` is connection-private).
+      'DB_URL': 'sqlite+aiosqlite:///${dbFile.path}',
+      // Point the bus at a dead host so it fails fast and degrades to a no-op.
+      'AIKO_MQTT_HOST': '127.0.0.1',
+      'PYTHONUNBUFFERED': '1',
+    };
+
+    // Migrate BEFORE serving — exactly as the container entrypoint does
+    // (entrypoint.sh: `python -m aiko_gateway.migrate` then uvicorn). The island's
+    // db.py fail-closes on an unmigrated schema ("no alembic_version table"), so a
+    // direct uvicorn boot against a fresh sqlite file dies at startup. Running the
+    // real migrate step keeps this harness a faithful mirror of the prod boot
+    // sequence (migrate → serve) rather than a divergent serve-only shortcut.
+    await _migrate(gatewayDir, python, gatewayEnv, dbFile);
+
+    // Seed the canonical `general` channel (EMPTY). In prod, channels appear via
+    // the aiko bus `channel_list` reconcile; this harness kills the bus (dead MQTT
+    // host → no-op), so nothing reconciles. Message-send upsert would create it but
+    // WITH a message — the test needs an empty channel to assert the empty fence
+    // (""). So we stand in for the bus reconcile using the island's OWN
+    // `upsert_channel` service (no field-mapping drift) + commit.
+    await _seedGeneralChannel(gatewayDir, python, gatewayEnv, dbFile);
+
     final proc = await Process.start(
       python,
       [
@@ -275,21 +309,7 @@ class _Gateway {
         '--host', '127.0.0.1', '--port', '$port', '--log-level', 'warning',
       ],
       workingDirectory: gatewayDir,
-      environment: {
-        // Declare a non-prod environment. The gateway defaults `environment` to
-        // "production", which FAIL-CLOSES the boot on the dev jwt_secret (and
-        // closes registration). This harness is a test, so it declares itself —
-        // exactly as the gateway's own tests/conftest.py does. Keeping the
-        // gateway checkout HEAD-following means a genuine contract break still
-        // turns this gate red; only the harness's own setup is fixed here.
-        'ENVIRONMENT': 'test',
-        // Four slashes = absolute path → file-backed sqlite shared across the
-        // app's many SessionLocal connections (`:memory:` is connection-private).
-        'DB_URL': 'sqlite+aiosqlite:///${dbFile.path}',
-        // Point the bus at a dead host so it fails fast and degrades to a no-op.
-        'AIKO_MQTT_HOST': '127.0.0.1',
-        'PYTHONUNBUFFERED': '1',
-      },
+      environment: gatewayEnv,
     );
 
     // A uvicorn process now exists. ANY failure before we return a live gateway
@@ -382,6 +402,81 @@ class _Gateway {
     if (await _dbFile.exists()) {
       try {
         await _dbFile.delete();
+      } catch (_) {/* best-effort temp cleanup */}
+    }
+  }
+
+  /// Bring the throwaway DB to head with the island's REAL migration entrypoint
+  /// before uvicorn serves it — the same `python -m aiko_gateway.migrate` the
+  /// container entrypoint runs. Fail-closed: a non-zero exit (or a hang) removes
+  /// the temp db and throws with the captured migrate output, so setUpAll surfaces
+  /// an actionable schema error instead of a downstream "gateway unhealthy".
+  static Future<void> _migrate(String gatewayDir, String python,
+      Map<String, String> env, File dbFile) async {
+    ProcessResult result;
+    try {
+      result = await Process.run(
+        python,
+        ['-m', 'aiko_gateway.migrate'],
+        workingDirectory: gatewayDir,
+        environment: env,
+      ).timeout(const Duration(seconds: 60));
+    } catch (e) {
+      await _bestEffortDelete(dbFile);
+      throw StateError('Gateway migrate step failed to run (python=$python).\n$e');
+    }
+    if (result.exitCode != 0) {
+      await _bestEffortDelete(dbFile);
+      throw StateError(
+          'Gateway migrate step exited ${result.exitCode} — schema not built.\n'
+          'python=$python\ngatewayDir=$gatewayDir\n'
+          '--- migrate stdout ---\n${result.stdout}\n'
+          '--- migrate stderr ---\n${result.stderr}');
+    }
+  }
+
+  /// Stand in for the aiko bus `channel_list` reconcile (absent under the dead-bus
+  /// harness): create an EMPTY canonical `general` channel via the island's own
+  /// `upsert_channel` service, so field-mapping can't drift from prod. Fail-closed
+  /// like [_migrate].
+  static Future<void> _seedGeneralChannel(String gatewayDir, String python,
+      Map<String, String> env, File dbFile) async {
+    const seed = '''
+import asyncio
+from aiko_gateway.db import SessionLocal
+from aiko_gateway.domain import channels_service
+async def main():
+    async with SessionLocal() as s:
+        await channels_service.upsert_channel(s, "general")
+        await s.commit()
+asyncio.run(main())
+''';
+    ProcessResult result;
+    try {
+      result = await Process.run(
+        python,
+        ['-c', seed],
+        workingDirectory: gatewayDir,
+        environment: env,
+      ).timeout(const Duration(seconds: 30));
+    } catch (e) {
+      await _bestEffortDelete(dbFile);
+      throw StateError('Gateway channel-seed step failed to run (python=$python).\n$e');
+    }
+    if (result.exitCode != 0) {
+      await _bestEffortDelete(dbFile);
+      throw StateError(
+          'Gateway channel-seed step exited ${result.exitCode}.\n'
+          'python=$python\ngatewayDir=$gatewayDir\n'
+          '--- seed stdout ---\n${result.stdout}\n'
+          '--- seed stderr ---\n${result.stderr}');
+    }
+  }
+
+  static Future<void> _bestEffortDelete(File f) async {
+    if (await f.exists()) {
+      try {
+        await f.delete();
       } catch (_) {/* best-effort temp cleanup */}
     }
   }
