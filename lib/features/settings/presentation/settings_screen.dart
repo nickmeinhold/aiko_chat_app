@@ -117,6 +117,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _addPasskeyError(Object e) => switch (e) {
         PasskeyAlreadyRegistered() => 'That passkey is already registered. Try '
             'signing in with it, or use a different passkey.',
+        // Before Unauthorized (its supertype): a ban is not "session expired."
+        // Short snackbar deliberately says "this island" rather than naming the
+        // host (as authErrorText does) — Settings already shows the active server
+        // in the Server tile, so the host is on-screen; a terse snackbar reads
+        // better here (cage-match Tesla P3, copy-drift is intentional).
+        AccountSuspended() => 'This account is suspended on this island.',
         Unauthorized() => 'Your session has expired. Please sign in again.',
         _ => 'Could not add a passkey. Please try again.',
       };
@@ -160,6 +166,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   String _deleteError(Object e) {
     if (e is SoleAdminDeletionBlocked) return e.message;
+    // A ban (403) can land on delete mid-session too — say so honestly rather
+    // than the vague "try again" (cage-match Tesla P3). AccountSuspended is a
+    // subtype of Unauthorized, so it must be checked first.
+    if (e is AccountSuspended) return 'This account is suspended on this island.';
     return 'Could not delete your account. Please try again.';
   }
 

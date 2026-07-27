@@ -1,5 +1,6 @@
 import '../../chat/data/chat_rest_api.dart'
     show
+        AccountSuspended,
         HandleTaken,
         NetworkUnavailable,
         PasskeyAlreadyRegistered,
@@ -46,8 +47,13 @@ String authErrorText(
   required String host,
   required AuthAction action,
 }) {
-  // (1) Domain exceptions, matched by type.
+  // (1) Domain exceptions, matched by type. AccountSuspended is a subtype of
+  // Unauthorized, so it MUST come first — a ban is not "sign in again" (that
+  // loops: the island 403s every re-auth), it is a per-island block.
   switch (error) {
+    case AccountSuspended():
+      return 'This account is suspended on $host. If you think this is a '
+          'mistake, contact the people who run this island.';
     case NetworkUnavailable():
       switch (action) {
         case AuthAction.createAccount:

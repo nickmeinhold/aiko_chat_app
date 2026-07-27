@@ -66,6 +66,16 @@ void main() {
       expect(t, contains('setup session expired'));
       expect(t, isNot(contains('passkey')));
     });
+
+    test('AccountSuspended → per-island block, NOT "sign in again"', () {
+      // A ban is a subtype of Unauthorized, so this case must win over it — the
+      // re-auth copy would loop (the island 403s every re-auth attempt).
+      final t = text(const AccountSuspended(), host: 'chat.example.com');
+      expect(t, contains('suspended'));
+      expect(t, contains('chat.example.com'));
+      expect(t, isNot(contains('sign in again')));
+      expect(t, isNot(contains("couldn't verify")));
+    });
   });
 
   group('passkey ceremony codes (AuthCeremonyFailed) keep their guidance', () {
