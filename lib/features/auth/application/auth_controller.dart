@@ -138,9 +138,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
     try {
       final user = await _rest.me();
       await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
-      // A successful me() means the ban (if any) lifted. Deferred INLINE (not
-      // via the now-synchronous _clearSuspended) because this runs during build.
-      Future.microtask(() => ref.read(suspendedProvider.notifier).clear());
+      _clearSuspended(); // a successful me() means the ban (if any) lifted
       return user;
     } on AccountSuspended {
       // BAN (403) — a terminal-for-this-island state, distinct from a revoked
@@ -151,7 +149,12 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // provider DURING this AsyncNotifier's build.
       await _tokens.clearTokens();
       await _cachedUser.clear();
-      Future.microtask(() => ref.read(suspendedProvider.notifier).flag());
+      // Flag SYNCHRONOUSLY (post-await, before return) so the flag lands atomically
+      // with build resolving to data(null) — the first non-loading redirect already
+      // sees the ban zone, no /login flash (cage-match Tesla). Safe: this is past
+      // build's first await, the window the file already trusts for sibling
+      // mutation (the _becomeUnauthenticated teardown clears pendingHandle here too).
+      ref.read(suspendedProvider.notifier).flag();
       return null;
     } on Unauthorized {
       await _tokens.clearTokens(); // tokens are genuinely dead
@@ -247,17 +250,26 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// direct flag set is safe.
   Future<bool> _settleSuspension() async {
     if (state.error is! AccountSuspended) return false;
-    await _tokens.clearTokens();
-    await _cachedUser.clear();
-    // Clear EVERY partial auth state, not just the tokens: a claimHandle ban
-    // leaves a live provisioning token in pendingHandleProvider, and the router
-    // orders suspended → pendingHandle, so a soft-gate dismiss would land on
-    // /claim-handle (re-opening the provisioning path) instead of a clean /login
-    // (cage-match Carnot + Tesla converged: a reservoir isn't empty while a
-    // hidden state variable still holds usable work).
+    // Set EVERY router-relevant piece of state SYNCHRONOUSLY, before any await,
+    // so settlement is ATOMIC w.r.t. the router (cage-match Tesla): the first
+    // redirect after the ceremony's AsyncError sees (logged-out + suspended) and
+    // lands on /suspended directly — never a one-frame /login flash that would
+    // paint the ban as the login screen's inline error (that sealed *dismiss*;
+    // this seals *arrival*).
+    //   - clear pending: a claimHandle ban leaves a live provisioning token, and
+    //     the router orders suspended → pendingHandle, so an uncleared pending
+    //     would send a soft-gate dismiss to /claim-handle, not /login (cage-match
+    //     Carnot + Tesla converged: the reservoir isn't empty while a hidden
+    //     state variable still holds usable work);
+    //   - reset the machine to clean AsyncData(null) (no lingering ban error);
+    //   - flag the suspended zone.
     ref.read(pendingHandleProvider.notifier).clear();
     state = const AsyncValue.data(null);
     ref.read(suspendedProvider.notifier).flag();
+    // The dead credential/cache drain is routing-irrelevant, so it runs AFTER —
+    // the user is already parked on /suspended and can take no authed action.
+    await _tokens.clearTokens();
+    await _cachedUser.clear();
     return true;
   }
 

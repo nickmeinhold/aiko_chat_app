@@ -75,4 +75,31 @@ void main() {
     expect(find.text('Account suspended'), findsNothing,
         reason: 'the logged-in eject wins over the suspended zone');
   });
+
+  testWidgets('a ceremony ban (sign-in → AccountSuspended) routes through the real router to /suspended',
+      (tester) async {
+    // The _ingress door through GoRouter (not just the cold-start restore): a
+    // fail-closed restore lands on /login with tokens kept, then a passkey
+    // sign-in resolves to a ban. Atomic settlement must land /suspended with no
+    // lingering login CTA (cage-match Tesla: seal the ceremony ARRIVAL path).
+    final rest = FakeRestApi(meThrows: Exception('unknown → fail-closed, tokens kept'))
+      ..finishAuthThrows = const AccountSuspended();
+    final c = makeContainer(
+      rest: rest,
+      transport: FakeChatTransport(),
+      store: InMemoryTokenStore(seededTokens),
+      passkey: FakePasskeyAuthClient(assertion: 'assert-json'),
+    );
+    addTearDown(c.dispose);
+    await pumpApp(tester, c); // fail-closed → login screen
+    expect(find.text('Already have a passkey? Sign in'), findsOneWidget);
+
+    await tester.tap(find.text('Already have a passkey? Sign in'));
+    await tester.pumpAndSettle();
+
+    expect(c.read(suspendedProvider), isTrue);
+    expect(find.text('Account suspended'), findsOneWidget);
+    expect(find.text('Already have a passkey? Sign in'), findsNothing,
+        reason: 'settled atomically onto /suspended — no lingering login CTA');
+  });
 }
