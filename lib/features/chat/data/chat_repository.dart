@@ -61,6 +61,25 @@ abstract class ChatTelemetry {
   /// or sticky engagement as a signal to investigate (a flood, a wedged writer),
   /// not just log it — see [LoggingChatTelemetry].
   void inboundBackpressure({required bool engaged, required int depth}) {}
+
+  /// A carried inbound `origin` verified as INVALID (`originCryptoValid == false`
+  /// — a well-formed signature envelope whose signature did NOT verify over the
+  /// message content). This is the #1896 verified-sender PROBE: surfaced to
+  /// MEASURE the base rate of carried-but-invalid BEFORE any user-facing
+  /// integrity warning ships. Early in rollout a `false` verdict is far likelier
+  /// to be our own signing/verify drift (encoding, `reply_to` normalization,
+  /// golden-vector skew) than a real tamper — instrument first, alarm only once
+  /// the base rate is known. A malicious island never SENDS a `false` (it would
+  /// forge a valid one), so this primarily catches transit tampering, corruption,
+  /// and our own bugs — never the operator.
+  ///
+  /// PII: opaque ids ONLY. [senderUserId] is the account id, never the handle;
+  /// [channelId]/[clientMsgId] are opaque. NEVER the body, pubkey, or signature.
+  void originVerificationFailed({
+    String? senderUserId,
+    required String channelId,
+    required String clientMsgId,
+  }) {}
 }
 
 class _NoopTelemetry extends ChatTelemetry {
@@ -456,16 +475,29 @@ class ChatRepository {
   /// history sync) so the cache never runs crypto and the verdict is computed
   /// exactly once. A malformed origin was already dropped at parse (fromView);
   /// an unverifiable-but-well-formed origin persists with originCryptoValid=false
-  /// (carried-but-invalid), which is DATA — no UI ships from it (wire-half T5).
+  /// (carried-but-invalid), which is DATA — no affirmative UI ships from it
+  /// (wire-half T5; the ✓ is held until key-continuity exists, #1896).
+  ///
+  /// A `false` verdict is PROBED (never yet alarmed) via
+  /// [ChatTelemetry.originVerificationFailed] so we can measure its base rate
+  /// before any user-facing integrity warning ships — early in rollout it is
+  /// likelier our own signing/verify drift than a real tamper.
   Future<void> _persistInbound(Message m) async {
     final o = m.origin;
-    final verified = o == null
-        ? m
-        : m.copyWith(
-            originCryptoValid: await verifyOrigin(o,
-                channelId: m.channelId, body: m.body, replyTo: m.replyToId),
-          );
-    await _cache.upsertInbound(verified);
+    if (o == null) {
+      await _cache.upsertInbound(m);
+      return;
+    }
+    final valid = await verifyOrigin(o,
+        channelId: m.channelId, body: m.body, replyTo: m.replyToId);
+    if (!valid) {
+      _telemetry.originVerificationFailed(
+        senderUserId: m.sender.userId,
+        channelId: m.channelId,
+        clientMsgId: o.clientMsgId,
+      );
+    }
+    await _cache.upsertInbound(m.copyWith(originCryptoValid: valid));
   }
 
   Future<void> _onError(TransportError e) async {
