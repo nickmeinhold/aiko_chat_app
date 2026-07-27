@@ -117,6 +117,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _addPasskeyError(Object e) => switch (e) {
         PasskeyAlreadyRegistered() => 'That passkey is already registered. Try '
             'signing in with it, or use a different passkey.',
+        // Before Unauthorized (its supertype): a ban is not "session expired."
+        AccountSuspended() => 'This account is suspended on this island.',
         Unauthorized() => 'Your session has expired. Please sign in again.',
         _ => 'Could not add a passkey. Please try again.',
       };

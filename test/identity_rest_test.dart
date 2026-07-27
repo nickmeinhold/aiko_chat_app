@@ -176,4 +176,39 @@ void main() {
           throwsA(isA<FormatException>()));
     });
   });
+
+  // The island's per-island BAN — `403 {"detail":"account suspended"}` at every
+  // ingress (handoff 2026-07-27, island #1914). Must map to the AccountSuspended
+  // REFINEMENT of Unauthorized so the UI says "suspended," not "session expired"
+  // (which loops: re-auth 403s again). Keyed on the BODY, not the bare 403, so an
+  // unrelated forbidden stays a plain Unauthorized. Both REST boundaries covered:
+  // authed routes (`_authedCall`, via listBlocks) and bare auth calls
+  // (`_throwIfAuthTerminal`, via addPasskey).
+  group('account-ban 403 → AccountSuspended', () {
+    test('authed route: 403 account suspended → AccountSuspended', () async {
+      final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
+      await expectLater(api.listBlocks(), throwsA(isA<AccountSuspended>()));
+    });
+
+    test('AccountSuspended IS an Unauthorized (routers on the base type hold)',
+        () async {
+      final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
+      await expectLater(api.listBlocks(), throwsA(isA<Unauthorized>()));
+    });
+
+    test('bare auth call: 403 account suspended → AccountSuspended', () async {
+      final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
+      await expectLater(
+          api.addPasskey('st', '{"id":"c"}'), throwsA(isA<AccountSuspended>()));
+    });
+
+    test('a NON-suspended 403 stays a plain Unauthorized (not a ban)', () async {
+      // e.g. a moderator-only endpoint's forbidden — must not be mislabelled.
+      final api = apiWith((_) => jsonBody(403, '{"detail":"forbidden"}'));
+      await expectLater(
+        api.listBlocks(),
+        throwsA(allOf(isA<Unauthorized>(), isNot(isA<AccountSuspended>()))),
+      );
+    });
+  });
 }

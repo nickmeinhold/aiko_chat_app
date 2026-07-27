@@ -47,6 +47,25 @@ class Unauthorized implements Exception {
   String toString() => 'Unauthorized(statusCode: $statusCode)';
 }
 
+/// The island BANNED this account — the gateway's `403 {"detail":"account
+/// suspended"}`, emitted at every ingress (handoff 2026-07-27, island #1914).
+/// A *refinement* of [Unauthorized]: it IS a terminal-auth rejection (so it
+/// reuses every existing router — reconcile's `_isAuthError`, the WS
+/// `unauthenticated` path — that already treats a 403 as terminal), but it is
+/// NOT "re-authenticate." A ban is per-island and reversible, so the honest
+/// message is "this account is suspended on this island," never "your session
+/// expired, sign in again" (which loops: a re-auth attempt 403s again).
+/// Consumers that want the distinct copy match `case AccountSuspended()` BEFORE
+/// `case Unauthorized()` (specific pattern wins); routers matching the base type
+/// keep working unchanged. Only surfaced at the two direct REST boundaries where
+/// the 403 body is in hand — the refresh ingress leaves it as a generic terminal
+/// rejection (→ logout → login), where the re-login attempt re-surfaces it.
+class AccountSuspended extends Unauthorized {
+  const AccountSuspended() : super(403);
+  @override
+  String toString() => 'AccountSuspended';
+}
+
 /// The gateway could not be REACHED — a connection/DNS/timeout-class transport
 /// failure, as opposed to a server that answered (even with an error). The REST
 /// impl maps the connection-class [DioException] into this at the boundary so

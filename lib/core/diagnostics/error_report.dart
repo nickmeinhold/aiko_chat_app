@@ -76,6 +76,8 @@ String describeError(Object? error) {
     // Drop the wrapped cause entirely — the type IS the diagnosis, and the
     // cause is the one that carries the request body.
     NetworkUnavailable() => 'NetworkUnavailable',
+    // Before Unauthorized (its supertype) so a ban triages distinctly.
+    AccountSuspended() => 'AccountSuspended',
     Unauthorized(:final statusCode) => 'Unauthorized($statusCode)',
     HandleTaken() => 'HandleTaken',
     PasskeyAlreadyRegistered() => 'PasskeyAlreadyRegistered',

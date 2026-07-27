@@ -236,8 +236,32 @@ class GatewayRestApi implements ChatRestApi {
   /// to [NetworkUnavailable] in the enclosing [_mapNetwork]).
   static Never _throwIfAuthTerminal(DioException e) {
     final code = e.response?.statusCode;
+    if (_isSuspended(e)) throw const AccountSuspended();
     if (code == 401 || code == 403) throw Unauthorized(code);
     throw e;
+  }
+
+  /// True iff this is the island's account-ban response — `403 {"detail":
+  /// "account suspended"}` (handoff 2026-07-27). Keyed on the body, not the bare
+  /// 403, so an unrelated forbidden (e.g. a moderator-only endpoint) is NOT
+  /// mislabelled as a ban. Robust to a Map body (dio-decoded JSON) or a raw JSON
+  /// string. Any parse hiccup falls through to the generic 401/403 → Unauthorized
+  /// path — a suspended user then simply sees the re-auth copy, never a crash.
+  static bool _isSuspended(DioException e) {
+    if (e.response?.statusCode != 403) return false;
+    final data = e.response?.data;
+    final Object? body =
+        data is String && data.isNotEmpty ? _tryJson(data) : data;
+    final detail = body is Map ? body['detail'] : null;
+    return detail is String && detail.toLowerCase().contains('suspend');
+  }
+
+  static Object? _tryJson(String s) {
+    try {
+      return jsonDecode(s);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Resolve the gateway's identity response (from a passkey finish) into an
@@ -431,6 +455,10 @@ class GatewayRestApi implements ChatRestApi {
       // a 403 — becomes the domain `Unauthorized`.
       final transient = e.requestOptions.extra['auth_transient'] == true;
       final code = e.response?.statusCode;
+      // A ban surfaces here first: the interceptor only refreshes on 401, so a
+      // live 403 flows straight through. Branch it BEFORE the generic mapping so
+      // the reconcile drain routes it as suspended, not "session expired."
+      if (!transient && _isSuspended(e)) throw const AccountSuspended();
       if (!transient && (code == 401 || code == 403)) throw Unauthorized(code);
       rethrow;
     }
