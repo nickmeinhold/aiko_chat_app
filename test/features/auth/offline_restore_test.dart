@@ -2,8 +2,10 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/identity_models.dart'
+    show PendingHandle;
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show Unauthorized, NetworkUnavailable;
+    show AccountSuspended, Unauthorized, NetworkUnavailable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -167,6 +169,122 @@ void main() {
 
       expect(await c.read(authControllerProvider.future), isNull);
       expect(rest.meCalls, 0);
+    });
+  });
+
+  group('account suspended (ban) drives the /suspended zone', () {
+    test('me() → AccountSuspended: flags suspended, clears dead tokens, logged out',
+        () async {
+      // A ban (403 account suspended) is terminal-for-this-island — the router
+      // must send it to /suspended, NOT /login (which loops on re-auth). Tokens
+      // are cleared like any terminal auth; the flag is what distinguishes it.
+      final rest = FakeRestApi(meThrows: const AccountSuspended());
+      final cache = InMemoryCachedUserStore(cachedUser);
+      final store = InMemoryTokenStore(seededTokens);
+      final c = makeContainer(rest: rest, store: store, cached: cache);
+      addTearDown(c.dispose);
+
+      final user = await c.read(authControllerProvider.future);
+
+      expect(user, isNull);
+      expect(c.read(suspendedProvider), isTrue,
+          reason: 'ban → /suspended zone, not /login');
+      expect(store.current, isNull,
+          reason: 'dead tokens cleared like any terminal auth');
+      expect(cache.cleared, isTrue);
+    });
+
+    test('a later successful me() (ban lifted) clears the suspended flag',
+        () async {
+      final rest = FakeRestApi(); // me() ok — the ban has lifted
+      final c = makeContainer(
+          rest: rest,
+          store: InMemoryTokenStore(seededTokens),
+          cached: InMemoryCachedUserStore());
+      addTearDown(c.dispose);
+      c.read(suspendedProvider.notifier).flag(); // pretend a prior ban
+
+      final user = await c.read(authControllerProvider.future);
+
+      expect(user, FakeRestApi.defaultUser);
+      expect(c.read(suspendedProvider), isFalse,
+          reason: 'a successful me() means the ban lifted → leave /suspended');
+    });
+
+    test('ingress ceremony ban → flags suspended, clears the stale credential, clean state',
+        () async {
+      // Fail-closed restore keeps tokens while logged-out; a passkey sign-in
+      // then resolves to a banned account. The ban must clear the lingering
+      // credential (cage-match Carnot: a flag without a clear left a stale
+      // token in the reservoir) AND reset the machine to a clean AsyncData(null)
+      // — so a soft-gate dismiss lands on a clean /login, not the ban re-painted
+      // as the login screen's inline error (cage-match Tesla: flag-only gate).
+      final rest = FakeRestApi(meThrows: Exception('unknown → fail-closed, tokens kept'))
+        ..finishAuthThrows = const AccountSuspended();
+      final cache = InMemoryCachedUserStore(cachedUser);
+      final store = InMemoryTokenStore(seededTokens);
+      final c = makeContainer(
+          rest: rest,
+          store: store,
+          cached: cache,
+          passkey: FakePasskeyAuthClient(assertion: 'assert-json'));
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future); // logged out, tokens KEPT
+      expect(store.current, isNotNull,
+          reason: 'precondition: fail-closed restore kept the tokens');
+
+      await c.read(authControllerProvider.notifier).signInWithPasskey();
+
+      expect(c.read(suspendedProvider), isTrue,
+          reason: 'a ceremony ban routes to /suspended');
+      expect(store.current, isNull,
+          reason: 'the stale/dead credential is cleared (Carnot)');
+      expect(cache.cleared, isTrue);
+      final auth = c.read(authControllerProvider);
+      expect(auth.hasError, isFalse,
+          reason: 'machine reset to clean logged-out, not AsyncError(ban) (Tesla)');
+      expect(auth.value, isNull);
+    });
+
+    test('claimHandle ban → flags suspended (third door sealed, Tesla)',
+        () async {
+      final rest = FakeRestApi()..claimThrows = const AccountSuspended();
+      final c = makeContainer(rest: rest, cached: InMemoryCachedUserStore());
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future); // logged out
+      c
+          .read(pendingHandleProvider.notifier)
+          .set(const PendingHandle(provisioningToken: 'p'));
+
+      await c
+          .read(authControllerProvider.notifier)
+          .claimHandle('robin', 'Robin');
+
+      expect(c.read(suspendedProvider), isTrue,
+          reason: 'a banned claim routes to /suspended, not a claim-screen error');
+      expect(c.read(authControllerProvider).hasError, isFalse,
+          reason: 'clean logged-out, not AsyncError(ban)');
+      expect(c.read(pendingHandleProvider), isNull,
+          reason: 'a terminal ban clears the provisioning path too — so a '
+              'soft-gate dismiss lands on /login, NOT /claim-handle (cage-match '
+              'Carnot + Tesla: the reservoir must be fully empty)');
+    });
+
+    test('a plain terminal Unauthorized does NOT flag suspended (revoked ≠ ban)',
+        () async {
+      // The subtype must not smear: a 401 revoked session is logged-out, not
+      // suspended. Only AccountSuspended flags the zone.
+      final rest = FakeRestApi(meThrows: const Unauthorized(401));
+      final c = makeContainer(
+          rest: rest,
+          store: InMemoryTokenStore(seededTokens),
+          cached: InMemoryCachedUserStore(cachedUser));
+      addTearDown(c.dispose);
+
+      await c.read(authControllerProvider.future);
+
+      expect(c.read(suspendedProvider), isFalse,
+          reason: 'a revoked 401 is logged-out, not suspended');
     });
   });
 

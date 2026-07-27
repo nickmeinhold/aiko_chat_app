@@ -52,6 +52,28 @@ class PendingHandleNotifier extends Notifier<PendingHandle?> {
   void clear() => state = null;
 }
 
+/// Whether THIS island has suspended the current account (a ban — the gateway's
+/// `403 {"detail":"account suspended"}`, surfaced as [AccountSuspended]). Like
+/// [pendingHandleProvider] it lives ALONGSIDE the `AppUser?` machine rather than
+/// inside it, and drives a dedicated router zone (`/suspended`) — a ban is a
+/// terminal-for-this-island state, NOT "logged out, please sign in again"
+/// (which loops). It is a SOFT gate: because suspension clears the (dead) tokens
+/// like any terminal auth, the suspended screen lets the user DISMISS it — "try
+/// again" clears the flag → /login (a re-auth re-flags if still banned, or lands
+/// the user in if the ban lifted), "switch island" clears it via a gateway
+/// switch. In-memory only: a cold restart re-discovers the ban on the next auth
+/// attempt (task #29). The host to display is read from [configProvider], so
+/// this stays a bare flag with a single owner for the host.
+final suspendedProvider =
+    NotifierProvider<SuspendedNotifier, bool>(SuspendedNotifier.new);
+
+class SuspendedNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+  void flag() => state = true;
+  void clear() => state = false;
+}
+
 class AuthController extends AsyncNotifier<AppUser?> {
   ChatRestApi get _rest => ref.read(restApiProvider);
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
@@ -116,7 +138,28 @@ class AuthController extends AsyncNotifier<AppUser?> {
     try {
       final user = await _rest.me();
       await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
+      _clearSuspended(); // a successful me() means the ban (if any) lifted
       return user;
+    } on AccountSuspended {
+      // BAN (403) — a terminal-for-this-island state, distinct from a revoked
+      // session. Must be caught BEFORE `on Unauthorized` (its supertype). Clear
+      // the dead tokens + all partial auth state like any terminal auth, then
+      // flag the suspended zone so the router shows /suspended instead of /login
+      // (which would loop: a re-auth 403s again).
+      await _tokens.clearTokens();
+      await _cachedUser.clear();
+      // Clear EVERY partial auth state, symmetric with _settleSuspension (cage-match
+      // Carnot): a stale in-memory pending handle during a rebuild-then-ban would
+      // otherwise send a soft-gate dismiss to /claim-handle instead of /login (router
+      // order: suspended → pendingHandle → login).
+      ref.read(pendingHandleProvider.notifier).clear();
+      // Flag SYNCHRONOUSLY (post-await, before return) so it lands atomically with
+      // build resolving to data(null) — the first non-loading redirect already sees
+      // the ban zone, no /login flash (cage-match Tesla). Safe: past build's first
+      // await, the window the file already trusts for sibling mutation (the
+      // _becomeUnauthenticated teardown clears pendingHandle here too).
+      ref.read(suspendedProvider.notifier).flag();
+      return null;
     } on Unauthorized {
       await _tokens.clearTokens(); // tokens are genuinely dead
       await _cachedUser.clear();
@@ -190,7 +233,67 @@ class AuthController extends AsyncNotifier<AppUser?> {
     final prior = state.value;
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() => ceremony(prior));
+    await _settleSuspension();
   }
+
+  /// Terminal-auth settlement for a ban surfaced by a ceremony guard (the
+  /// [_ingress] passkey finish/authenticate, or [claimHandle]) — the sign-in
+  /// against a banned account resolves to [AccountSuspended] inside the guard,
+  /// leaving `state` an `AsyncError`. This:
+  ///   1. clears the dead tokens + cache, like any terminal auth (the invariant
+  ///      the [_restoreSession] ban branch already honours — cage-match Carnot:
+  ///      flagging without clearing left a stale credential in the reservoir);
+  ///   2. RESETS the machine to a clean logged-out `AsyncData(null)` — so a
+  ///      soft-gate dismiss ("try again") lands on a CLEAN /login, not the ban
+  ///      re-painted as the login screen's inline `AsyncError` (cage-match Tesla:
+  ///      a flag-only gate is "the loop wearing a friendlier mask");
+  ///   3. flags the suspended zone.
+  /// No-op (returns false) when the guard's error is not a ban — a network /
+  /// ceremony-cancelled / handle-taken error passes through untouched so the
+  /// login/claim screens still show it. Runs OUTSIDE build (post-guard), so the
+  /// direct flag set is safe.
+  Future<bool> _settleSuspension() async {
+    if (state.error is! AccountSuspended) return false;
+    // Set EVERY router-relevant piece of state SYNCHRONOUSLY, before any await,
+    // so settlement is ATOMIC w.r.t. the router (cage-match Tesla): the first
+    // redirect after the ceremony's AsyncError sees (logged-out + suspended) and
+    // lands on /suspended directly — never a one-frame /login flash that would
+    // paint the ban as the login screen's inline error (that sealed *dismiss*;
+    // this seals *arrival*).
+    //   - clear pending: a claimHandle ban leaves a live provisioning token, and
+    //     the router orders suspended → pendingHandle, so an uncleared pending
+    //     would send a soft-gate dismiss to /claim-handle, not /login (cage-match
+    //     Carnot + Tesla converged: the reservoir isn't empty while a hidden
+    //     state variable still holds usable work);
+    //   - reset the machine to clean AsyncData(null) (no lingering ban error);
+    //   - flag the suspended zone.
+    // Flag BEFORE publishing the clean logged-out state (cage-match Carnot): the
+    // router listens to BOTH providers, so if the auth-state notification ran the
+    // redirect before `suspended` were true, an intermediate `(loggedOut,
+    // suspended=false)` from /claim-handle would hop to /login. Flagging first
+    // makes settlement order-INDEPENDENT — whichever notification the router
+    // processes first, it already sees `suspended == true`.
+    ref.read(pendingHandleProvider.notifier).clear();
+    ref.read(suspendedProvider.notifier).flag();
+    state = const AsyncValue.data(null);
+    // The dead credential/cache drain is routing-irrelevant, so it runs AFTER —
+    // the user is already parked on /suspended and can take no authed action.
+    await _tokens.clearTokens();
+    await _cachedUser.clear();
+    return true;
+  }
+
+  /// Clear the suspended flag (ban lifted / session ended / gateway switched).
+  /// SYNCHRONOUS, matching the sibling `pendingHandleProvider.clear()` it sits
+  /// beside in every caller (_teardownResources / switchGateway / success /
+  /// restore-success). Every mutation of the suspended flag is now synchronous,
+  /// so ordering is by execution order, not event-loop timing: the cold-start
+  /// ban flags as the LAST statement before `_restoreSession` returns (no await
+  /// after it), and a concurrent terminal signal either fired earlier — clearing
+  /// a still-false flag (no-op) — or fires after build resolves, where
+  /// `_becomeUnauthenticated`'s `state.value == null && !isLoading` guard
+  /// early-returns before it can reach a teardown clear. So the flag always wins.
+  void _clearSuspended() => ref.read(suspendedProvider.notifier).clear();
 
   /// Sign in with an EXISTING passkey (WebAuthn). The ingress is a gateway
   /// challenge + an on-device authenticator assertion: fetch the request
@@ -292,6 +395,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       case Authenticated(:final session):
         await _tokens.setTokens(session.tokens);
         await _writeCachedUser(session.user); // enable offline restore
+        _clearSuspended(); // signed in successfully → not suspended here
         return session.user;
       case PendingHandle pending:
         ref.read(pendingHandleProvider.notifier).set(pending);
@@ -317,8 +421,13 @@ class AuthController extends AsyncNotifier<AppUser?> {
       await _tokens.setTokens(session.tokens);
       await _writeCachedUser(session.user); // enable offline restore
       ref.read(pendingHandleProvider.notifier).clear();
+      _clearSuspended();
       return session.user;
     });
+    // Corpus seal (cage-match Tesla): claimHandle is a THIRD door that can
+    // surface a 403 ban (the claimed account/handle is banned) — settle it the
+    // same way as _ingress so it routes to /suspended, not a claim-screen error.
+    await _settleSuspension();
   }
 
   /// Full session teardown — the SINGLE owner of "end this session". Both the
@@ -351,6 +460,12 @@ class AuthController extends AsyncNotifier<AppUser?> {
     // a clean logged-out state — otherwise an abandoned PendingHandle survives
     // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
     ref.read(pendingHandleProvider.notifier).clear();
+    _clearSuspended(); // symmetric with pendingHandle: a terminal teardown is a
+    // THIRD exit (logout / _becomeUnauthenticated / deleteAccount) — an orphan
+    // suspended flag would make the next logged-out redirect prefer /suspended
+    // over an honest /login (cage-match Tesla). Safe re the cold-start flag: a
+    // ban sets state=data(null), so _becomeUnauthenticated's guard early-returns
+    // and never reaches this teardown to clobber a just-set flag.
     await _tokens.clearTokens();
     await _cachedUser.clear(); // lifecycle-symmetric with the tokens
     await ref.read(transportProvider).disconnect();
@@ -402,6 +517,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // silently absorbed (Carnot) — a clear failure propagates to the picker's
       // error UI. Only the disconnect is best-effort.
       ref.read(pendingHandleProvider.notifier).clear();
+      _clearSuspended(); // a different island may not have banned this account
       await _tokens.clearTokens(); // security-critical: old credential gone first
       await _cachedUser.clear(); // old identity gone with the old credential
       try {

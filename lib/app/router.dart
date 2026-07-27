@@ -6,9 +6,13 @@
 ///   - Terms not yet accepted on this device → `/eula` (the first-run gate, ahead
 ///     of auth — a fresh-install reviewer sees it before signing in);
 ///   - auth *loading* (cold-start session restore in flight) → `/splash`, so we
-///     never flash the login screen before the restore resolves;
+///     never flash the login screen before the restore resolves (but `/login`,
+///     `/claim-handle`, and `/suspended` hold through loading);
+///   - this island suspended (banned) this account → `/suspended`, ahead of the
+///     logged-out routing so a ban never loops on `/login`; `/settings/gateway`
+///     stays reachable so the user can switch islands;
 ///   - logged out → `/login`;
-///   - logged in → `/` (chat).
+///   - logged in → `/` (chat) — ejecting off any auth/gate/suspended screen.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -16,8 +20,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/auth/application/auth_controller.dart';
+import '../features/chat/data/chat_rest_api.dart' show AccountSuspended;
 import '../features/auth/presentation/claim_handle_screen.dart';
 import '../features/auth/presentation/login_screen.dart';
+import '../features/auth/presentation/suspended_screen.dart';
 import '../features/chat/presentation/chat_screen.dart';
 import '../features/chat/presentation/splash_screen.dart';
 import '../features/legal/application/eula_controller.dart';
@@ -34,6 +40,8 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.listen(authControllerProvider, (_, _) => refresh.value++);
   // A new identity awaiting its handle is a redirect trigger too.
   ref.listen(pendingHandleProvider, (_, _) => refresh.value++);
+  // A ban on this island (→ /suspended) is a redirect trigger too.
+  ref.listen(suspendedProvider, (_, _) => refresh.value++);
   // Accepting the Terms is a redirect trigger (gate → login/chat).
   ref.listen(eulaAcceptanceProvider, (_, _) => refresh.value++);
 
@@ -63,7 +71,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       // (with its own in-button progress + error UI), not flash the full-screen
       // splash (Maxwell F1).
       if (auth.isLoading) {
-        if (loc == '/login' || loc == '/claim-handle') return null;
+        // /suspended holds through a rebuild/restore too — a ban is
+        // terminal-for-this-island, so a flagged user must not flash to /splash
+        // while auth re-resolves (cage-match Tesla).
+        if (loc == '/login' || loc == '/claim-handle' || loc == '/suspended') {
+          return null;
+        }
         return loc == '/splash' ? null : '/splash';
       }
 
@@ -72,6 +85,30 @@ final routerProvider = Provider<GoRouter>((ref) {
       // see [pendingHandleProvider]).
       final pendingHandle = ref.read(pendingHandleProvider) != null;
 
+      // A ban is EITHER the settled flag OR a transient AsyncError(AccountSuspended)
+      // still on the machine. The ceremony doors (_ingress / claimHandle) publish
+      // the ban as AsyncValue.guard error state for an instant before the
+      // controller settles it to data(null)+flag; treating that error as the
+      // suspended zone here makes routing correct REGARDLESS of whether the router
+      // observes that transient — no one-frame /login flash on ban arrival, no
+      // dependence on Riverpod/GoRouter notification timing (cage-match Carnot +
+      // Tesla converged: the forbidden intermediate must not route to /login).
+      final banned = ref.read(suspendedProvider) ||
+          (auth.hasError && auth.error is AccountSuspended);
+
+      // Ban on THIS island (→ /suspended), ahead of the logged-out routing so a
+      // banned account never lands on /login to loop on re-auth. Guarded on
+      // `!loggedIn`: a LIVE session wins (suspended ⊥ logged-in — cage-match
+      // Tesla), so a flag set while authenticated falls through to the logged-in
+      // eject below rather than trapping a live user on the ban screen. In the
+      // normal ban path tokens are cleared, so loggedIn is already false. The
+      // gateway picker stays reachable so the user can switch islands
+      // (switchGateway clears the flag).
+      if (!loggedIn && banned) {
+        if (loc == '/settings/gateway') return null;
+        return loc == '/suspended' ? null : '/suspended';
+      }
+
       // Restore finished: leave the splash for the right destination.
       if (loc == '/splash') {
         if (loggedIn) return '/';
@@ -79,8 +116,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
 
       if (loggedIn) {
-        // Already in — leave any auth/gate screen for chat.
-        return (loc == '/login' || loc == '/claim-handle' || loc == '/eula')
+        // Already in — leave any auth/gate screen for chat. /suspended is in the
+        // eject list so a logged-in user can never idle on it (cage-match Tesla:
+        // suspended ⊥ logged-in — e.g. a deferred-clear race or a stale deep
+        // link must bounce to chat, not sit on the ban screen while live).
+        return (loc == '/login' ||
+                loc == '/claim-handle' ||
+                loc == '/eula' ||
+                loc == '/suspended')
             ? '/'
             : null;
       }
@@ -103,6 +146,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/eula', builder: (_, _) => const EulaScreen()),
       GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
+      GoRoute(
+          path: '/suspended', builder: (_, _) => const SuspendedScreen()),
       GoRoute(
           path: '/claim-handle', builder: (_, _) => const ClaimHandleScreen()),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),

@@ -121,8 +121,13 @@ class FakeRestApi implements ChatRestApi {
     passkeyAuthFinishCalls++;
     lastPasskeyAuthState = state;
     lastPasskeyAuthCredential = credentialJson;
+    if (finishAuthThrows != null) throw finishAuthThrows!;
     return passkeyAuthOutcome ?? Authenticated(_session());
   }
+
+  /// If set, `finishPasskeyAuthentication` throws this (e.g. a ceremony that
+  /// resolves to a banned account → `AccountSuspended`).
+  Object? finishAuthThrows;
 
   /// If set, `addPasskey` throws this (e.g. `PasskeyAlreadyRegistered`).
   Object? addPasskeyThrows;
