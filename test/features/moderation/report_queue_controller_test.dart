@@ -299,16 +299,19 @@ void main() {
       await c.read(pendingReportsProvider.future);
 
       // The account was banned: the action itself 403-suspends (AccountSuspended,
-      // a distinct type from Forbidden), and the reconciling /me confirms it.
+      // a distinct type from Forbidden). Crucially, the CONFIRMING /me is made to
+      // FAIL transiently — settleBan must settle from the action's own ban signal
+      // WITHOUT depending on a second round-trip (cage-match Carnot + Tesla r4).
       rest.operatorThrows = const AccountSuspended();
-      rest.meThrows = const AccountSuspended();
+      rest.meThrows = const NetworkUnavailable();
 
       await expectLater(
         c.read(pendingReportsProvider.notifier).resolve('r1'),
         throwsA(isA<AccountSuspended>()),
       );
 
-      // Routed to the suspended zone, NOT left as a generic "action failed".
+      // Settled to /suspended directly — NOT stranded on a generic "action
+      // failed" just because the confirming /me couldn't land.
       expect(c.read(suspendedProvider), isTrue);
       expect(c.read(authControllerProvider).value, isNull);
     });

@@ -112,8 +112,10 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
         child: Icon(Icons.flag_outlined, color: theme.colorScheme.onErrorContainer),
       ),
       title: Text(
+        // Bounded line budget so the fixed-height ListTile (isThreeLine) doesn't
+        // overflow at large accessibility text scales (cage-match Carnot round 4).
         _r.messageBody.isEmpty ? '(empty message)' : _r.messageBody,
-        maxLines: 3,
+        maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Padding(
@@ -128,6 +130,8 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
                 if (_r.isAlreadyDeleted) 'Already removed',
               ].join(' · '),
               style: theme.textTheme.bodySmall,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             // Traceability for the moderator (cage-match Carnot): which message /
             // channel this preview refers to, so an ambiguous body isn't acted on
@@ -137,6 +141,8 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.outline,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -196,9 +202,12 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
         await _run(
           confirm: (
             'Ban sender?',
-            'Suspends this account from the island. Reversible, but they lose '
-                'access immediately. The report stays in the queue until you act '
-                'on it.',
+            // Name WHO is being banned so an ambiguous body preview can't lead to
+            // banning the wrong principal (cage-match Tesla round 4). The island's
+            // report DTO carries only the sender id, not a handle — surface the id.
+            'Suspends the sender (${_r.messageSenderUserId}) from the island. '
+                'Reversible, but they lose access immediately. The report stays in '
+                'the queue until you act on it.',
             'Ban',
           ),
           act: () => ref

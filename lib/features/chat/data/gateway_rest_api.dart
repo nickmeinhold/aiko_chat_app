@@ -462,9 +462,19 @@ class GatewayRestApi implements ChatRestApi {
       queryParameters: {'status': 'pending'},
     );
     final list = (_map(r.data)['reports'] as List?) ?? const [];
-    return list
-        .map((e) => PendingReport.fromJson((e as Map).cast<String, dynamic>()))
-        .toList();
+    // Per-row isolation (cage-match Tesla round 4): a single malformed row must
+    // not fail the WHOLE triage queue — fail-loud on a row's identity (strict ids
+    // in PendingReport.fromJson), fail-closed on the fleet (skip the bad row, keep
+    // the N-1 actionable reports the moderator can still work).
+    final out = <PendingReport>[];
+    for (final e in list) {
+      try {
+        out.add(PendingReport.fromJson((e as Map).cast<String, dynamic>()));
+      } catch (_) {
+        // Skip this row; the rest of the queue remains actionable.
+      }
+    }
+    return out;
   });
 
   @override

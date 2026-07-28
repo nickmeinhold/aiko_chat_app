@@ -505,16 +505,20 @@ class AuthController extends AsyncNotifier<AppUser?> {
     if (startUserId == null) return; // not authenticated — nothing to refresh
     try {
       final user = await _rest.me();
-      // Commit-time SESSION guard (extends _restoreSession's token guard, PR #71
-      // Tesla): between this refresh starting and me() returning, the session can
-      // change out from under us — a concurrent terminal signal clears tokens, OR
-      // a logout + sign-in as a DIFFERENT user lands. Publishing then would
-      // resurrect a dead session or clobber user B with user A's stale /me
-      // (cage-match Carnot round 2). Re-check BOTH: tokens still present AND the
-      // live session is still the SAME user we started refreshing.
+      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
+      // Commit-time SESSION fence (extends _restoreSession's token guard, PR #71
+      // Tesla): between this refresh starting and here, the session can change out
+      // from under us — a concurrent terminal signal clears tokens, OR a logout +
+      // sign-in as a DIFFERENT user lands. Publishing then would resurrect a dead
+      // session or clobber user B with user A's stale /me. The fence MUST be the
+      // last thing before the publish, AFTER every await (incl. the cache write) —
+      // a guard placed before a trailing await leaves exactly the gap it was meant
+      // to close (cage-match Tesla round 4). The userId re-check is SYNCHRONOUS and
+      // immediately precedes the synchronous assign, so no teardown can interleave:
+      // a teardown nulls state.value (→ userId null ≠ startUserId), a sign-in-as-B
+      // changes it — either way we bail.
       if (await _tokens.currentAccessToken() == null) return;
       if (state.value?.userId != startUserId) return;
-      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
       state = AsyncData(user);
     } on AccountSuspended catch (e, st) {
       // A ban surfaced during the refresh — this IS terminal, but it is a BAN,
@@ -538,6 +542,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // Forbidden / NetworkUnavailable / any transient — leave the session as-is.
       // The caller already surfaced the originating action's failure.
     }
+  }
+
+  /// Settle a KNOWN ban directly, WITHOUT a confirming `/v1/me` round-trip.
+  ///
+  /// Use when a call already returned [AccountSuspended] — that response IS the
+  /// terminal ban signal, so re-fetching `/me` to "confirm" it only adds a second
+  /// network hop that can fail transiently and strand a banned user with no
+  /// routing (cage-match Carnot + Tesla round 4). Routes through the single
+  /// suspended door (`_settleSuspension` → `/suspended`), same as sign-in/restore.
+  /// Idempotent: if suspension is already settled it is a harmless re-flag.
+  Future<void> settleBan() async {
+    state = AsyncError(const AccountSuspended(), StackTrace.current);
+    await _settleSuspension();
   }
 
   /// Re-point the app at a different gateway (the #4 picker). JWTs are minted by

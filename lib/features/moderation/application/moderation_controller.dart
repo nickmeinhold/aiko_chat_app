@@ -111,7 +111,8 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
     try {
       return await ref.watch(restApiProvider).listPendingReports();
     } on Forbidden {
-      _scheduleReconcile();
+      // Flag revoked → schedule a /me refresh to flip isModeratorProvider off.
+      _scheduleAuthAction((a) => a.refreshUser());
       // RETHROW — do NOT publish success-empty. An empty AsyncData is the wrong
       // carrier for "you were denied": until (and unless) the /me refresh lands
       // and flips the flag, a returned `[]` would paint "the queue is clear" with
@@ -122,24 +123,24 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
       rethrow;
     } on AccountSuspended {
       // The operator's own account was BANNED — the FIRST load 403s with the ban
-      // body, not just an action (seal both doors on the load path too, not only
-      // Forbidden — cage-match Tesla round 3). The reconcile re-hits the ban via
-      // /me and settles to /suspended; rethrow so the queue is an honest error,
-      // not a false-empty, until the router leaves.
-      _scheduleReconcile();
+      // body, not just an action (seal both doors on the load path too — Tesla
+      // round 3). The load response IS the terminal ban signal, so settle
+      // suspension DIRECTLY (no second /me round-trip — Tesla round 4); rethrow so
+      // the queue is an honest error, not a false-empty, until the router leaves.
+      _scheduleAuthAction((a) => a.settleBan());
       rethrow;
     }
   }
 
-  /// Schedule the `/me` reconcile OUTSIDE this build (refreshUser mutates the
+  /// Run an [AuthController] reconcile action OUTSIDE this build (it mutates the
   /// watched authControllerProvider — awaiting it in-build orphans build's own
-  /// future). Guarded on `ref.mounted`: if the screen is navigated away before
-  /// the microtask runs, the notifier is disposed and `ref.read` would throw /
-  /// drop the reconcile (cage-match Tesla round 3).
-  void _scheduleReconcile() {
+  /// future). Guarded on `ref.mounted`: if the screen is navigated away before the
+  /// microtask runs, the notifier is disposed and `ref.read` would throw / drop
+  /// the reconcile (cage-match Tesla round 3).
+  void _scheduleAuthAction(Future<void> Function(AuthController) action) {
     Future.microtask(() {
       if (!ref.mounted) return;
-      ref.read(authControllerProvider.notifier).refreshUser();
+      action(ref.read(authControllerProvider.notifier));
     });
   }
 
@@ -192,10 +193,15 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
     try {
       await action();
     } on Forbidden {
+      // Flag revoked — re-read /me to flip isModeratorProvider off.
       await ref.read(authControllerProvider.notifier).refreshUser();
       rethrow;
     } on AccountSuspended {
-      await ref.read(authControllerProvider.notifier).refreshUser();
+      // The account is banned — the action's response IS the terminal signal, so
+      // settle suspension DIRECTLY (→ /suspended) rather than re-confirming via a
+      // second /me that could fail transiently and strand the banned moderator
+      // (cage-match Carnot + Tesla round 4).
+      await ref.read(authControllerProvider.notifier).settleBan();
       rethrow;
     }
   }
