@@ -452,6 +452,10 @@ class GatewayRestApi implements ChatRestApi {
   // catches Forbidden to refresh /me.
 
   @override
+  // KNOWN CEILING (cage-match Tesla): a single unpaginated GET. The island caps
+  // the page server-side (limit default 100, max 500) and only status=pending is
+  // served, so the queue is bounded by policy today; if an island ever grows a
+  // long pending backlog, cursor pagination (island #44) is the follow-up.
   Future<List<PendingReport>> listPendingReports() => _authedCall(() async {
     final r = await _authed.get(
       '/v1/reports',

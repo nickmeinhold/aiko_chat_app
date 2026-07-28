@@ -525,6 +525,15 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // `state.error`, so surface the ban there first, then delegate.
       state = AsyncError(e, st);
       await _settleSuspension();
+    } on Unauthorized {
+      // Terminal authN during the refresh (a 401 that survived the interceptor's
+      // refresh-and-retry) — the session is genuinely dead. Tear it down rather
+      // than leaving a dead token published in UI state (cage-match Carnot round
+      // 3). Idempotent with the interceptor's onUnauthenticated event path, so
+      // double-firing is safe; being explicit here makes refreshUser self-
+      // contained instead of relying on that event having already fired. (Caught
+      // AFTER AccountSuspended, its subtype, so a ban still routes to /suspended.)
+      _becomeUnauthenticated();
     } catch (_) {
       // Forbidden / NetworkUnavailable / any transient — leave the session as-is.
       // The caller already surfaced the originating action's failure.

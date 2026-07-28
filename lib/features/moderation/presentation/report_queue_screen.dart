@@ -11,7 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../auth/application/auth_controller.dart';
-import '../../chat/data/chat_rest_api.dart' show Forbidden;
+import '../../chat/data/chat_rest_api.dart' show AccountSuspended, Forbidden;
 import '../application/moderation_controller.dart';
 import '../domain/moderation_models.dart';
 
@@ -48,11 +48,16 @@ class ReportQueueScreen extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => ListView(
             // ListView so the RefreshIndicator still pulls on an error.
-            children: [
+            children: const [
               Padding(
-                padding: const EdgeInsets.all(24),
+                padding: EdgeInsets.all(24),
+                // Fixed operator-facing copy — never interpolate the raw
+                // exception (a DioException / Forbidden(context: /v1/...) leaks
+                // endpoint + backend body into the UI; keep diagnostics in
+                // telemetry only — cage-match Tesla + Carnot round 3). Pull to
+                // retry.
                 child: Text(
-                  'Could not load the report queue.\n$e',
+                  "Could not load the report queue. Pull to retry.",
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -262,6 +267,11 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
               : 'Action denied. Please try again.'),
         ),
       );
+      if (mounted) setState(() => _busy = false);
+    } on AccountSuspended {
+      // The operator's OWN account was banned mid-action. The controller already
+      // settled suspension (→ the router is navigating to /suspended); don't paint
+      // a competing "action failed" snackbar — let the router speak (Tesla r3).
       if (mounted) setState(() => _busy = false);
     } catch (_) {
       messenger.showSnackBar(

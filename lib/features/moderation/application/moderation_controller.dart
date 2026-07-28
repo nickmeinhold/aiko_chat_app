@@ -11,7 +11,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
-import '../../chat/data/chat_rest_api.dart' show ChatRestApi, Forbidden;
+import '../../chat/data/chat_rest_api.dart'
+    show AccountSuspended, ChatRestApi, Forbidden;
 import '../domain/moderation_models.dart';
 
 /// The account's blocked users (most recent first). Auth-gated via [build] (which
@@ -110,18 +111,7 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
     try {
       return await ref.watch(restApiProvider).listPendingReports();
     } on Forbidden {
-      // Stale-true moderator flag: the island revoked moderator since /me was
-      // last read, so the very FIRST load (or a pull-to-refresh) 403s — not just
-      // an action. Reconcile like the action paths do: refresh /me → flips
-      // isModeratorProvider false → the screen's top-level gate swaps to the
-      // "no longer a moderator" state.
-      //
-      // The refresh runs in a microtask, NOT awaited here: refreshUser mutates
-      // authControllerProvider, which this build WATCHES, so awaiting it in-build
-      // would orphan build's own future (dispose-during-loading).
-      Future.microtask(
-        () => ref.read(authControllerProvider.notifier).refreshUser(),
-      );
+      _scheduleReconcile();
       // RETHROW — do NOT publish success-empty. An empty AsyncData is the wrong
       // carrier for "you were denied": until (and unless) the /me refresh lands
       // and flips the flag, a returned `[]` would paint "the queue is clear" with
@@ -130,7 +120,27 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
       // Carnot round 2). Surfacing the error keeps the screen honest ("couldn't
       // load") until the flag-flip gates it off.
       rethrow;
+    } on AccountSuspended {
+      // The operator's own account was BANNED — the FIRST load 403s with the ban
+      // body, not just an action (seal both doors on the load path too, not only
+      // Forbidden — cage-match Tesla round 3). The reconcile re-hits the ban via
+      // /me and settles to /suspended; rethrow so the queue is an honest error,
+      // not a false-empty, until the router leaves.
+      _scheduleReconcile();
+      rethrow;
     }
+  }
+
+  /// Schedule the `/me` reconcile OUTSIDE this build (refreshUser mutates the
+  /// watched authControllerProvider — awaiting it in-build orphans build's own
+  /// future). Guarded on `ref.mounted`: if the screen is navigated away before
+  /// the microtask runs, the notifier is disposed and `ref.read` would throw /
+  /// drop the reconcile (cage-match Tesla round 3).
+  void _scheduleReconcile() {
+    Future.microtask(() {
+      if (!ref.mounted) return;
+      ref.read(authControllerProvider.notifier).refreshUser();
+    });
   }
 
   /// Take the reported message down (soft-delete + the island's forward
@@ -145,7 +155,7 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
   /// Ban [userId] from the island. Does NOT remove any report tile — a ban is a
   /// distinct action from resolving the triggering report (the island keeps the
   /// report pending); the moderator still resolves/dismisses it explicitly.
-  Future<void> ban(String userId) => _guardForbidden(() => _rest.banUser(userId));
+  Future<void> ban(String userId) => _reconcileAuthThenRethrow(() => _rest.banUser(userId));
 
   ChatRestApi get _rest => ref.read(restApiProvider);
 
@@ -154,7 +164,7 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
   /// load before mutating so a still-in-flight build() can't clobber the removal
   /// with its pre-action snapshot.
   Future<void> _actThenRemove(String reportId, Future<void> Function() act) =>
-      _guardForbidden(() async {
+      _reconcileAuthThenRethrow(() async {
         try {
           await future;
         } catch (_) {/* initial load failed; proceed from current state */}
@@ -165,14 +175,26 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
         );
       });
 
-  /// Run an operator action; on a [Forbidden] (moderator flag revoked
-  /// server-side) refresh `/me` so [isModeratorProvider] flips and the UI gates
-  /// off, then rethrow so the caller surfaces the failure. Any other error just
-  /// propagates. A [Forbidden] is NEVER a logout (A3) — only a stale-flag signal.
-  Future<void> _guardForbidden(Future<void> Function() action) async {
+  /// Run an operator action and reconcile the A3 auth taxonomy on BOTH doors of
+  /// the 403 it can produce (seal both, not one — cage-match Tesla):
+  ///   - [Forbidden] → the moderator flag was revoked; `refreshUser()` re-reads
+  ///     `/me`, flips [isModeratorProvider] false, the UI gates off. NOT a logout.
+  ///   - [AccountSuspended] → the operator's own account was BANNED mid-session;
+  ///     `refreshUser()`'s `/me` re-hits the ban and settles through the single
+  ///     suspended door → `/suspended` (NOT a generic "action failed", and NOT a
+  ///     logout loop).
+  /// Either way we rethrow so the caller can surface/suppress copy; the reconcile
+  /// runs first so the router/gate already reflect the settled world. A plain
+  /// [Unauthorized] (terminal authN) is left to propagate — the REST interceptor's
+  /// onUnauthenticated path is its reaper.
+  Future<void> _reconcileAuthThenRethrow(
+      Future<void> Function() action) async {
     try {
       await action();
     } on Forbidden {
+      await ref.read(authControllerProvider.notifier).refreshUser();
+      rethrow;
+    } on AccountSuspended {
       await ref.read(authControllerProvider.notifier).refreshUser();
       rethrow;
     }

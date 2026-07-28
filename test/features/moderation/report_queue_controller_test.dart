@@ -12,7 +12,7 @@ import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show AccountSuspended, Forbidden, NetworkUnavailable;
+    show AccountSuspended, Forbidden, NetworkUnavailable, Unauthorized;
 import 'package:aiko_chat_app/features/moderation/application/moderation_controller.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 import 'package:drift/native.dart';
@@ -289,6 +289,53 @@ void main() {
       // would land on /login and 403-loop.
       expect(c.read(suspendedProvider), isTrue);
       expect(c.read(authControllerProvider).value, isNull);
+    });
+
+    test('a BAN that lands DIRECTLY on an operator action (AccountSuspended, not '
+        'Forbidden) also settles to /suspended — both 403 doors sealed', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      // The account was banned: the action itself 403-suspends (AccountSuspended,
+      // a distinct type from Forbidden), and the reconciling /me confirms it.
+      rest.operatorThrows = const AccountSuspended();
+      rest.meThrows = const AccountSuspended();
+
+      await expectLater(
+        c.read(pendingReportsProvider.notifier).resolve('r1'),
+        throwsA(isA<AccountSuspended>()),
+      );
+
+      // Routed to the suspended zone, NOT left as a generic "action failed".
+      expect(c.read(suspendedProvider), isTrue);
+      expect(c.read(authControllerProvider).value, isNull);
+    });
+
+    test('refreshUser tears down on a terminal Unauthorized during /me — no dead '
+        'session left published (Carnot round 3)', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      // The action 403s (Forbidden → refreshUser), but the reconciling /me hits a
+      // terminal 401 (session genuinely dead, not just the flag).
+      rest.operatorThrows = const Forbidden('/v1/reports/r1/resolve');
+      rest.meThrows = const Unauthorized(401);
+
+      await expectLater(
+        c.read(pendingReportsProvider.notifier).resolve('r1'),
+        throwsA(isA<Forbidden>()),
+      );
+
+      // The dead session was torn down, not left published in UI state.
+      expect(c.read(authControllerProvider).value, isNull);
+      // Drain _becomeUnauthenticated's unawaited teardown before the container
+      // disposes, so its post-gap transport read doesn't hit a disposed Ref (a
+      // test-teardown race, not a production one — the root container outlives it).
+      await Future<void>.delayed(const Duration(milliseconds: 20));
     });
   });
 }
