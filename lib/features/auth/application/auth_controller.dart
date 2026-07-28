@@ -504,12 +504,23 @@ class AuthController extends AsyncNotifier<AppUser?> {
     if (state.value == null) return; // not authenticated — nothing to refresh
     try {
       final user = await _rest.me();
+      // Commit-time token guard (mirrors _restoreSession, PR #71 Tesla): a
+      // concurrent terminal signal (transport/REST `unauthenticated`) can clear
+      // the tokens and flip state to logged-out WHILE this me() is in flight.
+      // Re-read the token and only republish if the session still exists, so a
+      // refresh can never resurrect a just-logged-out session.
+      if (await _tokens.currentAccessToken() == null) return;
       await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
       state = AsyncData(user);
-    } on AccountSuspended {
-      // A ban surfaced during the refresh — this IS terminal; route it through
-      // the standard unauthenticated path rather than swallowing it below.
-      _becomeUnauthenticated();
+    } on AccountSuspended catch (e, st) {
+      // A ban surfaced during the refresh — this IS terminal, but it is a BAN,
+      // not a revoked session. Route it through the SAME single suspended-
+      // settlement door as sign-in/restore (`_settleSuspension`), NOT the generic
+      // `_becomeUnauthenticated` teardown — the latter lands on /login, which
+      // 403-loops (a re-auth attempt re-bans). `_settleSuspension` reads
+      // `state.error`, so surface the ban there first, then delegate.
+      state = AsyncError(e, st);
+      await _settleSuspension();
     } catch (_) {
       // Forbidden / NetworkUnavailable / any transient — leave the session as-is.
       // The caller already surfaced the originating action's failure.

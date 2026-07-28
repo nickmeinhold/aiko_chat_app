@@ -113,13 +113,27 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
       ),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 4),
-        child: Text(
-          [
-            'Reason: ${_r.reasonLabel}',
-            'Reporter: ${_r.reporterDisplayName ?? 'unknown'}',
-            if (_r.isAlreadyDeleted) 'Already removed',
-          ].join(' · '),
-          style: theme.textTheme.bodySmall,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              [
+                'Reason: ${_r.reasonLabel}',
+                'Reporter: ${_r.reporterDisplayName ?? 'unknown'}',
+                if (_r.isAlreadyDeleted) 'Already removed',
+              ].join(' · '),
+              style: theme.textTheme.bodySmall,
+            ),
+            // Traceability for the moderator (cage-match Carnot): which message /
+            // channel this preview refers to, so an ambiguous body isn't acted on
+            // blind.
+            Text(
+              'msg ${_r.messageId} · ch ${_r.channelId}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+          ],
         ),
       ),
       trailing: _busy
@@ -140,10 +154,14 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
                   value: _ReportAction.dismiss,
                   child: Text('Dismiss report'),
                 ),
-                const PopupMenuItem(
-                  value: _ReportAction.ban,
-                  child: Text('Ban sender'),
-                ),
+                // Fail closed client-side: never offer a ban for a report whose
+                // sender id decoded empty (a malformed row would POST
+                // /v1/users//ban) — cage-match Tesla + Carnot.
+                if (_r.messageSenderUserId.isNotEmpty)
+                  const PopupMenuItem(
+                    value: _ReportAction.ban,
+                    child: Text('Ban sender'),
+                  ),
               ],
             ),
     );
@@ -232,9 +250,16 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
       // refreshed /me (→ isModeratorProvider flips → the screen gates off).
       if (!mounted) return;
       setState(() => _busy = false);
+      // The controller already refreshed /me. Trust the RECONCILED flag, not the
+      // bare 403, for the copy: only assert demotion if the refresh actually
+      // flipped us to non-moderator; a transient refresh failure that left the
+      // flag true reads as a plain denial, not a false "you were demoted" (Tesla).
+      final stillModerator = ref.read(isModeratorProvider);
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('You no longer have moderator access.'),
+        SnackBar(
+          content: Text(stillModerator
+              ? 'Action denied. Please try again.'
+              : 'You no longer have moderator access.'),
         ),
       );
     } catch (_) {

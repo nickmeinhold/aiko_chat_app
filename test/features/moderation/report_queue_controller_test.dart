@@ -11,7 +11,8 @@ import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
-import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart' show Forbidden;
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
+    show AccountSuspended, Forbidden;
 import 'package:aiko_chat_app/features/moderation/application/moderation_controller.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 import 'package:drift/native.dart';
@@ -203,6 +204,50 @@ void main() {
       // Reconciled without a logout: still authenticated, flag now false.
       expect(c.read(authControllerProvider).value, isNotNull);
       expect(c.read(isModeratorProvider), isFalse);
+    });
+
+    test('a Forbidden on the INITIAL load (not just an action) reconciles /me '
+        'and flips the flag off — the load path gates the UI too', () async {
+      final rest = FakeRestApi(user: _modUser);
+      final c = await _loggedIn(rest);
+      expect(c.read(isModeratorProvider), isTrue);
+
+      // Server revoked moderator BEFORE the screen opened: the first list 403s,
+      // and a fresh /me now returns a non-moderator user.
+      rest.operatorThrows = const Forbidden('/v1/reports');
+      rest.user = FakeRestApi.defaultUser;
+
+      // build() must NOT surface an error with the tile still lit — it returns
+      // empty and schedules the /me reconcile in a microtask.
+      final reports = await c.read(pendingReportsProvider.future);
+      expect(reports, isEmpty);
+      // Drain the scheduled refresh (microtask → me() → state flip → rebuild).
+      await c.read(authControllerProvider.future);
+      await Future<void>.delayed(Duration.zero);
+      expect(c.read(isModeratorProvider), isFalse);
+      expect(c.read(authControllerProvider).value, isNotNull); // never logged out
+    });
+
+    test('a BAN discovered during the Forbidden refresh routes to the suspended '
+        'zone, NOT a plain logout (single suspended door)', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      // The action 403s; the reconciling /me reveals the account was BANNED.
+      rest.operatorThrows = const Forbidden('/v1/reports/r1/resolve');
+      rest.meThrows = const AccountSuspended();
+
+      await expectLater(
+        c.read(pendingReportsProvider.notifier).resolve('r1'),
+        throwsA(isA<Forbidden>()),
+      );
+
+      // Settled through the suspended door (→ /suspended), not a bare logout that
+      // would land on /login and 403-loop.
+      expect(c.read(suspendedProvider), isTrue);
+      expect(c.read(authControllerProvider).value, isNull);
     });
   });
 }

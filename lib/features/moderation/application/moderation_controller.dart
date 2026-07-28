@@ -107,7 +107,26 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
   Future<List<PendingReport>> build() async {
     final user = ref.watch(authControllerProvider).value;
     if (user == null || !user.isModerator) return const [];
-    return ref.watch(restApiProvider).listPendingReports();
+    try {
+      return await ref.watch(restApiProvider).listPendingReports();
+    } on Forbidden {
+      // Stale-true moderator flag: the island revoked moderator since /me was
+      // last read, so the very FIRST load (or a pull-to-refresh) 403s — not just
+      // an action. Reconcile like the action paths do (refresh /me → flips
+      // isModeratorProvider false → re-runs this build → empty via the early
+      // return above → the operator UI gates off). The load path MUST reconcile
+      // too, or a stale moderator opening the screen sees an error with the
+      // Reports tile still lit (cage-match Tesla + Carnot).
+      //
+      // The refresh runs in a microtask, NOT awaited here: refreshUser mutates
+      // authControllerProvider, which this build WATCHES, so awaiting it in-build
+      // would orphan build's own future (dispose-during-loading). Scheduling it
+      // after build completes lets the flag-flip drive the rebuild cleanly.
+      Future.microtask(
+        () => ref.read(authControllerProvider.notifier).refreshUser(),
+      );
+      return const [];
+    }
   }
 
   /// Take the reported message down (soft-delete + the island's forward
