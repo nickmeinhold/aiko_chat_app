@@ -153,7 +153,8 @@ class GatewayRestApi implements ChatRestApi {
     }
     // Runs on the AUTHED client: the bearer IS the identity the credential links
     // to — that is the whole distinction from register/finish (which mints a new
-    // account). `_authedCall` maps a terminal 401/403 → Unauthorized.
+    // account). `_authedCall` maps 401 → Unauthorized (terminal) and a plain
+    // 403 → Forbidden (authZ, non-terminal); a suspended-403 → AccountSuspended.
     return _authedCall(() async {
       try {
         final r = await _authed.post(
@@ -168,7 +169,7 @@ class GatewayRestApi implements ChatRestApi {
         if (e.response?.statusCode == 409) {
           throw const PasskeyAlreadyRegistered();
         }
-        rethrow; // terminal 401/403 mapped by _authedCall; else propagate
+        rethrow; // _authedCall maps 401→Unauthorized / plain 403→Forbidden; else propagate
       }
     });
   }
@@ -249,8 +250,9 @@ class GatewayRestApi implements ChatRestApi {
   /// substring — so a future 403 whose prose merely *mentions* suspend/suspension
   /// ("cannot suspend this operation") is not baptised a ban (cage-match Tesla).
   /// Robust to a Map body (dio-decoded JSON) or a raw JSON string. Any parse
-  /// hiccup falls through to the generic 401/403 → Unauthorized path — a
-  /// suspended user then sees the re-auth copy, never a crash.
+  /// hiccup falls through to the generic mapping — on the bare login door that is
+  /// 401/403 → Unauthorized; on the authed door a plain 403 → Forbidden (A3). A
+  /// suspended user hitting the login door then sees the re-auth copy, never a crash.
   static bool _isSuspended(DioException e) {
     if (e.response?.statusCode != 403) return false;
     final data = e.response?.data;
@@ -365,8 +367,9 @@ class GatewayRestApi implements ChatRestApi {
     try {
       await _authedCall(() => _authed.delete('/v1/account'));
     } on DioException catch (e) {
-      // _authedCall already mapped a terminal 401/403 → Unauthorized and
-      // rethrew everything else. A 409 means "sole admin of a channel" — map it
+      // _authedCall already mapped 401 → Unauthorized (terminal) and a plain
+      // 403 → Forbidden (authZ), and rethrew everything else. A 409 means
+      // "sole admin of a channel" — map it
       // to the typed domain error carrying the gateway's explanatory `detail`.
       if (e.response?.statusCode == 409) {
         final detail = (e.response?.data is Map)

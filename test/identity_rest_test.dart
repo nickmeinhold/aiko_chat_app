@@ -180,10 +180,12 @@ void main() {
   // The island's per-island BAN — `403 {"detail":"account suspended"}` at every
   // ingress (handoff 2026-07-27, island #1914). Must map to the AccountSuspended
   // REFINEMENT of Unauthorized so the UI says "suspended," not "session expired"
-  // (which loops: re-auth 403s again). Keyed on the BODY, not the bare 403, so an
-  // unrelated forbidden stays a plain Unauthorized. BOTH REST boundaries are
-  // covered by DISTINCT wire paths (cage-match Tesla P1 — an earlier revision
-  // tested `_authedCall` twice and left the login door unproven):
+  // (which loops: re-auth 403s again). Keyed on the BODY, not the bare 403. An
+  // unrelated (non-ban) forbidden is door-dependent (A3): on the authed door it
+  // is authZ → `Forbidden`; on the bare login door it stays terminal
+  // `Unauthorized`. BOTH REST boundaries are covered by DISTINCT wire paths
+  // (cage-match Tesla P1 — an earlier revision tested `_authedCall` twice and
+  // left the login door unproven):
   //   - authed routes  → `_authedCall`          (via listBlocks)
   //   - bare login door → `_throwIfAuthTerminal` (via finishPasskeyRegistration,
   //     the passkey-finish path that surfaces a revoked/expired provisioning 403)
@@ -208,6 +210,23 @@ void main() {
       final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
       await expectLater(api.finishPasskeyRegistration('st', '{"id":"c"}'),
           throwsA(isA<AccountSuspended>()));
+    });
+
+    test(
+        'login door (_throwIfAuthTerminal): a plain (non-suspended) 403 stays '
+        'terminal Unauthorized, NOT Forbidden (A3 door asymmetry is frozen)',
+        () async {
+      // The A3 unbundle is DOOR-DEPENDENT on purpose: a plain 403 on the AUTHED
+      // door is authZ → Forbidden, but on the token-less login/claim door it is a
+      // rejected/expired provisioning token = an authN failure → terminal
+      // Unauthorized. This test freezes that asymmetry so a future "make it
+      // consistent" edit can't collapse provisioning rejection into a
+      // non-terminal Forbidden the auth UI wouldn't treat as session death.
+      final api = apiWith((_) => jsonBody(403, '{"detail":"forbidden"}'));
+      await expectLater(
+        api.finishPasskeyRegistration('st', '{"id":"c"}'),
+        throwsA(allOf(isA<Unauthorized>(), isNot(isA<Forbidden>()))),
+      );
     });
 
     test(

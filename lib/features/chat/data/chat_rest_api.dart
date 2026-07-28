@@ -34,7 +34,11 @@ typedef PasskeyChallenge = ({String state, String optionsJson});
 /// rejected for authentication reasons — a 401 that survived the interceptor's
 /// single-flight refresh-and-retry, or the ban-403 (via the [AccountSuspended]
 /// refinement). A plain, non-suspended 403 is authoriZation, not authentication,
-/// and maps to [Forbidden] (NOT terminal — see there). Distinct from a transient
+/// and maps to [Forbidden] on the AUTHED path (`_authedCall`, NOT terminal — see
+/// there). Door-dependent: on the token-less login/claim door
+/// (`_throwIfAuthTerminal`), a plain 403 is STILL terminal `Unauthorized` — a
+/// rejected/expired provisioning token there IS an authN failure, and no operator
+/// endpoint uses that door. Distinct from a transient
 /// network/timeout/5xx error (which propagates as-is and must NOT trigger a
 /// logout — design 02). The reconcile engine recognises THIS type to route a
 /// reconnect to the unauthenticated state instead of a transient redrain,
@@ -153,6 +157,14 @@ class SoleAdminDeletionBlocked implements Exception {
 
 /// The history/auth/media REST seam (plan §B1; media is a later phase). No
 /// lifecycle. Riverpod + the repository depend on THIS, never on `dio`.
+///
+/// Auth-rejection contract for every authed method here: a terminal authN
+/// failure throws [Unauthorized] (→ logout), a ban throws its [AccountSuspended]
+/// refinement, and a plain authoriZation denial throws [Forbidden] (NOT terminal
+/// — the session stays valid; the caller handles it locally, e.g. an operator
+/// endpoint refreshing `/v1/me`). Callers that can provoke a 403 (moderator/
+/// admin actions) should catch [Forbidden] rather than let it surface as a
+/// generic error.
 abstract interface class ChatRestApi {
   /// Begin passkey REGISTRATION (first-passkey-creates-account). Returns the
   /// WebAuthn creation options + a binding [PasskeyChallenge.state]. No prior
