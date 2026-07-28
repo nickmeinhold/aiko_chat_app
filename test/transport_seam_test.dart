@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show Unauthorized;
+    show AccountSuspended, Forbidden, Unauthorized;
 import 'package:aiko_chat_app/features/chat/data/gateway_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/gateway_transport.dart';
@@ -217,10 +217,11 @@ void main() {
     GatewayRestApi backend({
       required Future<String> Function(String) remoteRefresh,
       required int statusCode,
+      String body = '{}',
     }) {
       final tokens = DefaultTokenProvider(
           store: InMemoryTokenStore(_seed), remoteRefresh: remoteRefresh);
-      ResponseBody handler(RequestOptions _) => jsonBody(statusCode, '{}');
+      ResponseBody handler(RequestOptions _) => jsonBody(statusCode, body);
       final authed = Dio(BaseOptions(baseUrl: 'http://x'))
         ..httpClientAdapter = FakeHttpAdapter(handler)
         ..interceptors.add(AuthInterceptor(
@@ -248,10 +249,32 @@ void main() {
       );
     });
 
-    test('a 403 → Unauthorized (terminal; no refresh attempted)', () async {
+    test(
+        'a plain (non-suspended) 403 → Forbidden, NOT Unauthorized — an authZ '
+        'denial must not log the user out (A3 taxonomy unbundle)', () async {
       final api =
           backend(remoteRefresh: (_) async => 'unused', statusCode: 403);
-      await expectLater(api.getHistory('c1'), throwsA(isA<Unauthorized>()));
+      await expectLater(
+        api.getHistory('c1'),
+        // Forbidden is NOT a subtype of Unauthorized, so the terminal-auth
+        // routers (_isAuthError / on Unauthorized) never fire → no logout.
+        throwsA(allOf(isA<Forbidden>(), isNot(isA<Unauthorized>()))),
+      );
+    });
+
+    test('a ban-403 (body {"detail":"account suspended"}) → AccountSuspended '
+        '(still terminal, unchanged by the unbundle)', () async {
+      final api = backend(
+        remoteRefresh: (_) async => 'unused',
+        statusCode: 403,
+        body: '{"detail":"account suspended"}',
+      );
+      await expectLater(
+        api.getHistory('c1'),
+        // AccountSuspended extends Unauthorized → stays terminal (logout path),
+        // and is matched BEFORE the plain-403 → Forbidden branch.
+        throwsA(allOf(isA<AccountSuspended>(), isA<Unauthorized>())),
+      );
     });
   });
 

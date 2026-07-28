@@ -210,23 +210,29 @@ void main() {
           throwsA(isA<AccountSuspended>()));
     });
 
-    test('a NON-suspended 403 stays a plain Unauthorized (not a ban)', () async {
-      // e.g. a moderator-only endpoint's forbidden — must not be mislabelled.
+    test(
+        'a NON-suspended 403 (authZ denial) → Forbidden, NOT Unauthorized '
+        '(A3: authZ ≠ authN, no logout)', () async {
+      // e.g. a moderator-only endpoint's forbidden. It must be neither a ban nor
+      // a terminal Unauthorized — the session is valid, only THIS action is
+      // denied, so the terminal-auth routers must not fire (no logout).
       final api = apiWith((_) => jsonBody(403, '{"detail":"forbidden"}'));
       await expectLater(
         api.listBlocks(),
-        throwsA(allOf(isA<Unauthorized>(), isNot(isA<AccountSuspended>()))),
+        throwsA(allOf(isA<Forbidden>(), isNot(isA<Unauthorized>()))),
       );
     });
 
     test('a 403 that merely mentions "suspend" is NOT a ban (exact-phrase key)',
         () async {
       // Tesla P2: the body key matches the island's phrase, not any "suspend".
+      // A near-miss body falls through to the plain-403 → Forbidden branch
+      // (A3), never to the ban's AccountSuspended.
       final api =
           apiWith((_) => jsonBody(403, '{"detail":"cannot suspend operation"}'));
       await expectLater(
         api.listBlocks(),
-        throwsA(allOf(isA<Unauthorized>(), isNot(isA<AccountSuspended>()))),
+        throwsA(allOf(isA<Forbidden>(), isNot(isA<AccountSuspended>()))),
       );
     });
   });
