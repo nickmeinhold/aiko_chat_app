@@ -46,6 +46,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/blocked'),
           ),
+          // Operator seat (#33/#35): visible ONLY to a moderator. Presentation
+          // gate only — the server ModeratorUser check is the real boundary — so
+          // a stale-true flag at worst shows a tile whose actions 403 → Forbidden
+          // (handled, not a logout). isModeratorProvider is fail-closed (false
+          // when logged out / mid-restore / on an older gateway).
+          if (ref.watch(isModeratorProvider))
+            ListTile(
+              leading: const Icon(Icons.shield_outlined),
+              title: const Text('Reports'),
+              subtitle: const Text('Review reported messages and act on them.'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/moderation/reports'),
+            ),
           const _SectionHeader('Sign-in'),
           ListTile(
             leading: const Icon(Icons.key_outlined),

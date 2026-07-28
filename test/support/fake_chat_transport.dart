@@ -174,6 +174,15 @@ class FakeChatRestApi implements ChatRestApi {
   Future<void> reportMessage(String messageId, ReportReason reason) =>
       throw UnimplementedError();
   @override
+  Future<List<PendingReport>> listPendingReports() =>
+      throw UnimplementedError();
+  @override
+  Future<void> resolveReport(String reportId) => throw UnimplementedError();
+  @override
+  Future<void> dismissReport(String reportId) => throw UnimplementedError();
+  @override
+  Future<void> banUser(String userId) => throw UnimplementedError();
+  @override
   Future<PasskeyChallenge> startPasskeyRegistration() =>
       throw UnimplementedError();
   @override

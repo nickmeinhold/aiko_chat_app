@@ -260,4 +260,28 @@ abstract interface class ChatRestApi {
   /// Report [messageId] as objectionable with [reason] (feeds the gateway's ops
   /// queue behind the 24h-action commitment). Idempotent per (message, reporter).
   Future<void> reportMessage(String messageId, ReportReason reason);
+
+  // --- operator / moderator actions (#33/#35, ModeratorUser-gated) ----------
+  // Every method below is gated server-side by `require_moderator`; a caller
+  // whose moderator flag is stale gets a plain 403 → [Forbidden] (authZ, NOT a
+  // logout — the A3 taxonomy). Consumers should catch [Forbidden] and reconcile
+  // the flag (refresh `/v1/me`) rather than treat it as a terminal auth failure.
+
+  /// The moderator triage queue — unresolved reports, newest first
+  /// (`GET /v1/reports?status=pending`). Throws [Forbidden] for a non-moderator.
+  Future<List<PendingReport>> listPendingReports();
+
+  /// Act on a report by taking the reported message DOWN (soft-delete + the
+  /// forward-ULID retraction the island fans to clients). Idempotent; the island
+  /// 404s an unknown report. Throws [Forbidden] for a non-moderator.
+  Future<void> resolveReport(String reportId);
+
+  /// Dismiss a report as not-actionable (no takedown). Idempotent. Throws
+  /// [Forbidden] for a non-moderator.
+  Future<void> dismissReport(String reportId);
+
+  /// Ban [userId] from this island (per-island, reversible, forward-looking;
+  /// active-disconnects their live sockets). Throws [Forbidden] for a
+  /// non-moderator. The island 400s a self-ban / a ban of another moderator.
+  Future<void> banUser(String userId);
 }

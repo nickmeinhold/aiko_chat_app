@@ -446,6 +446,35 @@ class GatewayRestApi implements ChatRestApi {
         ),
       );
 
+  // --- operator / moderator actions (#33/#35) --------------------------------
+  // All ModeratorUser-gated → a stale-flag caller gets 403 → Forbidden (A3), not
+  // a logout. `_authedCall` performs that mapping; the operator controller
+  // catches Forbidden to refresh /me.
+
+  @override
+  Future<List<PendingReport>> listPendingReports() => _authedCall(() async {
+    final r = await _authed.get(
+      '/v1/reports',
+      queryParameters: {'status': 'pending'},
+    );
+    final list = (_map(r.data)['reports'] as List?) ?? const [];
+    return list
+        .map((e) => PendingReport.fromJson((e as Map).cast<String, dynamic>()))
+        .toList();
+  });
+
+  @override
+  Future<void> resolveReport(String reportId) =>
+      _authedCall(() => _authed.post('/v1/reports/$reportId/resolve'));
+
+  @override
+  Future<void> dismissReport(String reportId) =>
+      _authedCall(() => _authed.post('/v1/reports/$reportId/dismiss'));
+
+  @override
+  Future<void> banUser(String userId) =>
+      _authedCall(() => _authed.post('/v1/users/$userId/ban'));
+
   /// Run an authed request, translating a rejection into a domain exception so
   /// callers (the reconcile engine) classify it without importing `dio`. The
   /// status taxonomy: a *terminal* authN failure — a 401 that survived

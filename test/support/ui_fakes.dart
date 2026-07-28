@@ -218,6 +218,43 @@ class FakeRestApi implements ChatRestApi {
     if (moderationThrows != null) throw moderationThrows!;
     reportCalls.add((messageId, reason));
   }
+
+  // --- operator / moderator actions (#33/#35) ---
+  /// The queue `listPendingReports` returns. Settable per-test.
+  List<PendingReport> pendingReports = const [];
+  int listPendingReportsCalls = 0;
+  final List<String> resolvedReports = [];
+  final List<String> dismissedReports = [];
+  final List<String> bannedUsers = [];
+
+  /// If set, the operator actions below throw this (e.g. a [Forbidden] to
+  /// exercise the stale-moderator-flag reconciliation).
+  Object? operatorThrows;
+
+  @override
+  Future<List<PendingReport>> listPendingReports() async {
+    listPendingReportsCalls++;
+    if (operatorThrows != null) throw operatorThrows!;
+    return List.unmodifiable(pendingReports);
+  }
+
+  @override
+  Future<void> resolveReport(String reportId) async {
+    if (operatorThrows != null) throw operatorThrows!;
+    resolvedReports.add(reportId);
+  }
+
+  @override
+  Future<void> dismissReport(String reportId) async {
+    if (operatorThrows != null) throw operatorThrows!;
+    dismissedReports.add(reportId);
+  }
+
+  @override
+  Future<void> banUser(String userId) async {
+    if (operatorThrows != null) throw operatorThrows!;
+    bannedUsers.add(userId);
+  }
 }
 
 /// A [PasskeyAuthClient] fake — returns canned attestation/assertion JSON (or

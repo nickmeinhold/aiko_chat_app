@@ -487,6 +487,35 @@ class AuthController extends AsyncNotifier<AppUser?> {
     await _teardownResources();
   }
 
+  /// Re-fetch `/v1/me` and republish the user WITHOUT a full session restore.
+  ///
+  /// Reconciles a stale DERIVED flag against the server — specifically a
+  /// moderator flag that reads true locally while the island has since revoked
+  /// it. When an operator endpoint returns [Forbidden] (authZ, not authN — see
+  /// the REST seam's A3 taxonomy), the operator controller calls this so a fresh
+  /// `me()` flips [isModeratorProvider] and the operator UI gates itself off.
+  ///
+  /// Non-destructive by contract: this is NOT a logout path. A [Forbidden], a
+  /// network blip, or any transient error leaves the current session untouched —
+  /// only a clean `me()` republishes, and only a genuine ban ([AccountSuspended])
+  /// routes to the normal terminal-auth teardown. Contrast [logout] and the
+  /// `_becomeUnauthenticated` reconcile signals, which DO end the session.
+  Future<void> refreshUser() async {
+    if (state.value == null) return; // not authenticated — nothing to refresh
+    try {
+      final user = await _rest.me();
+      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
+      state = AsyncData(user);
+    } on AccountSuspended {
+      // A ban surfaced during the refresh — this IS terminal; route it through
+      // the standard unauthenticated path rather than swallowing it below.
+      _becomeUnauthenticated();
+    } catch (_) {
+      // Forbidden / NetworkUnavailable / any transient — leave the session as-is.
+      // The caller already surfaced the originating action's failure.
+    }
+  }
+
   /// Re-point the app at a different gateway (the #4 picker). JWTs are minted by
   /// and only valid at the gateway that issued them, so a switch is a SESSION
   /// boundary. The ordering is load-bearing (Carnot):

@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
+import '../../chat/data/chat_rest_api.dart' show ChatRestApi, Forbidden;
 import '../domain/moderation_models.dart';
 
 /// The account's blocked users (most recent first). Auth-gated via [build] (which
@@ -87,4 +88,70 @@ class BlockedUsersController extends AsyncNotifier<List<BlockedUser>> {
   /// Report [messageId]. No local state — reports feed the gateway ops queue.
   Future<void> report(String messageId, ReportReason reason) =>
       ref.read(restApiProvider).reportMessage(messageId, reason);
+}
+
+/// The moderator triage queue (#33/#35). Auth- AND moderator-gated via [build]:
+/// a non-moderator (or logged-out) session yields an empty list and NEVER calls
+/// the `ModeratorUser`-gated endpoint — so a plain user can't provoke a
+/// guaranteed 403. Mirrors [BlockedUsersController]'s REST-confirmed-then-local
+/// shape + load-race guard; adds [Forbidden] reconciliation (a mid-session
+/// moderator revocation refreshes `/me`, which flips [isModeratorProvider] and
+/// gates the operator UI off — WITHOUT logging the user out, per A3).
+final pendingReportsProvider =
+    AsyncNotifierProvider<PendingReportsController, List<PendingReport>>(
+      PendingReportsController.new,
+    );
+
+class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
+  @override
+  Future<List<PendingReport>> build() async {
+    final user = ref.watch(authControllerProvider).value;
+    if (user == null || !user.isModerator) return const [];
+    return ref.watch(restApiProvider).listPendingReports();
+  }
+
+  /// Take the reported message down (soft-delete + the island's forward
+  /// retraction) and drop the report from the queue. REST-confirmed then local.
+  Future<void> resolve(String reportId) =>
+      _actThenRemove(reportId, () => _rest.resolveReport(reportId));
+
+  /// Dismiss the report as not-actionable and drop it from the queue.
+  Future<void> dismiss(String reportId) =>
+      _actThenRemove(reportId, () => _rest.dismissReport(reportId));
+
+  /// Ban [userId] from the island. Does NOT remove any report tile — a ban is a
+  /// distinct action from resolving the triggering report (the island keeps the
+  /// report pending); the moderator still resolves/dismisses it explicitly.
+  Future<void> ban(String userId) => _guardForbidden(() => _rest.banUser(userId));
+
+  ChatRestApi get _rest => ref.read(restApiProvider);
+
+  /// Run a report action, then remove that report from local state on success.
+  /// Same load-race guard as [BlockedUsersController.block]: settle the initial
+  /// load before mutating so a still-in-flight build() can't clobber the removal
+  /// with its pre-action snapshot.
+  Future<void> _actThenRemove(String reportId, Future<void> Function() act) =>
+      _guardForbidden(() async {
+        try {
+          await future;
+        } catch (_) {/* initial load failed; proceed from current state */}
+        await act();
+        final current = state.value ?? const <PendingReport>[];
+        state = AsyncData(
+          current.where((r) => r.reportId != reportId).toList(),
+        );
+      });
+
+  /// Run an operator action; on a [Forbidden] (moderator flag revoked
+  /// server-side) refresh `/me` so [isModeratorProvider] flips and the UI gates
+  /// off, then rethrow so the caller surfaces the failure. Any other error just
+  /// propagates. A [Forbidden] is NEVER a logout (A3) — only a stale-flag signal.
+  Future<void> _guardForbidden(Future<void> Function() action) async {
+    try {
+      await action();
+    } on Forbidden {
+      await ref.read(authControllerProvider.notifier).refreshUser();
+      rethrow;
+    }
+  }
 }
