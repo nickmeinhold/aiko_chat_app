@@ -3,7 +3,7 @@
 /// Wire shapes (verified against gateway rest/auth.py):
 ///   register/login -> {access_token, refresh_token, user: UserView}
 ///   refresh        -> {access_token}   (refresh token NOT rotated)
-///   me / UserView  -> {user_id, username, display_name, aiko_username}
+///   me / UserView  -> {user_id, username, display_name, aiko_username, is_moderator}
 library;
 
 /// The authenticated app user.
@@ -13,11 +13,20 @@ class AppUser {
   final String displayName;
   final String aikoUsername;
 
+  /// Whether this island considers the user a moderator — the island-global flag
+  /// the gateway emits on `/v1/me` (`is_moderator`, sourced from its configured
+  /// moderator set). PRESENTATION-ONLY: it shows/hides the operator UI; the true
+  /// gate is server-side (`ModeratorUser`), so a stale/forged `true` grants no
+  /// authority, only a door that 403s. Defaults false — fail-closed, so an older
+  /// gateway that omits the field never accidentally exposes the operator seat.
+  final bool isModerator;
+
   const AppUser({
     required this.userId,
     required this.username,
     required this.displayName,
     required this.aikoUsername,
+    this.isModerator = false,
   });
 
   factory AppUser.fromJson(Map<String, dynamic> j) => AppUser(
@@ -25,6 +34,7 @@ class AppUser {
         username: (j['username'] as String?) ?? '',
         displayName: (j['display_name'] as String?) ?? '',
         aikoUsername: (j['aiko_username'] as String?) ?? '',
+        isModerator: (j['is_moderator'] as bool?) ?? false,
       );
 
   /// Serialize for local persistence (offline-first session restore). Keys
@@ -35,6 +45,7 @@ class AppUser {
         'username': username,
         'display_name': displayName,
         'aiko_username': aikoUsername,
+        'is_moderator': isModerator,
       };
 
   @override
@@ -43,10 +54,12 @@ class AppUser {
       other.userId == userId &&
       other.username == username &&
       other.displayName == displayName &&
-      other.aikoUsername == aikoUsername;
+      other.aikoUsername == aikoUsername &&
+      other.isModerator == isModerator;
 
   @override
-  int get hashCode => Object.hash(userId, username, displayName, aikoUsername);
+  int get hashCode =>
+      Object.hash(userId, username, displayName, aikoUsername, isModerator);
 }
 
 /// JWT pair. The access token is short-lived (~15min); the refresh token is

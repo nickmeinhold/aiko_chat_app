@@ -67,6 +67,16 @@ class PendingHandleNotifier extends Notifier<PendingHandle?> {
 final suspendedProvider =
     NotifierProvider<SuspendedNotifier, bool>(SuspendedNotifier.new);
 
+/// Whether the current user is a moderator on this island — the presentation
+/// flag that shows/hides the operator seat (report queue + takedown/ban UI).
+/// Derived from the logged-in [AppUser.isModerator]; false when logged out,
+/// mid-restore, or on an older gateway that omits the field (fail-closed). This
+/// is UI gating ONLY — every operator action is enforced server-side
+/// (`ModeratorUser`), so this flag being wrong grants no authority, just a
+/// visible-or-hidden door.
+final isModeratorProvider = Provider<bool>(
+    (ref) => ref.watch(authControllerProvider).value?.isModerator ?? false);
+
 class SuspendedNotifier extends Notifier<bool> {
   @override
   bool build() => false;

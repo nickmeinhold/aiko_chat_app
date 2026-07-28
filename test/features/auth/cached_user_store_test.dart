@@ -30,6 +30,28 @@ void main() {
     expect(AppUser.fromJson(user.toJson()), user);
   });
 
+  test('is_moderator defaults false when the gateway omits it (fail-closed)', () {
+    // An older gateway (or /me before the flag shipped) sends no is_moderator —
+    // the app must read a non-moderator, never accidentally expose the operator UI.
+    final j = user.toJson()..remove('is_moderator');
+    expect(AppUser.fromJson(j).isModerator, isFalse);
+  });
+
+  test('is_moderator=true round-trips through the real persistence path',
+      () async {
+    const mod = AppUser(
+      userId: 'uid-2',
+      username: 'mod',
+      displayName: 'Mod',
+      aikoUsername: 'mod.aiko',
+      isModerator: true,
+    );
+    await store.write(mod);
+    final restored = store.read();
+    expect(restored, mod, reason: 'the moderator flag survives serialization');
+    expect(restored!.isModerator, isTrue);
+  });
+
   test('write then read round-trips through real SharedPreferences', () async {
     expect(store.read(), isNull, reason: 'nothing persisted yet');
     await store.write(user);
