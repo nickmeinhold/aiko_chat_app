@@ -45,7 +45,17 @@ class ReportQueueScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () => ref.refresh(pendingReportsProvider.future),
         child: reportsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
+          // Scrollable so the RefreshIndicator's pull works on every branch, not
+          // just error/empty (completes the loading/error/empty/data triad —
+          // cage-match Tesla round 5).
+          loading: () => ListView(
+            children: const [
+              Padding(
+                padding: EdgeInsets.symmetric(vertical: 48),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            ],
+          ),
           error: (e, _) => ListView(
             // ListView so the RefreshIndicator still pulls on an error.
             children: const [
@@ -193,7 +203,16 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
         );
       case _ReportAction.dismiss:
         await _run(
-          confirm: null,
+          // Dismiss resolves the report server-side (recoverable only by a fresh
+          // re-report), so it gets a light confirm too — the PR's "confirm on
+          // server-mutating actions" claim must hold for all three, not just the
+          // other-user-affecting ones (cage-match Tesla + Carnot round 5).
+          confirm: (
+            'Dismiss report?',
+            'Marks this report as not actionable and removes it from the queue. '
+                'Recoverable only if someone reports the message again.',
+            'Dismiss',
+          ),
           act: () =>
               ref.read(pendingReportsProvider.notifier).dismiss(_r.reportId),
           ok: 'Report dismissed.',

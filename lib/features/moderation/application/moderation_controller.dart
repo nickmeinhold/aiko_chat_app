@@ -138,9 +138,17 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
   /// microtask runs, the notifier is disposed and `ref.read` would throw / drop
   /// the reconcile (cage-match Tesla round 3).
   void _scheduleAuthAction(Future<void> Function(AuthController) action) {
-    Future.microtask(() {
+    Future.microtask(() async {
       if (!ref.mounted) return;
-      action(ref.read(authControllerProvider.notifier));
+      try {
+        await action(ref.read(authControllerProvider.notifier));
+      } catch (_) {
+        // Best-effort reconcile: the originating action already rethrew to the
+        // caller, so a settleBan/refresh failure here is not separately
+        // actionable. Swallow it so it isn't an unobserved async error (Carnot
+        // round 5) — the screen's gate / error state remains the user-visible
+        // signal.
+      }
     });
   }
 
@@ -181,9 +189,10 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
   ///   - [Forbidden] → the moderator flag was revoked; `refreshUser()` re-reads
   ///     `/me`, flips [isModeratorProvider] false, the UI gates off. NOT a logout.
   ///   - [AccountSuspended] → the operator's own account was BANNED mid-session;
-  ///     `refreshUser()`'s `/me` re-hits the ban and settles through the single
-  ///     suspended door → `/suspended` (NOT a generic "action failed", and NOT a
-  ///     logout loop).
+  ///     the action's response IS the terminal ban signal, so `settleBan()`
+  ///     settles the single suspended door → `/suspended` DIRECTLY, with no
+  ///     confirming `/me` round-trip (which could fail transiently and strand the
+  ///     banned moderator). NOT a generic "action failed", NOT a logout loop.
   /// Either way we rethrow so the caller can surface/suppress copy; the reconcile
   /// runs first so the router/gate already reflect the settled world. A plain
   /// [Unauthorized] (terminal authN) is left to propagate — the REST interceptor's

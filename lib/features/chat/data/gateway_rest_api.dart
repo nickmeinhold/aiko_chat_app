@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
@@ -467,12 +468,24 @@ class GatewayRestApi implements ChatRestApi {
     // in PendingReport.fromJson), fail-closed on the fleet (skip the bad row, keep
     // the N-1 actionable reports the moderator can still work).
     final out = <PendingReport>[];
+    var dropped = 0;
     for (final e in list) {
       try {
         out.add(PendingReport.fromJson((e as Map).cast<String, dynamic>()));
       } catch (_) {
         // Skip this row; the rest of the queue remains actionable.
+        dropped++;
       }
+    }
+    // Don't skip DARKLY (cage-match Tesla round 5): a poisoned field silently
+    // shrinking the queue must leave a signal, or "queue looks short" reads as
+    // "queue is clear" with no operator/on-call breadcrumb. (dev-only; a real
+    // telemetry sink is the follow-up if the island ever emits malformed rows.)
+    if (dropped > 0) {
+      debugPrint(
+        'listPendingReports: dropped $dropped malformed report row(s) of '
+        '${list.length}',
+      );
     }
     return out;
   });

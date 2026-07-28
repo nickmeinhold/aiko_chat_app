@@ -505,20 +505,22 @@ class AuthController extends AsyncNotifier<AppUser?> {
     if (startUserId == null) return; // not authenticated — nothing to refresh
     try {
       final user = await _rest.me();
-      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
       // Commit-time SESSION fence (extends _restoreSession's token guard, PR #71
       // Tesla): between this refresh starting and here, the session can change out
       // from under us — a concurrent terminal signal clears tokens, OR a logout +
-      // sign-in as a DIFFERENT user lands. Publishing then would resurrect a dead
-      // session or clobber user B with user A's stale /me. The fence MUST be the
-      // last thing before the publish, AFTER every await (incl. the cache write) —
-      // a guard placed before a trailing await leaves exactly the gap it was meant
-      // to close (cage-match Tesla round 4). The userId re-check is SYNCHRONOUS and
-      // immediately precedes the synchronous assign, so no teardown can interleave:
-      // a teardown nulls state.value (→ userId null ≠ startUserId), a sign-in-as-B
-      // changes it — either way we bail.
+      // sign-in as a DIFFERENT user lands. Two DURABLE mutators must be fenced, not
+      // just the publish: the offline CACHE and `state`. The fence is TOTAL —
+      // tokens · userId · (cache) · publish (cage-match Tesla round 5): fencing
+      // only `state` still let `_writeCachedUser(A)` land while tokens were already
+      // B's, so a later offline restore would pair B's tokens with A's face (the
+      // PR #71 mismatch class). Fence BEFORE the cache write (shrinking the window
+      // to the negligible local write vs the whole me() network call), then a final
+      // SYNCHRONOUS userId re-check immediately precedes the synchronous publish so
+      // no teardown can interleave (a teardown nulls state.value → userId mismatch).
       if (await _tokens.currentAccessToken() == null) return;
       if (state.value?.userId != startUserId) return;
+      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
+      if (state.value?.userId != startUserId) return; // re-fence after the write
       state = AsyncData(user);
     } on AccountSuspended catch (e, st) {
       // A ban surfaced during the refresh — this IS terminal, but it is a BAN,
