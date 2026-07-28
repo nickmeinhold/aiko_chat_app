@@ -501,15 +501,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// routes to the normal terminal-auth teardown. Contrast [logout] and the
   /// `_becomeUnauthenticated` reconcile signals, which DO end the session.
   Future<void> refreshUser() async {
-    if (state.value == null) return; // not authenticated — nothing to refresh
+    final startUserId = state.value?.userId;
+    if (startUserId == null) return; // not authenticated — nothing to refresh
     try {
       final user = await _rest.me();
-      // Commit-time token guard (mirrors _restoreSession, PR #71 Tesla): a
-      // concurrent terminal signal (transport/REST `unauthenticated`) can clear
-      // the tokens and flip state to logged-out WHILE this me() is in flight.
-      // Re-read the token and only republish if the session still exists, so a
-      // refresh can never resurrect a just-logged-out session.
+      // Commit-time SESSION guard (extends _restoreSession's token guard, PR #71
+      // Tesla): between this refresh starting and me() returning, the session can
+      // change out from under us — a concurrent terminal signal clears tokens, OR
+      // a logout + sign-in as a DIFFERENT user lands. Publishing then would
+      // resurrect a dead session or clobber user B with user A's stale /me
+      // (cage-match Carnot round 2). Re-check BOTH: tokens still present AND the
+      // live session is still the SAME user we started refreshing.
       if (await _tokens.currentAccessToken() == null) return;
+      if (state.value?.userId != startUserId) return;
       await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
       state = AsyncData(user);
     } on AccountSuspended catch (e, st) {

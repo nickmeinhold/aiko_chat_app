@@ -12,7 +12,7 @@ import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show AccountSuspended, Forbidden;
+    show AccountSuspended, Forbidden, NetworkUnavailable;
 import 'package:aiko_chat_app/features/moderation/application/moderation_controller.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 import 'package:drift/native.dart';
@@ -91,7 +91,12 @@ void main() {
       expect(r.isAlreadyDeleted, isFalse);
     });
 
-    test('lenient: missing fields never throw; unknown reason shows raw wire', () {
+    test('lenient on OPTIONAL fields (ids stay strict); unknown reason → raw '
+        'wire', () {
+      // The report_id/message_id keys are intentionally strict `as String` (a
+      // row with no id is garbage the moderator queue should fail loudly on, not
+      // silently drop); only the non-key fields are lenient. This row supplies
+      // both ids and omits the soft fields.
       final r = PendingReport.fromJson(const {
         'report_id': 'r2',
         'message_id': 'm2',
@@ -206,6 +211,17 @@ void main() {
       expect(c.read(isModeratorProvider), isFalse);
     });
 
+    // Keep the provider alive across its self-triggered rebuild and drain the
+    // scheduled microtask + any rebuild turns. (.future is flaky here: build
+    // rethrows AND schedules a refresh that rebuilds the provider, so the future
+    // can resolve to a rebuild/dispose artifact rather than the thrown Forbidden;
+    // assert on the settled state instead.)
+    Future<void> settle(ProviderContainer c) async {
+      for (var i = 0; i < 5; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
     test('a Forbidden on the INITIAL load (not just an action) reconciles /me '
         'and flips the flag off — the load path gates the UI too', () async {
       final rest = FakeRestApi(user: _modUser);
@@ -217,15 +233,40 @@ void main() {
       rest.operatorThrows = const Forbidden('/v1/reports');
       rest.user = FakeRestApi.defaultUser;
 
-      // build() must NOT surface an error with the tile still lit — it returns
-      // empty and schedules the /me reconcile in a microtask.
-      final reports = await c.read(pendingReportsProvider.future);
-      expect(reports, isEmpty);
-      // Drain the scheduled refresh (microtask → me() → state flip → rebuild).
-      await c.read(authControllerProvider.future);
-      await Future<void>.delayed(Duration.zero);
+      // Keep the provider alive; build() RETHROWS (never false-empty) and
+      // schedules the /me reconcile in a microtask.
+      final sub = c.listen(pendingReportsProvider, (_, _) {});
+      addTearDown(sub.close);
+      await settle(c);
+
+      // The reconcile flipped the flag → the screen's top-level gate closes.
       expect(c.read(isModeratorProvider), isFalse);
       expect(c.read(authControllerProvider).value, isNotNull); // never logged out
+    });
+
+    test('a Forbidden load whose /me reconcile FAILS transiently stays an ERROR, '
+        'never a false "queue clear" (empty is the wrong carrier for 403)',
+        () async {
+      final rest = FakeRestApi(user: _modUser);
+      final c = await _loggedIn(rest);
+
+      // The list 403s, but the reconciling /me can't land (network down).
+      rest.operatorThrows = const Forbidden('/v1/reports');
+      rest.meThrows = const NetworkUnavailable();
+
+      final sub = c.listen(pendingReportsProvider, (_, _) {});
+      addTearDown(sub.close);
+      await settle(c);
+
+      // The queue must remain an ERROR (honest "couldn't load"), NOT a
+      // success-empty that reads as "the queue is clear". The flag couldn't flip,
+      // so the server remains the gate.
+      final state = c.read(pendingReportsProvider);
+      expect(state.hasError, isTrue);
+      expect(state.hasValue && (state.value?.isEmpty ?? false), isFalse,
+          reason: 'a Forbidden load must never present as an empty (clear) queue');
+      expect(c.read(isModeratorProvider), isTrue);
+      expect(c.read(authControllerProvider).value, isNotNull); // not logged out
     });
 
     test('a BAN discovered during the Forbidden refresh routes to the suspended '

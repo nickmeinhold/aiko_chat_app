@@ -238,36 +238,36 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
       if (!mounted) return;
     }
     setState(() => _busy = true);
+    // The snackbars below fire through the messenger captured BEFORE the await, so
+    // they show even when a resolve/dismiss removed this tile mid-await and
+    // unmounted its State (that is the whole point of capturing it early —
+    // cage-match Tesla + Carnot round 2: the old `if (!mounted) return` shorted
+    // the success snackbar on the destructive path). Only `setState` needs the
+    // mount guard.
     try {
       await act();
-      if (!mounted) return;
       messenger.showSnackBar(SnackBar(content: Text(ok)));
-      // No setState(_busy=false) after resolve/dismiss — the tile is gone. A ban
-      // leaves the tile, so restore below on that path via the mounted check.
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false); // tile survives (ban) → reset
     } on Forbidden {
       // The moderator flag was revoked server-side; the controller already
-      // refreshed /me (→ isModeratorProvider flips → the screen gates off).
-      if (!mounted) return;
-      setState(() => _busy = false);
-      // The controller already refreshed /me. Trust the RECONCILED flag, not the
-      // bare 403, for the copy: only assert demotion if the refresh actually
-      // flipped us to non-moderator; a transient refresh failure that left the
-      // flag true reads as a plain denial, not a false "you were demoted" (Tesla).
-      final stillModerator = ref.read(isModeratorProvider);
+      // refreshed /me (→ isModeratorProvider flips → the screen gates off). Trust
+      // the RECONCILED flag for the copy: an unmount here means the flag flipped
+      // (demotion); if still mounted, read it — a transient refresh failure that
+      // left the flag true reads as a plain denial, not a false "you were demoted."
+      final demoted = !mounted || !ref.read(isModeratorProvider);
       messenger.showSnackBar(
         SnackBar(
-          content: Text(stillModerator
-              ? 'Action denied. Please try again.'
-              : 'You no longer have moderator access.'),
+          content: Text(demoted
+              ? 'You no longer have moderator access.'
+              : 'Action denied. Please try again.'),
         ),
       );
+      if (mounted) setState(() => _busy = false);
     } catch (_) {
-      if (!mounted) return;
-      setState(() => _busy = false);
       messenger.showSnackBar(
         const SnackBar(content: Text('Action failed. Please try again.')),
       );
+      if (mounted) setState(() => _busy = false);
     }
   }
 }

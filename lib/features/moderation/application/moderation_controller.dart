@@ -112,20 +112,24 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
     } on Forbidden {
       // Stale-true moderator flag: the island revoked moderator since /me was
       // last read, so the very FIRST load (or a pull-to-refresh) 403s — not just
-      // an action. Reconcile like the action paths do (refresh /me → flips
-      // isModeratorProvider false → re-runs this build → empty via the early
-      // return above → the operator UI gates off). The load path MUST reconcile
-      // too, or a stale moderator opening the screen sees an error with the
-      // Reports tile still lit (cage-match Tesla + Carnot).
+      // an action. Reconcile like the action paths do: refresh /me → flips
+      // isModeratorProvider false → the screen's top-level gate swaps to the
+      // "no longer a moderator" state.
       //
       // The refresh runs in a microtask, NOT awaited here: refreshUser mutates
       // authControllerProvider, which this build WATCHES, so awaiting it in-build
-      // would orphan build's own future (dispose-during-loading). Scheduling it
-      // after build completes lets the flag-flip drive the rebuild cleanly.
+      // would orphan build's own future (dispose-during-loading).
       Future.microtask(
         () => ref.read(authControllerProvider.notifier).refreshUser(),
       );
-      return const [];
+      // RETHROW — do NOT publish success-empty. An empty AsyncData is the wrong
+      // carrier for "you were denied": until (and unless) the /me refresh lands
+      // and flips the flag, a returned `[]` would paint "the queue is clear" with
+      // the Reports tile still lit — a demotion masquerading as an empty queue,
+      // and a permanent lie if the refresh fails transiently (cage-match Tesla +
+      // Carnot round 2). Surfacing the error keeps the screen honest ("couldn't
+      // load") until the flag-flip gates it off.
+      rethrow;
     }
   }
 

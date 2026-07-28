@@ -159,9 +159,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: '/settings/blocked',
           builder: (_, _) => const BlockedUsersScreen()),
-      // Operator seat (#33/#35). Reachable only via the moderator-gated Settings
-      // tile; the screen itself re-checks isModeratorProvider (defense in depth),
-      // and every action is ModeratorUser-gated server-side.
+      // Operator seat (#33/#35). The Settings ENTRY is moderator-gated, but this
+      // typed path itself is not router-gated — a deep link mounts it for any
+      // logged-in user, at which point the screen's own isModeratorProvider gate
+      // shows "no longer a moderator" and every action is ModeratorUser-gated
+      // server-side (the real boundary). Router-level gating is deferred polish,
+      // not a security gap (cage-match Tesla).
       GoRoute(
           path: '/moderation/reports',
           builder: (_, _) => const ReportQueueScreen()),
