@@ -153,7 +153,8 @@ class GatewayRestApi implements ChatRestApi {
     }
     // Runs on the AUTHED client: the bearer IS the identity the credential links
     // to — that is the whole distinction from register/finish (which mints a new
-    // account). `_authedCall` maps a terminal 401/403 → Unauthorized.
+    // account). `_authedCall` maps 401 → Unauthorized (terminal) and a plain
+    // 403 → Forbidden (authZ, non-terminal); a suspended-403 → AccountSuspended.
     return _authedCall(() async {
       try {
         final r = await _authed.post(
@@ -168,7 +169,7 @@ class GatewayRestApi implements ChatRestApi {
         if (e.response?.statusCode == 409) {
           throw const PasskeyAlreadyRegistered();
         }
-        rethrow; // terminal 401/403 mapped by _authedCall; else propagate
+        rethrow; // _authedCall maps 401→Unauthorized / plain 403→Forbidden; else propagate
       }
     });
   }
@@ -249,8 +250,9 @@ class GatewayRestApi implements ChatRestApi {
   /// substring — so a future 403 whose prose merely *mentions* suspend/suspension
   /// ("cannot suspend this operation") is not baptised a ban (cage-match Tesla).
   /// Robust to a Map body (dio-decoded JSON) or a raw JSON string. Any parse
-  /// hiccup falls through to the generic 401/403 → Unauthorized path — a
-  /// suspended user then sees the re-auth copy, never a crash.
+  /// hiccup falls through to the generic mapping — on the bare login door that is
+  /// 401/403 → Unauthorized; on the authed door a plain 403 → Forbidden (A3). A
+  /// suspended user hitting the login door then sees the re-auth copy, never a crash.
   static bool _isSuspended(DioException e) {
     if (e.response?.statusCode != 403) return false;
     final data = e.response?.data;
@@ -365,8 +367,9 @@ class GatewayRestApi implements ChatRestApi {
     try {
       await _authedCall(() => _authed.delete('/v1/account'));
     } on DioException catch (e) {
-      // _authedCall already mapped a terminal 401/403 → Unauthorized and
-      // rethrew everything else. A 409 means "sole admin of a channel" — map it
+      // _authedCall already mapped 401 → Unauthorized (terminal) and a plain
+      // 403 → Forbidden (authZ), and rethrew everything else. A 409 means
+      // "sole admin of a channel" — map it
       // to the typed domain error carrying the gateway's explanatory `detail`.
       if (e.response?.statusCode == 409) {
         final detail = (e.response?.data is Map)
@@ -443,11 +446,14 @@ class GatewayRestApi implements ChatRestApi {
         ),
       );
 
-  /// Run an authed request, translating a *terminal* auth rejection — a 401 that
-  /// survived [AuthInterceptor]'s single-flight refresh-and-retry, or a 403 —
-  /// into the domain [Unauthorized], so callers (the reconcile engine) classify
-  /// it without importing `dio`. Transient errors (network/timeout/5xx) and any
-  /// non-Dio error propagate unchanged: they must NOT be read as a logout
+  /// Run an authed request, translating a rejection into a domain exception so
+  /// callers (the reconcile engine) classify it without importing `dio`. The
+  /// status taxonomy: a *terminal* authN failure — a 401 that survived
+  /// [AuthInterceptor]'s single-flight refresh-and-retry — becomes [Unauthorized]
+  /// (→ logout); the ban body becomes [AccountSuspended]; a plain (non-suspended)
+  /// 403 is an authoriZation denial and becomes [Forbidden] (session stays valid,
+  /// the caller handles it — NOT a logout). Transient errors (network/timeout/5xx)
+  /// and any non-Dio error propagate unchanged: they must NOT be read as a logout
   /// (design 02 — a network blip is not an auth failure).
   static Future<T> _authedCall<T>(Future<T> Function() call) async {
     try {
@@ -455,16 +461,21 @@ class GatewayRestApi implements ChatRestApi {
     } on DioException catch (e) {
       // A 401 forwarded after a TRANSIENT refresh failure carries the
       // `auth_transient` marker (set by AuthInterceptor) — it is NOT terminal,
-      // so propagate it as-is (B4 leaves rows `sending` for redrain). Only a
-      // genuinely terminal rejection — a 401 that survived refresh-and-retry, or
-      // a 403 — becomes the domain `Unauthorized`.
+      // so propagate it as-is (B4 leaves rows `sending` for redrain). A 401 that
+      // survived refresh-and-retry is a terminal `Unauthorized` (authN failed).
       final transient = e.requestOptions.extra['auth_transient'] == true;
       final code = e.response?.statusCode;
       // A ban surfaces here first: the interceptor only refreshes on 401, so a
       // live 403 flows straight through. Branch it BEFORE the generic mapping so
       // the reconcile drain routes it as suspended, not "session expired."
       if (!transient && _isSuspended(e)) throw const AccountSuspended();
-      if (!transient && (code == 401 || code == 403)) throw Unauthorized(code);
+      if (!transient && code == 401) throw Unauthorized(code);
+      // A non-suspended 403 is authoriZation, not authentication: the session is
+      // valid, THIS action is denied. Mapping it to terminal `Unauthorized` would
+      // log the user out on a mere permission denial (e.g. an operator hitting a
+      // moderator endpoint with a stale flag). Route it to the domain `Forbidden`
+      // so the caller reacts locally instead of the reconcile drain logging out.
+      if (!transient && code == 403) throw Forbidden(e.requestOptions.path);
       rethrow;
     }
   }

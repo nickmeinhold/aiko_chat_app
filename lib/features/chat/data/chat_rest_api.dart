@@ -31,8 +31,14 @@ class HistoryPage {
 typedef PasskeyChallenge = ({String state, String optionsJson});
 
 /// Thrown by an authenticated REST call when the request is *terminally*
-/// rejected for auth reasons — a 401 that survived the interceptor's
-/// single-flight refresh-and-retry, or a 403. Distinct from a transient
+/// rejected for authentication reasons — a 401 that survived the interceptor's
+/// single-flight refresh-and-retry, or the ban-403 (via the [AccountSuspended]
+/// refinement). A plain, non-suspended 403 is authoriZation, not authentication,
+/// and maps to [Forbidden] on the AUTHED path (`_authedCall`, NOT terminal — see
+/// there). Door-dependent: on the token-less login/claim door
+/// (`_throwIfAuthTerminal`), a plain 403 is STILL terminal `Unauthorized` — a
+/// rejected/expired provisioning token there IS an authN failure, and no operator
+/// endpoint uses that door. Distinct from a transient
 /// network/timeout/5xx error (which propagates as-is and must NOT trigger a
 /// logout — design 02). The reconcile engine recognises THIS type to route a
 /// reconnect to the unauthenticated state instead of a transient redrain,
@@ -73,6 +79,34 @@ class AccountSuspended extends Unauthorized {
   const AccountSuspended() : super(403);
   @override
   String toString() => 'AccountSuspended';
+}
+
+/// The gateway ANSWERED and refused this specific action for an **authorization**
+/// reason — a plain `403` whose body is NOT the ban phrase (e.g. the island's
+/// `ModeratorUser` gate on an operator endpoint, `deps.py:63 "not a moderator"`,
+/// or a channel-admin-only mutation, `members.py:99`). Deliberately NOT a subtype
+/// of [Unauthorized]: authz ≠ authn. Holding a valid session and being denied one
+/// action must NOT log the user out — the two terminal-auth routers
+/// (`chat_repository._isAuthError`, `auth_controller`'s `on Unauthorized`) match
+/// [Unauthorized] and so never fire for a [Forbidden]. The caller that expects a
+/// denial (the operator seat) catches THIS to react locally — e.g. refresh
+/// `/v1/me` to reconcile a stale moderator flag — instead of ejecting the user.
+///
+/// PREMISE (verify before widening — cage-match, 2026-07-28): today NO
+/// app-reachable *authed* endpoint returns a non-suspended 403. The ban-403 is
+/// peeled off first (`_isSuspended` → [AccountSuspended]); the island's other
+/// authed 403s (member-admin, moderator-gate) are unreachable from the app until
+/// the operator seat lands. So splitting a plain 403 out of [Unauthorized] has
+/// zero blast radius on current flows — the first real producer is the operator
+/// UI, which handles it. If a future endpoint starts 403ing, its caller owns the
+/// [Forbidden] handling (an unhandled [Forbidden] surfaces as an error, never a
+/// silent logout — the safer failure).
+class Forbidden implements Exception {
+  /// The action/endpoint that was denied, for telemetry + caller-side copy.
+  final String? context;
+  const Forbidden([this.context]);
+  @override
+  String toString() => 'Forbidden(context: $context)';
 }
 
 /// The gateway could not be REACHED — a connection/DNS/timeout-class transport
@@ -123,6 +157,14 @@ class SoleAdminDeletionBlocked implements Exception {
 
 /// The history/auth/media REST seam (plan §B1; media is a later phase). No
 /// lifecycle. Riverpod + the repository depend on THIS, never on `dio`.
+///
+/// Auth-rejection contract for every authed method here: a terminal authN
+/// failure throws [Unauthorized] (→ logout), a ban throws its [AccountSuspended]
+/// refinement, and a plain authoriZation denial throws [Forbidden] (NOT terminal
+/// — the session stays valid; the caller handles it locally, e.g. an operator
+/// endpoint refreshing `/v1/me`). Callers that can provoke a 403 (moderator/
+/// admin actions) should catch [Forbidden] rather than let it surface as a
+/// generic error.
 abstract interface class ChatRestApi {
   /// Begin passkey REGISTRATION (first-passkey-creates-account). Returns the
   /// WebAuthn creation options + a binding [PasskeyChallenge.state]. No prior
