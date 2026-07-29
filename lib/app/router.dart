@@ -29,6 +29,7 @@ import '../features/chat/presentation/splash_screen.dart';
 import '../features/legal/application/eula_controller.dart';
 import '../features/legal/presentation/eula_screen.dart';
 import '../features/moderation/presentation/blocked_users_screen.dart';
+import '../features/moderation/presentation/report_queue_screen.dart';
 import '../features/settings/presentation/gateway_picker_screen.dart';
 import '../features/settings/presentation/settings_screen.dart';
 
@@ -158,6 +159,15 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: '/settings/blocked',
           builder: (_, _) => const BlockedUsersScreen()),
+      // Operator seat (#33/#35). The Settings ENTRY is moderator-gated, but this
+      // typed path itself is not router-gated — a deep link mounts it for any
+      // logged-in user, at which point the screen's own isModeratorProvider gate
+      // shows "no longer a moderator" and every action is ModeratorUser-gated
+      // server-side (the real boundary). Router-level gating is deferred polish,
+      // not a security gap (cage-match Tesla).
+      GoRoute(
+          path: '/moderation/reports',
+          builder: (_, _) => const ReportQueueScreen()),
       GoRoute(
           path: '/settings/eula',
           builder: (_, _) => const EulaScreen(gate: false)),

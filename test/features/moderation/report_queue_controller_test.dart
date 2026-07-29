@@ -1,0 +1,344 @@
+// Unit tests for the operator seat's application layer (#33/#35): the pending-
+// reports queue controller — moderator-gated load, resolve/dismiss local removal,
+// ban (no removal), and the Forbidden → /me-refresh reconciliation of a
+// server-revoked moderator flag (A3: authZ denial is NOT a logout).
+//
+// Reuses the full-graph container from moderation_controller_test: faked seams +
+// a real auth controller over an in-memory token store, then signs in.
+
+import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/core/auth/token_provider.dart';
+import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
+import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
+    show AccountSuspended, Forbidden, NetworkUnavailable, Unauthorized;
+import 'package:aiko_chat_app/features/moderation/application/moderation_controller.dart';
+import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
+import 'package:drift/native.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import '../../support/fake_chat_transport.dart';
+import '../../support/fakes.dart';
+import '../../support/ui_fakes.dart';
+
+const _modUser = AppUser(
+  userId: 'u1',
+  username: 'nick',
+  displayName: 'Nick',
+  aikoUsername: 'nick',
+  isModerator: true,
+);
+
+PendingReport _report(String id, {String sender = 'bad1'}) => PendingReport(
+  reportId: id,
+  messageId: 'm-$id',
+  channelId: 'c1',
+  reason: 'harassment',
+  reporterDisplayName: 'Reporter',
+  messageBody: 'something bad',
+  messageSenderUserId: sender,
+  createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+  messageDeletedAt: null,
+);
+
+ProviderContainer _container(FakeRestApi rest) {
+  late final ProviderContainer container;
+  container = ProviderContainer(
+    overrides: [
+      restApiProvider.overrideWithValue(rest),
+      transportProvider.overrideWithValue(FakeChatTransport()),
+      passkeyAuthClientProvider.overrideWithValue(FakePasskeyAuthClient()),
+      cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
+      tokenProviderProvider.overrideWithValue(
+        DefaultTokenProvider(
+          store: InMemoryTokenStore(),
+          remoteRefresh: (_) async => 'access2',
+          onUnauthenticated: () => container.read(authEventsProvider).add(null),
+        ),
+      ),
+      cacheProvider.overrideWith((ref) => DriftCache(NativeDatabase.memory())),
+    ],
+  );
+  addTearDown(container.dispose);
+  return container;
+}
+
+Future<ProviderContainer> _loggedIn(FakeRestApi rest) async {
+  final c = _container(rest);
+  await c.read(authControllerProvider.future);
+  await c.read(authControllerProvider.notifier).signInWithPasskey();
+  return c;
+}
+
+void main() {
+  group('PendingReport.fromJson', () {
+    test('parses a full row and maps a known reason to its label', () {
+      final r = PendingReport.fromJson(const {
+        'report_id': 'r1',
+        'message_id': 'm1',
+        'channel_id': 'c1',
+        'reason': 'harassment',
+        'reporter_display_name': 'Alice',
+        'message_body': 'bad',
+        'message_sender_user_id': 'u9',
+        'created_at': '2026-07-28T00:00:00Z',
+        'message_deleted_at': null,
+      });
+      expect(r.reportId, 'r1');
+      expect(r.reasonLabel, 'Harassment or bullying');
+      expect(r.isAlreadyDeleted, isFalse);
+    });
+
+    test('lenient on OPTIONAL fields (ids stay strict); unknown reason → raw '
+        'wire', () {
+      // The report_id/message_id keys are intentionally strict `as String` (a
+      // row with no id is garbage the moderator queue should fail loudly on, not
+      // silently drop); only the non-key fields are lenient. This row supplies
+      // both ids and omits the soft fields.
+      final r = PendingReport.fromJson(const {
+        'report_id': 'r2',
+        'message_id': 'm2',
+        'reason': 'some_future_reason',
+      });
+      expect(r.channelId, '');
+      expect(r.reporterDisplayName, isNull);
+      expect(r.reasonLabel, 'some_future_reason'); // unknown → raw wire, not dropped
+      expect(r.createdAt.millisecondsSinceEpoch, 0); // epoch fallback
+    });
+
+    test('an already-soft-deleted message is flagged', () {
+      final r = PendingReport.fromJson(const {
+        'report_id': 'r3',
+        'message_id': 'm3',
+        'reason': 'spam',
+        'message_deleted_at': '2026-07-28T01:00:00Z',
+      });
+      expect(r.isAlreadyDeleted, isTrue);
+    });
+  });
+
+  group('pendingReportsProvider gating', () {
+    test('a NON-moderator never calls the gated endpoint (empty queue)', () async {
+      final rest = FakeRestApi(user: FakeRestApi.defaultUser); // isModerator=false
+      rest.pendingReports = [_report('r1')];
+      final c = await _loggedIn(rest);
+
+      final reports = await c.read(pendingReportsProvider.future);
+      expect(reports, isEmpty);
+      // The whole point: no guaranteed-403 call for a plain user.
+      expect(rest.listPendingReportsCalls, 0);
+    });
+
+    test('a moderator loads the pending queue', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1'), _report('r2')];
+      final c = await _loggedIn(rest);
+
+      final reports = await c.read(pendingReportsProvider.future);
+      expect(reports.map((r) => r.reportId), ['r1', 'r2']);
+      expect(rest.listPendingReportsCalls, 1);
+    });
+  });
+
+  group('operator actions', () {
+    test('resolve takes down + removes that report from the queue', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1'), _report('r2')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      await c.read(pendingReportsProvider.notifier).resolve('r1');
+
+      expect(rest.resolvedReports, ['r1']);
+      expect(
+        c.read(pendingReportsProvider).value!.map((r) => r.reportId),
+        ['r2'],
+      );
+    });
+
+    test('dismiss removes that report from the queue', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1'), _report('r2')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      await c.read(pendingReportsProvider.notifier).dismiss('r2');
+
+      expect(rest.dismissedReports, ['r2']);
+      expect(
+        c.read(pendingReportsProvider).value!.map((r) => r.reportId),
+        ['r1'],
+      );
+    });
+
+    test('ban suspends the sender but LEAVES the report in the queue', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1', sender: 'bad1')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      await c.read(pendingReportsProvider.notifier).ban('bad1');
+
+      expect(rest.bannedUsers, ['bad1']);
+      // Ban != resolve — the tile stays until the moderator acts on the report.
+      expect(c.read(pendingReportsProvider).value, hasLength(1));
+    });
+  });
+
+  group('Forbidden reconciliation (A3: authZ denial is not a logout)', () {
+    test('a Forbidden action refreshes /me, flips the moderator flag off, '
+        'and rethrows — never logs out', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+      expect(c.read(isModeratorProvider), isTrue);
+
+      // Server revokes moderator mid-session: the next operator action 403s, and
+      // a fresh /me now returns a NON-moderator user.
+      rest.operatorThrows = const Forbidden('/v1/reports/r1/resolve');
+      rest.user = FakeRestApi.defaultUser; // me() now says: not a moderator
+
+      await expectLater(
+        c.read(pendingReportsProvider.notifier).resolve('r1'),
+        throwsA(isA<Forbidden>()),
+      );
+
+      // Reconciled without a logout: still authenticated, flag now false.
+      expect(c.read(authControllerProvider).value, isNotNull);
+      expect(c.read(isModeratorProvider), isFalse);
+    });
+
+    // Keep the provider alive across its self-triggered rebuild and drain the
+    // scheduled microtask + any rebuild turns. (.future is flaky here: build
+    // rethrows AND schedules a refresh that rebuilds the provider, so the future
+    // can resolve to a rebuild/dispose artifact rather than the thrown Forbidden;
+    // assert on the settled state instead.)
+    Future<void> settle(ProviderContainer c) async {
+      for (var i = 0; i < 5; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    test('a Forbidden on the INITIAL load (not just an action) reconciles /me '
+        'and flips the flag off — the load path gates the UI too', () async {
+      final rest = FakeRestApi(user: _modUser);
+      final c = await _loggedIn(rest);
+      expect(c.read(isModeratorProvider), isTrue);
+
+      // Server revoked moderator BEFORE the screen opened: the first list 403s,
+      // and a fresh /me now returns a non-moderator user.
+      rest.operatorThrows = const Forbidden('/v1/reports');
+      rest.user = FakeRestApi.defaultUser;
+
+      // Keep the provider alive; build() RETHROWS (never false-empty) and
+      // schedules the /me reconcile in a microtask.
+      final sub = c.listen(pendingReportsProvider, (_, _) {});
+      addTearDown(sub.close);
+      await settle(c);
+
+      // The reconcile flipped the flag → the screen's top-level gate closes.
+      expect(c.read(isModeratorProvider), isFalse);
+      expect(c.read(authControllerProvider).value, isNotNull); // never logged out
+    });
+
+    test('a Forbidden load whose /me reconcile FAILS transiently stays an ERROR, '
+        'never a false "queue clear" (empty is the wrong carrier for 403)',
+        () async {
+      final rest = FakeRestApi(user: _modUser);
+      final c = await _loggedIn(rest);
+
+      // The list 403s, but the reconciling /me can't land (network down).
+      rest.operatorThrows = const Forbidden('/v1/reports');
+      rest.meThrows = const NetworkUnavailable();
+
+      final sub = c.listen(pendingReportsProvider, (_, _) {});
+      addTearDown(sub.close);
+      await settle(c);
+
+      // The queue must remain an ERROR (honest "couldn't load"), NOT a
+      // success-empty that reads as "the queue is clear". The flag couldn't flip,
+      // so the server remains the gate.
+      final state = c.read(pendingReportsProvider);
+      expect(state.hasError, isTrue);
+      expect(state.hasValue && (state.value?.isEmpty ?? false), isFalse,
+          reason: 'a Forbidden load must never present as an empty (clear) queue');
+      expect(c.read(isModeratorProvider), isTrue);
+      expect(c.read(authControllerProvider).value, isNotNull); // not logged out
+    });
+
+    test('a BAN discovered during the Forbidden refresh routes to the suspended '
+        'zone, NOT a plain logout (single suspended door)', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      // The action 403s; the reconciling /me reveals the account was BANNED.
+      rest.operatorThrows = const Forbidden('/v1/reports/r1/resolve');
+      rest.meThrows = const AccountSuspended();
+
+      await expectLater(
+        c.read(pendingReportsProvider.notifier).resolve('r1'),
+        throwsA(isA<Forbidden>()),
+      );
+
+      // Settled through the suspended door (→ /suspended), not a bare logout that
+      // would land on /login and 403-loop.
+      expect(c.read(suspendedProvider), isTrue);
+      expect(c.read(authControllerProvider).value, isNull);
+    });
+
+    test('a BAN that lands DIRECTLY on an operator action (AccountSuspended, not '
+        'Forbidden) also settles to /suspended — both 403 doors sealed', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      // The account was banned: the action itself 403-suspends (AccountSuspended,
+      // a distinct type from Forbidden). Crucially, the CONFIRMING /me is made to
+      // FAIL transiently — settleBan must settle from the action's own ban signal
+      // WITHOUT depending on a second round-trip (cage-match Carnot + Tesla r4).
+      rest.operatorThrows = const AccountSuspended();
+      rest.meThrows = const NetworkUnavailable();
+
+      await expectLater(
+        c.read(pendingReportsProvider.notifier).resolve('r1'),
+        throwsA(isA<AccountSuspended>()),
+      );
+
+      // Settled to /suspended directly — NOT stranded on a generic "action
+      // failed" just because the confirming /me couldn't land.
+      expect(c.read(suspendedProvider), isTrue);
+      expect(c.read(authControllerProvider).value, isNull);
+    });
+
+    test('refreshUser tears down on a terminal Unauthorized during /me — no dead '
+        'session left published (Carnot round 3)', () async {
+      final rest = FakeRestApi(user: _modUser);
+      rest.pendingReports = [_report('r1')];
+      final c = await _loggedIn(rest);
+      await c.read(pendingReportsProvider.future);
+
+      // The action 403s (Forbidden → refreshUser), but the reconciling /me hits a
+      // terminal 401 (session genuinely dead, not just the flag).
+      rest.operatorThrows = const Forbidden('/v1/reports/r1/resolve');
+      rest.meThrows = const Unauthorized(401);
+
+      await expectLater(
+        c.read(pendingReportsProvider.notifier).resolve('r1'),
+        throwsA(isA<Forbidden>()),
+      );
+
+      // The dead session was torn down, not left published in UI state.
+      expect(c.read(authControllerProvider).value, isNull);
+      // Drain _becomeUnauthenticated's unawaited teardown before the container
+      // disposes, so its post-gap transport read doesn't hit a disposed Ref (a
+      // test-teardown race, not a production one — the root container outlives it).
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    });
+  });
+}

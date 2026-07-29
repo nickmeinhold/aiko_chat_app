@@ -487,6 +487,78 @@ class AuthController extends AsyncNotifier<AppUser?> {
     await _teardownResources();
   }
 
+  /// Re-fetch `/v1/me` and republish the user WITHOUT a full session restore.
+  ///
+  /// Reconciles a stale DERIVED flag against the server — specifically a
+  /// moderator flag that reads true locally while the island has since revoked
+  /// it. When an operator endpoint returns [Forbidden] (authZ, not authN — see
+  /// the REST seam's A3 taxonomy), the operator controller calls this so a fresh
+  /// `me()` flips [isModeratorProvider] and the operator UI gates itself off.
+  ///
+  /// Non-destructive by contract: this is NOT a logout path. A [Forbidden], a
+  /// network blip, or any transient error leaves the current session untouched —
+  /// only a clean `me()` republishes, and only a genuine ban ([AccountSuspended])
+  /// routes to the normal terminal-auth teardown. Contrast [logout] and the
+  /// `_becomeUnauthenticated` reconcile signals, which DO end the session.
+  Future<void> refreshUser() async {
+    final startUserId = state.value?.userId;
+    if (startUserId == null) return; // not authenticated — nothing to refresh
+    try {
+      final user = await _rest.me();
+      // Commit-time SESSION fence (extends _restoreSession's token guard, PR #71
+      // Tesla): between this refresh starting and here, the session can change out
+      // from under us — a concurrent terminal signal clears tokens, OR a logout +
+      // sign-in as a DIFFERENT user lands. Two DURABLE mutators must be fenced, not
+      // just the publish: the offline CACHE and `state`. The fence is TOTAL —
+      // tokens · userId · (cache) · publish (cage-match Tesla round 5): fencing
+      // only `state` still let `_writeCachedUser(A)` land while tokens were already
+      // B's, so a later offline restore would pair B's tokens with A's face (the
+      // PR #71 mismatch class). Fence BEFORE the cache write (shrinking the window
+      // to the negligible local write vs the whole me() network call), then a final
+      // SYNCHRONOUS userId re-check immediately precedes the synchronous publish so
+      // no teardown can interleave (a teardown nulls state.value → userId mismatch).
+      if (await _tokens.currentAccessToken() == null) return;
+      if (state.value?.userId != startUserId) return;
+      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
+      if (state.value?.userId != startUserId) return; // re-fence after the write
+      state = AsyncData(user);
+    } on AccountSuspended catch (e, st) {
+      // A ban surfaced during the refresh — this IS terminal, but it is a BAN,
+      // not a revoked session. Route it through the SAME single suspended-
+      // settlement door as sign-in/restore (`_settleSuspension`), NOT the generic
+      // `_becomeUnauthenticated` teardown — the latter lands on /login, which
+      // 403-loops (a re-auth attempt re-bans). `_settleSuspension` reads
+      // `state.error`, so surface the ban there first, then delegate.
+      state = AsyncError(e, st);
+      await _settleSuspension();
+    } on Unauthorized {
+      // Terminal authN during the refresh (a 401 that survived the interceptor's
+      // refresh-and-retry) — the session is genuinely dead. Tear it down rather
+      // than leaving a dead token published in UI state (cage-match Carnot round
+      // 3). Idempotent with the interceptor's onUnauthenticated event path, so
+      // double-firing is safe; being explicit here makes refreshUser self-
+      // contained instead of relying on that event having already fired. (Caught
+      // AFTER AccountSuspended, its subtype, so a ban still routes to /suspended.)
+      _becomeUnauthenticated();
+    } catch (_) {
+      // Forbidden / NetworkUnavailable / any transient — leave the session as-is.
+      // The caller already surfaced the originating action's failure.
+    }
+  }
+
+  /// Settle a KNOWN ban directly, WITHOUT a confirming `/v1/me` round-trip.
+  ///
+  /// Use when a call already returned [AccountSuspended] — that response IS the
+  /// terminal ban signal, so re-fetching `/me` to "confirm" it only adds a second
+  /// network hop that can fail transiently and strand a banned user with no
+  /// routing (cage-match Carnot + Tesla round 4). Routes through the single
+  /// suspended door (`_settleSuspension` → `/suspended`), same as sign-in/restore.
+  /// Idempotent: if suspension is already settled it is a harmless re-flag.
+  Future<void> settleBan() async {
+    state = AsyncError(const AccountSuspended(), StackTrace.current);
+    await _settleSuspension();
+  }
+
   /// Re-point the app at a different gateway (the #4 picker). JWTs are minted by
   /// and only valid at the gateway that issued them, so a switch is a SESSION
   /// boundary. The ordering is load-bearing (Carnot):

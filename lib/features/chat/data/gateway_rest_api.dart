@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
@@ -445,6 +446,61 @@ class GatewayRestApi implements ChatRestApi {
           data: {'reason': reason.wire},
         ),
       );
+
+  // --- operator / moderator actions (#33/#35) --------------------------------
+  // All ModeratorUser-gated → a stale-flag caller gets 403 → Forbidden (A3), not
+  // a logout. `_authedCall` performs that mapping; the operator controller
+  // catches Forbidden to refresh /me.
+
+  @override
+  // KNOWN CEILING (cage-match Tesla): a single unpaginated GET. The island caps
+  // the page server-side (limit default 100, max 500) and only status=pending is
+  // served, so the queue is bounded by policy today; if an island ever grows a
+  // long pending backlog, cursor pagination (island #44) is the follow-up.
+  Future<List<PendingReport>> listPendingReports() => _authedCall(() async {
+    final r = await _authed.get(
+      '/v1/reports',
+      queryParameters: {'status': 'pending'},
+    );
+    final list = (_map(r.data)['reports'] as List?) ?? const [];
+    // Per-row isolation (cage-match Tesla round 4): a single malformed row must
+    // not fail the WHOLE triage queue — fail-loud on a row's identity (strict ids
+    // in PendingReport.fromJson), fail-closed on the fleet (skip the bad row, keep
+    // the N-1 actionable reports the moderator can still work).
+    final out = <PendingReport>[];
+    var dropped = 0;
+    for (final e in list) {
+      try {
+        out.add(PendingReport.fromJson((e as Map).cast<String, dynamic>()));
+      } catch (_) {
+        // Skip this row; the rest of the queue remains actionable.
+        dropped++;
+      }
+    }
+    // Don't skip DARKLY (cage-match Tesla round 5): a poisoned field silently
+    // shrinking the queue must leave a signal, or "queue looks short" reads as
+    // "queue is clear" with no operator/on-call breadcrumb. (dev-only; a real
+    // telemetry sink is the follow-up if the island ever emits malformed rows.)
+    if (dropped > 0) {
+      debugPrint(
+        'listPendingReports: dropped $dropped malformed report row(s) of '
+        '${list.length}',
+      );
+    }
+    return out;
+  });
+
+  @override
+  Future<void> resolveReport(String reportId) =>
+      _authedCall(() => _authed.post('/v1/reports/$reportId/resolve'));
+
+  @override
+  Future<void> dismissReport(String reportId) =>
+      _authedCall(() => _authed.post('/v1/reports/$reportId/dismiss'));
+
+  @override
+  Future<void> banUser(String userId) =>
+      _authedCall(() => _authed.post('/v1/users/$userId/ban'));
 
   /// Run an authed request, translating a rejection into a domain exception so
   /// callers (the reconcile engine) classify it without importing `dio`. The
