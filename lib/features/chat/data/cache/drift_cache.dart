@@ -653,9 +653,13 @@ class DriftCache extends _$DriftCache {
   /// Is [ulid] a recorded dead id? MUST be called from inside an enclosing
   /// [transaction] (both doors do) so the read and the caller's write commit
   /// atomically — no TOCTOU between "is it retracted?" and the insert/stamp.
+  /// Compares on the canonical UPPERCASE form (dead ids are stored uppercased by
+  /// [applyRetraction]) so a case skew between a message id and its retraction
+  /// target can NEVER cause a silent suppression miss in release (cage-match
+  /// Tesla, flagged twice — see [applyRetraction]).
   Future<bool> _isRetracted(String ulid) async {
     final row = await (select(retractedIds)
-          ..where((t) => t.targetMsgId.equals(ulid)))
+          ..where((t) => t.targetMsgId.equals(ulid.toUpperCase())))
         .getSingleOrNull();
     return row != null;
   }
@@ -677,22 +681,28 @@ class DriftCache extends _$DriftCache {
   Future<void> applyRetraction(Retraction r) async {
     // Dead-id suppression is STRING-IDENTITY equality (_isRetracted compares the
     // stored targetMsgId against an inbound serverUlid). A non-canonical case on
-    // either side would silently never match — a suppression leak. Assert canonical
-    // (UPPERCASE) at this single choke point (both WS + history retractions flow
-    // here), same discipline as the watermark boundary (PR#7 finding 4; cage-match
-    // Tesla LOW). Debug-only; no-op in release.
+    // either side would silently never match — and for a MODERATION property that
+    // silent miss is a content leak, worse than the watermark's ordering-only skew.
+    // Two layers (cage-match Tesla, flagged twice):
+    //   1. assert canonical in DEBUG so a cross-repo contract violation is loud in
+    //      dev (same discipline as the watermark boundary, PR#7 finding 4);
+    //   2. NORMALIZE to canonical UPPERCASE on both store (here) and lookup
+    //      (_isRetracted) so a case skew can never cause a silent suppression miss
+    //      in RELEASE either — dissolve the class, don't just assert against it.
+    // ULIDs are Crockford base32; uppercasing IS the canonical form, so distinct
+    // ULIDs can't collide and a canonical id is unchanged.
     assertCanonicalUlid(r.targetMsgId, context: 'retraction target');
     assertCanonicalUlid(r.id, context: 'retraction id');
+    final deadId = r.targetMsgId.toUpperCase();
     await transaction(() async {
       await into(retractedIds).insertOnConflictUpdate(
         RetractedIdsCompanion.insert(
-          targetMsgId: r.targetMsgId,
+          targetMsgId: deadId,
           channelId: r.channelId,
-          retractionId: r.id,
+          retractionId: r.id.toUpperCase(),
         ),
       );
-      await (delete(messages)..where((t) => t.serverUlid.equals(r.targetMsgId)))
-          .go();
+      await (delete(messages)..where((t) => t.serverUlid.equals(deadId))).go();
     });
   }
 

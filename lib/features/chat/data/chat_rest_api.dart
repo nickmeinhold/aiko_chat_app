@@ -51,6 +51,14 @@ class RetractionHistoryItem extends HistoryItem {
 /// the unknown is the newest row at the fence, WEDGE — forever (cage-match Carnot
 /// HIGH, PR #102). The forward stream (island #104) is expected to grow item
 /// types; carrying them inertly keeps catch-up monotonic across that evolution.
+///
+/// CROSS-REPO CONTRACT (cage-match Tesla, PR #102): advancing inertly past an
+/// unknown means any FUTURE moderation/safety kind that is NOT `type: "retraction"`
+/// would be claimed-covered by the watermark and NEVER applied on an old client.
+/// Presence-independent suppression only works for kinds THIS build understands.
+/// The island contract must therefore hold one of: (a) all takedowns stay
+/// `type: "retraction"` forever, or (b) a new safety kind ships behind a protocol
+/// min-version gate that this app enforces. Tracked as an app+island follow-up.
 class UnknownHistoryItem extends HistoryItem {
   @override
   final String id;
