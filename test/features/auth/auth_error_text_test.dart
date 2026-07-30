@@ -86,6 +86,18 @@ void main() {
       );
     });
 
+    // Android's Credential Manager spells the SAME condition differently:
+    // `android-no-credential` (vs the package/iOS `no-credentials-available`).
+    // Play review hit exactly this — the Android spelling fell through to the
+    // raw "Sign-in failed: Passkey: android-no-credential" fallback. Both
+    // spellings must reach the Create-a-passkey nudge.
+    test('android-no-credential → same Create a passkey nudge', () {
+      expect(
+        text(const AuthCeremonyFailed('Passkey: android-no-credential')),
+        contains('No passkey found on this device'),
+      );
+    });
+
     test('domain-not-associated → names the host', () {
       final t = text(
         const AuthCeremonyFailed('Passkey: domain-not-associated'),
