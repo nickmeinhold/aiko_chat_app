@@ -8,7 +8,8 @@ import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
         Forbidden,
         MessageHistoryItem,
         RetractionHistoryItem,
-        Unauthorized;
+        Unauthorized,
+        UnknownHistoryItem;
 import 'package:aiko_chat_app/features/chat/data/gateway_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/gateway_transport.dart';
@@ -165,12 +166,14 @@ void main() {
     });
 
     test('getHistory parses a HETEROGENEOUS page: message + typed message + '
-        'retraction, and SKIPS an unknown future type (island #104)', () async {
+        'retraction, and carries an unknown future type INERTLY with its id '
+        '(island #104)', () async {
       // A page interleaving: a legacy untyped message, a {"type":"message"} item,
       // a retraction, and a future {"type":"reaction"} the island might add. The
-      // unknown type must be SKIPPED (not throw) — the recast's single forward
-      // stream will grow item types, and a hard parse would wedge history
-      // catch-up (re-strike D7-A2).
+      // unknown type must be carried as an INERT UnknownHistoryItem bearing its id
+      // (NOT dropped) so the pager's cursor advances THROUGH it — a dropped unknown
+      // trailing the last known row would wedge catch-up at the fence (cage-match
+      // Carnot HIGH). The recast's single forward stream will grow item types.
       final api = apiWith((_) => jsonBody(200, '''
         {"channel_id":"c1","messages":[
           {"msg_id":"01A","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"legacy","created_at":"2026-06-21T00:00:00Z","reply_to":null},
@@ -179,16 +182,33 @@ void main() {
           {"type":"reaction","id":"01D","emoji":"x"}
         ],"next_after":"01D"}'''));
       final page = await api.getHistory('c1');
-      expect(page.items.length, 3, reason: 'the unknown "reaction" is skipped');
+      expect(page.items.length, 4,
+          reason: 'the unknown "reaction" is carried inertly, not dropped');
       expect((page.items[0] as MessageHistoryItem).message.body, 'legacy');
       expect((page.items[1] as MessageHistoryItem).message.id, '01B');
       final r = page.items[2] as RetractionHistoryItem;
       expect(r.retraction.targetMsgId, '01A');
       expect(r.retraction.id, '01C');
       expect(r.retraction.channelId, 'c1');
-      // Cursor still comes from the LAST raw row's id (next_after), untouched by
-      // the client-side skip.
+      // The unknown is inert but carries its id → the cursor can advance through it.
+      final u = page.items[3] as UnknownHistoryItem;
+      expect(u.id, '01D');
+      // items.last.id == the true page end (next_after) — no cursor left behind.
+      expect(page.items.last.id, page.nextAfter);
       expect(page.nextAfter, '01D');
+    });
+
+    test('getHistory drops an unknown type with NO id field (the one residual — '
+        'nothing to advance the cursor to)', () async {
+      final api = apiWith((_) => jsonBody(200, '''
+        {"channel_id":"c1","messages":[
+          {"msg_id":"01A","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null},
+          {"type":"reaction","emoji":"x"}
+        ],"next_after":"01A"}'''));
+      final page = await api.getHistory('c1');
+      expect(page.items.length, 1,
+          reason: 'an idless unknown has no cursor to carry → dropped');
+      expect((page.items.single as MessageHistoryItem).message.id, '01A');
     });
 
     // task #1896 — the HTTP path of getCapabilities, the branch prod is in TODAY

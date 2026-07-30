@@ -414,19 +414,27 @@ class GatewayRestApi implements ChatRestApi {
     final list = (data['messages'] as List?) ?? const [];
     final items = <HistoryItem>[];
     for (final e in list) {
-      if (e is! Map) continue; // malformed row → skip, never abort the page
+      if (e is! Map) continue; // non-object row → skip; can't carry a cursor id
       final m = e.cast<String, dynamic>();
       // Heterogeneous since island #104. Message items historically carried NO
       // `type` (the fanout body is untyped); the history serializer now wraps them
       // as {"type":"message"}. Treat absent-type AND "message" as a message.
       // A retraction is a flat {type, id, target_msg_id, channel_id}. Any OTHER
-      // (future) type is SKIPPED, not thrown on: the recast's whole premise is one
-      // forward stream, so the island may add item types (edits, reactions); a
-      // hard parse would wedge history catch-up (the watermark could never advance
-      // past the unknown row). Forward-compat by skipping. (Re-strike D7-A2.)
+      // (future) type is carried as an INERT UnknownHistoryItem bearing its id —
+      // NOT dropped: the recast's premise is one forward stream that will grow item
+      // types (edits, reactions), and the pager advances the watermark through
+      // `items.last.id`, so a DROPPED unknown that trails the last known row (or a
+      // page of only unknowns) would stall/wedge catch-up at the fence (cage-match
+      // Carnot HIGH, PR #102). Carrying it inertly keeps the cursor monotonic
+      // across schema evolution. (Re-strike D7-A2 + Carnot.)
       switch (m['type']) {
         case null:
         case 'message':
+          // A malformed message row (Map, message-typed, but missing/ill-typed
+          // fields) still throws in Message.fromView and aborts the page — the
+          // SAME pre-existing behavior as before this PR (the reconnect treats the
+          // throw as transient and retries). This parser widens the KNOWN types; it
+          // does not change message-row robustness.
           items.add(MessageHistoryItem(Message.fromView(m)));
         case 'retraction':
           final rid = m['id'];
@@ -437,20 +445,21 @@ class GatewayRestApi implements ChatRestApi {
               id: rid,
               targetMsgId: target,
             )));
+          } else {
+            // Malformed retraction: keep the cursor moving if it has an id, else
+            // drop it (idless → nothing to advance to; the narrow residual below).
+            final salvage = rid ?? m['msg_id'];
+            if (salvage is String) items.add(UnknownHistoryItem(salvage));
           }
-        // else: malformed retraction → skip (same posture as a malformed message).
         default:
-          // Unknown future item type → skip silently (forward-compat, see above).
-          // NAMED TRADEOFF (re-strike): the pager advances from `items.last.id`,
-          // so skipping is transparent whenever the trailing item is known (a
-          // skipped MIDDLE item sits below the new cursor and is never re-fetched).
-          // The one residual edge is a page of PURELY unknown items → `items`
-          // empties → the pager reads it as a visibility gap and re-fetches until
-          // it escalates to benign `historySyncFault` telemetry (no loss, no
-          // crash, self-heals when the app learns the type). Impossible today
-          // (island emits only message|retraction); revisit when a real new type
-          // ships, in lockstep with the island (cf. sender_kind, task #7).
-          break;
+          // Unknown future item type → carry it INERT with its id so the watermark
+          // advances through it (see the switch-level comment). An unknown with no
+          // recognizable id field (neither `id` nor `msg_id`) is the one residual
+          // that must be dropped — there is nothing to advance the cursor to. That
+          // is far narrower than dropping every unknown, and island events carry an
+          // `id`, so this residual is not expected to fire.
+          final uid = m['id'] ?? m['msg_id'];
+          if (uid is String) items.add(UnknownHistoryItem(uid));
       }
     }
     return HistoryPage(

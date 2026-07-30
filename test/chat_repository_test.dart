@@ -1142,6 +1142,27 @@ void main() {
       expect(await cache.historyContiguousThrough(_chan), '01Z',
           reason: 'the pager advances the watermark to fence over the whole page');
     });
+
+    test('a history page whose TRAILING item is an UNKNOWN future type still '
+        'advances the watermark to fence — no wedge (cage-match Carnot HIGH)',
+        () async {
+      // The wedge Carnot found: a new island event type lands as the NEWEST row
+      // (at the fence). If the parser dropped it, `items.last.id` would be the
+      // known 01A, the cursor would never reach the 01D fence, and catch-up would
+      // refetch forever. Carried inertly, the cursor advances THROUGH it.
+      transport.fences = {_chan: '01D'};
+      rest.pagesByAfter[''] = HistoryPage(channelId: _chan, items: [
+        MessageHistoryItem(_server('01A', 'hi')),
+        UnknownHistoryItem('01D'), // a future event type, newest, at the fence
+      ], nextAfter: '01D');
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+
+      expect((await rows()).map((m) => m.id).toList(), ['01A'],
+          reason: 'the known message persists; the unknown is inert');
+      expect(await cache.historyContiguousThrough(_chan), '01D',
+          reason: 'the cursor advances THROUGH the trailing unknown to the fence');
+    });
   });
 }
 

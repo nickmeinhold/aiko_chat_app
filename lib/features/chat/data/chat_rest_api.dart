@@ -43,6 +43,20 @@ class RetractionHistoryItem extends HistoryItem {
   String get id => retraction.id;
 }
 
+/// A history item of a type this client doesn't understand yet (a future island
+/// event kind). INERT — the pager applies no effect for it — but it carries the
+/// row's [id] so the watermark still advances THROUGH it. Without this, a skipped
+/// unknown that trails the last KNOWN item (or a page of only unknowns) would
+/// leave the cursor below the real page end, and catch-up would refetch — or, if
+/// the unknown is the newest row at the fence, WEDGE — forever (cage-match Carnot
+/// HIGH, PR #102). The forward stream (island #104) is expected to grow item
+/// types; carrying them inertly keeps catch-up monotonic across that evolution.
+class UnknownHistoryItem extends HistoryItem {
+  @override
+  final String id;
+  const UnknownHistoryItem(this.id);
+}
+
 /// A page of history (always ascending). Carries both cursors so either
 /// direction can page:
 /// [nextBefore] = the gateway's `next_before` (oldest id in this batch) — pass as

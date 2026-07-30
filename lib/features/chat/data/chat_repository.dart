@@ -192,12 +192,16 @@ class ChatRepository {
     // Dart: while one handler is suspended at an `await`, another can begin and
     // interleave its cache write. The cache is atomic PER operation, but ORDERING
     // ACROSS operations was left to scheduler chance (an ack and the message it
-    // acks — or a retraction and the message it retracts — could reconcile out of
-    // order). Funnel all four through ONE repository-owned FIFO queue so
-    // single-writer ordering is STRUCTURAL, not incidental. (Retraction ordering
-    // is ALSO safe by construction — the dead id is presence-independent — but it
-    // rides the same FIFO so a retraction never races the very upsert it suppresses
-    // WITHIN this client, matching the paired-read visibility invariant.)
+    // acks — or a LIVE retraction and the live message it retracts — could
+    // reconcile out of order). Funnel all four through ONE repository-owned FIFO
+    // queue so single-writer ordering is STRUCTURAL, not incidental. NOTE the FIFO
+    // orders only the LIVE inbound streams; HISTORY retractions run in the pager
+    // (_fetchDeltaHistory, outside this FIFO) and CAN interleave with live inbound
+    // at awaits. That is safe not because of ordering but because the dead id is
+    // presence-independent + idempotent and both cache doors check it in-txn — so
+    // whichever of {live upsert, history retraction} runs first, the other is
+    // suppressed. The FIFO buys live-vs-live ordering; the dead id buys
+    // live-vs-history safety without ordering (cage-match Carnot, PR #102).
     // connectionState stays direct: it is the reconnect COORDINATOR (epoch-
     // guarded; its own writes go through the cache via drain/history), not a
     // simple inbound mutation, and it must be able to bump the epoch to cancel
@@ -736,6 +740,13 @@ class ChatRepository {
             await _persistInbound(message); // ASC; W3 dedups + verifies origin
           case RetractionHistoryItem(:final retraction):
             await _cache.applyRetraction(retraction);
+          case UnknownHistoryItem():
+            // Inert (a future island event type this client doesn't understand):
+            // no effect, but it stays in `items` so `newCursor` advances THROUGH it
+            // below — a dropped unknown trailing the last known row (or a page of
+            // only unknowns) would stall/wedge catch-up at the fence (cage-match
+            // Carnot HIGH, PR #102).
+            break;
         }
       }
       // Every history item exposes a NON-NULL cursor id (message → msg_id,
