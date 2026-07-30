@@ -653,13 +653,14 @@ class DriftCache extends _$DriftCache {
   /// Is [ulid] a recorded dead id? MUST be called from inside an enclosing
   /// [transaction] (both doors do) so the read and the caller's write commit
   /// atomically — no TOCTOU between "is it retracted?" and the insert/stamp.
-  /// Compares on the canonical UPPERCASE form (dead ids are stored uppercased by
-  /// [applyRetraction]) so a case skew between a message id and its retraction
-  /// target can NEVER cause a silent suppression miss in release (cage-match
-  /// Tesla, flagged twice — see [applyRetraction]).
+  /// String-identity match on the CANONICAL id — canonical-ULID is a debug-asserted
+  /// cross-repo contract throughout this component (the watermark, the history
+  /// cursor, and serverUlid dedup all assume it), so both sides are the same case
+  /// by contract. See [applyRetraction] for why this path does NOT do a bespoke
+  /// release-time case-normalization.
   Future<bool> _isRetracted(String ulid) async {
     final row = await (select(retractedIds)
-          ..where((t) => t.targetMsgId.equals(ulid.toUpperCase())))
+          ..where((t) => t.targetMsgId.equals(ulid)))
         .getSingleOrNull();
     return row != null;
   }
@@ -679,30 +680,35 @@ class DriftCache extends _$DriftCache {
   /// remains the single writer of `historyContiguousThrough` (round-4 invariant).
   /// The same retraction also arrives as a history item and re-applies harmlessly.
   Future<void> applyRetraction(Retraction r) async {
-    // Dead-id suppression is STRING-IDENTITY equality (_isRetracted compares the
-    // stored targetMsgId against an inbound serverUlid). A non-canonical case on
-    // either side would silently never match — and for a MODERATION property that
-    // silent miss is a content leak, worse than the watermark's ordering-only skew.
-    // Two layers (cage-match Tesla, flagged twice):
-    //   1. assert canonical in DEBUG so a cross-repo contract violation is loud in
-    //      dev (same discipline as the watermark boundary, PR#7 finding 4);
-    //   2. NORMALIZE to canonical UPPERCASE on both store (here) and lookup
-    //      (_isRetracted) so a case skew can never cause a silent suppression miss
-    //      in RELEASE either — dissolve the class, don't just assert against it.
-    // ULIDs are Crockford base32; uppercasing IS the canonical form, so distinct
-    // ULIDs can't collide and a canonical id is unchanged.
+    // Dead-id suppression + the hard-delete are STRING-IDENTITY equality against a
+    // serverUlid. Canonical-ULID (UPPERCASE Crockford) is a CROSS-REPO CONTRACT the
+    // whole component already relies on via DEBUG asserts — the watermark
+    // (advanceHistoryContiguous), the history cursor, and serverUlid dedup all
+    // assume it and none release-normalize. So assert canonical here too (loud in
+    // dev on a contract violation) and store/compare the id as-is, matching that
+    // discipline on ALL THREE surfaces (dead-id store, _isRetracted lookup,
+    // hard-delete) so they stay mutually consistent.
+    //
+    // NOT a bespoke release-time toUpperCase() on this path (reverted after
+    // cage-match Tesla, PR #102): normalizing only the dead-id table left
+    // messages.serverUlid raw, so the hard-delete could MISS a case-skewed present
+    // row — a half-wound coil worse than raw-vs-raw. The complete fix is to
+    // canonicalize serverUlid at the INGEST stamp (W2/W3) so the identity string is
+    // canonical system-wide; that is a whole-component change tracked as a follow-up
+    // (claude-tasks), not a retraction-local patch. Under the island's canonical
+    // contract, raw-vs-raw matches exactly and the debug assert guards dev.
     assertCanonicalUlid(r.targetMsgId, context: 'retraction target');
     assertCanonicalUlid(r.id, context: 'retraction id');
-    final deadId = r.targetMsgId.toUpperCase();
     await transaction(() async {
       await into(retractedIds).insertOnConflictUpdate(
         RetractedIdsCompanion.insert(
-          targetMsgId: deadId,
+          targetMsgId: r.targetMsgId,
           channelId: r.channelId,
-          retractionId: r.id.toUpperCase(),
+          retractionId: r.id,
         ),
       );
-      await (delete(messages)..where((t) => t.serverUlid.equals(deadId))).go();
+      await (delete(messages)..where((t) => t.serverUlid.equals(r.targetMsgId)))
+          .go();
     });
   }
 
