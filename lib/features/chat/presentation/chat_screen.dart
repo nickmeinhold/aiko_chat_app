@@ -193,9 +193,24 @@ class MessageTile extends ConsumerWidget {
             crossAxisAlignment:
                 isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-              Text(
-                message.sender.displayLabel,
-                style: Theme.of(context).textTheme.labelSmall,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      message.sender.displayLabel,
+                      style: Theme.of(context).textTheme.labelSmall,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  // Non-human senders (LLM/robot/generic actor — e.g. an agent
+                  // the island stamps from User.kind) get a participant badge so
+                  // a reader can tell a bot from a person. Humans get nothing.
+                  if (message.sender.kind.isExternalActor) ...[
+                    const SizedBox(width: 4),
+                    _SenderBadge(kind: message.sender.kind),
+                  ],
+                ],
               ),
               const SizedBox(height: 2),
               Text(message.body),
@@ -225,6 +240,54 @@ class MessageTile extends ConsumerWidget {
     final h = l.hour.toString().padLeft(2, '0');
     final m = l.minute.toString().padLeft(2, '0');
     return '$h:$m';
+  }
+}
+
+/// A small "who/what" chip shown beside a non-human sender's label so an
+/// agent/bot message is visually distinguishable from a person's. Driven by
+/// [SenderKind.isExternalActor]; never shown for [SenderKind.human]. Any
+/// unrecognized island sender_kind decodes to [SenderKind.actor] → "Bot".
+class _SenderBadge extends StatelessWidget {
+  const _SenderBadge({required this.kind});
+
+  final SenderKind kind;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.smart_toy, size: 10, color: scheme.onSecondaryContainer),
+          const SizedBox(width: 3),
+          Text(
+            _label(kind),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSecondaryContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _label(SenderKind kind) {
+    switch (kind) {
+      case SenderKind.llm:
+        return 'AI';
+      case SenderKind.robot:
+        return 'Robot';
+      case SenderKind.human:
+      case SenderKind.actor:
+        return 'Bot';
+    }
   }
 }
 
