@@ -727,25 +727,33 @@ class ChatRepository {
         }
         return;
       }
+      // TWO-PASS page application (cage-match Carnot HIGH). A page is observed as
+      // ONE causal batch but persisted as N separate cache transactions. Applying a
+      // message and its SAME-PAGE retraction in item order would durably insert the
+      // message, THEN delete it — a crash/error between those two commits leaves the
+      // retracted message durably visible until the next reconnect self-heals.
+      // Instead, record ALL retractions in the page FIRST, so pass 2's message
+      // upserts hit a dead id at Door A and a retracted message is NEVER durably
+      // inserted. A crash mid-pass-1 leaves no message rows; mid-pass-2 leaves only
+      // non-retracted rows. The watermark still advances only at the fence below
+      // (D4: suppress-only, pager stays the single writer), so a partial page is
+      // re-walked on reconnect — coverage is never claimed over a gap.
       for (final item in page.items) {
-        // Heterogeneous page (island #104): messages persist through W3 (which
-        // suppresses a dead id at Door A); retractions apply in-loop (record the
-        // dead id + hard-delete a present target). Applied in ascending id order so
-        // a target arriving before its retraction on the same/earlier page is
-        // deleted when the retraction lands, and one arriving after is suppressed
-        // at Door A. The watermark still advances only at the fence below (D4:
-        // suppress-only, pager stays the single writer).
+        if (item case RetractionHistoryItem(:final retraction)) {
+          await _cache.applyRetraction(retraction);
+        }
+      }
+      for (final item in page.items) {
         switch (item) {
           case MessageHistoryItem(:final message):
-            await _persistInbound(message); // ASC; W3 dedups + verifies origin
-          case RetractionHistoryItem(:final retraction):
-            await _cache.applyRetraction(retraction);
+            await _persistInbound(message); // ASC; W3 dedups + verifies + Door-A suppresses
+          case RetractionHistoryItem():
+            break; // applied in pass 1 above
           case UnknownHistoryItem():
             // Inert (a future island event type this client doesn't understand):
-            // no effect, but it stays in `items` so `newCursor` advances THROUGH it
+            // no effect, but it occupies `items` so `newCursor` advances THROUGH it
             // below — a dropped unknown trailing the last known row (or a page of
-            // only unknowns) would stall/wedge catch-up at the fence (cage-match
-            // Carnot HIGH, PR #102).
+            // only unknowns) would stall/wedge catch-up at the fence (Carnot HIGH).
             break;
         }
       }

@@ -446,10 +446,16 @@ class GatewayRestApi implements ChatRestApi {
               targetMsgId: target,
             )));
           } else {
-            // Malformed retraction: keep the cursor moving if it has an id, else
-            // drop it (idless → nothing to advance to; the narrow residual below).
-            final salvage = rid ?? m['msg_id'];
-            if (salvage is String) items.add(UnknownHistoryItem(salvage));
+            // FAIL-CLOSED on a malformed KNOWN retraction (cage-match Tesla HIGH).
+            // A retraction is a safety frame, NOT a forward-compat unknown: do NOT
+            // salvage it as an inert cursor-bearer, because advancing the watermark
+            // past a takedown that never applied is a SILENT MODERATION LEAK (the
+            // target stays visible forever, never re-walked). Throw instead — the
+            // same family as a malformed message row (Message.fromView throws): the
+            // page fails, the reconnect retries, and a persistent malformation
+            // wedges catch-up LOUDLY via reconnectFailed telemetry rather than
+            // dropping a takedown. Never claim coverage over an unapplied retraction.
+            throw FormatException('malformed retraction history item: $m');
           }
         default:
           // Unknown future item type → carry it INERT with its id so the watermark

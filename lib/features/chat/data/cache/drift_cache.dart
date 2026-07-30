@@ -675,6 +675,14 @@ class DriftCache extends _$DriftCache {
   /// remains the single writer of `historyContiguousThrough` (round-4 invariant).
   /// The same retraction also arrives as a history item and re-applies harmlessly.
   Future<void> applyRetraction(Retraction r) async {
+    // Dead-id suppression is STRING-IDENTITY equality (_isRetracted compares the
+    // stored targetMsgId against an inbound serverUlid). A non-canonical case on
+    // either side would silently never match — a suppression leak. Assert canonical
+    // (UPPERCASE) at this single choke point (both WS + history retractions flow
+    // here), same discipline as the watermark boundary (PR#7 finding 4; cage-match
+    // Tesla LOW). Debug-only; no-op in release.
+    assertCanonicalUlid(r.targetMsgId, context: 'retraction target');
+    assertCanonicalUlid(r.id, context: 'retraction id');
     await transaction(() async {
       await into(retractedIds).insertOnConflictUpdate(
         RetractedIdsCompanion.insert(

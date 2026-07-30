@@ -211,6 +211,20 @@ void main() {
       expect((page.items.single as MessageHistoryItem).message.id, '01A');
     });
 
+    test('getHistory FAILS the page on a malformed RETRACTION — fail-closed, never '
+        'salvaged as inert (cage-match Tesla HIGH)', () async {
+      // A retraction is a KNOWN safety frame; a broken one (missing target_msg_id)
+      // must NOT be demoted to an inert cursor-bearer (that would advance the
+      // watermark past a takedown that never applied — a silent moderation leak).
+      // It throws, same family as a malformed message row: retry, don't claim
+      // coverage.
+      final api = apiWith((_) => jsonBody(200, '''
+        {"channel_id":"c1","messages":[
+          {"type":"retraction","id":"01C","channel_id":"c1"}
+        ],"next_after":"01C"}'''));
+      await expectLater(api.getHistory('c1'), throwsA(isA<FormatException>()));
+    });
+
     // task #1896 — the HTTP path of getCapabilities, the branch prod is in TODAY
     // (/capabilities 404s). Cage-match Maxwell + Tesla + Carnot all flagged it
     // untested. Three-state at the wire: explicit bool → value; every "can't
