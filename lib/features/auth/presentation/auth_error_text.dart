@@ -88,7 +88,13 @@ String authErrorText(
   // banner still leaked).
   final ceremonyMsg = error is AuthCeremonyFailed ? error.message : '';
   final lower = ceremonyMsg.toLowerCase();
-  if (ceremonyMsg.contains('no-credentials-available')) {
+  // Android's Credential Manager emits `android-no-credential`; the passkeys
+  // package / iOS emit `no-credentials-available`. Same condition (no passkey
+  // on this device), two spellings — match the shared `no-credential` stem so
+  // neither platform falls through to the raw "Sign-in failed: …" fallback.
+  // The Android spelling DID fall through, and it's what Google Play review
+  // hit when the reviewer tapped "Sign in" on a device with no passkey.
+  if (lower.contains('no-credential')) {
     return 'No passkey found on this device. '
         'Tap "Create a passkey" above to make one.';
   }
