@@ -3,7 +3,12 @@ import 'dart:async';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show AccountSuspended, Forbidden, Unauthorized;
+    show
+        AccountSuspended,
+        Forbidden,
+        MessageHistoryItem,
+        RetractionHistoryItem,
+        Unauthorized;
 import 'package:aiko_chat_app/features/chat/data/gateway_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/gateway_transport.dart';
@@ -154,9 +159,36 @@ void main() {
       final api = apiWith((_) => jsonBody(200,
           '{"channel_id":"c1","messages":[{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}],"next_before":"01J","next_after":"01K"}'));
       final page = await api.getHistory('c1');
-      expect(page.messages.single.body, 'hi');
+      expect((page.items.single as MessageHistoryItem).message.body, 'hi');
       expect(page.nextBefore, '01J');
       expect(page.nextAfter, '01K');
+    });
+
+    test('getHistory parses a HETEROGENEOUS page: message + typed message + '
+        'retraction, and SKIPS an unknown future type (island #104)', () async {
+      // A page interleaving: a legacy untyped message, a {"type":"message"} item,
+      // a retraction, and a future {"type":"reaction"} the island might add. The
+      // unknown type must be SKIPPED (not throw) — the recast's single forward
+      // stream will grow item types, and a hard parse would wedge history
+      // catch-up (re-strike D7-A2).
+      final api = apiWith((_) => jsonBody(200, '''
+        {"channel_id":"c1","messages":[
+          {"msg_id":"01A","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"legacy","created_at":"2026-06-21T00:00:00Z","reply_to":null},
+          {"type":"message","msg_id":"01B","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"typed","created_at":"2026-06-21T00:00:01Z","reply_to":null},
+          {"type":"retraction","id":"01C","target_msg_id":"01A","channel_id":"c1"},
+          {"type":"reaction","id":"01D","emoji":"x"}
+        ],"next_after":"01D"}'''));
+      final page = await api.getHistory('c1');
+      expect(page.items.length, 3, reason: 'the unknown "reaction" is skipped');
+      expect((page.items[0] as MessageHistoryItem).message.body, 'legacy');
+      expect((page.items[1] as MessageHistoryItem).message.id, '01B');
+      final r = page.items[2] as RetractionHistoryItem;
+      expect(r.retraction.targetMsgId, '01A');
+      expect(r.retraction.id, '01C');
+      expect(r.retraction.channelId, 'c1');
+      // Cursor still comes from the LAST raw row's id (next_after), untouched by
+      // the client-side skip.
+      expect(page.nextAfter, '01D');
     });
 
     // task #1896 — the HTTP path of getCapabilities, the branch prod is in TODAY

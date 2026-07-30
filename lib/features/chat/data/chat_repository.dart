@@ -16,6 +16,7 @@ import '../../auth/domain/auth_models.dart';
 import '../domain/message.dart';
 import '../domain/message_signing.dart';
 import '../domain/origin_envelope.dart';
+import '../domain/retraction.dart';
 import '../domain/ulid.dart';
 import 'cache/drift_cache.dart';
 import 'chat_rest_api.dart';
@@ -186,18 +187,22 @@ class ChatRepository {
       throw StateError('ChatRepository.start() called twice — streams wire ONCE (B-live)');
     }
     _started = true;
-    // INBOUND SERIALIZATION (PR#7 finding 2). The three inbound mutation streams
-    // (ack/message/error) are NOT serialized against each other by Dart: while
-    // one handler is suspended at an `await`, another can begin and interleave
-    // its cache write. The cache is atomic PER operation, but ORDERING ACROSS
-    // operations was left to scheduler chance (an ack and the message it acks
-    // could reconcile out of order). Funnel all three through ONE repository-
-    // owned FIFO queue so single-writer ordering is STRUCTURAL, not incidental.
+    // INBOUND SERIALIZATION (PR#7 finding 2). The four inbound mutation streams
+    // (ack/message/error/retraction) are NOT serialized against each other by
+    // Dart: while one handler is suspended at an `await`, another can begin and
+    // interleave its cache write. The cache is atomic PER operation, but ORDERING
+    // ACROSS operations was left to scheduler chance (an ack and the message it
+    // acks — or a retraction and the message it retracts — could reconcile out of
+    // order). Funnel all four through ONE repository-owned FIFO queue so
+    // single-writer ordering is STRUCTURAL, not incidental. (Retraction ordering
+    // is ALSO safe by construction — the dead id is presence-independent — but it
+    // rides the same FIFO so a retraction never races the very upsert it suppresses
+    // WITHIN this client, matching the paired-read visibility invariant.)
     // connectionState stays direct: it is the reconnect COORDINATOR (epoch-
     // guarded; its own writes go through the cache via drain/history), not a
     // simple inbound mutation, and it must be able to bump the epoch to cancel
     // in-flight work without waiting behind the queue.
-    // The three inbound subscriptions are held separately (_inboundSubs) so the
+    // The four inbound subscriptions are held separately (_inboundSubs) so the
     // backpressure valve can pause/resume exactly them — and NEVER connectionState
     // (the reconnect coordinator must keep flowing to bump the epoch even while
     // inbound is paused). They are also in _subs so dispose() cancels everything.
@@ -207,8 +212,10 @@ class ChatRepository {
         .listen((m) => _enqueueInbound(() => _onMessage(m))); // W3
     final errSub = _transport.errors
         .listen((e) => _enqueueInbound(() => _onError(e))); // W4
-    _inboundSubs.addAll([ackSub, msgSub, errSub]);
-    _subs.addAll([ackSub, msgSub, errSub]);
+    final retractSub = _transport.retractions
+        .listen((r) => _enqueueInbound(() => _onRetraction(r))); // W6
+    _inboundSubs.addAll([ackSub, msgSub, errSub, retractSub]);
+    _subs.addAll([ackSub, msgSub, errSub, retractSub]);
     _subs.add(_transport.connectionState.listen(_onConnState)); // reconnect
   }
 
@@ -223,8 +230,8 @@ class ChatRepository {
   /// completion before the next starts.
   Future<void> _inboundTail = Future<void>.value();
 
-  /// The three inbound subscriptions (ack/message/error) — the only ones the
-  /// backpressure valve pauses. connectionState is deliberately excluded.
+  /// The four inbound subscriptions (ack/message/error/retraction) — the only
+  /// ones the backpressure valve pauses. connectionState is deliberately excluded.
   final List<StreamSubscription<dynamic>> _inboundSubs = [];
 
   /// In-flight inbound units: incremented at enqueue (when a transport event is
@@ -454,14 +461,26 @@ class ChatRepository {
       _telemetry.inboundWriteFailed(e, st);
       return;
     }
-    _completeAckWaiter(a.clientMsgId); // unblock a drain waiter
-    if (outcome == AckOutcome.orphaned) {
-      // Unreachable in Phase 1 BY CONSTRUCTION (W1 persists before send; no
-      // local delete until W6). The enum makes the impossible OBSERVABLE, not
-      // recoverable: there is no targeted backfill (the ack has no channelId)
-      // and no "next history sync" backstop under the forward delta.
-      _telemetry.orphanAck(a.clientMsgId, a.msgId);
-      assert(false, 'orphan ack — unreachable in Phase 1; see AckOutcome.orphaned');
+    _completeAckWaiter(a.clientMsgId); // unblock a drain waiter (all outcomes)
+    switch (outcome) {
+      case AckOutcome.orphaned:
+        // Unreachable BY CONSTRUCTION (W1 persists before send; the only local
+        // delete is a retraction, split out as [retracted] below). The enum makes
+        // the impossible OBSERVABLE, not recoverable: there is no targeted backfill
+        // (the ack has no channelId) and no "next history sync" backstop under the
+        // forward delta.
+        _telemetry.orphanAck(a.clientMsgId, a.msgId);
+        assert(
+            false, 'orphan ack — unreachable in Phase 1; see AckOutcome.orphaned');
+      case AckOutcome.retracted:
+        // BENIGN (island #104): this own-message was taken down before its ack
+        // landed. Door B hard-deleted the optimistic row (or it was already gone)
+        // rather than resurrecting it. The waiter is already completed above so the
+        // drain doesn't burn its timeout; there is nothing to render or recover.
+        break;
+      case AckOutcome.reconciled:
+      case AckOutcome.collapsed:
+        break;
     }
   }
 
@@ -514,6 +533,22 @@ class ChatRepository {
         serverUlid: m.id!, // non-null for inbound (upsertInbound just asserted it)
         clientMsgId: o.clientMsgId,
       );
+    }
+  }
+
+  /// W6 — a moderator takedown reached this client (island #104). Suppress the
+  /// dead id (presence-independent) and hard-delete the target if present. Awaited
+  /// + guarded like [_onMessage] so a cache failure is OWNED via telemetry rather
+  /// than leaking as an unhandled async error from the stream handler. Does NOT
+  /// touch the history watermark — a live retraction is suppress-only (the pager
+  /// stays the single watermark writer); the same retraction re-arrives as a
+  /// history item and re-applies idempotently as the pager reaches it.
+  Future<void> _onRetraction(Retraction r) async {
+    if (_disposed) return; // a torn-down repo must not write (rebuild overlap)
+    try {
+      await _cache.applyRetraction(r);
+    } catch (e, st) {
+      _telemetry.inboundWriteFailed(e, st);
     }
   }
 
@@ -645,7 +680,7 @@ class ChatRepository {
       // skip older history. An empty string is below every ULID → forward path.
       final page = await _rest.getHistory(channelId, after: cursor ?? '', limit: 50);
       if (_aborted(epoch)) return; // TOCTOU: re-check AFTER await, BEFORE write
-      if (page.messages.isEmpty) {
+      if (page.items.isEmpty) {
         // An empty page while cursor < fence USED to be an invariant violation
         // (assert). It no longer is: visibility can legitimately SHRINK between
         // the fence read (at subscribe) and this paging — a moderation block (#7)
@@ -688,21 +723,35 @@ class ChatRepository {
         }
         return;
       }
-      for (final m in page.messages) {
-        await _persistInbound(m); // ASC; W3 dedups on serverUlid, verifies origin
+      for (final item in page.items) {
+        // Heterogeneous page (island #104): messages persist through W3 (which
+        // suppresses a dead id at Door A); retractions apply in-loop (record the
+        // dead id + hard-delete a present target). Applied in ascending id order so
+        // a target arriving before its retraction on the same/earlier page is
+        // deleted when the retraction lands, and one arriving after is suppressed
+        // at Door A. The watermark still advances only at the fence below (D4:
+        // suppress-only, pager stays the single writer).
+        switch (item) {
+          case MessageHistoryItem(:final message):
+            await _persistInbound(message); // ASC; W3 dedups + verifies origin
+          case RetractionHistoryItem(:final retraction):
+            await _cache.applyRetraction(retraction);
+        }
       }
-      final newCursor = page.messages.last.id;
-      if (newCursor != null) {
-        assertCanonicalUlid(newCursor, context: 'history page cursor');
-      }
+      // Every history item exposes a NON-NULL cursor id (message → msg_id,
+      // retraction → its ULID; the sealed [HistoryItem] guarantees it), so the
+      // "null-id history row" failure mode the old guard defended is now
+      // impossible BY CONSTRUCTION — one fewer runtime branch, eliminated at the
+      // type level by the heterogeneous-page reshape (island #104).
+      final newCursor = page.items.last.id;
+      assertCanonicalUlid(newCursor, context: 'history page cursor');
       // PROGRESS GUARD: the loop's liveness depends on the gateway treating
       // `after` as EXCLUSIVE — a frozen contract owned by a DIFFERENT repo. If a
-      // page ever fails to advance (non-exclusive `after`, a ULID tie, or a
-      // null-id history row), the loop would re-fetch the same cursor forever,
-      // hammering getHistory + re-upserting. Refuse to loop: surface it as the
-      // invariant violation it is, don't hang.
-      if (newCursor == null ||
-          (cursor != null && newCursor.compareTo(cursor) <= 0)) {
+      // page ever fails to advance (non-exclusive `after`, or a ULID tie), the
+      // loop would re-fetch the same cursor forever, hammering getHistory +
+      // re-upserting. Refuse to loop: surface it as the invariant violation it is,
+      // don't hang.
+      if (cursor != null && newCursor.compareTo(cursor) <= 0) {
         _telemetry.historyGapBeforeFence(channelId, cursor, fence);
         assert(false,
             'history page did not advance (cursor=$cursor newCursor=$newCursor) '

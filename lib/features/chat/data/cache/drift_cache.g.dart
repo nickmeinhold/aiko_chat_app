@@ -1691,12 +1691,299 @@ class SyncMetaCompanion extends UpdateCompanion<SyncMetaData> {
   }
 }
 
+class $RetractedIdsTable extends RetractedIds
+    with TableInfo<$RetractedIdsTable, RetractedId> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $RetractedIdsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _targetMsgIdMeta = const VerificationMeta(
+    'targetMsgId',
+  );
+  @override
+  late final GeneratedColumn<String> targetMsgId = GeneratedColumn<String>(
+    'target_msg_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _channelIdMeta = const VerificationMeta(
+    'channelId',
+  );
+  @override
+  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+    'channel_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _retractionIdMeta = const VerificationMeta(
+    'retractionId',
+  );
+  @override
+  late final GeneratedColumn<String> retractionId = GeneratedColumn<String>(
+    'retraction_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [targetMsgId, channelId, retractionId];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'retracted_ids';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<RetractedId> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('target_msg_id')) {
+      context.handle(
+        _targetMsgIdMeta,
+        targetMsgId.isAcceptableOrUnknown(
+          data['target_msg_id']!,
+          _targetMsgIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_targetMsgIdMeta);
+    }
+    if (data.containsKey('channel_id')) {
+      context.handle(
+        _channelIdMeta,
+        channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_channelIdMeta);
+    }
+    if (data.containsKey('retraction_id')) {
+      context.handle(
+        _retractionIdMeta,
+        retractionId.isAcceptableOrUnknown(
+          data['retraction_id']!,
+          _retractionIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_retractionIdMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {targetMsgId};
+  @override
+  RetractedId map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return RetractedId(
+      targetMsgId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}target_msg_id'],
+      )!,
+      channelId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}channel_id'],
+      )!,
+      retractionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}retraction_id'],
+      )!,
+    );
+  }
+
+  @override
+  $RetractedIdsTable createAlias(String alias) {
+    return $RetractedIdsTable(attachedDatabase, alias);
+  }
+}
+
+class RetractedId extends DataClass implements Insertable<RetractedId> {
+  /// The suppressed message id (the retraction's `target_msg_id`). PK ⇒ recording
+  /// the same takedown twice is an idempotent no-op.
+  final String targetMsgId;
+
+  /// The channel the taken-down message lived in (prunability + observability).
+  final String channelId;
+
+  /// The retraction event's own (higher) ULID — enables an optional monotonic
+  /// prune later; carries no behaviour today.
+  final String retractionId;
+  const RetractedId({
+    required this.targetMsgId,
+    required this.channelId,
+    required this.retractionId,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['target_msg_id'] = Variable<String>(targetMsgId);
+    map['channel_id'] = Variable<String>(channelId);
+    map['retraction_id'] = Variable<String>(retractionId);
+    return map;
+  }
+
+  RetractedIdsCompanion toCompanion(bool nullToAbsent) {
+    return RetractedIdsCompanion(
+      targetMsgId: Value(targetMsgId),
+      channelId: Value(channelId),
+      retractionId: Value(retractionId),
+    );
+  }
+
+  factory RetractedId.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return RetractedId(
+      targetMsgId: serializer.fromJson<String>(json['targetMsgId']),
+      channelId: serializer.fromJson<String>(json['channelId']),
+      retractionId: serializer.fromJson<String>(json['retractionId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'targetMsgId': serializer.toJson<String>(targetMsgId),
+      'channelId': serializer.toJson<String>(channelId),
+      'retractionId': serializer.toJson<String>(retractionId),
+    };
+  }
+
+  RetractedId copyWith({
+    String? targetMsgId,
+    String? channelId,
+    String? retractionId,
+  }) => RetractedId(
+    targetMsgId: targetMsgId ?? this.targetMsgId,
+    channelId: channelId ?? this.channelId,
+    retractionId: retractionId ?? this.retractionId,
+  );
+  RetractedId copyWithCompanion(RetractedIdsCompanion data) {
+    return RetractedId(
+      targetMsgId: data.targetMsgId.present
+          ? data.targetMsgId.value
+          : this.targetMsgId,
+      channelId: data.channelId.present ? data.channelId.value : this.channelId,
+      retractionId: data.retractionId.present
+          ? data.retractionId.value
+          : this.retractionId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RetractedId(')
+          ..write('targetMsgId: $targetMsgId, ')
+          ..write('channelId: $channelId, ')
+          ..write('retractionId: $retractionId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(targetMsgId, channelId, retractionId);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is RetractedId &&
+          other.targetMsgId == this.targetMsgId &&
+          other.channelId == this.channelId &&
+          other.retractionId == this.retractionId);
+}
+
+class RetractedIdsCompanion extends UpdateCompanion<RetractedId> {
+  final Value<String> targetMsgId;
+  final Value<String> channelId;
+  final Value<String> retractionId;
+  final Value<int> rowid;
+  const RetractedIdsCompanion({
+    this.targetMsgId = const Value.absent(),
+    this.channelId = const Value.absent(),
+    this.retractionId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  RetractedIdsCompanion.insert({
+    required String targetMsgId,
+    required String channelId,
+    required String retractionId,
+    this.rowid = const Value.absent(),
+  }) : targetMsgId = Value(targetMsgId),
+       channelId = Value(channelId),
+       retractionId = Value(retractionId);
+  static Insertable<RetractedId> custom({
+    Expression<String>? targetMsgId,
+    Expression<String>? channelId,
+    Expression<String>? retractionId,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (targetMsgId != null) 'target_msg_id': targetMsgId,
+      if (channelId != null) 'channel_id': channelId,
+      if (retractionId != null) 'retraction_id': retractionId,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  RetractedIdsCompanion copyWith({
+    Value<String>? targetMsgId,
+    Value<String>? channelId,
+    Value<String>? retractionId,
+    Value<int>? rowid,
+  }) {
+    return RetractedIdsCompanion(
+      targetMsgId: targetMsgId ?? this.targetMsgId,
+      channelId: channelId ?? this.channelId,
+      retractionId: retractionId ?? this.retractionId,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (targetMsgId.present) {
+      map['target_msg_id'] = Variable<String>(targetMsgId.value);
+    }
+    if (channelId.present) {
+      map['channel_id'] = Variable<String>(channelId.value);
+    }
+    if (retractionId.present) {
+      map['retraction_id'] = Variable<String>(retractionId.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RetractedIdsCompanion(')
+          ..write('targetMsgId: $targetMsgId, ')
+          ..write('channelId: $channelId, ')
+          ..write('retractionId: $retractionId, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$DriftCache extends GeneratedDatabase {
   _$DriftCache(QueryExecutor e) : super(e);
   $DriftCacheManager get managers => $DriftCacheManager(this);
   late final $MessagesTable messages = $MessagesTable(this);
   late final $ChannelsTable channels = $ChannelsTable(this);
   late final $SyncMetaTable syncMeta = $SyncMetaTable(this);
+  late final $RetractedIdsTable retractedIds = $RetractedIdsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1705,6 +1992,7 @@ abstract class _$DriftCache extends GeneratedDatabase {
     messages,
     channels,
     syncMeta,
+    retractedIds,
   ];
 }
 
@@ -2518,6 +2806,172 @@ typedef $$SyncMetaTableProcessedTableManager =
       SyncMetaData,
       PrefetchHooks Function()
     >;
+typedef $$RetractedIdsTableCreateCompanionBuilder =
+    RetractedIdsCompanion Function({
+      required String targetMsgId,
+      required String channelId,
+      required String retractionId,
+      Value<int> rowid,
+    });
+typedef $$RetractedIdsTableUpdateCompanionBuilder =
+    RetractedIdsCompanion Function({
+      Value<String> targetMsgId,
+      Value<String> channelId,
+      Value<String> retractionId,
+      Value<int> rowid,
+    });
+
+class $$RetractedIdsTableFilterComposer
+    extends Composer<_$DriftCache, $RetractedIdsTable> {
+  $$RetractedIdsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get targetMsgId => $composableBuilder(
+    column: $table.targetMsgId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get channelId => $composableBuilder(
+    column: $table.channelId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get retractionId => $composableBuilder(
+    column: $table.retractionId,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$RetractedIdsTableOrderingComposer
+    extends Composer<_$DriftCache, $RetractedIdsTable> {
+  $$RetractedIdsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get targetMsgId => $composableBuilder(
+    column: $table.targetMsgId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get channelId => $composableBuilder(
+    column: $table.channelId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get retractionId => $composableBuilder(
+    column: $table.retractionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$RetractedIdsTableAnnotationComposer
+    extends Composer<_$DriftCache, $RetractedIdsTable> {
+  $$RetractedIdsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get targetMsgId => $composableBuilder(
+    column: $table.targetMsgId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get channelId =>
+      $composableBuilder(column: $table.channelId, builder: (column) => column);
+
+  GeneratedColumn<String> get retractionId => $composableBuilder(
+    column: $table.retractionId,
+    builder: (column) => column,
+  );
+}
+
+class $$RetractedIdsTableTableManager
+    extends
+        RootTableManager<
+          _$DriftCache,
+          $RetractedIdsTable,
+          RetractedId,
+          $$RetractedIdsTableFilterComposer,
+          $$RetractedIdsTableOrderingComposer,
+          $$RetractedIdsTableAnnotationComposer,
+          $$RetractedIdsTableCreateCompanionBuilder,
+          $$RetractedIdsTableUpdateCompanionBuilder,
+          (
+            RetractedId,
+            BaseReferences<_$DriftCache, $RetractedIdsTable, RetractedId>,
+          ),
+          RetractedId,
+          PrefetchHooks Function()
+        > {
+  $$RetractedIdsTableTableManager(_$DriftCache db, $RetractedIdsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$RetractedIdsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$RetractedIdsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$RetractedIdsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> targetMsgId = const Value.absent(),
+                Value<String> channelId = const Value.absent(),
+                Value<String> retractionId = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => RetractedIdsCompanion(
+                targetMsgId: targetMsgId,
+                channelId: channelId,
+                retractionId: retractionId,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String targetMsgId,
+                required String channelId,
+                required String retractionId,
+                Value<int> rowid = const Value.absent(),
+              }) => RetractedIdsCompanion.insert(
+                targetMsgId: targetMsgId,
+                channelId: channelId,
+                retractionId: retractionId,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$RetractedIdsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$DriftCache,
+      $RetractedIdsTable,
+      RetractedId,
+      $$RetractedIdsTableFilterComposer,
+      $$RetractedIdsTableOrderingComposer,
+      $$RetractedIdsTableAnnotationComposer,
+      $$RetractedIdsTableCreateCompanionBuilder,
+      $$RetractedIdsTableUpdateCompanionBuilder,
+      (
+        RetractedId,
+        BaseReferences<_$DriftCache, $RetractedIdsTable, RetractedId>,
+      ),
+      RetractedId,
+      PrefetchHooks Function()
+    >;
 
 class $DriftCacheManager {
   final _$DriftCache _db;
@@ -2528,4 +2982,6 @@ class $DriftCacheManager {
       $$ChannelsTableTableManager(_db, _db.channels);
   $$SyncMetaTableTableManager get syncMeta =>
       $$SyncMetaTableTableManager(_db, _db.syncMeta);
+  $$RetractedIdsTableTableManager get retractedIds =>
+      $$RetractedIdsTableTableManager(_db, _db.retractedIds);
 }

@@ -11,6 +11,7 @@ import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
 import '../domain/gateway_capabilities.dart';
 import '../domain/message.dart';
+import '../domain/retraction.dart';
 import 'chat_rest_api.dart';
 
 /// Attaches the bearer token and transparently refreshes on 401.
@@ -411,11 +412,50 @@ class GatewayRestApi implements ChatRestApi {
     );
     final data = _map(r.data);
     final list = (data['messages'] as List?) ?? const [];
+    final items = <HistoryItem>[];
+    for (final e in list) {
+      if (e is! Map) continue; // malformed row → skip, never abort the page
+      final m = e.cast<String, dynamic>();
+      // Heterogeneous since island #104. Message items historically carried NO
+      // `type` (the fanout body is untyped); the history serializer now wraps them
+      // as {"type":"message"}. Treat absent-type AND "message" as a message.
+      // A retraction is a flat {type, id, target_msg_id, channel_id}. Any OTHER
+      // (future) type is SKIPPED, not thrown on: the recast's whole premise is one
+      // forward stream, so the island may add item types (edits, reactions); a
+      // hard parse would wedge history catch-up (the watermark could never advance
+      // past the unknown row). Forward-compat by skipping. (Re-strike D7-A2.)
+      switch (m['type']) {
+        case null:
+        case 'message':
+          items.add(MessageHistoryItem(Message.fromView(m)));
+        case 'retraction':
+          final rid = m['id'];
+          final target = m['target_msg_id'];
+          if (rid is String && target is String) {
+            items.add(RetractionHistoryItem(Retraction(
+              channelId: (m['channel_id'] as String?) ?? channelId,
+              id: rid,
+              targetMsgId: target,
+            )));
+          }
+        // else: malformed retraction → skip (same posture as a malformed message).
+        default:
+          // Unknown future item type → skip silently (forward-compat, see above).
+          // NAMED TRADEOFF (re-strike): the pager advances from `items.last.id`,
+          // so skipping is transparent whenever the trailing item is known (a
+          // skipped MIDDLE item sits below the new cursor and is never re-fetched).
+          // The one residual edge is a page of PURELY unknown items → `items`
+          // empties → the pager reads it as a visibility gap and re-fetches until
+          // it escalates to benign `historySyncFault` telemetry (no loss, no
+          // crash, self-heals when the app learns the type). Impossible today
+          // (island emits only message|retraction); revisit when a real new type
+          // ships, in lockstep with the island (cf. sender_kind, task #7).
+          break;
+      }
+    }
     return HistoryPage(
       channelId: channelId,
-      messages: list
-          .map((e) => Message.fromView((e as Map).cast<String, dynamic>()))
-          .toList(),
+      items: items,
       nextBefore: data['next_before'] as String?,
       nextAfter: data['next_after'] as String?,
     );
