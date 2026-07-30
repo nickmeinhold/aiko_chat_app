@@ -88,3 +88,47 @@ adversary consensus, not novel author architecture — all three demanded this e
 `feedback_post_temper_recast_needs_own_strike`, a substantial recast wants a confirming re-strike; given
 the convergence + ~0-user stakes, the honest close is: **recast folded, ONE confirming re-strike (or a
 Fold-2 self-pass) remains before "battle-tested."** Not claimed as fully tempered until that lands.
+
+## RE-STRIKE (Fold-2 self-pass, 2026-07-30) — VERDICT: recast HOLDS
+
+Focused self-strike on the recast *as a unit*, striking the concrete C-app design (plan D1–D7,
+`dreamy-rolling-seal.md`) that embodies F1+F3+F4. Two of the strike vectors touched live code and were
+**verified against reality**, not reasoned from the doc. Proportionate to ~0 users + 3-family convergence;
+NOT a substitute for the C-app *code* cage-match (state-lifecycle → full ceremony), which is the real adversary.
+
+Carnot's invariant to hold: *every client that advances history must also advance through retractions, and
+local cache writes must suppress retracted IDs thereafter.*
+
+**Holds by construction (strikes that bounced):**
+- **Watermark advance ⇒ retraction processed.** `advanceHistoryContiguous` is the SOLE watermark writer,
+  driven only by the history pager, which now iterates retraction items in the same page-loop before
+  advancing to fence. The invariant is structural, not incidental.
+- **Suppress-only live watermark (D4) is loss-free.** A live retraction (`id > fence`) suppresses via a
+  DURABLE dead-id but never advances the cursor; the same retraction re-arrives as a history item and is
+  re-applied idempotently as the pager reaches it. The dead-id is what makes suppress-only safe — it's why
+  the rejected "advance from a second site" alt (round-4 message-loss regression) is correctly dead.
+- **Both ack/retraction orders safe (D2, own-message takedown).** retraction-then-ack → Door B
+  (`reconcileAck`) suppresses at the stamp site in-txn (no TOCTOU); ack-then-retraction → `applyRetraction`
+  hard-deletes the now-normal row. Presence-independent dead-id covers the pending-ack (serverUlid NULL) gap.
+
+**Verified against shipped code (strikes that touched reality):**
+- **F3 single-door HELD in shipped B (PR #100).** `moderation_controller.dart` has ZERO cache coupling;
+  `upsertInbound` has exactly two call sites, both in `_persistInbound`. Report-queue DTOs are display-only
+  — resurrection path (e) is closed in the code that actually shipped.
+- **Reply-to-a-hard-deleted-parent → NON-ISSUE today.** `replyToId` is a stored `String?` with no
+  reply-preview rendering anywhere in `presentation/`. Nothing resolves a parent, so a hard-delete dangles
+  nothing. *Latent* only — re-raise if reply previews are ever added (hard-deleted parent = missing preview).
+
+**One hardening upgrade folded into the build (D7-A2, upgrade from "optional" to "do it"):**
+- **Skip unknown history item `type`s; do not throw.** The recast's whole thesis is ONE forward stream, which
+  *increases* the odds the island later adds item types (edits, reactions, …). Today an unknown history
+  `type` hits `Message.fromView`'s hard `msg_id` cast → throws → the whole page parse fails → catch-up wedges
+  → watermark can't advance. Lenient-skip is not just defense; it's forward-compat insurance for the exact
+  stream shape the recast chose. Parse message/retraction, skip-and-log anything else.
+
+**Minor / deferred (non-blocking):** dead-id table is per-client unbounded (one row per takedown, PK
+`targetMsgId`) — fine at ~0 users; ship the unused `pruneRetractedBelow` hook (D1) and defer the trigger.
+
+**Honest evidence-strength:** recast re-confirmed by a focused self-pass that verified its two live-code
+claims. Earns "**recast re-struck — HOLDS**", NOT "battle-tested" — the C-app diff still gets a full
+state-lifecycle cage-match, which is where the cross-family adversary meets the *implementation*.

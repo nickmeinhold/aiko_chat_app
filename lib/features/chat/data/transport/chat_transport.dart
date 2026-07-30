@@ -1,4 +1,5 @@
 import '../../domain/message.dart';
+import '../../domain/retraction.dart';
 import 'envelopes.dart';
 
 export 'envelopes.dart' show TransportErrorCode;
@@ -57,6 +58,13 @@ abstract interface class ChatTransport {
   Stream<Message> get messages;
   Stream<AckResult> get acks;
   Stream<TransportError> get errors;
+
+  /// Moderator takedowns (island #104): a forward-ULID [Retraction] the reconcile
+  /// engine consumes to suppress + hard-delete the taken-down message. Broadcast
+  /// and outlives reconnects like the other inbound streams; the repository funnels
+  /// it through the same single-writer inbound FIFO so a retraction and the message
+  /// it retracts can never reconcile out of order.
+  Stream<Retraction> get retractions;
 
   /// Open the socket (pulls a token via the TokenProvider). Idempotent if
   /// already connected/connecting.

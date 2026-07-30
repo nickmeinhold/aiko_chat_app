@@ -5,6 +5,7 @@
 
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:aiko_chat_app/features/chat/domain/retraction.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -266,6 +267,121 @@ void main() {
       final rows = await cache.watchChannel('chan').first;
       expect(rows.map((m) => m.clientTempId).toList(), ['first', 'second'],
           reason: 'localSeq preserves compose order, not random uuid order');
+    });
+  });
+
+  // --- W6: retraction (moderator takedown, island #104) ---------------------
+  // The two-door suppression invariant (crucible F1+F3): a takedown records a
+  // presence-independent dead id, and BOTH cache write doors (upsertInbound W3,
+  // reconcileAck W2) suppress it thereafter — so a taken-down message can never
+  // (re)appear regardless of arrival order or which door it comes through.
+  Retraction retract(String targetMsgId, String retractionId,
+          {String channel = 'chan'}) =>
+      Retraction(
+          channelId: channel, id: retractionId, targetMsgId: targetMsgId);
+
+  Future<List<Message>> chanRows([String channel = 'chan']) =>
+      cache.watchChannel(channel).first;
+
+  group('W6 — applyRetraction (hard-delete + dead id)', () {
+    test('hard-deletes a present target row and records the dead id', () async {
+      await cache.upsertInbound(server('01A', 'chan', 'objectionable'));
+      expect(await chanRows(), hasLength(1));
+      await cache.applyRetraction(retract('01A', '01Z'));
+      expect(await chanRows(), isEmpty, reason: 'target hard-deleted');
+    });
+
+    test('is idempotent — applying twice is a no-op (PK dead id)', () async {
+      await cache.upsertInbound(server('01A', 'chan', 'x'));
+      await cache.applyRetraction(retract('01A', '01Z'));
+      await cache.applyRetraction(retract('01A', '01Z')); // again
+      expect(await chanRows(), isEmpty);
+      // And a later re-upsert is still suppressed (dead id persisted once).
+      expect(await cache.upsertInbound(server('01A', 'chan', 'x')), isFalse);
+      expect(await chanRows(), isEmpty);
+    });
+
+    test('does NOT touch the history watermark (D4: suppress-only, pager is the '
+        'single writer)', () async {
+      await cache.advanceHistoryContiguous('chan', '01M');
+      await cache.applyRetraction(retract('01A', '01Z'));
+      expect(await cache.historyContiguousThrough('chan'), '01M',
+          reason: 'a retraction never advances or rewinds the watermark');
+    });
+  });
+
+  group('W3 Door A — upsertInbound suppresses a dead id', () {
+    test('retraction BEFORE the message → message never inserted '
+        '(presence-independent)', () async {
+      // The target was NEVER synced (e.g. a takedown of an already-husked msg, or
+      // a reconnect where the retraction is seen first). Recording the dead id
+      // must not require the row to exist.
+      await cache.applyRetraction(retract('01A', '01Z'));
+      final wrote = await cache.upsertInbound(server('01A', 'chan', 'late'));
+      expect(wrote, isFalse, reason: 'suppressed at Door A, nothing written');
+      expect(await chanRows(), isEmpty);
+    });
+
+    test('message AFTER a delete (buffered frame / reconnect re-walk) stays gone',
+        () async {
+      await cache.upsertInbound(server('01A', 'chan', 'x'));
+      await cache.applyRetraction(retract('01A', '01Z')); // deletes it
+      // A buffered fanout frame or a history re-walk re-delivers 01A.
+      final wrote = await cache.upsertInbound(server('01A', 'chan', 'x'));
+      expect(wrote, isFalse);
+      expect(await chanRows(), isEmpty, reason: 'no resurrection');
+    });
+
+    test('an UNrelated message is unaffected by a dead id', () async {
+      await cache.applyRetraction(retract('01A', '01Z'));
+      // (upsertInbound's bool is the #1896 invalid-origin probe, not an
+      // insert flag — for a plain message it is false either way; the row's
+      // PRESENCE is the real proof the dead id didn't suppress it.)
+      await cache.upsertInbound(server('01B', 'chan', 'fine'));
+      expect(await chanRows(), hasLength(1));
+      expect((await chanRows()).single.id, '01B');
+    });
+  });
+
+  group('W2 Door B — reconcileAck suppresses a dead id (own-message takedown)',
+      () {
+    test('pending own-message taken down, THEN its ack → retracted + '
+        'optimistic row hard-deleted, never resurrected', () async {
+      await cache.insertOptimistic(optimistic('tmp', 'chan', 'my message'));
+      // The takedown lands while the ack is still in flight. applyRetraction
+      // deletes by serverUlid, but the optimistic row has serverUlid NULL, so it
+      // is NOT matched here — it is the second door the dead id must cover.
+      await cache.applyRetraction(retract('01A', '01Z'));
+      expect(await chanRows(), hasLength(1),
+          reason: 'optimistic (serverUlid NULL) row untouched by applyRetraction');
+      final outcome =
+          await cache.reconcileAck('tmp', '01A', DateTime.utc(2026, 1, 1, 12, 1));
+      expect(outcome, AckOutcome.retracted);
+      expect(await chanRows(), isEmpty,
+          reason: 'the ack hard-deletes the optimistic row instead of stamping it');
+    });
+
+    test('acked+stamped own-message taken down, THEN a duplicate ack → retracted '
+        '(NOT orphaned — no false tripwire)', () async {
+      await cache.insertOptimistic(optimistic('tmp', 'chan', 'my message'));
+      final first =
+          await cache.reconcileAck('tmp', '01A', DateTime.utc(2026, 1, 1, 12, 1));
+      expect(first, AckOutcome.reconciled); // stamped
+      await cache.applyRetraction(retract('01A', '01Z')); // hard-deletes it
+      expect(await chanRows(), isEmpty);
+      // A duplicate/late ack now finds no row. Under the dead id this is EXPECTED
+      // (retracted), not the orphan invariant violation.
+      final dup =
+          await cache.reconcileAck('tmp', '01A', DateTime.utc(2026, 1, 1, 12, 1));
+      expect(dup, AckOutcome.retracted);
+    });
+
+    test('a normal orphan ack (no dead id) is still orphaned, not retracted',
+        () async {
+      final outcome = await cache.reconcileAck(
+          'nope', '01A', DateTime.utc(2026, 1, 1, 12, 1));
+      expect(outcome, AckOutcome.orphaned,
+          reason: 'the retracted split must not swallow a genuine orphan');
     });
   });
 }

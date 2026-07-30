@@ -173,6 +173,19 @@ void main() {
       expect(ServerFrame.parse('{"type":"ack","client_msg_id":"x"}'),
           isA<UnknownFrame>());
     });
+    test('retraction -> RetractionFrame with all three ids (island #104)', () {
+      final f = ServerFrame.parse(
+          '{"type":"retraction","channel_id":"c1","id":"01Z","target_msg_id":"01A"}');
+      expect(f, isA<RetractionFrame>());
+      final r = f as RetractionFrame;
+      expect(r.channelId, 'c1');
+      expect(r.id, '01Z');
+      expect(r.targetMsgId, '01A');
+    });
+    test('retraction missing target_msg_id -> UnknownFrame (never throws)', () {
+      expect(ServerFrame.parse('{"type":"retraction","channel_id":"c1","id":"01Z"}'),
+          isA<UnknownFrame>());
+    });
   });
 
   group('outbound frames', () {

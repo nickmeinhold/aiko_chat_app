@@ -11,6 +11,7 @@ import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
 import '../domain/gateway_capabilities.dart';
 import '../domain/message.dart';
+import '../domain/retraction.dart';
 import 'chat_rest_api.dart';
 
 /// Attaches the bearer token and transparently refreshes on 401.
@@ -411,11 +412,65 @@ class GatewayRestApi implements ChatRestApi {
     );
     final data = _map(r.data);
     final list = (data['messages'] as List?) ?? const [];
+    final items = <HistoryItem>[];
+    for (final e in list) {
+      if (e is! Map) continue; // non-object row → skip; can't carry a cursor id
+      final m = e.cast<String, dynamic>();
+      // Heterogeneous since island #104. Message items historically carried NO
+      // `type` (the fanout body is untyped); the history serializer now wraps them
+      // as {"type":"message"}. Treat absent-type AND "message" as a message.
+      // A retraction is a flat {type, id, target_msg_id, channel_id}. Any OTHER
+      // (future) type is carried as an INERT UnknownHistoryItem bearing its id —
+      // NOT dropped: the recast's premise is one forward stream that will grow item
+      // types (edits, reactions), and the pager advances the watermark through
+      // `items.last.id`, so a DROPPED unknown that trails the last known row (or a
+      // page of only unknowns) would stall/wedge catch-up at the fence (cage-match
+      // Carnot HIGH, PR #102). Carrying it inertly keeps the cursor monotonic
+      // across schema evolution. (Re-strike D7-A2 + Carnot.)
+      switch (m['type']) {
+        case null:
+        case 'message':
+          // A malformed message row (Map, message-typed, but missing/ill-typed
+          // fields) still throws in Message.fromView and aborts the page — the
+          // SAME pre-existing behavior as before this PR (the reconnect treats the
+          // throw as transient and retries). This parser widens the KNOWN types; it
+          // does not change message-row robustness.
+          items.add(MessageHistoryItem(Message.fromView(m)));
+        case 'retraction':
+          final rid = m['id'];
+          final target = m['target_msg_id'];
+          if (rid is String && target is String) {
+            items.add(RetractionHistoryItem(Retraction(
+              channelId: (m['channel_id'] as String?) ?? channelId,
+              id: rid,
+              targetMsgId: target,
+            )));
+          } else {
+            // FAIL-CLOSED on a malformed KNOWN retraction (cage-match Tesla HIGH).
+            // A retraction is a safety frame, NOT a forward-compat unknown: do NOT
+            // salvage it as an inert cursor-bearer, because advancing the watermark
+            // past a takedown that never applied is a SILENT MODERATION LEAK (the
+            // target stays visible forever, never re-walked). Throw instead — the
+            // same family as a malformed message row (Message.fromView throws): the
+            // page fails, the reconnect retries, and a persistent malformation
+            // wedges catch-up LOUDLY via reconnectFailed telemetry rather than
+            // dropping a takedown. Never claim coverage over an unapplied retraction.
+            throw FormatException('malformed retraction history item: $m');
+          }
+        default:
+          // Unknown future item type → carry it INERT with its id so the watermark
+          // advances through it (see the switch-level comment). An unknown with no
+          // recognizable id field (neither `id` nor `msg_id`) is the one residual
+          // that must be dropped — there is nothing to advance the cursor to. That
+          // is far narrower than dropping every unknown, and island events carry an
+          // `id`, so this residual is not expected to fire.
+          final uid = m['id'] ?? m['msg_id'];
+          if (uid is String) items.add(UnknownHistoryItem(uid));
+      }
+    }
     return HistoryPage(
       channelId: channelId,
-      messages: list
-          .map((e) => Message.fromView((e as Map).cast<String, dynamic>()))
-          .toList(),
+      items: items,
       nextBefore: data['next_before'] as String?,
       nextAfter: data['next_after'] as String?,
     );

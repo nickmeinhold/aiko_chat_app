@@ -8,6 +8,7 @@ import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/gateway_capabilities.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:aiko_chat_app/features/chat/domain/retraction.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 
 /// A [ChatTransport] faked at the INTERFACE level (the shipped fakes are at the
@@ -18,6 +19,7 @@ class FakeChatTransport implements ChatTransport {
   final _messages = StreamController<Message>.broadcast();
   final _acks = StreamController<AckResult>.broadcast();
   final _errors = StreamController<TransportError>.broadcast();
+  final _retractions = StreamController<Retraction>.broadcast();
   final _conn = StreamController<ConnectionState>.broadcast();
 
   /// Every `sendMessage` the repository dispatched, in order (drain + W1 sends).
@@ -61,6 +63,8 @@ class FakeChatTransport implements ChatTransport {
   Stream<AckResult> get acks => _acks.stream;
   @override
   Stream<TransportError> get errors => _errors.stream;
+  @override
+  Stream<Retraction> get retractions => _retractions.stream;
 
   @override
   Future<void> connect() async {}
@@ -91,6 +95,11 @@ class FakeChatTransport implements ChatTransport {
   void emitMessage(Message m) => _messages.add(m);
   void emitError(TransportError e) => _errors.add(e);
 
+  /// Emit a moderator takedown (island #104) onto the retraction stream.
+  void emitRetraction(String channelId, String id, String targetMsgId) =>
+      _retractions.add(
+          Retraction(channelId: channelId, id: id, targetMsgId: targetMsgId));
+
   /// Emit an error from a RAW wire `code`, running it through the production
   /// [TransportErrorCode.fromWire] mapping (exactly as `gateway_transport` does)
   /// so tests exercise the real raw→enum classification — including the
@@ -113,6 +122,7 @@ class FakeChatTransport implements ChatTransport {
     await _messages.close();
     await _acks.close();
     await _errors.close();
+    await _retractions.close();
     await _conn.close();
   }
 }
@@ -150,7 +160,7 @@ class FakeChatRestApi implements ChatRestApi {
       throw StateError('staged failure on after=${after ?? ''}');
     }
     return pagesByAfter[after ?? ''] ??
-        HistoryPage(channelId: channelId, messages: const []);
+        HistoryPage(channelId: channelId, items: const []);
   }
 
   @override

@@ -11,6 +11,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:aiko_chat_app/features/chat/domain/retraction.dart';
 import 'package:aiko_chat_app/features/chat/domain/ulid.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
@@ -156,7 +157,7 @@ void main() {
       // returns the same message (the lost-ack scenario's backstop).
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] =
-          HistoryPage(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
 
       transport.emitConn(ConnectionState.connected);
       await pump();
@@ -181,7 +182,7 @@ void main() {
       rest.getHistoryCalls.clear();
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] =
-          HistoryPage(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
 
       transport.emitConn(ConnectionState.connected);
       await pump();
@@ -198,7 +199,7 @@ void main() {
       await pump();
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] =
-          HistoryPage(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
       transport.emitConn(ConnectionState.connected);
       await pump();
       transport.emitAck('tmp0', '01U'); // the re-send's ack (gateway idempotent)
@@ -213,7 +214,7 @@ void main() {
       await pump();
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] =
-          HistoryPage(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
       transport.emitConn(ConnectionState.connected);
       // No ack during the drain window → timeout (80ms) → history runs anyway.
       await Future<void>.delayed(const Duration(milliseconds: 150));
@@ -238,11 +239,11 @@ void main() {
     test('interrupted-sync — watermark advances ONLY on completion; resume '
         'refills with no gap', () async {
       transport.fences = {_chan: '01D'};
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan,
           messages: [_server('01A', 'a'), _server('01B', 'b')],
           nextAfter: '01B');
-      rest.pagesByAfter['01B'] = HistoryPage(
+      rest.pagesByAfter['01B'] = HistoryPage.ofMessages(
           channelId: _chan,
           messages: [_server('01C', 'c'), _server('01D', 'd')],
           nextAfter: '01D');
@@ -277,7 +278,7 @@ void main() {
         'MAX(serverUlid)', () async {
       // Sync 1 completes: watermark = 01B.
       transport.fences = {_chan: '01B'};
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan,
           messages: [_server('01A', 'a'), _server('01B', 'b')],
           nextAfter: '01B');
@@ -293,7 +294,7 @@ void main() {
       // Reconnect: the 01C..01D gap must refill. The resume cursor MUST be the
       // watermark (01B), NOT MAX (01Z) — else 01C,01D are skipped forever.
       transport.fences = {_chan: '01D'};
-      rest.pagesByAfter['01B'] = HistoryPage(
+      rest.pagesByAfter['01B'] = HistoryPage.ofMessages(
           channelId: _chan,
           messages: [_server('01C', 'c'), _server('01D', 'd')],
           nextAfter: '01D');
@@ -392,7 +393,7 @@ void main() {
       // cursor from null to 01A before hitting the (still-empty) next page. The
       // stall watermark MOVED, so the streak restarts at 1 — NOT 3 — even though
       // it is the third consecutive gap overall.
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
       await reconnectCycle();
 
@@ -468,7 +469,7 @@ void main() {
       // Wedge subscribe so the terminal event lands mid-choreography.
       transport.subscribeGate = Completer<void>();
       transport.fences = {_chan: '01U'};
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
       transport.emitConn(ConnectionState.connected);
       await pump(); // started, wedged on subscribe
@@ -488,7 +489,7 @@ void main() {
     test('re-entrancy — two connected events → ONE concurrent choreography + '
         'ONE coalesced re-run', () async {
       transport.fences = {_chan: '01A'};
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
       rest.getHistoryGate = Completer<void>(); // wedge the first paging
 
@@ -513,7 +514,7 @@ void main() {
     test('epoch-rerun — a disconnect between two connected events does NOT '
         'suppress the legit reconnect', () async {
       transport.fences = {_chan: '01A'};
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
       rest.getHistoryGate = Completer<void>();
 
@@ -533,7 +534,7 @@ void main() {
     test('history-TOCTOU — a disconnect during getHistory drops the resolved '
         'page (no write, no watermark advance)', () async {
       transport.fences = {_chan: '01B'};
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan,
           messages: [_server('01A', 'a'), _server('01B', 'b')],
           nextAfter: '01B');
@@ -584,7 +585,7 @@ void main() {
 
       // Guard cleared: a later reconnect (with history working) runs to success.
       rest.throwOnGetHistory = null;
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
       transport.emitConn(ConnectionState.disconnected);
       await pump();
@@ -610,7 +611,7 @@ void main() {
       // it must NOT resurrect the choreography: there is no live `connected`
       // justifying it. A genuine reconnect later would emit a fresh `connected`.
       transport.fences = {_chan: '01A'};
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
       rest.getHistoryGate = Completer<void>();
 
@@ -635,7 +636,7 @@ void main() {
         'channel then goes silent', () async {
       // Z (01E) committed in the REST-vs-subscribe window, ≤ fence; no live emit.
       transport.fences = {_chan: '01F'};
-      rest.pagesByAfter[''] = HistoryPage(
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan,
           messages: [
             _server('01C', 'c'),
@@ -693,7 +694,7 @@ void main() {
 
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] =
-          HistoryPage(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
       rest.getHistoryCalls.clear();
 
       transport.emitConn(ConnectionState.connected);
@@ -720,7 +721,7 @@ void main() {
       await pump();
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] =
-          HistoryPage(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
       rest.getHistoryCalls.clear();
 
       transport.emitConn(ConnectionState.connected);
@@ -1076,6 +1077,91 @@ void main() {
         () => cache.advanceHistoryContiguous(_chan, '01arz3ndektsv4rrffq69g5fz'),
         throwsA(isA<AssertionError>()),
       );
+    });
+  });
+
+  group('retraction consumer (C-app, island #104)', () {
+    test('live retraction (WS frame) removes the target message from the view',
+        () async {
+      transport.emitMessage(_server('01A', 'objectionable'));
+      await pump();
+      expect((await rows()).map((m) => m.id), contains('01A'));
+
+      transport.emitRetraction(_chan, '01Z', '01A');
+      await pump();
+      expect(await rows(), isEmpty, reason: 'the taken-down message disappears');
+    });
+
+    test('a retraction arriving BEFORE the message it retracts still suppresses '
+        'it (presence-independent dead id)', () async {
+      // Out-of-order live delivery (the retraction lands first). The dead id is
+      // recorded with no target present; the later message is suppressed at Door A.
+      transport.emitRetraction(_chan, '01Z', '01A');
+      await pump();
+      transport.emitMessage(_server('01A', 'late arrival'));
+      await pump();
+      expect(await rows(), isEmpty,
+          reason: 'presence-independent suppression, either arrival order');
+    });
+
+    test('live retraction is SUPPRESS-ONLY — it never advances the history '
+        'watermark (D4: the pager stays the single writer)', () async {
+      // Establish a watermark via a clean history sync.
+      transport.fences = {_chan: '01M'};
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
+          channelId: _chan, messages: [_server('01M', 'hi')], nextAfter: '01M');
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+      expect(await cache.historyContiguousThrough(_chan), '01M');
+
+      // A live retraction (id '01Z' > fence) must suppress-only. If it advanced
+      // the watermark from a second site, a later reconnect could skip an
+      // un-fetched span (the round-4 message-loss regression the design rejects).
+      transport.emitRetraction(_chan, '01Z', '01M');
+      await pump();
+      expect(await cache.historyContiguousThrough(_chan), '01M',
+          reason: 'watermark unchanged — retraction is suppress-only');
+      expect(await rows(), isEmpty, reason: 'the retracted 01M is gone');
+    });
+
+    test('heterogeneous history page: an in-page retraction suppresses its '
+        'target while OTHER messages persist, and the watermark advances to fence',
+        () async {
+      transport.fences = {_chan: '01Z'};
+      rest.pagesByAfter[''] = HistoryPage(channelId: _chan, items: [
+        MessageHistoryItem(_server('01A', 'objectionable')),
+        MessageHistoryItem(_server('01B', 'fine')),
+        RetractionHistoryItem(
+            const Retraction(channelId: _chan, id: '01Z', targetMsgId: '01A')),
+      ], nextAfter: '01Z');
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+
+      expect((await rows()).map((m) => m.id).toList(), ['01B'],
+          reason: '01A suppressed by the in-page retraction; 01B kept');
+      expect(await cache.historyContiguousThrough(_chan), '01Z',
+          reason: 'the pager advances the watermark to fence over the whole page');
+    });
+
+    test('a history page whose TRAILING item is an UNKNOWN future type still '
+        'advances the watermark to fence — no wedge (cage-match Carnot HIGH)',
+        () async {
+      // The wedge Carnot found: a new island event type lands as the NEWEST row
+      // (at the fence). If the parser dropped it, `items.last.id` would be the
+      // known 01A, the cursor would never reach the 01D fence, and catch-up would
+      // refetch forever. Carried inertly, the cursor advances THROUGH it.
+      transport.fences = {_chan: '01D'};
+      rest.pagesByAfter[''] = HistoryPage(channelId: _chan, items: [
+        MessageHistoryItem(_server('01A', 'hi')),
+        UnknownHistoryItem('01D'), // a future event type, newest, at the fence
+      ], nextAfter: '01D');
+      transport.emitConn(ConnectionState.connected);
+      await pump();
+
+      expect((await rows()).map((m) => m.id).toList(), ['01A'],
+          reason: 'the known message persists; the unknown is inert');
+      expect(await cache.historyContiguousThrough(_chan), '01D',
+          reason: 'the cursor advances THROUGH the trailing unknown to the fence');
     });
   });
 }

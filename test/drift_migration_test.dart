@@ -18,6 +18,7 @@ import 'dart:io';
 
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
+import 'package:aiko_chat_app/features/chat/domain/retraction.dart';
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -154,6 +155,37 @@ void main() {
     expect(row.keyVersion, isNull);
     expect(row.signedClientMsgId, isNull);
     expect(row.originCryptoValid, isNull);
+  });
+
+  test('v5 -> v6 upgrade creates the retracted_ids table, keeping existing rows',
+      () async {
+    final file = dbFile('v5');
+
+    // Build the CURRENT (v6) schema, then hand-downgrade to v5 by DROPPING the
+    // v6 table so the reopen's `from < 6` createTable runs against a genuinely
+    // absent table (not a no-op IF-NOT-EXISTS over the createAll'd one).
+    final v5 = DriftCache(NativeDatabase(file));
+    await v5.select(v5.channels).get(); // force onCreate (createAll @ current)
+    await v5.customStatement('DROP TABLE retracted_ids');
+    await insertBaselineRow(v5, 'row-v5');
+    await v5.customStatement('PRAGMA user_version = 5');
+    await v5.close();
+
+    // Reopen -> onUpgrade(from: 5) runs the from<6 createTable(retractedIds).
+    final v6 = DriftCache(NativeDatabase(file));
+    addTearDown(v6.close);
+
+    // The pre-existing message row survives untouched (a new empty table only).
+    expect(await rowCount(v6), 1, reason: 'the v5 message row must survive');
+    expect((await v6.select(v6.messages).getSingle()).body, 'survives migration');
+
+    // retracted_ids was created and is usable: a takedown records + suppresses.
+    await v6.applyRetraction(
+        const Retraction(channelId: 'general', id: '01Z', targetMsgId: '01A'));
+    final n = await v6
+        .customSelect('SELECT COUNT(*) AS n FROM retracted_ids')
+        .getSingle();
+    expect(n.read<int>('n'), 1, reason: 'retracted_ids recreated + writable');
   });
 
   test('v1 -> v4 upgrade recreates sync_meta AND adds every signing column',

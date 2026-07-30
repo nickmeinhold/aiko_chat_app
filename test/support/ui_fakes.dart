@@ -175,7 +175,7 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<HistoryPage> getHistory(String channelId,
           {String? before, String? after, int limit = 50}) async =>
-      HistoryPage(channelId: channelId, messages: const []);
+      HistoryPage.ofMessages(channelId: channelId, messages: const []);
 
   // --- moderation (#7) — functional fakes so widget tests can drive block/report.
 

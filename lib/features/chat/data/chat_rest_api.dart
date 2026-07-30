@@ -4,6 +4,66 @@ import '../../moderation/domain/moderation_models.dart';
 import '../domain/channel.dart';
 import '../domain/gateway_capabilities.dart';
 import '../domain/message.dart';
+import '../domain/retraction.dart';
+
+/// One item on a history page. HETEROGENEOUS since island #104: `get_history`
+/// interleaves ordinary messages with forward-ULID retractions (moderator
+/// takedowns), merged into one ascending stream by id. Sealed so the pager's
+/// `switch` is compiler-forced to handle every arm — a new item type the island
+/// ADDS later becomes a compile error here, not a silent drop.
+///
+/// [id] is the item's cursor id (message → `msg_id`; retraction → the retraction
+/// ULID). The pager advances its watermark from `items.last.id` regardless of
+/// type — the island's `next_after = rows[-1].id` is computed across both types,
+/// so either kind of trailing item yields the correct next cursor.
+sealed class HistoryItem {
+  const HistoryItem();
+
+  /// The cursor id for this item (see class doc).
+  String get id;
+}
+
+/// An ordinary history message.
+class MessageHistoryItem extends HistoryItem {
+  final Message message;
+  const MessageHistoryItem(this.message);
+
+  /// A history/inbound message always carries a server ULID (`Message.fromView`
+  /// sets `id = msg_id`), so the non-null assertion is safe here.
+  @override
+  String get id => message.id!;
+}
+
+/// A moderator takedown interleaved into history.
+class RetractionHistoryItem extends HistoryItem {
+  final Retraction retraction;
+  const RetractionHistoryItem(this.retraction);
+
+  @override
+  String get id => retraction.id;
+}
+
+/// A history item of a type this client doesn't understand yet (a future island
+/// event kind). INERT — the pager applies no effect for it — but it carries the
+/// row's [id] so the watermark still advances THROUGH it. Without this, a skipped
+/// unknown that trails the last KNOWN item (or a page of only unknowns) would
+/// leave the cursor below the real page end, and catch-up would refetch — or, if
+/// the unknown is the newest row at the fence, WEDGE — forever (cage-match Carnot
+/// HIGH, PR #102). The forward stream (island #104) is expected to grow item
+/// types; carrying them inertly keeps catch-up monotonic across that evolution.
+///
+/// CROSS-REPO CONTRACT (cage-match Tesla, PR #102): advancing inertly past an
+/// unknown means any FUTURE moderation/safety kind that is NOT `type: "retraction"`
+/// would be claimed-covered by the watermark and NEVER applied on an old client.
+/// Presence-independent suppression only works for kinds THIS build understands.
+/// The island contract must therefore hold one of: (a) all takedowns stay
+/// `type: "retraction"` forever, or (b) a new safety kind ships behind a protocol
+/// min-version gate that this app enforces. Tracked as an app+island follow-up.
+class UnknownHistoryItem extends HistoryItem {
+  @override
+  final String id;
+  const UnknownHistoryItem(this.id);
+}
 
 /// A page of history (always ascending). Carries both cursors so either
 /// direction can page:
@@ -11,16 +71,34 @@ import '../domain/message.dart';
 ///   the next `before` to page OLDER (UI scroll-up). Null when no older history.
 /// [nextAfter] = the gateway's `next_after` (newest id in this batch) — pass as
 ///   the next `after` to page NEWER (B4 reconnect catch-up). Null on an empty page.
+///
+/// [items] is HETEROGENEOUS (messages + retractions) since island #104. Most
+/// callers only produce messages — use [HistoryPage.ofMessages] for that case.
 class HistoryPage {
   final String channelId;
-  final List<Message> messages;
+  final List<HistoryItem> items;
   final String? nextBefore;
   final String? nextAfter;
   const HistoryPage(
       {required this.channelId,
-      required this.messages,
+      required this.items,
       this.nextBefore,
       this.nextAfter});
+
+  /// Convenience for a message-only page (the common case, and every caller that
+  /// predates retractions): wraps each [Message] as a [MessageHistoryItem].
+  factory HistoryPage.ofMessages({
+    required String channelId,
+    required List<Message> messages,
+    String? nextBefore,
+    String? nextAfter,
+  }) =>
+      HistoryPage(
+        channelId: channelId,
+        items: messages.map<HistoryItem>(MessageHistoryItem.new).toList(),
+        nextBefore: nextBefore,
+        nextAfter: nextAfter,
+      );
 }
 
 /// A passkey ceremony's `start` response: the gateway's WebAuthn `options`

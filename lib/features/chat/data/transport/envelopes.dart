@@ -129,6 +129,20 @@ sealed class ServerFrame {
           detail: (j['detail'] as String?) ?? '',
           refClientMsgId: j['ref_client_msg_id'] as String?,
         );
+      case 'retraction':
+        // A moderator takedown, propagated as a forward-ULID event (island #104).
+        // The WS fanout path is UNTYPED on the message body but the ENVELOPE
+        // carries `type`, so this frame is flat (no nested `msg`). All three ids
+        // are required — a malformed retraction degrades to [UnknownFrame]
+        // (logged + dropped) rather than throwing, same posture as every branch.
+        final cid = j['channel_id'];
+        final rid = j['id'];
+        final target = j['target_msg_id'];
+        if (cid is! String || rid is! String || target is! String) {
+          return UnknownFrame(raw, reason: 'retraction missing ids');
+        }
+        return RetractionFrame(
+            channelId: cid, id: rid, targetMsgId: target);
       default:
         return UnknownFrame(raw, reason: 'unknown type ${j['type']}');
     }
@@ -182,6 +196,18 @@ class ErrorFrame extends ServerFrame {
       required this.parsedCode,
       required this.detail,
       this.refClientMsgId});
+}
+
+/// A moderator takedown reached this client (island #104). References the
+/// taken-down [targetMsgId] with the retraction's own higher [id]; the transport
+/// maps it to a [Retraction] the reconcile engine suppresses. Flat (no nested
+/// `msg`) — the fanout envelope itself carries the `type`.
+class RetractionFrame extends ServerFrame {
+  final String channelId;
+  final String id;
+  final String targetMsgId;
+  const RetractionFrame(
+      {required this.channelId, required this.id, required this.targetMsgId});
 }
 
 /// A frame we couldn't classify. Held (not thrown) so the transport can log it

@@ -8,7 +8,9 @@
 ///
 /// Writer census (every path that mutates a `messages` row):
 ///   W1 insertOptimistic · W2 reconcileAck · W3 upsertInbound ·
-///   W4 markFailed · W5 retry · W6 delete (Phase 2, unsupported here).
+///   W4 markFailed · W5 retry · W6 applyRetraction (moderator takedown, #104 —
+///   hard-deletes the taken-down row + records a presence-independent dead id;
+///   W2 and W3 both suppress a dead id, the two-door invariant).
 library;
 
 import 'dart:convert';
@@ -19,6 +21,7 @@ import '../../domain/channel.dart';
 import '../../domain/message.dart';
 import '../../domain/message_signing.dart';
 import '../../domain/origin_envelope.dart';
+import '../../domain/retraction.dart';
 import '../../domain/ulid.dart';
 
 part 'drift_cache.g.dart';
@@ -31,11 +34,18 @@ part 'drift_cache.g.dart';
 ///   path), or was already stamped (an idempotent re-ack — no regression).
 /// * [collapsed] — history had already inserted the server row; the ack merged
 ///   server truth onto the optimistic row and freed the duplicate (one row).
-/// * [orphaned] — no optimistic row matched the ack. **Unreachable in Phase 1
-///   by construction** (W1 always persists before the wire send; no local
-///   delete until W6/Phase 2), so B4 treats it as an invariant assertion +
+/// * [orphaned] — no optimistic row matched the ack, AND the ack's ULID is not
+///   retracted. **Unreachable in Phase 1 by construction** (W1 always persists
+///   before the wire send; the only local delete is [applyRetraction], which is
+///   split out as [retracted]), so B4 treats it as an invariant assertion +
 ///   telemetry, never a recovery path.
-enum AckOutcome { reconciled, collapsed, orphaned }
+/// * [retracted] — the ack is for an own-message that was TAKEN DOWN before its
+///   ack landed (island #104). The retraction recorded a presence-independent
+///   dead id; reconcileAck refuses to stamp/resurrect the optimistic row and
+///   hard-deletes it instead (or finds it already gone). Benign — the second door
+///   a dead id enters (the first is [upsertInbound]). B4 completes the ack waiter
+///   and renders nothing; there is nothing to recover.
+enum AckOutcome { reconciled, collapsed, orphaned, retracted }
 
 /// The `messages` table. `@DataClassName('MessageRow')` avoids colliding with
 /// the domain [Message] type.
@@ -134,12 +144,37 @@ class SyncMeta extends Table {
   Set<Column> get primaryKey => {channelId};
 }
 
-@DriftDatabase(tables: [Messages, Channels, SyncMeta])
+/// Dead ids from moderator takedowns (island #104, schema v6). A takedown emits a
+/// forward-ULID *retraction*; this table records the id it suppresses so the
+/// suppression is **presence-independent** — a `Messages` flag can't work because
+/// the target row may never have been synced (a takedown of an already-husked
+/// message still emits a retraction). Follows the `SyncMeta`-as-separate-table
+/// precedent. One row per takedown ever (PK ⇒ idempotent), negligible growth at
+/// current scale — pruning is safe but DEFERRED (an [pruneRetractedBelow] hook
+/// exists but is unused; a real prune would add a second watermark reader for no
+/// present benefit).
+class RetractedIds extends Table {
+  /// The suppressed message id (the retraction's `target_msg_id`). PK ⇒ recording
+  /// the same takedown twice is an idempotent no-op.
+  TextColumn get targetMsgId => text()();
+
+  /// The channel the taken-down message lived in (prunability + observability).
+  TextColumn get channelId => text()();
+
+  /// The retraction event's own (higher) ULID — enables an optional monotonic
+  /// prune later; carries no behaviour today.
+  TextColumn get retractionId => text()();
+
+  @override
+  Set<Column> get primaryKey => {targetMsgId};
+}
+
+@DriftDatabase(tables: [Messages, Channels, SyncMeta, RetractedIds])
 class DriftCache extends _$DriftCache {
   DriftCache(super.e);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -166,6 +201,11 @@ class DriftCache extends _$DriftCache {
           // authoritative server order (default 0 — self-heals on the next
           // saveChannels, which rewrites every row's ordinal).
           if (from < 5) await m.addColumn(channels, channels.ordinal);
+          // v5 -> v6: the retraction dead-id table (moderator takedowns, #104).
+          // A new empty table — existing rows are untouched; a takedown that
+          // predates the upgrade re-arrives on the next history catch-up and is
+          // recorded then (presence-independent), so no backfill is needed.
+          if (from < 6) await m.createTable(retractedIds);
         },
       );
 
@@ -384,9 +424,33 @@ class DriftCache extends _$DriftCache {
       final rc = await (select(messages)
             ..where((t) => t.clientTempId.equals(clientTempId)))
           .getSingleOrNull();
-      if (rc == null) return AckOutcome.orphaned; // see AckOutcome.orphaned.
+      if (rc == null) {
+        // Door B of two-door retraction suppression (island #104). No optimistic
+        // row matched. Ordinarily unreachable (see AckOutcome.orphaned), but a
+        // retraction of an own-message that had ALREADY been acked+stamped
+        // hard-deletes the row (keyed by serverUlid), so a late/duplicate ack now
+        // finds nothing. That is EXPECTED, not an invariant violation — classify
+        // it as [retracted] so B4 doesn't fire the orphan tripwire.
+        if (await _isRetracted(serverUlid)) return AckOutcome.retracted;
+        return AckOutcome.orphaned; // see AckOutcome.orphaned.
+      }
       // Already reconciled (idempotent re-ack) — reconciled, never a regression.
+      // (A retracted row would have been hard-deleted, landing in the rc == null
+      // branch above; the inbound FIFO serializes ack vs retraction, so a stamped
+      // row is never concurrently a live dead id here.)
       if (rc.serverUlid != null) return AckOutcome.reconciled;
+
+      // The optimistic row is still pending (serverUlid NULL). If its server id
+      // was taken down while the ack was in flight, DO NOT stamp it — that would
+      // resurrect a taken-down message. Hard-delete the optimistic row instead
+      // (applyRetraction's delete-by-serverUlid never reached it — serverUlid was
+      // NULL), same transaction as the dead-id read (no TOCTOU).
+      if (await _isRetracted(serverUlid)) {
+        await (delete(messages)
+              ..where((t) => t.clientTempId.equals(clientTempId)))
+            .go();
+        return AckOutcome.retracted;
+      }
 
       final ru = await (select(messages)
             ..where((t) => t.serverUlid.equals(serverUlid)))
@@ -506,6 +570,13 @@ class DriftCache extends _$DriftCache {
           'origin-present with a null verdict is illegal');
     }
     return transaction(() async {
+      // Door A of two-door retraction suppression (island #104). A dead id is
+      // presence-independent, so a taken-down message that arrives AFTER its
+      // retraction (reconnect re-walk, buffered fanout frame, live+history dual
+      // delivery) must never be (re)inserted. Checked FIRST inside the txn — same
+      // transaction as the insert/update below, so no TOCTOU. Returns false: no
+      // row was written, so no per-message origin probe should fire either.
+      if (await _isRetracted(u)) return false;
       final existing = await (select(messages)
             ..where((t) => t.serverUlid.equals(u)))
           .getSingleOrNull();
@@ -575,6 +646,80 @@ class DriftCache extends _$DriftCache {
         return serverMsg.origin != null && serverMsg.originCryptoValid == false;
       }
     });
+  }
+
+  // --- W6: retraction (moderator takedown, island #104) ----------------------
+
+  /// Is [ulid] a recorded dead id? MUST be called from inside an enclosing
+  /// [transaction] (both doors do) so the read and the caller's write commit
+  /// atomically — no TOCTOU between "is it retracted?" and the insert/stamp.
+  /// String-identity match on the CANONICAL id — canonical-ULID is a debug-asserted
+  /// cross-repo contract throughout this component (the watermark, the history
+  /// cursor, and serverUlid dedup all assume it), so both sides are the same case
+  /// by contract. See [applyRetraction] for why this path does NOT do a bespoke
+  /// release-time case-normalization.
+  Future<bool> _isRetracted(String ulid) async {
+    final row = await (select(retractedIds)
+          ..where((t) => t.targetMsgId.equals(ulid)))
+        .getSingleOrNull();
+    return row != null;
+  }
+
+  /// W6 — apply a moderator takedown [r]. One transaction, two effects:
+  ///   1. RECORD the dead id (presence-independent, idempotent via PK) so both
+  ///      write doors ([upsertInbound], [reconcileAck]) suppress it thereafter,
+  ///      whether or not the target row currently exists;
+  ///   2. HARD-DELETE the present target row (matched by `serverUlid`). The
+  ///      reactive `watchChannel` read has no hide-filter, so a delete disappears
+  ///      from the UI with zero query change. An optimistic (`serverUlid NULL`)
+  ///      own-message row is intentionally NOT matched here — it is handled at
+  ///      Door B when its ack lands (the dead id above makes that safe).
+  ///
+  /// Idempotent (re-applying is a no-op insert + a no-op delete) and does NOT
+  /// touch the history watermark — a live retraction is suppress-only; the pager
+  /// remains the single writer of `historyContiguousThrough` (round-4 invariant).
+  /// The same retraction also arrives as a history item and re-applies harmlessly.
+  Future<void> applyRetraction(Retraction r) async {
+    // Dead-id suppression + the hard-delete are STRING-IDENTITY equality against a
+    // serverUlid. Canonical-ULID (UPPERCASE Crockford) is a CROSS-REPO CONTRACT the
+    // whole component already relies on via DEBUG asserts — the watermark
+    // (advanceHistoryContiguous), the history cursor, and serverUlid dedup all
+    // assume it and none release-normalize. So assert canonical here too (loud in
+    // dev on a contract violation) and store/compare the id as-is, matching that
+    // discipline on ALL THREE surfaces (dead-id store, _isRetracted lookup,
+    // hard-delete) so they stay mutually consistent.
+    //
+    // NOT a bespoke release-time toUpperCase() on this path (reverted after
+    // cage-match Tesla, PR #102): normalizing only the dead-id table left
+    // messages.serverUlid raw, so the hard-delete could MISS a case-skewed present
+    // row — a half-wound coil worse than raw-vs-raw. The complete fix is to
+    // canonicalize serverUlid at the INGEST stamp (W2/W3) so the identity string is
+    // canonical system-wide; that is a whole-component change tracked as a follow-up
+    // (claude-tasks), not a retraction-local patch. Under the island's canonical
+    // contract, raw-vs-raw matches exactly and the debug assert guards dev.
+    assertCanonicalUlid(r.targetMsgId, context: 'retraction target');
+    assertCanonicalUlid(r.id, context: 'retraction id');
+    await transaction(() async {
+      await into(retractedIds).insertOnConflictUpdate(
+        RetractedIdsCompanion.insert(
+          targetMsgId: r.targetMsgId,
+          channelId: r.channelId,
+          retractionId: r.id,
+        ),
+      );
+      await (delete(messages)..where((t) => t.serverUlid.equals(r.targetMsgId)))
+          .go();
+    });
+  }
+
+  /// DEFERRED prune hook (unused today): drop dead ids whose retraction ULID is
+  /// strictly below [floorRetractionId]. Growth is one row per takedown ever —
+  /// negligible at current scale — so this is not wired to any watermark. Present
+  /// so the prune policy has a home when/if it is needed, not because it is.
+  Future<void> pruneRetractedBelow(String floorRetractionId) async {
+    await (delete(retractedIds)
+          ..where((t) => t.retractionId.isSmallerThanValue(floorRetractionId)))
+        .go();
   }
 
   // --- W4: error handler -----------------------------------------------------

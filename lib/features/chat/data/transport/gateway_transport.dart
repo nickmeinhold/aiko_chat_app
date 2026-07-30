@@ -7,6 +7,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../../../core/auth/token_provider.dart';
 import '../../domain/message.dart';
 import '../../domain/origin_envelope.dart';
+import '../../domain/retraction.dart';
 import 'chat_transport.dart';
 import 'envelopes.dart';
 
@@ -51,6 +52,7 @@ class GatewayTransport implements ChatTransport {
   final _messages = StreamController<Message>.broadcast();
   final _acks = StreamController<AckResult>.broadcast();
   final _errors = StreamController<TransportError>.broadcast();
+  final _retractions = StreamController<Retraction>.broadcast();
   final _connState = StreamController<ConnectionState>.broadcast();
 
   /// The CURRENT connection state, replayed to every new [connectionState]
@@ -117,6 +119,8 @@ class GatewayTransport implements ChatTransport {
   Stream<AckResult> get acks => _acks.stream;
   @override
   Stream<TransportError> get errors => _errors.stream;
+  @override
+  Stream<Retraction> get retractions => _retractions.stream;
 
   @override
   Future<void> connect() async {
@@ -333,6 +337,9 @@ class GatewayTransport implements ChatTransport {
             parsedCode: f.parsedCode,
             detail: f.detail,
             refClientMsgId: f.refClientMsgId));
+      case RetractionFrame f:
+        _retractions.add(Retraction(
+            channelId: f.channelId, id: f.id, targetMsgId: f.targetMsgId));
       case UnknownFrame f:
         _log?.call('dropped unknown frame: ${f.reason}');
     }
@@ -406,6 +413,7 @@ class GatewayTransport implements ChatTransport {
     await _messages.close();
     await _acks.close();
     await _errors.close();
+    await _retractions.close();
     await _connState.close();
   }
 }
