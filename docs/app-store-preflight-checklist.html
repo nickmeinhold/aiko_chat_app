@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aiko Chat — App Store Pre-Submission Preflight</title>
+<style>
+  :root { --p:#5E35B1; --pl:#7E57C2; --bg:#faf9fc; --ink:#1c1c24; }
+  body { font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         color:#222; background:var(--bg); max-width:900px; margin:2rem auto; padding:0 1.2rem; }
+  h1 { color:var(--p); font-size:1.7rem; margin-bottom:.2rem; }
+  h2 { color:var(--p); margin-top:2rem; border-bottom:2px solid #ece7f5; padding-bottom:.3rem; }
+  .sub { color:#666; margin-top:0; }
+  .why { background:#fff4f4; border-left:4px solid #d9534f; border-radius:6px; padding:.5rem .9rem; margin:.6rem 0; font-size:.94rem; }
+  .why b { color:#b02a2a; }
+  .check { background:#fff; border:1px solid #e4ddf0; border-radius:10px; padding:1rem 1.2rem; margin:1.1rem 0; }
+  .check h3 { margin:.1rem 0 .5rem; color:var(--p); font-size:1.12rem; }
+  .tags { font-size:.78rem; color:#555; margin:.3rem 0 .6rem; }
+  .tag { display:inline-block; background:#f3f0fa; border:1px solid #e0d8f0; border-radius:12px; padding:.05rem .55rem; margin-right:.3rem; }
+  .tag.auto { background:#eef8f0; border-color:#c4e6cb; color:#2b7a3d; }
+  .tag.manual { background:#fff6e9; border-color:#f0dcb8; color:#a86a12; }
+  code, pre { background:#f3f0fa; border-radius:5px; padding:.1rem .4rem; font-size:.9em; }
+  pre { padding:.7rem .9rem; overflow-x:auto; white-space:pre-wrap; line-height:1.45; }
+  table { border-collapse:collapse; width:100%; margin:.6rem 0; }
+  td,th { border:1px solid #e4ddf0; padding:.45rem .7rem; text-align:left; vertical-align:top; font-size:.92rem; }
+  th { background:#f3f0fa; }
+  .pass { color:#2b7a3d; font-weight:600; }
+  .fail { color:#b02a2a; font-weight:600; }
+  .snapshot { background:#f7f5fc; border:1px solid #e4ddf0; border-radius:10px; padding:.8rem 1.1rem; }
+</style>
+</head>
+<body>
+
+<h1>Aiko Chat — Pre-Submission Preflight</h1>
+<p class="sub">Run this <strong>before every App Store / Play submission</strong>, on every platform you're shipping. Companion to the <a href="app-store-submission-kit.html">Submission Kit</a> (the kit is what you paste <em>at</em> the gate; this is what you verify <em>before</em> it). Every check below exists because it was a wall discovered <em>at</em> the submit gate during the 2026-07 launch — the whole point is to move each precondition <em>earlier</em>. The automated form of this belongs in the <code>asc</code>/<code>gplay</code> CLI (claude-tasks#15 / #14, <code>~/git/tools/cli-tools/appstore</code>); until then, this is the documented manual gate.</p>
+
+<div class="why"><b>The crux:</b> distribution is artifact-grounded. The tooling encodes the <em>happy path</em>; every rejection came from a <em>precondition</em> that was true on <code>main</code> but not in the <em>submitted artifact / live platform</em>. Repo intent ≠ submitted reality — verify the reality.</div>
+
+<h2>The five checks</h2>
+
+<div class="check">
+  <h3>1 · The submitted build actually carries the intended fix + a fresh version</h3>
+  <div class="tags"><span class="tag auto">partly automatable</span><span class="tag">all platforms</span><span class="tag">Android worst-hit</span></div>
+  <div class="why"><b>Wall it prevents:</b> version code <code>+8</code> was reused across ~18 days of commits, so the fix merged to <code>main</code> (the passkey nudge, PR #101) was never in the submitted AAB. Google reviews the <em>artifact</em>, not <code>main</code> → <strong>two rejections</strong> on an already-fixed bug.</div>
+  <b>Verify:</b>
+  <pre># version bumped since the last submitted build?
+grep '^version:' pubspec.yaml            # e.g. 0.0.1+9  — the +N must be NEW
+asc builds        | head -3              # iOS/macOS: is the latest build a fresh number?
+gplay status --track production          # Android: which versionCode is live/submitted?
+
+# the fix commit is actually in the build you're about to submit:
+git log --oneline -1                     # HEAD you built from
+# → confirm the intended fix SHA is an ancestor of the built commit</pre>
+  Rule: <strong>one build number per build.</strong> Never resubmit a reused version code expecting new code in it.
+</div>
+
+<div class="check">
+  <h3>2 · Every metadata URL resolves 200</h3>
+  <div class="tags"><span class="tag auto">automatable</span><span class="tag">all platforms</span></div>
+  <div class="why"><b>Wall it prevents:</b> privacy / support / marketing URLs 404ing → rejection or a broken public listing. The live iOS listing still points at a dead <code>imagineering.cc/aiko/privacy</code>; the canonical pages moved into the island's FastAPI routes.</div>
+  <b>Verify:</b>
+  <pre>for U in \
+  "https://chat.imagineering.cc/privacy" \
+  "https://chat.imagineering.cc/terms" \
+  "$MARKETING_URL"; do
+  echo "[$(curl -s -o /dev/null -w '%{http_code}' -L "$U")] $U"
+done   # every line must be 200</pre>
+  Canonical: privacy = <code>chat.imagineering.cc/privacy</code>, terms = <code>chat.imagineering.cc/terms</code>. <strong>Note:</strong> the account-deletion URL Apple/Play require must also resolve (covered inline via the privacy page <code>#retention</code> anchor as the current stopgap).
+</div>
+
+<div class="check">
+  <h3>3 · The sole-ingress auth path (passkey) works on the target platform</h3>
+  <div class="tags"><span class="tag manual">manual gate (partly automatable)</span><span class="tag">all platforms</span></div>
+  <div class="why"><b>Wall it prevents:</b> passkey is the <em>only</em> way in — if it's broken on a platform, <em>no one</em> gets in, reviewer included. Android CREATE failed on every device because <code>assetlinks.json</code> was missing the <code>handle_all_urls</code> relation (while Google's own <code>assetlinks:check</code> stayed green — a lying proxy).</div>
+  <b>Verify (automatable part) — the well-known files carry the right relations:</b>
+  <pre># Android: BOTH relations required (get_login_creds AND handle_all_urls)
+curl -s https://chat.imagineering.cc/.well-known/assetlinks.json | \
+  grep -o 'get_login_creds\|handle_all_urls' | sort -u   # must show BOTH
+
+# Apple: AASA served for the associated domain
+curl -s https://chat.imagineering.cc/.well-known/apple-app-site-association | head</pre>
+  <b>Verify (manual gate):</b> on the target platform, against prod, tap <strong>Create a passkey</strong> (never "Sign in" on a fresh device), authenticate, confirm you reach the chat. This is the single most-rejected path — see the Submission Kit's reviewer note.
+</div>
+
+<div class="check">
+  <h3>4 · You know the account's submit capability (API vs Console-only)</h3>
+  <div class="tags"><span class="tag">documented constant</span><span class="tag">differs per platform</span></div>
+  <div class="why"><b>Wall it prevents:</b> a "submitted" that's silently a <em>draft</em>. This Play account has <code>changesNotSentForReview</code> — the API <strong>cannot</strong> auto-submit; a plain commit stages a draft that waits for a human Console click. iOS/macOS ASC <code>reviewSubmissions</code> <em>does</em> submit via API.</div>
+  <table>
+    <tr><th>Platform</th><th>Submit path</th><th>Gate</th></tr>
+    <tr><td>iOS / macOS</td><td>ASC <code>reviewSubmissions</code> API</td><td>Fully API (<code>asc</code> with <code>--confirm</code>)</td></tr>
+    <tr><td>Android</td><td>Play Console only</td><td><span class="fail">Human click</span>: Publishing overview → "Send for review". API commit = draft only.</td></tr>
+  </table>
+  Rule: after a Play push, <strong>the job is not done</strong> until the Console "Send for review" is clicked and the change shows in review.
+</div>
+
+<div class="check">
+  <h3>5 · Platform-required manifest / Info.plist keys are present</h3>
+  <div class="tags"><span class="tag auto">automatable</span><span class="tag">platform-specific</span></div>
+  <div class="why"><b>Wall it prevents:</b> a missing platform key that only surfaces at the submit gate — <code>LSApplicationCategoryType</code> is a Mac App Store <em>requirement</em> (iOS doesn't need it) and was discovered at MAS submit time.</div>
+  <b>Verify:</b>
+  <pre># macOS (MAS): app category REQUIRED
+grep -A1 LSApplicationCategoryType macos/Runner/Info.plist
+
+# iOS: skip the per-build encryption question
+grep -A1 ITSAppUsesNonExemptEncryption ios/Runner/Info.plist
+
+# Android: passkey relations (see check 3) + a bumped versionCode (see check 1)</pre>
+</div>
+
+<h2>Live snapshot — dogfooded 2026-08-01</h2>
+<div class="snapshot">
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>2 · <code>chat.imagineering.cc/privacy</code></td><td class="pass">200 ✅</td></tr>
+  <tr><td>2 · <code>chat.imagineering.cc/terms</code></td><td class="pass">200 ✅</td></tr>
+  <tr><td>2 · Marketing URL <code>chat.imagineering.cc</code> (root)</td><td class="fail">404 ❌ — root serves nothing; repoint or drop this URL</td></tr>
+  <tr><td>5 · macOS <code>LSApplicationCategoryType</code></td><td class="pass">present (public.app-category.social-networking) ✅</td></tr>
+  <tr><td>5 · iOS <code>ITSAppUsesNonExemptEncryption</code></td><td class="pass">present (false) ✅</td></tr>
+  <tr><td>1 · Version</td><td class="pass">0.0.1+9 (live) ✅</td></tr>
+</table>
+<p style="margin:.4rem 0 0; font-size:.9rem;"><strong>Open finding:</strong> the Marketing URL on file (<code>chat.imagineering.cc</code> root) 404s. Marketing URL is optional — either drop it or repoint it at a page that resolves (e.g. the GitHub Pages hub) before the next submission.</p>
+</div>
+
+<p class="sub" style="margin-top:1.5rem;">Automating this: each check above maps to an <code>asc preflight</code> / <code>gplay preflight</code> subcommand (config-driven URLs + keys per app) in <code>~/git/tools/cli-tools/appstore</code>. Checks 2 and 5 are pure automation; 1 and 3 have an automatable part + a human gate; 4 is a per-account constant. This doc is the spec.</p>
+
+</body>
+</html>
