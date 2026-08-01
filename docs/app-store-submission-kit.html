@@ -93,8 +93,8 @@ a long-press menu. Account deletion is available in Settings → Delete Account.
   <summary>How to drive the build / upload yourself (Claude tooling)</summary>
   <pre>flutter build ipa --dart-define-from-file=dart_defines/prod.json \
     --export-options-plist ios/ExportOptions.plist
-python ~/.aiko-play-tools/asc_api.py upload --ipa build/ios/ipa/aiko_chat_app.ipa
-python ~/.aiko-play-tools/asc_api.py builds        # poll until state=VALID</pre>
+asc upload --ipa build/ios/ipa/aiko_chat_app.ipa   # `asc` CLI (~/git/tools/cli-tools/appstore), app=aiko by config default
+asc builds                                         # poll until state=VALID</pre>
   <p>See memory <code>reference_ios_distribution_tooling.md</code>.</p>
 </details>
 <details>
