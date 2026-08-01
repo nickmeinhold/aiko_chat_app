@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Aiko Chat — App Store / TestFlight External Submission Kit</title>
+<title>Aiko Chat — App Store Submission Kit (passkey-only)</title>
 <style>
   :root { --p:#5E35B1; --pl:#7E57C2; --bg:#faf9fc; --ink:#1c1c24; }
   body { font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -29,24 +29,29 @@
 <body>
 
 <h1>Aiko Chat — Submission Kit</h1>
-<p class="sub">Everything needed for TestFlight External Beta App Review (and, later, App Store review). Bundle <code>cc.imagineering.aikoChatApp</code> · App id <code>6785395468</code>. Build <strong>3</strong> (1.0.0+3) is the review candidate.</p>
+<p class="sub">Review information for each App Store version submission. Bundle <code>cc.imagineering.aikoChatApp</code> · App id <code>6785395468</code>. Aiko Chat is <strong>LIVE on the App Store</strong> (0.0.1, READY_FOR_SALE) — this kit covers the reviewer-facing details every subsequent version goes back through review with. <strong>Auth is passkey-only</strong> (social sign-in was removed in PR&nbsp;#69); there is no username/password and no demo account.</p>
 
 <div class="gate">
   <h2>⚠️ The one gate before submitting</h2>
-  <p><strong>Verify Sign in with Apple works end-to-end on build 3 (a real device) against the live gateway — before hitting Submit.</strong></p>
-  <p>Aiko is now <strong>social-only</strong> (no username/password), so there is no demo account to hand Apple. The reviewer must sign in with <em>their own</em> Apple ID via Sign in with Apple. If SIWA is broken against <code>chat.imagineering.cc</code>, review is rejected with "could not log in." This is exactly your open tasks #1/#2/#3 (verify social nonce + gateway transform + native wiring). Install build 3 via Internal TestFlight, tap <strong>Sign in with Apple</strong>, confirm you reach the chat. Only then submit.</p>
+  <p><strong>Verify passkey <em>CREATE</em> works end-to-end on the review build, against <code>chat.imagineering.cc</code>, before hitting Submit — and make sure the App Access note tells the reviewer to tap <em>Create a passkey</em>, not <em>Sign in</em>.</strong></p>
+  <p>Aiko is passkey-only, so there is no demo account to hand Apple — the reviewer must create their own passkey on the review device. Two things sink this if unchecked, and both bit the Android launch (rejected <em>twice</em>):</p>
+  <ul>
+    <li><strong>The reviewer taps "Already have a passkey? Sign in" on a fresh device</strong> → no passkey exists yet → dead-end. The in-app nudge (PR&nbsp;#101) now redirects that to "Create a passkey," but the App Access note below must <em>also</em> say it explicitly — reviewers follow the note literally.</li>
+    <li><strong>The review device has no screen lock / biometric enrolled</strong> → passkey creation itself can't proceed. The note asks them to enrol one.</li>
+  </ul>
+  <p>Install the review build, tap <strong>Create a passkey</strong>, authenticate with Face ID / Touch ID, confirm you land in the chat. Only then submit.</p>
 </div>
 
 <h2>1 · Export compliance / encryption</h2>
 <div class="ok">
-  <p>✅ Handled in code — <code>ITSAppUsesNonExemptEncryption = false</code> is now in <code>Info.plist</code> (app uses only standard HTTPS/TLS, which is exempt). Apple will no longer ask the per-build encryption question.</p>
+  <p>✅ Handled in code — <code>ITSAppUsesNonExemptEncryption = false</code> is in <code>Info.plist</code> (app uses only standard HTTPS/TLS, which is exempt). Apple will no longer ask the per-build encryption question.</p>
 </div>
 <p>If ASC ever asks anyway: <em>"Does your app use encryption?"</em> → Yes → <em>"Does it qualify for any exemptions?"</em> → Yes (standard encryption via iOS / HTTPS).</p>
 
 <h2>2 · TestFlight → Test Information (app-level, fill once)</h2>
 
 <div class="field"><span class="label">Beta App Description</span>
-<pre>Aiko Chat is a real-time messaging app for joining topic channels and chatting with others. Sign in with Apple or Google, join a channel, and start talking. Includes user blocking and content reporting, plus full in-app account deletion.</pre></div>
+<pre>Aiko Chat is a passwordless, real-time private messenger. Create your account with a passkey — no password, no phone number — using Face ID or Touch ID, join a topic channel, and start chatting. Includes user blocking and content reporting, plus full in-app account deletion.</pre></div>
 
 <div class="field"><span class="label">Feedback Email</span>
 <pre>nick.meinhold@gmail.com</pre></div>
@@ -57,13 +62,14 @@
 <div class="field"><span class="label">Marketing URL (optional)</span>
 <pre>https://chat.imagineering.cc</pre></div>
 
-<h2>3 · Build 3 → "What to Test"</h2>
+<h2>3 · Per-build → "What to Test"</h2>
 <div class="field"><span class="label">What to Test (per-build notes)</span>
 <pre>First run shows a EULA you must accept (scroll to the bottom).
-Then sign in with Apple or Google.
+Then create your account with a passkey (Face ID / Touch ID) —
+tap "Create a passkey", NOT "Sign in".
 
 Please test:
-• Sign in with Apple (creates an account automatically)
+• Create a passkey (an account is created automatically on first use)
 • Join a channel and send / receive messages
 • Long-press a message → Report, or a user → Block
 • Settings → Delete Account (full account removal)</pre></div>
@@ -72,21 +78,31 @@ Please test:
 <table>
   <tr><th>Field</th><th>Value</th></tr>
   <tr><td>Sign-in required?</td><td><strong>Yes</strong></td></tr>
-  <tr><td>Demo account</td><td>Leave blank — see the note below (social-only)</td></tr>
+  <tr><td>Demo account</td><td>Leave blank — passkey-only, see the note below</td></tr>
   <tr><td>Contact first / last</td><td>Nick / Meinhold</td></tr>
   <tr><td>Contact email</td><td>nick.meinhold@gmail.com</td></tr>
   <tr><td>Contact phone</td><td><em>(your number)</em></td></tr>
 </table>
 
 <div class="field"><span class="label">Notes for Review (the important one)</span>
-<pre>This app uses social sign-in only (Sign in with Apple and Google) — there is
-no username/password, so no demo credentials are provided. To sign in, tap
-"Sign in with Apple" on the login screen and authenticate with any Apple ID;
-a Aiko account is created automatically.
+<pre>Aiko Chat uses PASSKEYS ONLY — there is no username or password, and no demo
+account to provide. Please do NOT tap "Already have a passkey? Sign in": there
+is no passkey on a fresh review device yet, so that path will correctly report
+"no passkey found."
+
+To sign in:
+1. Make sure the review device has a screen lock with Face ID or Touch ID
+   enrolled — creating a passkey requires it.
+2. On the login screen, tap "Create a passkey" (NOT "Sign in").
+3. Authenticate with Face ID / Touch ID. An Aiko account is created
+   automatically on your first passkey, and you are taken straight to the chat.
+
+Network: the app connects to https://chat.imagineering.cc — please allow
+network access.
 
 UGC compliance: a EULA must be accepted on first launch (zero tolerance for
-objectionable content). Users can block other users and report messages from
-a long-press menu. Account deletion is available in Settings → Delete Account.</pre></div>
+objectionable content). Users can block other users and report messages from a
+long-press menu. Account deletion is available in Settings → Delete Account.</pre></div>
 
 <h2>5 · Reference</h2>
 <details>
@@ -95,11 +111,11 @@ a long-press menu. Account deletion is available in Settings → Delete Account.
     --export-options-plist ios/ExportOptions.plist
 asc upload --ipa build/ios/ipa/aiko_chat_app.ipa   # `asc` CLI (~/git/tools/cli-tools/appstore), app=aiko by config default
 asc builds                                         # poll until state=VALID</pre>
-  <p>See memory <code>reference_ios_distribution_tooling.md</code>.</p>
+  <p>See memory <code>reference_ios_distribution_tooling.md</code> and <code>reference_macos_local_build_passkey_signing.md</code> (the <code>asc</code>/<code>gplay</code> CLI replaced the old <code>~/.aiko-play-tools</code> scripts).</p>
 </details>
 <details>
-  <summary>Stale: the old "reviewer" demo account (task #19)</summary>
-  <p>The prod <code>reviewer</code> demo account predates the social-only pivot (#21/#31) and is now unusable for review (no password sign-in). The SIWA note above replaces it. Task #19 (remove the reviewer account) can proceed once review passes.</p>
+  <summary>History: how this app reached passkey-only</summary>
+  <p>Aiko originally shipped social sign-in (Sign in with Apple / Google), then a server-side OAuth broker, then pivoted to <strong>passkeys as the sole ingress</strong> in PR&nbsp;#69 (2026-07-10). The old prod <code>reviewer</code> demo account (task&nbsp;#19) predates all of this and is unusable — passkey-only review needs the reviewer to create their own passkey, per the note above, so no stored credential applies.</p>
 </details>
 
 </body>
