@@ -8,6 +8,8 @@
 /// the rest are optional metadata.
 library;
 
+import 'package:flutter/foundation.dart';
+
 class ServerEntry {
   /// Human label shown in the picker, e.g. "Production".
   final String label;
@@ -108,13 +110,16 @@ class ServerEntry {
 ///
 /// Production is first so the common case (point at the live server) is one tap.
 /// Local and the Android-emulator loopback cover dev against a gateway on the
-/// host machine — entries no remote directory advertises, so they stay bundled
-/// regardless of what the directory returns (the merge dedups any overlap on the
-/// normalized base URL, so bundling an island the directory also lists is safe).
+/// host machine — DEBUG-ONLY: gated behind [kDebugMode] so they never reach end
+/// users in a release build (a user has nothing on their localhost, and
+/// 10.0.2.2 only resolves inside an Android emulator). A developer on a release
+/// build can still reach them via the Custom URL field. [kDebugMode] is a const
+/// bool, so the list stays `const` and the gating is zero-cost.
 const kGatewayPresets = <ServerEntry>[
   ServerEntry(label: 'Production', httpBaseUrl: 'https://chat.imagineering.cc'),
   ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co'),
-  ServerEntry(label: 'Local', httpBaseUrl: 'http://localhost:8095'),
-  ServerEntry(
-      label: 'Android emulator', httpBaseUrl: 'http://10.0.2.2:8095'),
+  if (kDebugMode)
+    ServerEntry(label: 'Local', httpBaseUrl: 'http://localhost:8095'),
+  if (kDebugMode)
+    ServerEntry(label: 'Android emulator', httpBaseUrl: 'http://10.0.2.2:8095'),
 ];
