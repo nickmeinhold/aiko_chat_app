@@ -187,6 +187,67 @@ void main() {
     expect(find.text('in-random'), findsNothing);
   });
 
+  testWidgets('an unsent draft does not bleed across a channel switch',
+      (tester) async {
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // Type a draft in 'general' but do NOT send it.
+    await tester.enterText(find.byType(TextField).first, 'draft-for-general');
+    await tester.pump();
+
+    // Switch to 'random'.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+
+    // The composer is fresh — the general draft did not ride into 'random'
+    // (Composer is keyed by channel id). Fails if the draft carries over.
+    expect(find.text('draft-for-general'), findsNothing);
+  });
+
+  testWidgets('channel pick resets across logout (no cross-session selection leak)',
+      (tester) async {
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // Pick 'random'.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'random'), findsOneWidget);
+
+    // Log out (chat surface unmounts → selectedChannelIdProvider auto-disposes).
+    await tester.tap(find.byIcon(Icons.logout));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+
+    // Back in: a fresh session lands on the default channel, NOT the prior pick.
+    // (Fails if the provider is keep-alive — the 'random' selection would survive.)
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+  });
+
   testWidgets('single channel shows a plain title, not a switcher', (tester) async {
     // Default FakeRestApi has one channel → no dropdown affordance.
     final container =

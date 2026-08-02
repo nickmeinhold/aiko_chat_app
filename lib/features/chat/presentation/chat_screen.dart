@@ -40,6 +40,20 @@ class ChatScreen extends ConsumerWidget {
     final channels = channelsAsync.value ?? const <Channel>[];
     final active = _resolveActive(channels, selectedId);
 
+    // If the picked channel leaves the list (removed / renamed-away on a refetch),
+    // clear the pick so the Notifier and the UI agree. Without this the resolver
+    // heals only the DISPLAY (falls back to first) while the stale id lingers, so a
+    // channel that later reappears would snap the user back to a selection they
+    // never re-made (cage-match #106, Tesla). ref.listen fires outside build, so
+    // mutating the selection notifier here is safe.
+    ref.listen(channelsProvider, (_, next) {
+      final ids = next.value?.map((c) => c.id).toSet();
+      final sel = ref.read(selectedChannelIdProvider);
+      if (sel != null && ids != null && !ids.contains(sel)) {
+        ref.read(selectedChannelIdProvider.notifier).clear();
+      }
+    });
+
     return Scaffold(
       appBar: AppBar(
         title: channels.length > 1 && active != null
@@ -89,7 +103,16 @@ class ChatScreen extends ConsumerWidget {
                         channelId: active.id,
                       ),
                     ),
-                    Composer(channelId: active.id),
+                    // Keyed by channel id like MessageList above, so each channel
+                    // gets its OWN composer state: without this, Flutter reuses
+                    // _ComposerState across a switch and a draft typed in one
+                    // channel rides into the next (and sends there) — the same
+                    // state-carry the ValueKey fixes for scroll position
+                    // (cage-match #106, Maxwell + Tesla).
+                    Composer(
+                      key: ValueKey('composer-${active.id}'),
+                      channelId: active.id,
+                    ),
                   ],
                 );
               },
