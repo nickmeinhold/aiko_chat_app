@@ -1,6 +1,7 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
+import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -130,6 +131,73 @@ void main() {
 
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
     expect(find.text('secret-from-A'), findsNothing); // cache cleared on logout
+  });
+
+  testWidgets(
+      'channel switcher swaps the message surface and scopes sends per channel',
+      (tester) async {
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // The switcher opens on the default (first) channel.
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+
+    // A send lands in 'general'.
+    await tester.enterText(find.byType(TextField).first, 'in-general');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    expect(find.text('in-general'), findsOneWidget);
+
+    // Switch to 'random' via the dropdown.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+
+    // Now on 'random': general's message is off-screen, empty-state shows. No
+    // re-subscribe was needed — the repo already subscribed to both channels.
+    expect(find.text('in-general'), findsNothing);
+    expect(find.text('No messages yet. Say hello!'), findsOneWidget);
+
+    // A send now targets 'random' (channelId threaded from the active channel).
+    await tester.enterText(find.byType(TextField).first, 'in-random');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    expect(find.text('in-random'), findsOneWidget);
+    expect(find.text('in-general'), findsNothing);
+
+    // Switch back to 'general': its message is still cached (round-trip).
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('general').last);
+    await tester.pumpAndSettle();
+    expect(find.text('in-general'), findsOneWidget);
+    expect(find.text('in-random'), findsNothing);
+  });
+
+  testWidgets('single channel shows a plain title, not a switcher', (tester) async {
+    // Default FakeRestApi has one channel → no dropdown affordance.
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    expect(find.byType(DropdownButton<String>), findsNothing);
   });
 
   testWidgets('new messages auto-scroll the list to the newest (#42)',
