@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Carried Record — show me the log you carry</title>
+<style>
+:root{
+  --bg:#e7e0cf; --bg-panel:#f3eee1; --text:#16303a; --text-dim:#586d70;
+  --line:#c8bda3; --sea:#c4d0c9; --sea-2:#aebfb8;
+  --beacon:#bd7016; --signal:#227687; --alert:#b8402a;
+  --seal-ink:#f3eee1;
+  --font-display:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,ui-serif,serif;
+  --font-body:ui-sans-serif,"Avenir Next","Segoe UI",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --maxw:70ch;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0a1720; --bg-panel:#102430; --text:#dce9eb; --text-dim:#83999f;
+    --line:#204049; --sea:#123039; --sea-2:#0d2530;
+    --beacon:#f0b649; --signal:#57c9d8; --alert:#ec7357;
+    --seal-ink:#0a1720;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#e7e0cf; --bg-panel:#f3eee1; --text:#16303a; --text-dim:#586d70;
+  --line:#c8bda3; --sea:#c4d0c9; --sea-2:#aebfb8;
+  --beacon:#bd7016; --signal:#227687; --alert:#b8402a; --seal-ink:#f3eee1;
+}
+:root[data-theme="dark"]{
+  --bg:#0a1720; --bg-panel:#102430; --text:#dce9eb; --text-dim:#83999f;
+  --line:#204049; --sea:#123039; --sea-2:#0d2530;
+  --beacon:#f0b649; --signal:#57c9d8; --alert:#ec7357; --seal-ink:#0a1720;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:var(--font-body); line-height:1.6;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+.wrap{max-width:960px; margin:0 auto; padding:0 20px}
+
+/* ---- top bar ---- */
+.topbar{
+  display:flex; justify-content:space-between; align-items:center;
+  gap:12px; padding:18px 20px; max-width:960px; margin:0 auto;
+  font-family:var(--font-mono); font-size:12px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--text-dim);
+}
+.topbar .brand{color:var(--text)}
+.topbar .brand b{color:var(--beacon); font-weight:600}
+.theme-toggle{
+  background:transparent; border:1px solid var(--line); color:var(--text-dim);
+  border-radius:999px; padding:6px 12px; cursor:pointer; font:inherit;
+  font-family:var(--font-mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+}
+.theme-toggle:hover{color:var(--text); border-color:var(--text-dim)}
+.theme-toggle:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+
+/* ---- hero ---- */
+.hero{padding:38px 0 20px}
+.eyebrow{
+  font-family:var(--font-mono); font-size:12px; letter-spacing:.30em;
+  text-transform:uppercase; color:var(--signal); margin:0 0 18px;
+}
+h1{
+  font-family:var(--font-display); font-weight:600;
+  font-size:clamp(2.4rem,7vw,4.6rem); line-height:1.03; margin:0;
+  text-wrap:balance; letter-spacing:-0.01em;
+}
+.lede{
+  max-width:56ch; margin:20px 0 0; font-size:clamp(1.02rem,2.2vw,1.18rem);
+  color:var(--text-dim);
+}
+.lede b{color:var(--text); font-weight:600}
+
+/* ---- the mark (identity) ---- */
+.mark{
+  margin:26px 0 6px; display:flex; flex-wrap:wrap; align-items:center; gap:14px;
+  padding:14px 16px; border:1px solid var(--line); border-radius:12px;
+  background:var(--bg-panel);
+}
+.mark .glyph{
+  width:40px; height:40px; flex:none; border-radius:50%;
+  background:
+    radial-gradient(circle at 32% 30%, color-mix(in srgb, var(--beacon) 92%, #fff) 0%, var(--beacon) 46%, color-mix(in srgb, var(--beacon) 70%, #000) 100%);
+  display:grid; place-items:center; color:var(--seal-ink);
+  font-family:var(--font-display); font-weight:600; font-size:19px;
+  box-shadow: inset 0 -2px 4px rgba(0,0,0,.25), 0 1px 2px rgba(0,0,0,.2);
+}
+.mark .meta{display:flex; flex-direction:column; gap:2px; min-width:0}
+.mark .meta .k{
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:.22em;
+  text-transform:uppercase; color:var(--text-dim);
+}
+.mark .meta .v{
+  font-family:var(--font-mono); font-size:14px; color:var(--text);
+  overflow-wrap:anywhere;
+}
+.mark .meta .v b{color:var(--beacon)}
+.mark .rotate{margin-left:auto}
+
+/* ---- log ---- */
+.log-head{
+  display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+  margin:40px 0 4px; padding-bottom:12px; border-bottom:1px solid var(--line); flex-wrap:wrap;
+}
+.log-head h2{
+  font-family:var(--font-mono); font-size:12.5px; letter-spacing:.26em;
+  text-transform:uppercase; color:var(--text-dim); font-weight:600; margin:0;
+}
+.tally{font-family:var(--font-mono); font-size:12px; color:var(--text-dim); display:flex; gap:16px}
+.tally b{font-variant-numeric:tabular-nums}
+.tally .ok{color:var(--signal)} .tally .bad{color:var(--alert)}
+
+.log{position:relative; margin:8px 0 0; padding:8px 0 8px 0}
+/* the forward cursor line */
+.log::before{
+  content:""; position:absolute; left:19px; top:26px; bottom:26px; width:2px;
+  background:linear-gradient(var(--line), var(--line));
+}
+.entry{
+  position:relative; display:grid; grid-template-columns:40px 1fr; gap:16px;
+  padding:16px 0; align-items:start;
+}
+.seal-cell{grid-column:1; position:relative; z-index:2; display:flex; justify-content:center; padding-top:4px}
+.seal{
+  width:40px; height:40px; border-radius:50%; flex:none; position:relative;
+  display:grid; place-items:center; font-size:18px; color:var(--seal-ink);
+  transition:transform .18s ease;
+}
+.seal.ok{
+  background:radial-gradient(circle at 34% 30%, color-mix(in srgb, var(--signal) 88%, #fff) 0%, var(--signal) 48%, color-mix(in srgb, var(--signal) 62%, #000) 100%);
+  box-shadow: inset 0 -2px 4px rgba(0,0,0,.28), 0 1px 2px rgba(0,0,0,.22);
+}
+.seal.bad{
+  background:radial-gradient(circle at 34% 30%, color-mix(in srgb, var(--alert) 88%, #fff) 0%, var(--alert) 50%, color-mix(in srgb, var(--alert) 60%, #000) 100%);
+  box-shadow: inset 0 -2px 4px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.24);
+}
+/* broken seal: a crack */
+.seal.bad::after{
+  content:""; position:absolute; inset:0; border-radius:50%;
+  background:linear-gradient(105deg, transparent 46%, var(--seal-ink) 47%, var(--seal-ink) 53%, transparent 54%);
+  opacity:.65;
+}
+.seal.none{
+  background:transparent; border:2px dashed var(--line); color:var(--text-dim);
+  box-shadow:none;
+}
+.seal .g{position:relative; z-index:1}
+@keyframes reseal{0%{transform:scale(.7)}60%{transform:scale(1.12)}100%{transform:scale(1)}}
+.seal.pulse{animation:reseal .32s ease}
+@media (prefers-reduced-motion:reduce){.seal{transition:none}.seal.pulse{animation:none}}
+
+.card{
+  grid-column:2; background:var(--bg-panel); border:1px solid var(--line);
+  border-radius:12px; padding:14px 16px; min-width:0;
+}
+.card .top{
+  display:flex; align-items:center; gap:10px; margin-bottom:9px; flex-wrap:wrap;
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase;
+}
+.kind{
+  padding:2px 8px; border-radius:999px; border:1px solid currentColor; font-weight:600;
+}
+.kind.message{color:var(--signal)}
+.kind.judgment{color:var(--beacon)}
+.kind.legacy{color:var(--text-dim)}
+.ulid{color:var(--text-dim); overflow-wrap:anywhere}
+.verdict-word{margin-left:auto; font-weight:600}
+.verdict-word.ok{color:var(--signal)} .verdict-word.bad{color:var(--alert)} .verdict-word.none{color:var(--text-dim)}
+
+.body{
+  font-size:1.05rem; color:var(--text); outline:none; border-radius:6px;
+  padding:3px 6px; margin:0 -6px; transition:background .15s;
+  border-bottom:1px dashed transparent;
+}
+.body[contenteditable="true"]{border-bottom:1px dashed var(--line); cursor:text}
+.body[contenteditable="true"]:hover{background:color-mix(in srgb, var(--signal) 8%, transparent)}
+.body:focus-visible{background:color-mix(in srgb, var(--signal) 12%, transparent); border-bottom-color:var(--signal)}
+.judgment .body{font-family:var(--font-display); font-style:italic}
+
+.card .foot{
+  margin-top:11px; padding-top:10px; border-top:1px solid var(--line);
+  display:flex; gap:18px; flex-wrap:wrap; align-items:center;
+  font-family:var(--font-mono); font-size:11px; color:var(--text-dim);
+}
+.card .foot .kv b{color:var(--text); font-weight:500}
+.sig{overflow-wrap:anywhere}
+.inspect{
+  margin-left:auto; background:transparent; border:1px solid var(--line);
+  color:var(--text-dim); border-radius:999px; padding:4px 11px; cursor:pointer;
+  font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+}
+.inspect:hover{color:var(--text); border-color:var(--text-dim)}
+.inspect:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+
+/* ---- bytes drawer ---- */
+.bytes{
+  grid-column:2; margin-top:-6px; margin-bottom:6px;
+  background:var(--sea-2); border:1px solid var(--line); border-radius:10px;
+  padding:12px 14px; font-family:var(--font-mono); font-size:11.5px; line-height:1.7;
+  overflow-x:auto;
+}
+.bytes .lbl{display:block; color:var(--text-dim); letter-spacing:.16em; text-transform:uppercase; font-size:9.5px; margin-bottom:6px}
+.bytes .row{white-space:pre; color:var(--text)}
+.bytes .tag{color:var(--beacon)}
+.bytes .len{color:var(--text-dim)}
+.bytes .fld{color:var(--signal)}
+.bytes .note{margin-top:8px; color:var(--text-dim); font-family:var(--font-body); font-size:12px; white-space:normal}
+
+/* ---- controls ---- */
+.controls{display:flex; gap:10px; flex-wrap:wrap; margin:24px 0 8px}
+.btn{
+  background:transparent; border:1px solid var(--line); color:var(--text);
+  border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;
+  font-size:13px; display:inline-flex; align-items:center; gap:7px;
+}
+.btn:hover{border-color:var(--text-dim); background:var(--bg-panel)}
+.btn:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+.btn.primary{border-color:var(--beacon); color:var(--beacon)}
+
+/* ---- coda ---- */
+.coda{
+  margin:36px 0 10px; padding:22px 22px; border-radius:14px;
+  background:var(--bg-panel); border:1px solid var(--line);
+}
+.coda p{margin:0; max-width:60ch}
+.coda p + p{margin-top:12px}
+.coda .big{font-family:var(--font-display); font-size:1.35rem; line-height:1.35; color:var(--text)}
+.coda .small{font-size:.92rem; color:var(--text-dim)}
+.coda .small b{color:var(--text); font-weight:600}
+.coda a{color:var(--signal)}
+
+.footer{
+  margin:30px 0 50px; padding-top:16px; border-top:1px solid var(--line);
+  font-family:var(--font-mono); font-size:11px; letter-spacing:.08em; color:var(--text-dim);
+  display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+}
+.banner{
+  margin:18px 0 0; padding:12px 16px; border-radius:10px;
+  border:1px solid var(--alert); color:var(--alert);
+  font-family:var(--font-mono); font-size:12.5px; display:none;
+}
+.banner.show{display:block}
+@media (max-width:560px){
+  .entry{grid-template-columns:32px 1fr; gap:11px}
+  .log::before{left:15px}
+  .seal,.seal-cell .seal{width:32px;height:32px;font-size:15px}
+  .bytes{grid-column:1 / -1}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">The Carried Record · <b>a ship keeps its own log</b></div>
+  <button class="theme-toggle" id="themeBtn" aria-label="Toggle light or dark theme">◑ theme</button>
+</div>
+
+<div class="wrap">
+  <header class="hero">
+    <p class="eyebrow">Aiko · sovereign identity · companion to “The Wake, Not the Papers”</p>
+    <h1>Show me the log you carry.</h1>
+    <p class="lede">Reputation isn’t a score a harbor assigns you. It’s the <b>log you carry</b> between islands — every entry signed at the moment it happened, verifiable by anyone, altered by no one. This is real Ed25519, running in your browser with no server. <b>Edit any line below and watch its wax seal break.</b></p>
+
+    <div class="mark">
+      <div class="glyph" id="markGlyph">⚓</div>
+      <div class="meta">
+        <span class="k">Your mark · Ed25519 public key</span>
+        <span class="v" id="markFp">generating…</span>
+      </div>
+      <button class="btn rotate" id="rotateBtn" title="Generate a new keypair and re-sign the whole log under it">↻ rotate mark</button>
+    </div>
+    <div class="banner" id="banner"></div>
+  </header>
+
+  <div class="log-head">
+    <h2>The log — forward cursor ↓</h2>
+    <div class="tally" id="tally"></div>
+  </div>
+
+  <main class="log" id="log"></main>
+
+  <div class="controls">
+    <button class="btn primary" id="resetBtn">↺ re-seal the log (reset)</button>
+    <button class="btn" id="addBtn">＋ add a signed entry</button>
+  </div>
+
+  <section class="coda">
+    <p class="big">The trick is that a message, a peer’s judgment, and a moderator’s retraction are the <em>same kind of thing</em>: a signed event on a carried log. So there’s no reputation <em>system</em> to build — only a log to read.</p>
+    <p class="small"><b>Honest waterline.</b> In Aiko today, <b>messages</b> carry this seal (sign-at-birth shipped). <b>Conduct-judgments don’t yet</b> — the island must sign them first, tracked as issue #2506. This log renders the whole vision so you can see the shape; the amber “judgment” entries are the near future, not today.</p>
+    <p class="small">A fresh identity carries an empty log — provably thin, and thinness can’t be shed by re-registering. That’s sybil defence without asking anyone to prove they’re a person. Verification here uses only the carried bytes and the signer’s public key: <b>no authority is consulted, none is needed.</b></p>
+  </section>
+
+  <div class="footer">
+    <span>Ed25519 · domain tag <b>aikochat:msg:v1:EdDSA</b> · WebCrypto</span>
+    <span>tamper any byte → the seal you’re verifying was minted over exactly those bytes</span>
+  </div>
+</div>
+
+<script>
+"use strict";
+const enc = new TextEncoder();
+
+/* ---------- reproduce the app's canonical signingBytes (message_signing.dart) ---------- */
+const DOMAIN_TAG = "aikochat:msg:v1:EdDSA";
+function u32be(n){ const b=new Uint8Array(4); new DataView(b.buffer).setUint32(0,n,false); return b; }
+function u64be(n){ const b=new Uint8Array(8); new DataView(b.buffer).setBigUint64(0,BigInt(n),false); return b; }
+function concat(chunks){ let len=0; for(const c of chunks) len+=c.length; const out=new Uint8Array(len); let o=0; for(const c of chunks){ out.set(c,o); o+=c.length; } return out; }
+function lp(bytes){ return concat([u32be(bytes.length), bytes]); }
+// exact field order + framing as the Dart signingBytes()
+function signingBytes(p){
+  return concat([
+    lp(enc.encode(DOMAIN_TAG)),
+    lp(p.rawPublicKey),
+    lp(enc.encode(p.channelId)),
+    lp(enc.encode(p.clientMsgId)),
+    u64be(p.signedAtMs),
+    lp(enc.encode(p.body)),
+    lp(enc.encode(p.replyTo || "")),
+  ]);
+}
+function hex(bytes){ return Array.from(bytes).map(b=>b.toString(16).padStart(2,"0")).join(""); }
+function fingerprint(pub){ const h=hex(pub); return h.slice(0,8)+"…"+h.slice(-8); }
+
+/* ---------- WebCrypto Ed25519 (with feature detection) ---------- */
+let KEY = null;           // {publicKey, privateKey, raw}
+let cryptoOk = true;
+async function newKey(){
+  const kp = await crypto.subtle.generateKey({name:"Ed25519"}, true, ["sign","verify"]);
+  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+  return {publicKey:kp.publicKey, privateKey:kp.privateKey, raw};
+}
+async function signBytes(bytes){ return new Uint8Array(await crypto.subtle.sign({name:"Ed25519"}, KEY.privateKey, bytes)); }
+async function verifyBytes(pub, sig, bytes){
+  const key = await crypto.subtle.importKey("raw", pub, {name:"Ed25519"}, false, ["verify"]);
+  return crypto.subtle.verify({name:"Ed25519"}, key, sig, bytes);
+}
+
+/* ---------- the seed log ---------- */
+let ULID = 1;
+function ulid(){ // display-only monotonic pseudo-ULID; the point is "forward cursor", not real ulid
+  const base="01J8CARRIEDREC0RD"; const n=(ULID++).toString(36).toUpperCase().padStart(9,"0"); return base+n;
+}
+function seed(){
+  return [
+    {kind:"message",  channelId:"harbour-general", body:"Shipped the reconcile-engine fix — history catches up after a reconnect now.", replyTo:null},
+    {kind:"message",  channelId:"harbour-general", body:"Reviewed Ada’s passkey PR: seaworthy. +1.", replyTo:null},
+    {kind:"judgment", channelId:"harbour-general", body:"Conduct upheld — resolved a dispute fairly and de-escalated. Signed by the harbourmaster.", replyTo:null},
+    {kind:"legacy",   channelId:"harbour-general", body:"…an older note from before anyone was signing. No seal — absence isn’t dishonesty.", replyTo:null, unsigned:true},
+  ];
+}
+let ENTRIES = [];
+
+async function mintEntry(spec){
+  const e = {
+    kind:spec.kind, channelId:spec.channelId, body:spec.body, replyTo:spec.replyTo||null,
+    clientMsgId:ulid(), signedAtMs: 1754100000000 + ULID*37000,
+    unsigned: !!spec.unsigned, pub:null, sig:null,
+  };
+  if(!e.unsigned){
+    e.pub = KEY.raw;
+    e.sig = await signBytes(signingBytes({rawPublicKey:e.pub, channelId:e.channelId, clientMsgId:e.clientMsgId, signedAtMs:e.signedAtMs, body:e.body, replyTo:e.replyTo}));
+  }
+  return e;
+}
+
+async function reseedAll(){
+  ULID = 1;
+  const specs = ENTRIES.length ? ENTRIES.map(e=>({kind:e.kind, channelId:e.channelId, body:e._pristine ?? e.body, replyTo:e.replyTo, unsigned:e.unsigned})) : seed();
+  ENTRIES = [];
+  for(const s of specs){ const e=await mintEntry(s); e._pristine=e.body; ENTRIES.push(e); }
+}
+
+/* ---------- verify + render ---------- */
+async function verdictFor(e, currentBody){
+  if(e.unsigned) return "none";
+  const bytes = signingBytes({rawPublicKey:e.pub, channelId:e.channelId, clientMsgId:e.clientMsgId, signedAtMs:e.signedAtMs, body:currentBody, replyTo:e.replyTo});
+  const ok = await verifyBytes(e.pub, e.sig, bytes);
+  return ok ? "ok" : "bad";
+}
+
+const SEAL_GLYPH = {ok:"✓", bad:"✕", none:"○"};
+const VERDICT_WORD = {ok:"sealed · verifies", bad:"seal broken · tampered", none:"unsigned"};
+
+async function renderTally(){
+  let ok=0,bad=0,none=0;
+  for(const e of ENTRIES){
+    const v = await verdictFor(e, e.body);
+    if(v==="ok")ok++; else if(v==="bad")bad++; else none++;
+  }
+  document.getElementById("tally").innerHTML =
+    `<span class="ok">✓ <b>${ok}</b> verified</span><span class="bad">✕ <b>${bad}</b> broken</span><span>○ <b>${none}</b> unsigned</span>`;
+}
+
+function bytesDrawerHTML(e, body){
+  const rows = [
+    ["domain tag", DOMAIN_TAG, "tag"],
+    ["public key (32)", fingerprint(e.pub||new Uint8Array(32)), "fld"],
+    ["channel", e.channelId, "fld"],
+    ["client_msg_id", e.clientMsgId, "fld"],
+    ["signed_at_ms", String(e.signedAtMs), "fld"],
+    ["body", body, "fld"],
+    ["reply_to", e.replyTo || "«null»", "fld"],
+  ];
+  const lines = rows.map(([k,v,cls])=>{
+    const len = (cls==="fld"&&k!=="signed_at_ms") ? `<span class="len">len=${enc.encode(String(v)).length}</span> ` : `<span class="len">u64        </span> `;
+    return `<span class="row">  ${len}<span class="${cls}">${escapeHtml(v)}</span>  <span class="len">← ${k}</span></span>`;
+  }).join("\n");
+  return `<span class="lbl">signingBytes — length-prefixed, domain-separated (the exact bytes the signature covers)</span>${lines}\n<span class="note">Every field is length-prefixed so no two boundaries can be re-read as each other. Change one character in <b>body</b> above and these bytes change — so the signature, minted over the old bytes, no longer verifies. That’s the broken seal.</span>`;
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function render(){
+  const log = document.getElementById("log");
+  log.innerHTML = "";
+  for(let i=0;i<ENTRIES.length;i++){
+    const e = ENTRIES[i];
+    const v = await verdictFor(e, e.body);
+    const row = document.createElement("div");
+    row.className = "entry "+e.kind;
+    row.innerHTML = `
+      <div class="seal-cell"><div class="seal ${v}" data-i="${i}"><span class="g">${SEAL_GLYPH[v]}</span></div></div>
+      <div class="card">
+        <div class="top">
+          <span class="kind ${e.kind}">${e.kind}</span>
+          <span class="ulid">${e.clientMsgId}</span>
+          <span class="verdict-word ${v}">${VERDICT_WORD[v]}</span>
+        </div>
+        <div class="body" ${e.unsigned?"":'contenteditable="true"'} spellcheck="false" data-i="${i}">${escapeHtml(e.body)}</div>
+        <div class="foot">
+          <span class="kv">sig&nbsp;<b class="sig">${e.sig?fingerprint(e.sig):"—"}</b></span>
+          ${e.unsigned?"":`<button class="inspect" data-i="${i}">inspect bytes</button>`}
+        </div>
+      </div>`;
+    log.appendChild(row);
+  }
+  bindEntries();
+  renderTally();
+}
+
+let openDrawer = -1;
+function bindEntries(){
+  document.querySelectorAll(".body[contenteditable='true']").forEach(el=>{
+    el.addEventListener("input", debounce(async ()=>{
+      const i = +el.dataset.i;
+      ENTRIES[i].body = el.textContent;
+      const v = await verdictFor(ENTRIES[i], ENTRIES[i].body);
+      updateSeal(i, v);
+      if(openDrawer===i) refreshDrawer(i);
+      renderTally();
+    }, 90));
+  });
+  document.querySelectorAll(".inspect").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const i = +btn.dataset.i;
+      if(openDrawer===i){ closeDrawer(); return; }
+      closeDrawer(); openDrawer=i;
+      const card = btn.closest(".entry");
+      const d = document.createElement("div");
+      d.className="bytes"; d.id="drawer";
+      d.innerHTML = bytesDrawerHTML(ENTRIES[i], ENTRIES[i].body);
+      card.after(d);
+      btn.textContent="hide bytes";
+    });
+  });
+}
+function refreshDrawer(i){ const d=document.getElementById("drawer"); if(d) d.innerHTML=bytesDrawerHTML(ENTRIES[i], ENTRIES[i].body); }
+function closeDrawer(){ const d=document.getElementById("drawer"); if(d)d.remove(); document.querySelectorAll(".inspect").forEach(b=>b.textContent="inspect bytes"); openDrawer=-1; }
+function updateSeal(i, v){
+  const seal = document.querySelector(`.seal[data-i="${i}"]`);
+  if(!seal) return;
+  seal.className = `seal ${v} pulse`;
+  seal.querySelector(".g").textContent = SEAL_GLYPH[v];
+  setTimeout(()=>seal.classList.remove("pulse"), 340);
+  const word = seal.closest(".entry").querySelector(".verdict-word");
+  word.className = `verdict-word ${v}`; word.textContent = VERDICT_WORD[v];
+}
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+
+/* ---------- identity + controls ---------- */
+function paintMark(){ document.getElementById("markFp").innerHTML = `<b>${fingerprint(KEY.raw)}</b>`; }
+async function rotate(){
+  KEY = await newKey(); paintMark();
+  // re-sign every signed entry under the new mark, at its pristine body
+  for(const e of ENTRIES){ if(!e.unsigned){ e.body=e._pristine; e.pub=KEY.raw; e.sig=await signBytes(signingBytes({rawPublicKey:e.pub, channelId:e.channelId, clientMsgId:e.clientMsgId, signedAtMs:e.signedAtMs, body:e.body, replyTo:e.replyTo})); } }
+  closeDrawer(); render();
+}
+async function reset(){
+  for(const e of ENTRIES){ if(!e.unsigned){ e.body=e._pristine; e.pub=KEY.raw; e.sig=await signBytes(signingBytes({rawPublicKey:e.pub, channelId:e.channelId, clientMsgId:e.clientMsgId, signedAtMs:e.signedAtMs, body:e.body, replyTo:e.replyTo})); } else { e.body=e._pristine; } }
+  closeDrawer(); render();
+}
+async function addEntry(){
+  const samples = [
+    {kind:"message", body:"Charted a new channel and invited three neighbours aboard."},
+    {kind:"judgment", body:"Vouched-for by two islands after a clean crossing. Signed by a peer."},
+    {kind:"message", body:"Answered a distress call in #open-water at 03:00."},
+  ];
+  const s = samples[(ENTRIES.length) % samples.length];
+  const e = await mintEntry({kind:s.kind, channelId:"harbour-general", body:s.body, replyTo:null});
+  e._pristine=e.body; ENTRIES.push(e); render();
+}
+
+/* ---------- theme ---------- */
+document.getElementById("themeBtn").addEventListener("click", ()=>{
+  const root=document.documentElement;
+  const cur = root.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light");
+  root.setAttribute("data-theme", cur==="dark"?"light":"dark");
+});
+
+/* ---------- boot ---------- */
+async function boot(){
+  try{
+    KEY = await newKey();
+  }catch(err){
+    cryptoOk=false;
+    const b=document.getElementById("banner");
+    b.className="banner show";
+    b.textContent="This browser doesn’t expose WebCrypto Ed25519, so live verification is unavailable. The log below shows the structure, but the seals won’t re-verify here — try a current Chrome, Edge, or Safari.";
+    document.getElementById("markFp").textContent="unavailable";
+    return;
+  }
+  paintMark();
+  for(const s of seed()){ const e=await mintEntry(s); e._pristine=e.body; ENTRIES.push(e); }
+  render();
+  document.getElementById("rotateBtn").addEventListener("click", rotate);
+  document.getElementById("resetBtn").addEventListener("click", reset);
+  document.getElementById("addBtn").addEventListener("click", addEntry);
+}
+boot();
+</script>
+</body>
+</html>
