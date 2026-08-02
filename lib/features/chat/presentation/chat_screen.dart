@@ -141,6 +141,10 @@ class _ChannelSwitcher extends ConsumerWidget {
       child: DropdownButton<String>(
         value: activeId,
         isDense: true,
+        // isExpanded so the button is bounded by the AppBar title width and a
+        // long channel name ellipsizes instead of overflowing the bar (a channel
+        // named like a legal entity would otherwise clip — cage-match #106, Tesla).
+        isExpanded: true,
         borderRadius: BorderRadius.circular(8),
         icon: const Icon(Icons.arrow_drop_down),
         // M3 AppBar foreground is onSurface, and the menu opens on a surface
@@ -148,7 +152,10 @@ class _ChannelSwitcher extends ConsumerWidget {
         // the collapsed bar and the open menu (no explicit color needed).
         items: [
           for (final c in channels)
-            DropdownMenuItem<String>(value: c.id, child: Text(c.name)),
+            DropdownMenuItem<String>(
+              value: c.id,
+              child: Text(c.name, overflow: TextOverflow.ellipsis),
+            ),
         ],
         onChanged: (id) {
           if (id != null) {

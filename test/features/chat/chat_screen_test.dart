@@ -1,6 +1,7 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
+import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_test/flutter_test.dart';
@@ -178,6 +179,11 @@ void main() {
     expect(find.text('in-random'), findsOneWidget);
     expect(find.text('in-general'), findsNothing);
 
+    // Wire-level: each send carried the ACTIVE channel's id, not just landed in
+    // the right cache slice (pins "scopes sends" at the transport, not by proxy).
+    expect(transport.sent.firstWhere((m) => m.body == 'in-general').channelId, 'c1');
+    expect(transport.sent.firstWhere((m) => m.body == 'in-random').channelId, 'c2');
+
     // Switch back to 'general': its message is still cached (round-trip).
     await tester.tap(find.byType(DropdownButton<String>));
     await tester.pumpAndSettle();
@@ -185,6 +191,49 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('in-general'), findsOneWidget);
     expect(find.text('in-random'), findsNothing);
+  });
+
+  testWidgets('a picked channel that disappears clears the pick and never snaps back',
+      (tester) async {
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // Pick 'random'.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+    expect(container.read(selectedChannelIdProvider), 'c2');
+
+    // 'random' leaves the roster; the channel list refetches.
+    rest.channels = const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+    ];
+    container.refresh(channelsProvider);
+    await tester.pumpAndSettle();
+
+    // The stale pick was CLEARED (not merely display-masked by _resolveActive) —
+    // this is the ref.listen/clear() write-back under test.
+    expect(container.read(selectedChannelIdProvider), isNull);
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+
+    // 'random' returns — the user must NOT be yanked back to a pick they never
+    // re-made. (Fails if clear() is a no-op: the stale 'c2' would re-resolve.)
+    rest.channels = const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ];
+    container.refresh(channelsProvider);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
   });
 
   testWidgets('an unsent draft does not bleed across a channel switch',
