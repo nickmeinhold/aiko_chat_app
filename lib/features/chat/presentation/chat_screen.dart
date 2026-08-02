@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/mark/mark_avatar.dart';
 import '../../../core/network/network_status_banner.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
@@ -196,6 +197,16 @@ class MessageTile extends ConsumerWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Key-derived Blockie mark (identity v1): the signed sender key
+                  // when present, else a stable seed from the user id so every
+                  // sender still gets a deterministic face.
+                  MarkAvatar(
+                    publicKey: message.origin?.rawPublicKey,
+                    seed: message.sender.userId ?? message.sender.displayLabel,
+                    size: 20,
+                    radius: 6,
+                  ),
+                  const SizedBox(width: 6),
                   Flexible(
                     child: Text(
                       message.sender.displayLabel,
