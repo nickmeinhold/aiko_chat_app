@@ -151,6 +151,40 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
   return repo;
 });
 
+/// The channel the user has picked in the app-bar switcher, or null to follow
+/// the default (the first channel the gateway returns). Held DELIBERATELY
+/// outside [channelsProvider]: that provider refetches on every reconnect and on
+/// the offline→online edge (a fresh `listChannels()`), so a selection folded into
+/// it would snap the user back to 'general' on a routine socket blip. Keeping the
+/// pick here means it survives channel-list refreshes; the UI's resolver falls
+/// back to the first channel if the picked id ever leaves the list (a removed or
+/// renamed-away channel), so a stale pick self-heals rather than dead-ends.
+///
+/// EXPLICITLY `.autoDispose` (the file's convention — every sibling provider spells
+/// it) so it shares the chat surface's lifecycle: only [ChatScreen] watches it, and
+/// that unmounts on logout (router → login), tearing it down and resetting the pick
+/// to null. A fresh login therefore starts on the default channel — no cross-session
+/// selection leak. A plain (keep-alive) `NotifierProvider` would survive logout in
+/// the same `ProviderContainer` and leak the previous user's pick into the next
+/// session (cage-match #106, Carnot + Tesla). The base class is a plain [Notifier]:
+/// Riverpod 3 removed `AutoDisposeNotifier` (folded into `Notifier`), so disposal
+/// rides on the provider's `.autoDispose`, not the notifier type.
+final selectedChannelIdProvider =
+    NotifierProvider.autoDispose<SelectedChannelId, String?>(SelectedChannelId.new);
+
+class SelectedChannelId extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  /// Pick a channel by id. Idempotent.
+  void select(String channelId) => state = channelId;
+
+  /// Drop the pick (→ follow the default). Called when the selected channel
+  /// leaves the list, so the Notifier and the UI agree rather than the resolver
+  /// papering over a stale id that would re-snap the user if the channel returns.
+  void clear() => state = null;
+}
+
 /// The reactive, ordered message list for a channel. Awaits the repository, then
 /// forwards its cache-backed stream — each [MessageTile] watches the narrowest
 /// slice (this family entry) rather than the whole repo.

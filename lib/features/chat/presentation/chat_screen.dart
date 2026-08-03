@@ -7,21 +7,58 @@ import '../../../core/network/network_status_banner.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
+import '../domain/channel.dart';
 import '../domain/message.dart';
 
-/// The single-channel Phase-1 chat surface: channel header + logout, a thin
-/// connection banner, the message list, and the composer. The default channel
-/// is the first one the gateway returns (a single seeded "general" in Phase 1).
+/// The chat surface: a channel switcher + logout in the app bar, a thin
+/// connection banner, the message list, and the composer. The default channel is
+/// the first one the gateway returns; when more than one channel exists the title
+/// becomes a dropdown to switch among them (the app already fetches the full list
+/// via [channelsProvider]).
+///
+/// Switching is a pure DISPLAY change — the repository subscribes to EVERY
+/// channel at construction and syncs each one's history on connect
+/// (chat_repository `_subscribedChannelIds`), so every channel's messages are
+/// already in the cache. Picking another channel just re-points [MessageList] /
+/// [Composer] at a different cache slice; there is no re-subscribe or history
+/// fetch on switch. (Named tradeoff: subscribe-to-all is simplest and gives
+/// instant switching at this channel count; a large channel set would want lazy
+/// per-channel subscription instead — future work, not Phase-1.)
 class ChatScreen extends ConsumerWidget {
   const ChatScreen({super.key});
+
+  /// The channel to display: the user's pick if it is still in the list, else
+  /// the first channel (the default, and the self-heal when a pick disappears).
+  static Channel? _resolveActive(List<Channel> channels, String? selectedId) =>
+      channels.where((c) => c.id == selectedId).firstOrNull ??
+      channels.firstOrNull;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final channelsAsync = ref.watch(channelsProvider);
+    final selectedId = ref.watch(selectedChannelIdProvider);
+    final channels = channelsAsync.value ?? const <Channel>[];
+    final active = _resolveActive(channels, selectedId);
+
+    // If the picked channel leaves the list (removed / renamed-away on a refetch),
+    // clear the pick so the Notifier and the UI agree. Without this the resolver
+    // heals only the DISPLAY (falls back to first) while the stale id lingers, so a
+    // channel that later reappears would snap the user back to a selection they
+    // never re-made (cage-match #106, Tesla). ref.listen fires outside build, so
+    // mutating the selection notifier here is safe.
+    ref.listen(channelsProvider, (_, next) {
+      final ids = next.value?.map((c) => c.id).toSet();
+      final sel = ref.read(selectedChannelIdProvider);
+      if (sel != null && ids != null && !ids.contains(sel)) {
+        ref.read(selectedChannelIdProvider.notifier).clear();
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(channelsAsync.value?.firstOrNull?.name ?? 'Chat'),
+        title: channels.length > 1 && active != null
+            ? _ChannelSwitcher(channels: channels, activeId: active.id)
+            : Text(active?.name ?? 'Chat'),
         actions: [
           IconButton(
             tooltip: 'Settings',
@@ -49,20 +86,82 @@ class ChatScreen extends ConsumerWidget {
               error: (e, _) =>
                   Center(child: Text('Could not load channels.\n$e')),
               data: (channels) {
-                final channel = channels.firstOrNull;
-                if (channel == null) {
+                if (active == null) {
                   return const Center(child: Text('No channels yet.'));
                 }
                 return Column(
                   children: [
-                    Expanded(child: MessageList(channelId: channel.id)),
-                    Composer(channelId: channel.id),
+                    // Key by channel id so a switch gives MessageList a FRESH
+                    // State: without this, Flutter reuses the element at this
+                    // slot and the old channel's ScrollController (and its
+                    // near-bottom tracking) would carry over, landing the new
+                    // channel at a stale scroll offset instead of its newest
+                    // message. The key forces dispose→recreate on switch.
+                    Expanded(
+                      child: MessageList(
+                        key: ValueKey(active.id),
+                        channelId: active.id,
+                      ),
+                    ),
+                    // Keyed by channel id like MessageList above, so each channel
+                    // gets its OWN composer state: without this, Flutter reuses
+                    // _ComposerState across a switch and a draft typed in one
+                    // channel rides into the next (and sends there) — the same
+                    // state-carry the ValueKey fixes for scroll position
+                    // (cage-match #106, Maxwell + Tesla).
+                    Composer(
+                      key: ValueKey('composer-${active.id}'),
+                      channelId: active.id,
+                    ),
                   ],
                 );
               },
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The app-bar channel picker, shown only when more than one channel exists.
+/// Renders the active channel's name with a dropdown of the rest; picking one
+/// writes [selectedChannelIdProvider], which re-points the message surface. Menu
+/// items decode from the same [channelsProvider] list the repo subscribed to, so
+/// every listed channel is already synced and switching is instant.
+class _ChannelSwitcher extends ConsumerWidget {
+  const _ChannelSwitcher({required this.channels, required this.activeId});
+
+  final List<Channel> channels;
+  final String activeId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        value: activeId,
+        isDense: true,
+        // isExpanded so the button is bounded by the AppBar title width and a
+        // long channel name ellipsizes instead of overflowing the bar (a channel
+        // named like a legal entity would otherwise clip — cage-match #106, Tesla).
+        isExpanded: true,
+        borderRadius: BorderRadius.circular(8),
+        icon: const Icon(Icons.arrow_drop_down),
+        // M3 AppBar foreground is onSurface, and the menu opens on a surface
+        // background — so the inherited onSurface text reads correctly in both
+        // the collapsed bar and the open menu (no explicit color needed).
+        items: [
+          for (final c in channels)
+            DropdownMenuItem<String>(
+              value: c.id,
+              child: Text(c.name, overflow: TextOverflow.ellipsis),
+            ),
+        ],
+        onChanged: (id) {
+          if (id != null) {
+            ref.read(selectedChannelIdProvider.notifier).select(id);
+          }
+        },
       ),
     );
   }

@@ -1,6 +1,8 @@
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
+import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
+import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -130,6 +132,182 @@ void main() {
 
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
     expect(find.text('secret-from-A'), findsNothing); // cache cleared on logout
+  });
+
+  testWidgets(
+      'channel switcher swaps the message surface and scopes sends per channel',
+      (tester) async {
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // The switcher opens on the default (first) channel.
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+
+    // A send lands in 'general'.
+    await tester.enterText(find.byType(TextField).first, 'in-general');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    expect(find.text('in-general'), findsOneWidget);
+
+    // Switch to 'random' via the dropdown.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+
+    // Now on 'random': general's message is off-screen, empty-state shows. No
+    // re-subscribe was needed — the repo already subscribed to both channels.
+    expect(find.text('in-general'), findsNothing);
+    expect(find.text('No messages yet. Say hello!'), findsOneWidget);
+
+    // A send now targets 'random' (channelId threaded from the active channel).
+    await tester.enterText(find.byType(TextField).first, 'in-random');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    expect(find.text('in-random'), findsOneWidget);
+    expect(find.text('in-general'), findsNothing);
+
+    // Wire-level: each send carried the ACTIVE channel's id, not just landed in
+    // the right cache slice (pins "scopes sends" at the transport, not by proxy).
+    expect(transport.sent.firstWhere((m) => m.body == 'in-general').channelId, 'c1');
+    expect(transport.sent.firstWhere((m) => m.body == 'in-random').channelId, 'c2');
+
+    // Switch back to 'general': its message is still cached (round-trip).
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('general').last);
+    await tester.pumpAndSettle();
+    expect(find.text('in-general'), findsOneWidget);
+    expect(find.text('in-random'), findsNothing);
+  });
+
+  testWidgets('a picked channel that disappears clears the pick and never snaps back',
+      (tester) async {
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // Pick 'random'.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+    expect(container.read(selectedChannelIdProvider), 'c2');
+
+    // 'random' leaves the roster; the channel list refetches.
+    rest.channels = const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+    ];
+    container.refresh(channelsProvider);
+    await tester.pumpAndSettle();
+
+    // The stale pick was CLEARED (not merely display-masked by _resolveActive) —
+    // this is the ref.listen/clear() write-back under test.
+    expect(container.read(selectedChannelIdProvider), isNull);
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+
+    // 'random' returns — the user must NOT be yanked back to a pick they never
+    // re-made. (Fails if clear() is a no-op: the stale 'c2' would re-resolve.)
+    rest.channels = const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ];
+    container.refresh(channelsProvider);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+  });
+
+  testWidgets('an unsent draft does not bleed across a channel switch',
+      (tester) async {
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // Type a draft in 'general' but do NOT send it.
+    await tester.enterText(find.byType(TextField).first, 'draft-for-general');
+    await tester.pump();
+
+    // Switch to 'random'.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+
+    // The composer is fresh — the general draft did not ride into 'random'
+    // (Composer is keyed by channel id). Fails if the draft carries over.
+    expect(find.text('draft-for-general'), findsNothing);
+  });
+
+  testWidgets('channel pick resets across logout (no cross-session selection leak)',
+      (tester) async {
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // Pick 'random'.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'random'), findsOneWidget);
+
+    // Log out (chat surface unmounts → selectedChannelIdProvider auto-disposes).
+    await tester.tap(find.byIcon(Icons.logout));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+
+    // Back in: a fresh session lands on the default channel, NOT the prior pick.
+    // (Fails if the provider is keep-alive — the 'random' selection would survive.)
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+  });
+
+  testWidgets('single channel shows a plain title, not a switcher', (tester) async {
+    // Default FakeRestApi has one channel → no dropdown affordance.
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    expect(find.byType(DropdownButton<String>), findsNothing);
   });
 
   testWidgets('new messages auto-scroll the list to the newest (#42)',
