@@ -59,6 +59,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => context.push('/moderation/reports'),
             ),
+          const _SectionHeader('Identity'),
+          ListTile(
+            leading: const Icon(Icons.verified_outlined),
+            title: const Text('Your Carried Record'),
+            subtitle: const Text(
+                'Messages attributed to you, and which you can cryptographically '
+                'prove you signed on this device.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/carried-record'),
+          ),
           const _SectionHeader('Sign-in'),
           ListTile(
             leading: const Icon(Icons.key_outlined),

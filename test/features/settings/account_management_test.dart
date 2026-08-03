@@ -17,6 +17,15 @@ void main() {
         makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
     addTearDown(container.dispose);
 
+    // The settings list has grown (Identity, Safety, Sign-in, Account, Legal
+    // sections); its Terms tile sits below the default 800x600 test viewport, so
+    // give this test a taller viewport so the whole list lays out on-screen and
+    // the Terms tile is reachable without scroll gymnastics.
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     await pumpApp(tester, container);
     await signIn(tester);
     await tester.tap(find.byIcon(Icons.settings));

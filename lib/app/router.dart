@@ -24,6 +24,7 @@ import '../features/chat/data/chat_rest_api.dart' show AccountSuspended;
 import '../features/auth/presentation/claim_handle_screen.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/auth/presentation/suspended_screen.dart';
+import '../features/chat/presentation/carried_record_screen.dart';
 import '../features/chat/presentation/chat_screen.dart';
 import '../features/chat/presentation/splash_screen.dart';
 import '../features/legal/application/eula_controller.dart';
@@ -153,6 +154,9 @@ final routerProvider = Provider<GoRouter>((ref) {
           path: '/claim-handle', builder: (_, _) => const ClaimHandleScreen()),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
+      GoRoute(
+          path: '/settings/carried-record',
+          builder: (_, _) => const CarriedRecordScreen()),
       GoRoute(
           path: '/settings/gateway',
           builder: (_, _) => const GatewayPickerScreen()),
