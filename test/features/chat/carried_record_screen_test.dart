@@ -2,12 +2,15 @@
 // real carriedRecordProvider → carriedRecord domain path over a fixed, injected
 // message set: signed-mine renders ✓, tampered-mine renders invalid, unsigned-mine
 // renders —, and a message from ANOTHER author is excluded entirely.
+import 'dart:typed_data';
+
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/chat/presentation/carried_record_screen.dart';
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,6 +25,14 @@ const _meUser = AppUser(
   displayName: 'Me',
   aikoUsername: 'me',
 );
+
+/// A fresh, independent Ed25519 key — distinct from the device key. Used to
+/// forge a well-formed, VALID signature under a key that is NOT mine.
+Future<SovereignKey> _freshKey() async {
+  final kp = await Ed25519().newKeyPair();
+  final pub = await kp.extractPublicKey();
+  return SovereignKey(keyPair: kp, rawPublicKey: Uint8List.fromList(pub.bytes));
+}
 
 Future<Message> _signedMessage(
   SovereignKey key, {
@@ -91,6 +102,25 @@ void main() {
     expect(find.text('Verified — provably yours'), findsOneWidget);
     // The other author's message is excluded entirely.
     expect(find.text('not mine'), findsNothing);
+  });
+
+  testWidgets(
+      'SECURITY: a valid signature under a FOREIGN key (sender.userId == me) '
+      'never renders "provably yours"', (tester) async {
+    // A forged/cached row claiming to be from me, carrying a well-formed VALID
+    // signature — but signed by an attacker's own key. Must NOT read verified.
+    final attacker = await _freshKey();
+    final forged = await _signedMessage(attacker,
+        clientTempId: 'x', body: 'I never wrote this');
+
+    await _pump(tester, [forged]);
+
+    expect(find.text('I never wrote this'), findsOneWidget);
+    // Never claimed as mine.
+    expect(find.text('Verified — provably yours'), findsNothing);
+    // Honestly labelled as a different key.
+    expect(find.text('Signed by a different key — not this device'),
+        findsOneWidget);
   });
 
   testWidgets('a tampered message renders as invalid', (tester) async {

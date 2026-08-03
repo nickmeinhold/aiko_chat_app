@@ -14,6 +14,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/providers.dart';
 import '../application/chat_providers.dart';
 import '../domain/carried_record.dart';
 import '../domain/message.dart';
@@ -42,12 +43,23 @@ final myCarriedMessagesProvider =
 });
 
 /// The current user's carried record: their authored messages, each carried
-/// signature re-verified independently. Empty subject id while logged out.
+/// signature re-verified independently and the `verified` verdict BOUND to this
+/// device's sovereign public key (so a valid signature under a foreign key is
+/// never claimed as yours). Fails closed to an empty record while logged out /
+/// before the user id is known.
 final carriedRecordProvider =
     FutureProvider.autoDispose<CarriedRecord>((ref) async {
   final me = ref.watch(currentUserProvider);
+  if (me == null || me.userId.isEmpty) return CarriedRecord.empty;
+  // The subject is ME, and my device holds my sovereign key — bind ownership to
+  // it. Loaded here (not in the domain reader) so the reader stays pure/hermetic.
+  final myKey = await ref.watch(sovereignKeyStoreProvider).loadOrCreate();
   final messages = await ref.watch(myCarriedMessagesProvider.future);
-  return carriedRecord(me?.userId ?? '', messages);
+  return carriedRecord(
+    me.userId,
+    messages,
+    subjectPublicKey: myKey.rawPublicKey,
+  );
 });
 
 class CarriedRecordScreen extends ConsumerWidget {
@@ -129,15 +141,17 @@ class _Header extends StatelessWidget {
           Text(
             'These are the messages you can cryptographically prove are yours. '
             'Each signature is re-checked here on your device, from the message '
-            'itself — nothing on a server is trusted to vouch for it.',
+            'itself — nothing on a server is trusted to re-vouch the signature.',
             style: theme.textTheme.bodyMedium,
           ),
           const SizedBox(height: 8),
           Text(
-            'A dash (—) means a message carries no signature — older messages '
-            'from before signing existed, or ones never signed. That is not a '
-            'sign of dishonesty. This is only your authorship: it is not a '
-            'reputation or a record of anything anyone has said about you.',
+            'Only messages signed by this device’s key show as verified. '
+            'Messages you signed on another device show as signed by a different '
+            'key — multi-device support is coming. A dash (—) means no signature '
+            'was carried (older or never-signed messages); that is not a sign of '
+            'dishonesty. This is only your authorship: it is not a reputation, '
+            'and not a record of anything anyone has said about you.',
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
@@ -164,6 +178,11 @@ class _EntryTile extends StatelessWidget {
           Icons.warning_amber_outlined,
           theme.colorScheme.error,
           "Invalid — signature doesn't match",
+        ),
+      CarriedRecordVerdict.foreignKey => (
+          Icons.devices_other_outlined,
+          theme.colorScheme.tertiary,
+          'Signed by a different key — not this device',
         ),
       CarriedRecordVerdict.unsigned => (
           Icons.remove,

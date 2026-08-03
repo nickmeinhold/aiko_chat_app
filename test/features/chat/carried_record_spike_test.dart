@@ -1,19 +1,33 @@
-// SPIKE falsifier for "The Carried Record" (docs/RECOMBINATION.md,
-// /ascend cold-pole build): proves — or disposes — the claim that a
-// subject's locally-cached signed messages can be listed and each signature
-// INDEPENDENTLY re-verified from carried bytes alone, with no new schema, no
-// new routes, no network.
+// Domain falsifier for "The Carried Record" authorship reader
+// (docs/RECOMBINATION.md): a subject's locally-cached signed messages are
+// listed and each signature INDEPENDENTLY re-verified from carried bytes alone
+// — AND the `verified` verdict is bound to the subject's own public key, so a
+// valid signature under a foreign key is never claimed as theirs.
+import 'dart:typed_data';
+
 import 'package:aiko_chat_app/features/chat/domain/carried_record.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart';
 
 const _me = 'me-user-id';
 const _chan = 'chan-1';
+
+/// Mint a FRESH, independent Ed25519 key — distinct from the device key. Used to
+/// forge a well-formed, VALID signature under a key that is NOT the subject's.
+Future<SovereignKey> _freshKey() async {
+  final kp = await Ed25519().newKeyPair();
+  final pub = await kp.extractPublicKey();
+  return SovereignKey(
+    keyPair: kp,
+    rawPublicKey: Uint8List.fromList(pub.bytes),
+  );
+}
 
 Future<Message> _signedMessage(
   SovereignKey key, {
@@ -46,10 +60,21 @@ Future<Message> _signedMessage(
   );
 }
 
+Message _unsignedMessage(String id, String body) => Message(
+      clientTempId: id,
+      id: id,
+      channelId: _chan,
+      sender: const MessageSender(userId: _me, kind: SenderKind.human),
+      body: body,
+      createdAt: DateTime.now().toUtc(),
+      deliveryState: DeliveryState.sent,
+      // origin: null (default) — legal, pre-feature / never-signed history.
+    );
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  late SovereignKey key;
+  late SovereignKey key; // the subject's (device) key
 
   setUp(() async {
     installSecureStorageMock();
@@ -63,12 +88,14 @@ void main() {
     final m2 = await _signedMessage(key, clientTempId: 'b', body: 'world');
     final m3 = await _signedMessage(key, clientTempId: 'c', body: 'third');
 
-    final record = await carriedRecord(_me, [m1, m2, m3]);
+    final record = await carriedRecord(_me, [m1, m2, m3],
+        subjectPublicKey: key.rawPublicKey);
 
     expect(record.subjectUserId, _me);
     expect(record.entries.length, 3);
     expect(record.verifiedCount, 3);
     expect(record.invalidCount, 0);
+    expect(record.foreignKeyCount, 0);
     expect(record.unsignedCount, 0);
     expect(
       record.entries.every((e) => e.verdict == CarriedRecordVerdict.verified),
@@ -85,26 +112,44 @@ void main() {
     // what's carried — independent verification must catch this.
     final tampered = honest.copyWith(body: 'hello, but attacker edited this');
 
-    final record = await carriedRecord(_me, [tampered]);
+    final record = await carriedRecord(_me, [tampered],
+        subjectPublicKey: key.rawPublicKey);
 
     expect(record.entries.single.verdict, CarriedRecordVerdict.invalid);
     expect(record.invalidCount, 1);
     expect(record.verifiedCount, 0);
   });
 
-  test('an unsigned message classifies unsigned and does not crash', () async {
-    final unsigned = Message(
-      clientTempId: 'u',
-      id: 'u',
-      channelId: _chan,
-      sender: const MessageSender(userId: _me, kind: SenderKind.human),
-      body: 'pre-feature history',
-      createdAt: DateTime.now().toUtc(),
-      deliveryState: DeliveryState.sent,
-      // origin: null (default) — legal, pre-feature / never-signed history.
-    );
+  test(
+      'RED-proof (the security guarantee): a VALID signature under a FOREIGN '
+      'key with sender.userId == me is NEVER verified/"provably yours"',
+      () async {
+    // The attack: a cached/forged row that CLAIMS to be from me (sender.userId
+    // == _me) carrying a well-formed, cryptographically VALID signature — but
+    // signed by an attacker's own key, not mine. Selecting "mine" by the
+    // non-crypto sender field and trusting any valid sig would render this
+    // "Verified — provably yours". Binding `verified` to my key must reject it.
+    final attacker = await _freshKey();
+    expect(attacker.rawPublicKey, isNot(key.rawPublicKey));
 
-    final record = await carriedRecord(_me, [unsigned]);
+    final forged = await _signedMessage(attacker,
+        clientTempId: 'x', body: 'I never wrote this');
+
+    final record = await carriedRecord(_me, [forged],
+        subjectPublicKey: key.rawPublicKey);
+
+    // NOT verified — the core guarantee.
+    expect(record.verifiedCount, 0);
+    expect(record.entries.single.verdict, isNot(CarriedRecordVerdict.verified));
+    // Classified as a foreign key: provably signed by *someone*, but not me.
+    expect(record.entries.single.verdict, CarriedRecordVerdict.foreignKey);
+    expect(record.foreignKeyCount, 1);
+  });
+
+  test('an unsigned message classifies unsigned and does not crash', () async {
+    final record = await carriedRecord(
+        _me, [_unsignedMessage('u', 'pre-feature history')],
+        subjectPublicKey: key.rawPublicKey);
 
     expect(record.entries.single.verdict, CarriedRecordVerdict.unsigned);
     expect(record.unsignedCount, 1);
@@ -122,7 +167,8 @@ void main() {
       senderUserId: 'someone-else',
     );
 
-    final record = await carriedRecord(_me, [mine, theirs]);
+    final record = await carriedRecord(_me, [mine, theirs],
+        subjectPublicKey: key.rawPublicKey);
 
     expect(record.entries.length, 1);
     expect(record.entries.single.id, 'mine');
@@ -131,24 +177,27 @@ void main() {
   test('a mixed record (verified + invalid + unsigned) tallies correctly',
       () async {
     final good = await _signedMessage(key, clientTempId: 'g', body: 'good');
-    final bad =
-        (await _signedMessage(key, clientTempId: 'b', body: 'orig'))
-            .copyWith(body: 'tampered');
-    final none = Message(
-      clientTempId: 'n',
-      id: 'n',
-      channelId: _chan,
-      sender: const MessageSender(userId: _me, kind: SenderKind.human),
-      body: 'unsigned',
-      createdAt: DateTime.now().toUtc(),
-      deliveryState: DeliveryState.sent,
-    );
+    final bad = (await _signedMessage(key, clientTempId: 'b', body: 'orig'))
+        .copyWith(body: 'tampered');
+    final none = _unsignedMessage('n', 'unsigned');
 
-    final record = await carriedRecord(_me, [good, bad, none]);
+    final record = await carriedRecord(_me, [good, bad, none],
+        subjectPublicKey: key.rawPublicKey);
 
     expect(record.verifiedCount, 1);
     expect(record.invalidCount, 1);
     expect(record.unsignedCount, 1);
     expect(record.entries.length, 3);
+  });
+
+  test('fails closed on an empty subject id or empty subject key', () async {
+    final m = await _signedMessage(key, clientTempId: 'a', body: 'hello');
+
+    final noSubject =
+        await carriedRecord('', [m], subjectPublicKey: key.rawPublicKey);
+    expect(noSubject.entries, isEmpty);
+
+    final noKey = await carriedRecord(_me, [m], subjectPublicKey: Uint8List(0));
+    expect(noKey.entries, isEmpty);
   });
 }
