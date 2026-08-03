@@ -139,9 +139,11 @@ class _Header extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'These are the messages you can cryptographically prove are yours. '
-            'Each signature is re-checked here on your device, from the message '
-            'itself — nothing on a server is trusted to re-vouch the signature.',
+            'Messages attributed to you in this device’s cache. Only rows '
+            'marked Verified are cryptographically bound to this device’s '
+            'key — each of those signatures is re-checked here on your device, '
+            'from the message itself, with nothing on a server trusted to '
+            're-vouch it.',
             style: theme.textTheme.bodyMedium,
           ),
           const SizedBox(height: 8),

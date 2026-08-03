@@ -64,7 +64,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             leading: const Icon(Icons.verified_outlined),
             title: const Text('Your Carried Record'),
             subtitle: const Text(
-                'The messages you can cryptographically prove are yours.'),
+                'Messages attributed to you, and which you can cryptographically '
+                'prove you signed on this device.'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/carried-record'),
           ),
