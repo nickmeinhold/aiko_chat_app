@@ -137,31 +137,120 @@ class _ChannelSwitcher extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return DropdownButtonHideUnderline(
-      child: DropdownButton<String>(
-        value: activeId,
-        isDense: true,
-        // isExpanded so the button is bounded by the AppBar title width and a
-        // long channel name ellipsizes instead of overflowing the bar (a channel
-        // named like a legal entity would otherwise clip — cage-match #106, Tesla).
-        isExpanded: true,
-        borderRadius: BorderRadius.circular(8),
-        icon: const Icon(Icons.arrow_drop_down),
-        // M3 AppBar foreground is onSurface, and the menu opens on a surface
-        // background — so the inherited onSurface text reads correctly in both
-        // the collapsed bar and the open menu (no explicit color needed).
-        items: [
-          for (final c in channels)
-            DropdownMenuItem<String>(
-              value: c.id,
-              child: Text(c.name, overflow: TextOverflow.ellipsis),
+    // Aggregate unread across every NON-active channel, so the collapsed app-bar
+    // switcher carries an at-a-glance "there's unread elsewhere" dot even before
+    // the user opens the menu (the closed DropdownButton only shows the active
+    // channel's own item, which is always badge-free). Opening the menu then
+    // reveals which channel and how many via the per-item counts below.
+    final otherUnread = channels
+        .where((c) => c.id != activeId)
+        .fold<int>(0, (sum, c) => sum + ref.watch(channelUnreadCountProvider(c.id)));
+
+    return Row(
+      children: [
+        Expanded(
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: activeId,
+              isDense: true,
+              // isExpanded so the button is bounded by the AppBar title width and
+              // a long channel name ellipsizes instead of overflowing the bar (a
+              // channel named like a legal entity would otherwise clip —
+              // cage-match #106, Tesla).
+              isExpanded: true,
+              borderRadius: BorderRadius.circular(8),
+              icon: const Icon(Icons.arrow_drop_down),
+              // M3 AppBar foreground is onSurface, and the menu opens on a
+              // surface background — so the inherited onSurface text reads
+              // correctly in both the collapsed bar and the open menu.
+              items: [
+                for (final c in channels)
+                  DropdownMenuItem<String>(
+                    value: c.id,
+                    child: _ChannelMenuItem(
+                      channelId: c.id,
+                      name: c.name,
+                      isActive: c.id == activeId,
+                    ),
+                  ),
+              ],
+              onChanged: (id) {
+                if (id != null) {
+                  ref.read(selectedChannelIdProvider.notifier).select(id);
+                }
+              },
             ),
+          ),
+        ),
+        if (otherUnread > 0)
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: UnreadBadge(
+              key: const Key('unread-aggregate'),
+              count: otherUnread,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// One row of the channel dropdown: the channel name plus, for a NON-active
+/// channel with unread messages, a trailing count badge. The active channel is
+/// never badged — it is the one you are reading, so it has no unread — which also
+/// keeps the collapsed DropdownButton (which renders the active item) badge-free.
+class _ChannelMenuItem extends ConsumerWidget {
+  const _ChannelMenuItem({
+    required this.channelId,
+    required this.name,
+    required this.isActive,
+  });
+
+  final String channelId;
+  final String name;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unread = isActive ? 0 : ref.watch(channelUnreadCountProvider(channelId));
+    return Row(
+      children: [
+        Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
+        if (unread > 0) ...[
+          const SizedBox(width: 8),
+          UnreadBadge(key: Key('unread-item-$channelId'), count: unread),
         ],
-        onChanged: (id) {
-          if (id != null) {
-            ref.read(selectedChannelIdProvider.notifier).select(id);
-          }
-        },
+      ],
+    );
+  }
+}
+
+/// A compact unread-count pill. Caps the display at `99+` so a noisy channel
+/// never widens the app bar. Uses the M3 error/​primary container colours so it
+/// reads as a notification marker in both light and dark themes.
+class UnreadBadge extends StatelessWidget {
+  const UnreadBadge({super.key, required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final label = count > 99 ? '99+' : '$count';
+    return Container(
+      constraints: const BoxConstraints(minWidth: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: scheme.primary,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: scheme.onPrimary,
+              fontWeight: FontWeight.w700,
+            ),
       ),
     );
   }
@@ -242,6 +331,29 @@ class _MessageListState extends ConsumerState<MessageList> {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
             _scrollToBottom(animate: hadClients);
+          });
+        }
+        // Viewing this channel marks it read: advance its last-read watermark to
+        // the newest server ULID currently loaded. Fires on mount (a channel
+        // switch rebuilds this keyed widget) and on every new inbound while it
+        // stays active, so the switcher badge for this channel settles to 0. Uses
+        // the max non-null id (own un-acked sends carry none and never gate
+        // unread). markRead is monotonic, so a post-frame re-mark never rewinds.
+        String? newestReadId;
+        for (final m in messages) {
+          final id = m.id;
+          if (id != null &&
+              (newestReadId == null || id.compareTo(newestReadId) > 0)) {
+            newestReadId = id;
+          }
+        }
+        if (newestReadId != null) {
+          final markId = newestReadId;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            ref
+                .read(channelReadMarksProvider.notifier)
+                .markRead(widget.channelId, markId);
           });
         }
         return ListView.builder(
