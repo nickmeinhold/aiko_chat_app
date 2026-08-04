@@ -107,11 +107,17 @@ void main() {
     // Channel rows rendered in the sidebar.
     expect(find.byKey(const Key('sidebar-channel-c1')), findsOneWidget);
     expect(find.byKey(const Key('sidebar-channel-c2')), findsOneWidget);
-    // Wide has NO app bar — the sidebar owns the chrome and the message pane
-    // carries its own slim channel header. The active channel name shows in that
-    // header (and in the selected rail tile).
+    // Wide has NO app bar and NO channel header — the open channel is shown
+    // solely by the highlighted rail tile (the default/first channel selected).
     expect(find.byType(AppBar), findsNothing);
-    expect(find.text('general'), findsWidgets); // rail tile + pane header
+    expect(
+      tester.widget<ListTile>(find.byKey(const Key('sidebar-channel-c1'))).selected,
+      isTrue,
+    );
+    expect(
+      tester.widget<ListTile>(find.byKey(const Key('sidebar-channel-c2'))).selected,
+      isFalse,
+    );
   });
 
   testWidgets('wide: tapping a sidebar tile swaps the pane (re-keys MessageList)',

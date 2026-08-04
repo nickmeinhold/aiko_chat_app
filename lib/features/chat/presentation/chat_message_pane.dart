@@ -32,16 +32,8 @@ class ChatMessagePane extends ConsumerWidget {
     final channels = channelsAsync.value ?? const <Channel>[];
     final active = ChatScreen.resolveActive(channels, selectedId);
 
-    // On wide there is no app bar (the sidebar owns the chrome), so the pane
-    // carries its own slim channel header to name the open channel (Slack/Element
-    // style). On narrow the app-bar title already does this job, so the header is
-    // suppressed to avoid a duplicate.
-    final isWide =
-        MediaQuery.sizeOf(context).width >= kWideLayoutBreakpoint;
-
     return Column(
       children: [
-        if (isWide && active != null) _WideChannelHeader(channel: active),
         const NetworkStatusBanner(),
         Expanded(
           child: channelsAsync.when(
@@ -77,45 +69,6 @@ class ChatMessagePane extends ConsumerWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// The slim channel header at the top of the message pane on the WIDE layout,
-/// where there is no app bar. Names the open channel (# + name) with a hairline
-/// bottom border — the Slack/Element convention. Not shown on narrow (the app-bar
-/// title carries the channel name there).
-class _WideChannelHeader extends StatelessWidget {
-  const _WideChannelHeader({required this.channel});
-
-  final Channel channel;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      alignment: Alignment.centerLeft,
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: theme.dividerColor, width: 1),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.tag, size: 18, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              channel.name,
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
