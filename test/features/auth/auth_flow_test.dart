@@ -2,6 +2,7 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/network/network_status_banner.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/chat/presentation/chat_message_pane.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
@@ -141,7 +142,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(rest.passkeyAuthFinishCalls, 1);
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    expect(find.byType(ChatMessagePane), findsOneWidget); // reached chat (layout-agnostic)
   });
 
   testWidgets('a NEW passkey account → claim-handle → chat', (tester) async {
@@ -164,7 +165,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(rest.claimCalls, 1);
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    expect(find.byType(ChatMessagePane), findsOneWidget); // reached chat (layout-agnostic)
   });
 
   testWidgets('claim-handle surfaces a taken handle inline', (tester) async {
@@ -217,7 +218,7 @@ void main() {
     await pumpApp(tester, container);
 
     // No login form — the stored tokens + me() restored the session.
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    expect(find.byType(ChatMessagePane), findsOneWidget); // reached chat (layout-agnostic)
   });
 
   // --- EULA acceptance gate (Apple 1.2 / Google UGC) ------------------------
