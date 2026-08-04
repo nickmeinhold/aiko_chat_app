@@ -1,4 +1,5 @@
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
+import 'package:aiko_chat_app/features/chat/presentation/chat_message_pane.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show SoleAdminDeletionBlocked;
 import 'package:flutter/material.dart';
@@ -50,7 +51,7 @@ void main() {
     addTearDown(container.dispose);
     await pumpApp(tester, container);
     await signIn(tester);
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    expect(find.byType(ChatMessagePane), findsOneWidget); // reached chat (layout-agnostic)
 
     // chat → settings → Delete account → confirm.
     await tester.tap(find.byIcon(Icons.settings));

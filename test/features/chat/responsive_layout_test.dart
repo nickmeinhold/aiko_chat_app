@@ -107,8 +107,17 @@ void main() {
     // Channel rows rendered in the sidebar.
     expect(find.byKey(const Key('sidebar-channel-c1')), findsOneWidget);
     expect(find.byKey(const Key('sidebar-channel-c2')), findsOneWidget);
-    // The wide app bar carries the active channel name and no action icons.
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    // Wide has NO app bar and NO channel header — the open channel is shown
+    // solely by the highlighted rail tile (the default/first channel selected).
+    expect(find.byType(AppBar), findsNothing);
+    expect(
+      tester.widget<ListTile>(find.byKey(const Key('sidebar-channel-c1'))).selected,
+      isTrue,
+    );
+    expect(
+      tester.widget<ListTile>(find.byKey(const Key('sidebar-channel-c2'))).selected,
+      isFalse,
+    );
   });
 
   testWidgets('wide: tapping a sidebar tile swaps the pane (re-keys MessageList)',
