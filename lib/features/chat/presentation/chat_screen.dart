@@ -68,11 +68,13 @@ class ChatScreen extends ConsumerWidget {
     final isWide = MediaQuery.sizeOf(context).width >= kWideLayoutBreakpoint;
 
     return Scaffold(
-      // Wide: the channel name titles the bar (channels + settings/logout moved
-      // into the rail). Narrow: the CURRENT app bar — the dropdown switcher when
-      // >1 channel, plus the settings + sign-out actions — unchanged.
+      // Wide: NO app bar — the sidebar owns the chrome (server switcher, channels,
+      // settings/logout) and the message pane carries its own slim channel header
+      // (the redundant full-width bar sat below the native macOS title bar). Narrow:
+      // the CURRENT app bar — the dropdown switcher when >1 channel, plus the
+      // settings + sign-out actions — unchanged.
       appBar: isWide
-          ? AppBar(title: Text(active?.name ?? 'Chat'))
+          ? null
           : AppBar(
               title: channels.length > 1 && active != null
                   ? _ChannelSwitcher(channels: channels, activeId: active.id)
