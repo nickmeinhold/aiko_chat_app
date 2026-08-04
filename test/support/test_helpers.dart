@@ -80,6 +80,7 @@ ProviderContainer makeContainer({
   FakePasskeyAuthClient? passkey,
   FakeEulaStore? eula,
   String? eulaText,
+  DriftCache? cache,
 }) {
   final tokenStore = store ?? InMemoryTokenStore();
   late final ProviderContainer container;
@@ -124,7 +125,11 @@ ProviderContainer makeContainer({
     // platform channel under flutter_test. Widget tests get an in-memory cache
     // that, like the real provider, is disposed and recreated across auth
     // sessions — ensuring no state leaks between tests.
+    // A test may inject a PRE-SEEDED cache (e.g. to stage channel history that
+    // exists before the app first observes it, for first-sight/unread tests); the
+    // test owns its lifecycle. Otherwise a fresh in-memory cache per session.
     cacheProvider.overrideWith((ref) {
+      if (cache != null) return cache;
       final db = DriftCache(NativeDatabase.memory());
       ref.onDispose(db.close);
       return db;

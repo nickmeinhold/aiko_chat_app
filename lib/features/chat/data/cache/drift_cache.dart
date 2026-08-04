@@ -810,6 +810,17 @@ class DriftCache extends _$DriftCache {
     return row?.historyContiguousThrough;
   }
 
+  /// Reactive [historyContiguousThrough]: emits the resume fence for [channelId]
+  /// and re-emits when the pager advances it. NULL until the first page is durably
+  /// applied — i.e. non-null means "history sync has SETTLED for this channel"
+  /// (including `''`, the empty-channel sentinel). Read-only (no writer added); the
+  /// unread indicator uses it to know when a channel's baseline may be taken,
+  /// rather than trusting a pre-sync empty stream emission.
+  Stream<String?> watchHistoryContiguousThrough(String channelId) {
+    final q = select(syncMeta)..where((t) => t.channelId.equals(channelId));
+    return q.watchSingleOrNull().map((row) => row?.historyContiguousThrough);
+  }
+
   /// Advance the resume watermark for [channelId] to [ulid]. The **ONLY** writer
   /// of this column (round-4 single-writer invariant) — call it ONLY from the
   /// history pager, ONLY after the pages up to [ulid] are durably applied. The

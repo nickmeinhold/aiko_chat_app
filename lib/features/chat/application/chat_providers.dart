@@ -15,6 +15,7 @@ import '../../../core/network/network_status.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
 import '../../moderation/application/moderation_controller.dart';
+import '../data/channel_read_store.dart';
 import '../data/chat_repository.dart';
 import '../data/chat_rest_api.dart' show NetworkUnavailable;
 import '../data/transport/chat_transport.dart' show ConnectionState;
@@ -197,10 +198,180 @@ class SelectedChannelId extends Notifier<String?> {
 /// re-filters immediately. A null `sender.userId` (external actor) is never in the
 /// set, so bot/LLM messages are always kept.
 final messagesProvider =
-    StreamProvider.autoDispose.family<List<Message>, String>((ref, channelId) async* {
+    StreamProvider.autoDispose.family<List<Message>, String>(
+        (ref, channelId) => _watchVisibleMessages(ref, channelId));
+
+/// The blocked-filtered, cache-backed message stream for a channel — the shared
+/// body of [messagesProvider] and [_unreadMessagesProvider]. Kept as a function
+/// (not a shared provider) precisely so the two providers back onto DISTINCT
+/// drift streams; see [_unreadMessagesProvider] for why that separation matters.
+Stream<List<Message>> _watchVisibleMessages(Ref ref, String channelId) async* {
   final repo = await ref.watch(chatRepositoryProvider.future);
   final blocked = ref.watch(blockedUserIdsProvider);
   yield* repo.watchChannel(channelId).map((msgs) => blocked.isEmpty
       ? msgs
       : msgs.where((m) => !blocked.contains(m.sender.userId)).toList());
+}
+
+// --- per-channel unread (channel-switcher badges) --------------------------
+
+/// The durable per-channel last-read watermark store, over the app-wide
+/// [SharedPreferences]. The lightest durable home for read-state (no drift
+/// migration on the shared cache); see [ChannelReadStore].
+final channelReadStoreProvider = Provider<ChannelReadStore>(
+  (ref) => ChannelReadStore(ref.watch(sharedPreferencesProvider)),
+);
+
+/// The in-memory, reactive `channelId → newest-read ULID` map — the UI watches
+/// this so a switcher badge recomputes the instant a watermark advances, while
+/// the [ChannelReadStore] keeps it durable across restarts.
+///
+/// `.autoDispose`, sharing the chat surface's lifecycle exactly like
+/// [selectedChannelIdProvider]: it is torn down on logout (the switcher unmounts)
+/// and rebuilt fresh on the next login, which reloads the NEW user's persisted
+/// read-state — so a user switch never leaks the previous user's marks.
+///
+/// The user id is read NON-reactively (`ref.read`, not `ref.watch`): the switcher
+/// only builds once a user is authenticated and their channels are loaded, so the
+/// id is stable for the surface's life. Watching [currentUserProvider] here would
+/// make this provider self-invalidate when a *descendant* (the message list)
+/// flushes that (login-dirty) provider mid-build — Riverpod surfaces that as
+/// "setState during build".
+final channelReadMarksProvider =
+    NotifierProvider.autoDispose<ChannelReadMarks, Map<String, String>>(
+        ChannelReadMarks.new);
+
+class ChannelReadMarks extends Notifier<Map<String, String>> {
+  @override
+  Map<String, String> build() {
+    final userId = ref.read(currentUserProvider)?.userId;
+    if (userId == null) return const {};
+    return ref.read(channelReadStoreProvider).readAll(userId);
+  }
+
+  /// Advance [channelId]'s watermark to [ulid] (the newest message the user has
+  /// now seen in that channel). **Monotonic** — a ulid not strictly greater than
+  /// the stored one is ignored, so an out-of-order or stale mark can never rewind
+  /// read-state and resurrect a badge. Persists through the store.
+  void markRead(String channelId, String ulid) {
+    if (!ChannelReadStore.isSortableWatermark(ulid)) return; // reject junk id
+    final userId = ref.read(currentUserProvider)?.userId; // non-reactive read
+    if (userId == null) return;
+    final current = state[channelId];
+    if (current != null && ulid.compareTo(current) <= 0) return;
+    state = {...state, channelId: ulid};
+    ref.read(channelReadStoreProvider).setWatermark(userId, channelId, ulid);
+  }
+
+  /// Establish the FIRST-SIGHT baseline for a never-observed channel: treat every
+  /// message already in the cache as read, so a channel the user has never opened
+  /// doesn't flood the switcher with `99+` from pre-existing history — unread means
+  /// "since first sight," not "every fossil in the cache." Only writes when the
+  /// channel has no watermark yet (idempotent via the presence guard), so it never
+  /// clobbers a real read position advanced by [markRead]. [newestUlid] is the
+  /// newest server ULID currently cached, or `''` when the channel is empty at
+  /// first sight (an empty-string floor below every ULID, so later arrivals still
+  /// count — and it persists the "observed" fact so a restart doesn't re-baseline
+  /// over messages that landed while away).
+  void baseline(String channelId, String newestUlid) {
+    if (!ChannelReadStore.isSortableWatermark(newestUlid)) return; // reject junk
+    if (state.containsKey(channelId)) return; // already observed / has a mark
+    final userId = ref.read(currentUserProvider)?.userId;
+    if (userId == null) return;
+    state = {...state, channelId: newestUlid};
+    ref.read(channelReadStoreProvider).setWatermark(userId, channelId, newestUlid);
+  }
+}
+
+/// A per-channel message stream used ONLY for unread accounting — deliberately
+/// SEPARATE from [messagesProvider] even though both stream the same cache slice.
+///
+/// The channel switcher lives in the AppBar (an ANCESTOR of the message list) and
+/// watches unread for the non-active channels. If it and [MessageList] shared one
+/// `messagesProvider` family entry, the list mounting for a channel the switcher
+/// is watching would flush that shared StreamProvider mid-build and synchronously
+/// notify the switcher — Riverpod surfaces that as "setState during build". This
+/// happens on an active-channel switch (the old non-active channel becomes
+/// active). Backing the two onto distinct drift streams removes the shared node,
+/// so a list mount never rebuilds the switcher mid-build. (The extra stream is one
+/// cheap cache query per visible channel — the repo already subscribes to all.)
+final _unreadMessagesProvider =
+    StreamProvider.autoDispose.family<List<Message>, String>(
+        (ref, channelId) => _watchVisibleMessages(ref, channelId));
+
+/// The unread count for [channelId]: cached messages strictly newer (by server
+/// ULID) than the channel's last-read watermark, EXCLUDING the current user's
+/// own messages (you don't have unread from yourself) and any message not yet
+/// carrying a server ULID (an un-acked optimistic send — always your own).
+///
+/// The per-channel history-sync fence, made reactive — non-null (including the
+/// `''` empty-channel sentinel) means history has SETTLED for the channel, so a
+/// first-sight baseline may be taken against a complete picture. Watching this
+/// (rather than trusting the message stream's first emission) is what closes the
+/// baseline-during-load window: a cache-backed stream legitimately emits an empty
+/// or partial list BEFORE the reconcile engine's history sync upserts a channel's
+/// messages, and baselining then (to `''`) would let every fossil sort above the
+/// floor and flood the switcher once history lands (cage-match #109 closure,
+/// Carnot + Tesla). A DISTINCT stream from the message/display providers, same
+/// isolation rationale as [_unreadMessagesProvider].
+final _historyFenceProvider =
+    StreamProvider.autoDispose.family<String?, String>((ref, channelId) =>
+        ref.watch(cacheProvider).watchHistoryContiguousThrough(channelId));
+
+/// On FIRST SIGHT of a channel (no watermark yet) it reports 0 and, ONCE HISTORY
+/// HAS SETTLED for the channel, lazily baselines it to the newest cached message
+/// so pre-existing history never floods the switcher ("since first sight," not
+/// "every fossil"). Thereafter unread is messages strictly newer than the
+/// baseline/last-read mark. The active channel is advanced on view (see
+/// `MessageList`), so it settles to 0; the switcher additionally never badges the
+/// active channel.
+///
+/// Reads the same blocked-filtered slice the UI shows (so unread matches what's
+/// visible) — but via [_unreadMessagesProvider], a stream DISTINCT from
+/// [messagesProvider], so the switcher and the message list never share one
+/// StreamProvider family entry.
+final channelUnreadCountProvider =
+    Provider.autoDispose.family<int, String>((ref, channelId) {
+  final messages =
+      ref.watch(_unreadMessagesProvider(channelId)).value ?? const <Message>[];
+  final marks = ref.watch(channelReadMarksProvider);
+  // Non-reactive: watching currentUserProvider here would self-invalidate this
+  // provider when the message list flushes that (login-dirty) provider mid-build.
+  // The unread chain is autoDispose + rebuilt per session, so a read suffices.
+  final myUserId = ref.read(currentUserProvider)?.userId;
+  final watermark = marks[channelId];
+
+  if (watermark == null) {
+    // Never observed → report 0 (NEVER flood) until history has SETTLED for this
+    // channel, then baseline to THE FENCE VALUE ITSELF — the exact ULID
+    // `watchHistoryContiguousThrough` yields (`''` for an empty channel, a real
+    // ULID otherwise). The baseline is NEVER computed from the message stream: the
+    // fence is the single authoritative "synced through" mark, and deriving the
+    // baseline from `messages` raced both live arrivals (a live msg > fence that
+    // arrived before settle got marked read) and stream-settle timing (an empty
+    // stream mis-baselined to ''). Baseline = fence dissolves both by construction;
+    // `messages` is used ONLY to count unread (ULID > watermark) below. Deferred to
+    // a microtask so we never mutate provider state during a build; the notifier is
+    // captured so it stays valid if this entry disposes.
+    final fence = ref.watch(_historyFenceProvider(channelId)).value;
+    if (fence != null) {
+      final notifier = ref.read(channelReadMarksProvider.notifier);
+      Future.microtask(() {
+        try {
+          notifier.baseline(channelId, fence);
+        } catch (_) {
+          // The chain disposed (logout) before the microtask ran — a missed
+          // baseline is benign; it re-establishes on the next session.
+        }
+      });
+    }
+    return 0;
+  }
+
+  return messages.where((m) {
+    final id = m.id;
+    if (id == null) return false; // un-acked own send — never unread
+    if (m.sender.userId == myUserId) return false; // my own message
+    return id.compareTo(watermark) > 0;
+  }).length;
 });
