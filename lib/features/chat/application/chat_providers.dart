@@ -343,18 +343,22 @@ final channelUnreadCountProvider =
 
   if (watermark == null) {
     // Never observed → report 0 (NEVER flood) until history has SETTLED for this
-    // channel, i.e. the resume fence is non-null (`''` for an empty channel, a
-    // real ULID otherwise). Only then baseline — to the newest cached message, or
-    // the `''` floor when empty at settle-time (so a later live arrival still
-    // counts). Deferred to a microtask so we never mutate provider state during a
-    // build; the notifier is captured so it stays valid if this entry disposes.
-    final historySettled = ref.watch(_historyFenceProvider(channelId)).value != null;
-    if (historySettled) {
-      final newest = _newestServerUlid(messages) ?? '';
+    // channel, then baseline to THE FENCE VALUE ITSELF — the exact ULID
+    // `watchHistoryContiguousThrough` yields (`''` for an empty channel, a real
+    // ULID otherwise). The baseline is NEVER computed from the message stream: the
+    // fence is the single authoritative "synced through" mark, and deriving the
+    // baseline from `messages` raced both live arrivals (a live msg > fence that
+    // arrived before settle got marked read) and stream-settle timing (an empty
+    // stream mis-baselined to ''). Baseline = fence dissolves both by construction;
+    // `messages` is used ONLY to count unread (ULID > watermark) below. Deferred to
+    // a microtask so we never mutate provider state during a build; the notifier is
+    // captured so it stays valid if this entry disposes.
+    final fence = ref.watch(_historyFenceProvider(channelId)).value;
+    if (fence != null) {
       final notifier = ref.read(channelReadMarksProvider.notifier);
       Future.microtask(() {
         try {
-          notifier.baseline(channelId, newest);
+          notifier.baseline(channelId, fence);
         } catch (_) {
           // The chain disposed (logout) before the microtask ran — a missed
           // baseline is benign; it re-establishes on the next session.
@@ -371,15 +375,3 @@ final channelUnreadCountProvider =
     return id.compareTo(watermark) > 0;
   }).length;
 });
-
-/// The newest server ULID among [messages] (max by string order — ULIDs sort
-/// lexicographically), or null when none carries one (all un-acked own sends /
-/// empty). Order-independent, matching the `>` compare unread uses.
-String? _newestServerUlid(List<Message> messages) {
-  String? newest;
-  for (final m in messages) {
-    final id = m.id;
-    if (id != null && (newest == null || id.compareTo(newest) > 0)) newest = id;
-  }
-  return newest;
-}

@@ -47,7 +47,10 @@ class ChannelReadStore {
       if (decoded is Map) {
         final out = <String, String>{};
         decoded.forEach((k, v) {
-          if (v is String) out[k.toString()] = v;
+          // Validate on LOAD too: a corrupt/legacy value must not enter the marks
+          // map, where it would poison lexicographic comparison OR (worse) block a
+          // channel's first-sight baseline forever via the `containsKey` guard.
+          if (v is String && isSortableWatermark(v)) out[k.toString()] = v;
         });
         return out;
       }

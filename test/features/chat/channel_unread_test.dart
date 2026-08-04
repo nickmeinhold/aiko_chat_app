@@ -138,6 +138,16 @@ void main() {
       await store.setWatermark('u', 'c2', ulid('0B'));
       expect(store.readAll('u'), {'c1': ulid('0A'), 'c2': ulid('0B')});
     });
+
+    test('readAll drops a malformed persisted value (load-time validation)',
+        () async {
+      // A corrupt/legacy entry must never enter the marks map — it would poison
+      // comparison AND block the channel's first-sight baseline via containsKey.
+      await testPrefs.setString('aiko_channel_lastread_u',
+          jsonEncode({'c1': ulid('0A'), 'bad': 'SHORT'}));
+      final store = ChannelReadStore(testPrefs);
+      expect(store.readAll('u'), {'c1': ulid('0A')}); // 'bad' dropped
+    });
   });
 
   // ── Widget: switcher badges ────────────────────────────────────────────────
@@ -260,11 +270,12 @@ void main() {
   });
 
   testWidgets(
-      'history arriving AFTER first sight does not flood — baseline waits for '
-      'the sync fence (finding 3, load-ordering window)', (tester) async {
-    // Drive the cache directly so we control the REAL ordering the old
-    // hasValue-baseline missed: login → first sight of an EMPTY stream → history
-    // upserts LATER → fence advances only once sync settles.
+      'a live message arriving before the fence settles stays unread — baseline '
+      'is the FENCE, not newest-cached (finding 3a, live-swallow)',
+      (tester) async {
+    // Drive the cache directly to control the real ordering. Baseline = fence,
+    // NOT newest-cached: a live message that arrived before history settled sits
+    // ABOVE the fence, so it must remain unread.
     final cache = DriftCache(NativeDatabase.memory());
     addTearDown(cache.close);
 
@@ -276,29 +287,59 @@ void main() {
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await signIn(tester); // NOT connected: history has not settled yet
+    await signIn(tester); // NOT connected: fence not settled yet
     await settle(tester);
+    expect(aggregate(), findsNothing); // fence null → 0
 
-    // First sight of c2: empty cache, fence null → no baseline, no badge.
-    expect(aggregate(), findsNothing);
-
-    // History sync upserts fossils AFTER first sight — but the fence is NOT yet
-    // advanced. This is the window the ''-baseline reintroduced the flood in.
-    await cache.upsertInbound(inbound('c2', ulid('03'), 'u2', 'fossil-1'));
-    await cache.upsertInbound(inbound('c2', ulid('05'), 'u2', 'fossil-2'));
+    // A LIVE message lands in c2 BEFORE history settles (fence still null).
+    await cache.upsertInbound(inbound('c2', ulid('09'), 'u2', 'live-early'));
     await settle(tester);
-    // MUST NOT flood: history not settled (fence null) → baseline withheld.
-    expect(aggregate(), findsNothing);
+    expect(aggregate(), findsNothing); // still 0 — baseline withheld until settle
 
-    // History SETTLES: the pager advances the fence to the newest synced ULID.
+    // History SETTLES at an OLDER fence (subscribe-time watermark), BELOW the
+    // live message: history covered '..05', the live '09' arrived after.
     await cache.advanceHistoryContiguous('c2', ulid('05'));
     await settle(tester);
-    // Baseline caught up to the fossils → still 0 (they are read, not unread).
-    expect(aggregate(), findsNothing);
 
-    // A genuinely-new message after the baseline still counts.
-    transport.emitMessage(inbound('c2', ulid('09'), 'u2', 'fresh'));
+    // Baseline = fence '05' → the live '09' > '05' is NOT swallowed (count 1).
+    // (baseline=newest-cached would baseline to '09' → 0 → RED here.)
+    expect(aggregate(), findsOneWidget);
+    expect(find.descendant(of: aggregate(), matching: find.text('1')),
+        findsOneWidget);
+  });
+
+  testWidgets(
+      'restart with a settled fence but not-yet-streamed history does not flood '
+      '— baseline is the FENCE (finding 3b, fence-first)', (tester) async {
+    // Durable fence already settled at '05' from a prior session; no marks, and
+    // the message stream has not yielded history at first unread build.
+    final cache = DriftCache(NativeDatabase.memory());
+    addTearDown(cache.close);
+    await cache.advanceHistoryContiguous('c2', ulid('05'));
+
+    final transport = FakeChatTransport();
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels),
+        transport: transport,
+        cache: cache);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
     await settle(tester);
+    // First sight: fence '05' (durable) but stream empty → baseline = fence '05',
+    // NOT '' from the empty stream (which is the round-3 flood).
+
+    // History + a live message now land in the cache.
+    await cache.upsertInbound(inbound('c2', ulid('01'), 'u2', 'h1'));
+    await cache.upsertInbound(inbound('c2', ulid('03'), 'u2', 'h2'));
+    await cache.upsertInbound(inbound('c2', ulid('05'), 'u2', 'h3'));
+    await cache.upsertInbound(inbound('c2', ulid('09'), 'u2', 'live'));
+    await settle(tester);
+
+    // NO flood: only '09' > baseline '05'. History 01..05 ≤ baseline is read.
+    // (baseline=newest-cached-or-'' would baseline '' on the empty first sight →
+    // all four count → RED here.)
     expect(aggregate(), findsOneWidget);
     expect(find.descendant(of: aggregate(), matching: find.text('1')),
         findsOneWidget);
