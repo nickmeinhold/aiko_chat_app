@@ -28,6 +28,14 @@ class ChannelReadStore {
 
   String _key(String userId) => '$_prefix$userId';
 
+  /// A watermark must be either the empty-string floor (`''`, the first-sight
+  /// baseline for a channel empty at settle-time) or a full 26-char ULID. A
+  /// malformed/short id would sort OFF the timeline (`compareTo` is lexicographic)
+  /// and, once persisted, pin a bad monotonic floor forever — so it is rejected at
+  /// the boundary, in memory AND on disk.
+  static bool isSortableWatermark(String ulid) =>
+      ulid.isEmpty || ulid.length == 26;
+
   /// Every persisted watermark for [userId], as `channelId → newest-read ULID`.
   /// The map the in-memory notifier seeds from on login / user switch. A missing
   /// or corrupt payload reads as empty (self-heals on the next write).
@@ -63,6 +71,7 @@ class ChannelReadStore {
   /// reloads the NEWEST ULID, never a resurrected older one (which would clear a
   /// read badge back to unread).
   Future<void> setWatermark(String userId, String channelId, String ulid) {
+    if (!isSortableWatermark(ulid)) return Future<void>.value(); // reject junk
     final result = _writes.then((_) async {
       final map = Map<String, String>.from(readAll(userId));
       final current = map[channelId];

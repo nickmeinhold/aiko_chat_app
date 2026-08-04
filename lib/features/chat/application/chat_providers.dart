@@ -254,6 +254,7 @@ class ChannelReadMarks extends Notifier<Map<String, String>> {
   /// the stored one is ignored, so an out-of-order or stale mark can never rewind
   /// read-state and resurrect a badge. Persists through the store.
   void markRead(String channelId, String ulid) {
+    if (!ChannelReadStore.isSortableWatermark(ulid)) return; // reject junk id
     final userId = ref.read(currentUserProvider)?.userId; // non-reactive read
     if (userId == null) return;
     final current = state[channelId];
@@ -273,6 +274,7 @@ class ChannelReadMarks extends Notifier<Map<String, String>> {
   /// count — and it persists the "observed" fact so a restart doesn't re-baseline
   /// over messages that landed while away).
   void baseline(String channelId, String newestUlid) {
+    if (!ChannelReadStore.isSortableWatermark(newestUlid)) return; // reject junk
     if (state.containsKey(channelId)) return; // already observed / has a mark
     final userId = ref.read(currentUserProvider)?.userId;
     if (userId == null) return;
@@ -302,12 +304,27 @@ final _unreadMessagesProvider =
 /// own messages (you don't have unread from yourself) and any message not yet
 /// carrying a server ULID (an un-acked optimistic send — always your own).
 ///
-/// On FIRST SIGHT of a channel (no watermark yet) it reports 0 and lazily
-/// baselines the channel to its newest cached message, so pre-existing history
-/// never floods the switcher (finding: "since first sight," not "every fossil").
-/// Thereafter unread is messages strictly newer than the baseline/last-read mark.
-/// The active channel is advanced on view (see `MessageList`), so it settles to 0;
-/// the switcher additionally never badges the active channel.
+/// The per-channel history-sync fence, made reactive — non-null (including the
+/// `''` empty-channel sentinel) means history has SETTLED for the channel, so a
+/// first-sight baseline may be taken against a complete picture. Watching this
+/// (rather than trusting the message stream's first emission) is what closes the
+/// baseline-during-load window: a cache-backed stream legitimately emits an empty
+/// or partial list BEFORE the reconcile engine's history sync upserts a channel's
+/// messages, and baselining then (to `''`) would let every fossil sort above the
+/// floor and flood the switcher once history lands (cage-match #109 closure,
+/// Carnot + Tesla). A DISTINCT stream from the message/display providers, same
+/// isolation rationale as [_unreadMessagesProvider].
+final _historyFenceProvider =
+    StreamProvider.autoDispose.family<String?, String>((ref, channelId) =>
+        ref.watch(cacheProvider).watchHistoryContiguousThrough(channelId));
+
+/// On FIRST SIGHT of a channel (no watermark yet) it reports 0 and, ONCE HISTORY
+/// HAS SETTLED for the channel, lazily baselines it to the newest cached message
+/// so pre-existing history never floods the switcher ("since first sight," not
+/// "every fossil"). Thereafter unread is messages strictly newer than the
+/// baseline/last-read mark. The active channel is advanced on view (see
+/// `MessageList`), so it settles to 0; the switcher additionally never badges the
+/// active channel.
 ///
 /// Reads the same blocked-filtered slice the UI shows (so unread matches what's
 /// visible) — but via [_unreadMessagesProvider], a stream DISTINCT from
@@ -315,8 +332,8 @@ final _unreadMessagesProvider =
 /// StreamProvider family entry.
 final channelUnreadCountProvider =
     Provider.autoDispose.family<int, String>((ref, channelId) {
-  final async = ref.watch(_unreadMessagesProvider(channelId));
-  final messages = async.value ?? const <Message>[];
+  final messages =
+      ref.watch(_unreadMessagesProvider(channelId)).value ?? const <Message>[];
   final marks = ref.watch(channelReadMarksProvider);
   // Non-reactive: watching currentUserProvider here would self-invalidate this
   // provider when the message list flushes that (login-dirty) provider mid-build.
@@ -325,13 +342,14 @@ final channelUnreadCountProvider =
   final watermark = marks[channelId];
 
   if (watermark == null) {
-    // Never observed. Baseline to the newest CURRENTLY-LOADED message so existing
-    // history counts as read — but only once the stream has delivered its first
-    // real value (`hasValue`), never during the loading state, or we would baseline
-    // to empty and then flood when the cache stream arrives. The write is deferred
-    // to a microtask so we never mutate provider state during a build; capturing
-    // the notifier keeps it valid even if this family entry disposes first.
-    if (async.hasValue) {
+    // Never observed → report 0 (NEVER flood) until history has SETTLED for this
+    // channel, i.e. the resume fence is non-null (`''` for an empty channel, a
+    // real ULID otherwise). Only then baseline — to the newest cached message, or
+    // the `''` floor when empty at settle-time (so a later live arrival still
+    // counts). Deferred to a microtask so we never mutate provider state during a
+    // build; the notifier is captured so it stays valid if this entry disposes.
+    final historySettled = ref.watch(_historyFenceProvider(channelId)).value != null;
+    if (historySettled) {
       final newest = _newestServerUlid(messages) ?? '';
       final notifier = ref.read(channelReadMarksProvider.notifier);
       Future.microtask(() {
