@@ -335,9 +335,13 @@ class _MessageListState extends ConsumerState<MessageList> {
         }
         // Viewing this channel marks it read: advance its last-read watermark to
         // the newest server ULID currently loaded. Fires on mount (a channel
-        // switch rebuilds this keyed widget) and on every new inbound while it
-        // stays active, so the switcher badge for this channel settles to 0. Uses
-        // the max non-null id (own un-acked sends carry none and never gate
+        // switch rebuilds this keyed widget, and `_isNearBottom` is true before the
+        // first layout, so opening a channel marks it read) and on a new inbound
+        // ONLY WHILE the reader is at/near the tail. If they've scrolled UP into
+        // history, a tail-arrival must NOT jump the watermark past a message they
+        // never saw — that would falsely mark the channel read (Tesla, PR #109).
+        // `wasNearBottom` is the exact same signal that gates the auto-scroll above.
+        // Uses the max non-null id (own un-acked sends carry none and never gate
         // unread). markRead is monotonic, so a post-frame re-mark never rewinds.
         String? newestReadId;
         for (final m in messages) {
@@ -347,7 +351,7 @@ class _MessageListState extends ConsumerState<MessageList> {
             newestReadId = id;
           }
         }
-        if (newestReadId != null) {
+        if (newestReadId != null && wasNearBottom) {
           final markId = newestReadId;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;

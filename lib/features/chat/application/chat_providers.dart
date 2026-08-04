@@ -261,6 +261,24 @@ class ChannelReadMarks extends Notifier<Map<String, String>> {
     state = {...state, channelId: ulid};
     ref.read(channelReadStoreProvider).setWatermark(userId, channelId, ulid);
   }
+
+  /// Establish the FIRST-SIGHT baseline for a never-observed channel: treat every
+  /// message already in the cache as read, so a channel the user has never opened
+  /// doesn't flood the switcher with `99+` from pre-existing history — unread means
+  /// "since first sight," not "every fossil in the cache." Only writes when the
+  /// channel has no watermark yet (idempotent via the presence guard), so it never
+  /// clobbers a real read position advanced by [markRead]. [newestUlid] is the
+  /// newest server ULID currently cached, or `''` when the channel is empty at
+  /// first sight (an empty-string floor below every ULID, so later arrivals still
+  /// count — and it persists the "observed" fact so a restart doesn't re-baseline
+  /// over messages that landed while away).
+  void baseline(String channelId, String newestUlid) {
+    if (state.containsKey(channelId)) return; // already observed / has a mark
+    final userId = ref.read(currentUserProvider)?.userId;
+    if (userId == null) return;
+    state = {...state, channelId: newestUlid};
+    ref.read(channelReadStoreProvider).setWatermark(userId, channelId, newestUlid);
+  }
 }
 
 /// A per-channel message stream used ONLY for unread accounting — deliberately
@@ -284,10 +302,12 @@ final _unreadMessagesProvider =
 /// own messages (you don't have unread from yourself) and any message not yet
 /// carrying a server ULID (an un-acked optimistic send — always your own).
 ///
-/// A null watermark (never viewed) treats every inbound message as unread. The
-/// active channel is advanced to its newest on view (see `MessageList`), so it
-/// settles to 0; the switcher additionally never renders a badge on the active
-/// channel, so a just-arrived message there never flashes a count.
+/// On FIRST SIGHT of a channel (no watermark yet) it reports 0 and lazily
+/// baselines the channel to its newest cached message, so pre-existing history
+/// never floods the switcher (finding: "since first sight," not "every fossil").
+/// Thereafter unread is messages strictly newer than the baseline/last-read mark.
+/// The active channel is advanced on view (see `MessageList`), so it settles to 0;
+/// the switcher additionally never badges the active channel.
 ///
 /// Reads the same blocked-filtered slice the UI shows (so unread matches what's
 /// visible) — but via [_unreadMessagesProvider], a stream DISTINCT from
@@ -295,17 +315,53 @@ final _unreadMessagesProvider =
 /// StreamProvider family entry.
 final channelUnreadCountProvider =
     Provider.autoDispose.family<int, String>((ref, channelId) {
-  final messages = ref.watch(_unreadMessagesProvider(channelId)).value ?? const <Message>[];
+  final async = ref.watch(_unreadMessagesProvider(channelId));
+  final messages = async.value ?? const <Message>[];
   final marks = ref.watch(channelReadMarksProvider);
   // Non-reactive: watching currentUserProvider here would self-invalidate this
   // provider when the message list flushes that (login-dirty) provider mid-build.
   // The unread chain is autoDispose + rebuilt per session, so a read suffices.
   final myUserId = ref.read(currentUserProvider)?.userId;
   final watermark = marks[channelId];
+
+  if (watermark == null) {
+    // Never observed. Baseline to the newest CURRENTLY-LOADED message so existing
+    // history counts as read — but only once the stream has delivered its first
+    // real value (`hasValue`), never during the loading state, or we would baseline
+    // to empty and then flood when the cache stream arrives. The write is deferred
+    // to a microtask so we never mutate provider state during a build; capturing
+    // the notifier keeps it valid even if this family entry disposes first.
+    if (async.hasValue) {
+      final newest = _newestServerUlid(messages) ?? '';
+      final notifier = ref.read(channelReadMarksProvider.notifier);
+      Future.microtask(() {
+        try {
+          notifier.baseline(channelId, newest);
+        } catch (_) {
+          // The chain disposed (logout) before the microtask ran — a missed
+          // baseline is benign; it re-establishes on the next session.
+        }
+      });
+    }
+    return 0;
+  }
+
   return messages.where((m) {
     final id = m.id;
     if (id == null) return false; // un-acked own send — never unread
     if (m.sender.userId == myUserId) return false; // my own message
-    return watermark == null || id.compareTo(watermark) > 0;
+    return id.compareTo(watermark) > 0;
   }).length;
 });
+
+/// The newest server ULID among [messages] (max by string order — ULIDs sort
+/// lexicographically), or null when none carries one (all un-acked own sends /
+/// empty). Order-independent, matching the `>` compare unread uses.
+String? _newestServerUlid(List<Message> messages) {
+  String? newest;
+  for (final m in messages) {
+    final id = m.id;
+    if (id != null && (newest == null || id.compareTo(newest) > 0)) newest = id;
+  }
+  return newest;
+}

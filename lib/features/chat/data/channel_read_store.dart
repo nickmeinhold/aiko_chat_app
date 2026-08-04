@@ -6,11 +6,16 @@
 /// channel), non-secret, and never leaves the device — so it wants neither the
 /// encrypted key store nor a drift schema migration on the shared message cache.
 ///
-/// **Per-user scoped.** Keys embed the authenticated user id
-/// (`aiko_channel_lastread_<userId>_<channelId>`) so two users on one device
-/// never read each other's read-state — mirroring the per-user isolation the
-/// message cache gets from a user-keyed database file (app/providers Carnot C3).
+/// **Per-user, one key per user.** All of a user's watermarks live under a single
+/// key `aiko_channel_lastread_<userId>` holding a JSON `{channelId: ulid}` map.
+/// This keeps the keyspace INJECTIVE: channel ids are opaque server strings that
+/// may contain any character (including `_`), so a `<userId>_<channelId>` flat key
+/// would collide — `(user:a, chan:b_c)` and `(user:a_b, chan:c)` both flatten to
+/// `..._a_b_c`. Nesting channel ids inside a per-user JSON value removes the
+/// delimiter ambiguity entirely (the only key segment is the user id).
 library;
+
+import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -21,28 +26,53 @@ class ChannelReadStore {
 
   static const _prefix = 'aiko_channel_lastread_';
 
-  String _userPrefix(String userId) => '$_prefix${userId}_';
-
-  String _key(String userId, String channelId) =>
-      '${_userPrefix(userId)}$channelId';
+  String _key(String userId) => '$_prefix$userId';
 
   /// Every persisted watermark for [userId], as `channelId → newest-read ULID`.
-  /// The map the in-memory notifier seeds from on login / user switch.
+  /// The map the in-memory notifier seeds from on login / user switch. A missing
+  /// or corrupt payload reads as empty (self-heals on the next write).
   Map<String, String> readAll(String userId) {
-    final p = _userPrefix(userId);
-    final out = <String, String>{};
-    for (final k in _prefs.getKeys()) {
-      if (k.startsWith(p)) {
-        final v = _prefs.getString(k);
-        // The remainder after the exact `<prefix><userId>_` is the channel id
-        // verbatim (channel ids may contain '_'; only the user segment is fixed).
-        if (v != null) out[k.substring(p.length)] = v;
+    final raw = _prefs.getString(_key(userId));
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final out = <String, String>{};
+        decoded.forEach((k, v) {
+          if (v is String) out[k.toString()] = v;
+        });
+        return out;
       }
+    } on FormatException {
+      // Corrupt JSON — treat as empty; the next setWatermark rewrites it clean.
     }
-    return out;
+    return const {};
   }
 
-  /// Persist [ulid] as the newest-read watermark for ([userId], [channelId]).
-  Future<void> setWatermark(String userId, String channelId, String ulid) =>
-      _prefs.setString(_key(userId, channelId), ulid);
+  /// Serializes durable writes so a read-modify-write of the per-user JSON map
+  /// never interleaves with another. Chained (not awaited by callers) — the
+  /// in-memory notifier is the UI's fast path; disk catches up in order.
+  Future<void> _writes = Future<void>.value();
+
+  /// Persist [ulid] as [channelId]'s watermark for [userId] — MONOTONICALLY and
+  /// SERIALIZED. The write is chained onto [_writes] (so concurrent advances apply
+  /// in call order, never a torn read-modify-write) and is a COMPARE-AND-SET: a
+  /// [ulid] not strictly greater than the persisted one is dropped. Together these
+  /// guarantee the durable value never goes backwards — even if two rapid advances
+  /// (e.g. `…0B` then `…0C`) are issued/complete out of order, a cold restart
+  /// reloads the NEWEST ULID, never a resurrected older one (which would clear a
+  /// read badge back to unread).
+  Future<void> setWatermark(String userId, String channelId, String ulid) {
+    final result = _writes.then((_) async {
+      final map = Map<String, String>.from(readAll(userId));
+      final current = map[channelId];
+      if (current != null && ulid.compareTo(current) <= 0) return; // CAS: no rewind
+      map[channelId] = ulid;
+      await _prefs.setString(_key(userId), jsonEncode(map));
+    });
+    // Keep the chain alive past a failed write (a persistence error must not wedge
+    // every subsequent watermark) — the next advance still runs.
+    _writes = result.catchError((_) {});
+    return result;
+  }
 }
