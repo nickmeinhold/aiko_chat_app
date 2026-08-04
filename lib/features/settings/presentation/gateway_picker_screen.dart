@@ -12,13 +12,12 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
-import '../../auth/application/auth_controller.dart';
 import '../application/gateway_directory_provider.dart';
 import '../data/gateway_directory_client.dart';
+import 'gateway_switch_action.dart';
 
 class GatewayPickerScreen extends ConsumerStatefulWidget {
   const GatewayPickerScreen({super.key});
@@ -145,64 +144,21 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
     return null;
   }
 
-  Future<void> _select(String url, String label) async {
-    final current = ref.read(configProvider).httpBaseUrl;
-    if (_isCurrent(url, current)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Already connected to this server.')),
+  /// Route through the shared [confirmAndSwitchGateway] so this picker and the
+  /// wide-layout sidebar switcher present the identical no-op guard, confirm
+  /// dialog, error copy, and post-switch `/login` landing — they can't drift.
+  /// The picker owns only its local AbsorbPointer spinner, driven via
+  /// [onSwitching].
+  Future<void> _select(String url, String label) =>
+      confirmAndSwitchGateway(
+        context,
+        ref,
+        url: url,
+        label: label,
+        onSwitching: (switching) {
+          if (mounted) setState(() => _switching = switching);
+        },
       );
-      return;
-    }
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Switch server?'),
-        content: Text(
-          'You\'ll be signed out and need to sign in again on $label. '
-          'Your account on the current server is not affected.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Switch')),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _switching = true);
-    // switchGateway publishes `loading` (router → /splash) then logs the user out
-    // on the new gateway. A persistence failure throws BEFORE any teardown
-    // (session intact) — surface it and stay put.
-    try {
-      await ref.read(authControllerProvider.notifier).switchGateway(url);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _switching = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_switchError(e))),
-      );
-      return;
-    }
-    // Land deterministically on the new gateway's /login. We're now logged out,
-    // so /login is always correct. This is NOT redundant: since #35 made
-    // /settings/gateway reachable while logged out, the redirect treats it as a
-    // valid logged-out resting state — so without an explicit nav the picker
-    // stays on screen after the switch (the loading→/splash hop only moves us if
-    // a frame happens to pump mid-switch — a race we don't depend on). maybeOf
-    // keeps the bare-widget unit test (no GoRouter ancestor) a safe no-op.
-    if (mounted) GoRouter.maybeOf(context)?.go('/login');
-    if (mounted) setState(() => _switching = false);
-  }
-
-  String _switchError(Object e) {
-    if (e is GatewaySwitchFailed) return e.message;
-    return 'Could not switch servers. Please try again.';
-  }
 }
 
 class _ServerTile extends StatelessWidget {
