@@ -10,6 +10,7 @@ import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart'
     show UnreadBadge;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart';
@@ -63,6 +64,20 @@ void main() {
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
+  }
+
+  // These widget tests assert the app-bar aggregate badge — a NARROW (phone)
+  // layout feature. The flutter_test default viewport (800x600) is ABOVE the
+  // responsive breakpoint (720) and renders the wide sidebar instead, so pin a
+  // phone-width viewport. (The sidebar's own unread badge is covered in
+  // responsive_layout_test.dart.)
+  Future<void> pumpNarrow(
+      WidgetTester tester, ProviderContainer container) async {
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpApp(tester, container);
   }
 
   /// Sign in AND drive the `connected` choreography so the repo's history sync
@@ -180,7 +195,7 @@ void main() {
         rest: FakeRestApi(channels: twoChannels), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signInConnected(tester, transport); // active channel = c1
 
     // No unread yet.
@@ -203,7 +218,7 @@ void main() {
         rest: FakeRestApi(channels: twoChannels), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signInConnected(tester, transport);
 
     transport.emitMessage(inbound('c2', ulid('0A'), 'u2', 'unread msg'));
@@ -231,7 +246,7 @@ void main() {
         rest: FakeRestApi(channels: twoChannels), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signInConnected(tester, transport); // active = c1
 
     // A message arrives in the ACTIVE channel c1 from someone else.
@@ -249,7 +264,7 @@ void main() {
         rest: FakeRestApi(channels: twoChannels), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signInConnected(tester, transport); // me = u1
 
     // An echo of MY OWN message lands in the non-active channel c2.
@@ -273,7 +288,7 @@ void main() {
         rest: FakeRestApi(channels: twoChannels), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
     await settle(tester);
 
@@ -307,7 +322,7 @@ void main() {
         cache: cache);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester); // NOT connected: fence not settled yet
     await settle(tester);
     expect(aggregate(), findsNothing); // fence null → 0
@@ -345,7 +360,7 @@ void main() {
         cache: cache);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
     await settle(tester);
     // First sight: fence '05' (durable) but stream empty → baseline = fence '05',
@@ -375,7 +390,7 @@ void main() {
         rest: FakeRestApi(channels: twoChannels), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester); // active = c1
 
     // Fill c1 with enough inbound (from another user) to overflow the viewport,
@@ -417,7 +432,7 @@ void main() {
         rest: FakeRestApi(channels: twoChannels), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signInConnected(tester, transport);
 
     transport.emitMessage(inbound('c2', ulid('0A'), 'u2', 'one'));

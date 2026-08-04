@@ -4,6 +4,7 @@ import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/fake_chat_transport.dart';
@@ -14,12 +15,27 @@ void main() {
     await initializeTestEnvironment();
   });
 
+  // These tests exercise the NARROW (phone) layout — the app-bar dropdown
+  // switcher and app-bar settings/logout actions. The flutter_test default
+  // viewport is 800x600, which is ABOVE kWideLayoutBreakpoint (720) and would
+  // render the wide sidebar instead; pin a phone-width viewport so the mobile UX
+  // under test is what's rendered. The wide layout has its own suite
+  // (responsive_layout_test.dart).
+  Future<void> pumpNarrow(
+      WidgetTester tester, ProviderContainer container) async {
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpApp(tester, container);
+  }
+
   testWidgets('passkey sign-in → chat screen shows the channel', (tester) async {
     final rest = FakeRestApi();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     expect(rest.passkeyAuthFinishCalls, 1);
@@ -33,7 +49,7 @@ void main() {
     final container = makeContainer(rest: rest, transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     await tester.enterText(find.byType(TextField).first, 'hello world');
@@ -51,7 +67,7 @@ void main() {
     final container = makeContainer(rest: FakeRestApi(), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
 
@@ -67,7 +83,7 @@ void main() {
     final container = makeContainer(rest: FakeRestApi(), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     transport.emitConn(ConnectionState.disconnected);
@@ -85,7 +101,7 @@ void main() {
     final container = makeContainer(rest: FakeRestApi(), transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
 
@@ -105,7 +121,7 @@ void main() {
     final container = makeContainer(rest: rest, transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     // User A sends a message into the (in-memory) cache.
@@ -145,7 +161,7 @@ void main() {
     final container = makeContainer(rest: rest, transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     // The switcher opens on the default (first) channel.
@@ -203,7 +219,7 @@ void main() {
         makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     // Pick 'random'.
@@ -246,7 +262,7 @@ void main() {
         makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     // Type a draft in 'general' but do NOT send it.
@@ -274,7 +290,7 @@ void main() {
         makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     // Pick 'random'.
@@ -303,7 +319,7 @@ void main() {
         makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
@@ -317,7 +333,7 @@ void main() {
     final container = makeContainer(rest: rest, transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     // Send enough messages through the real composer path to overflow the
@@ -350,7 +366,7 @@ void main() {
     final container = makeContainer(rest: rest, transport: transport);
     addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
+    await pumpNarrow(tester, container);
     await signIn(tester);
 
     for (var i = 0; i < 20; i++) {

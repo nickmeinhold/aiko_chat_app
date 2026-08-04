@@ -3,12 +3,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/mark/mark_avatar.dart';
-import '../../../core/network/network_status_banner.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
+import 'channel_sidebar.dart';
+import 'chat_message_pane.dart';
+
+/// At or above this logical width the chat surface shows the Slack/Element-style
+/// left rail ([ChatSidebar]); below it collapses to the phone app-bar dropdown.
+const double kWideLayoutBreakpoint = 720;
+
+/// The fixed width of the wide-layout channel rail.
+const double kSidebarWidth = 268;
 
 /// The chat surface: a channel switcher + logout in the app bar, a thin
 /// connection banner, the message list, and the composer. The default channel is
@@ -29,7 +37,9 @@ class ChatScreen extends ConsumerWidget {
 
   /// The channel to display: the user's pick if it is still in the list, else
   /// the first channel (the default, and the self-heal when a pick disappears).
-  static Channel? _resolveActive(List<Channel> channels, String? selectedId) =>
+  /// Public so the shared [ChatMessagePane] and [ChatSidebar] resolve the active
+  /// channel with the SAME pure rule (single source of truth for "which channel").
+  static Channel? resolveActive(List<Channel> channels, String? selectedId) =>
       channels.where((c) => c.id == selectedId).firstOrNull ??
       channels.firstOrNull;
 
@@ -38,14 +48,15 @@ class ChatScreen extends ConsumerWidget {
     final channelsAsync = ref.watch(channelsProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
     final channels = channelsAsync.value ?? const <Channel>[];
-    final active = _resolveActive(channels, selectedId);
+    final active = resolveActive(channels, selectedId);
 
     // If the picked channel leaves the list (removed / renamed-away on a refetch),
     // clear the pick so the Notifier and the UI agree. Without this the resolver
     // heals only the DISPLAY (falls back to first) while the stale id lingers, so a
     // channel that later reappears would snap the user back to a selection they
     // never re-made (cage-match #106, Tesla). ref.listen fires outside build, so
-    // mutating the selection notifier here is safe.
+    // mutating the selection notifier here is safe. Runs in BOTH layouts (it's
+    // above the width fork).
     ref.listen(channelsProvider, (_, next) {
       final ids = next.value?.map((c) => c.id).toSet();
       final sel = ref.read(selectedChannelIdProvider);
@@ -54,69 +65,47 @@ class ChatScreen extends ConsumerWidget {
       }
     });
 
+    final isWide = MediaQuery.sizeOf(context).width >= kWideLayoutBreakpoint;
+
     return Scaffold(
-      appBar: AppBar(
-        title: channels.length > 1 && active != null
-            ? _ChannelSwitcher(channels: channels, activeId: active.id)
-            : Text(active?.name ?? 'Chat'),
-        actions: [
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings),
-            onPressed: () => context.push('/settings'),
-          ),
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () => ref.read(authControllerProvider.notifier).logout(),
-          ),
-        ],
-      ),
-      // The network banner lives ABOVE the channels branch so it stays visible
-      // in every state — including the offline empty-cache case ("No channels
-      // yet"), where it's the only thing explaining WHY the workspace looks empty
-      // (Carnot, PR #72). Without this, an offline first-launch reads as a real
-      // empty account rather than an offline one.
-      body: Column(
-        children: [
-          const NetworkStatusBanner(),
-          Expanded(
-            child: channelsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) =>
-                  Center(child: Text('Could not load channels.\n$e')),
-              data: (channels) {
-                if (active == null) {
-                  return const Center(child: Text('No channels yet.'));
-                }
-                return Column(
-                  children: [
-                    // Key by channel id so a switch gives MessageList a FRESH
-                    // State: without this, Flutter reuses the element at this
-                    // slot and the old channel's ScrollController (and its
-                    // near-bottom tracking) would carry over, landing the new
-                    // channel at a stale scroll offset instead of its newest
-                    // message. The key forces dispose→recreate on switch.
-                    Expanded(
-                      child: MessageList(
-                        key: ValueKey(active.id),
-                        channelId: active.id,
-                      ),
-                    ),
-                    // Keyed by channel id like MessageList above, so each channel
-                    // gets its OWN composer state: without this, Flutter reuses
-                    // _ComposerState across a switch and a draft typed in one
-                    // channel rides into the next (and sends there) — the same
-                    // state-carry the ValueKey fixes for scroll position
-                    // (cage-match #106, Maxwell + Tesla).
-                    Composer(
-                      key: ValueKey('composer-${active.id}'),
-                      channelId: active.id,
-                    ),
-                  ],
-                );
-              },
+      // Wide: the channel name titles the bar (channels + settings/logout moved
+      // into the rail). Narrow: the CURRENT app bar — the dropdown switcher when
+      // >1 channel, plus the settings + sign-out actions — unchanged.
+      appBar: isWide
+          ? AppBar(title: Text(active?.name ?? 'Chat'))
+          : AppBar(
+              title: channels.length > 1 && active != null
+                  ? _ChannelSwitcher(channels: channels, activeId: active.id)
+                  : Text(active?.name ?? 'Chat'),
+              actions: [
+                IconButton(
+                  tooltip: 'Settings',
+                  icon: const Icon(Icons.settings),
+                  onPressed: () => context.push('/settings'),
+                ),
+                IconButton(
+                  tooltip: 'Sign out',
+                  icon: const Icon(Icons.logout),
+                  onPressed: () =>
+                      ref.read(authControllerProvider.notifier).logout(),
+                ),
+              ],
             ),
+      // Option A — no state loss across the breakpoint. The body is ALWAYS a Row
+      // whose LAST child is `Expanded(ChatMessagePane(...))`. Narrow is a
+      // one-child Row; wide inserts `[sidebar, divider]` before it. Because the
+      // pane stays the LAST Row child (same type + key) across a resize, Flutter's
+      // bottom-up child matching reuses its Element + State — so the message
+      // list's scroll position and the composer's draft survive the crossing. The
+      // NetworkStatusBanner lives INSIDE the pane so it renders in both layouts.
+      body: Row(
+        children: [
+          if (isWide) ...[
+            const ChatSidebar(),
+            const VerticalDivider(width: 1),
+          ],
+          const Expanded(
+            child: ChatMessagePane(key: ValueKey('chat-message-pane')),
           ),
         ],
       ),
