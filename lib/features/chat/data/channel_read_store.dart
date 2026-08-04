@@ -29,12 +29,21 @@ class ChannelReadStore {
   String _key(String userId) => '$_prefix$userId';
 
   /// A watermark must be either the empty-string floor (`''`, the first-sight
-  /// baseline for a channel empty at settle-time) or a full 26-char ULID. A
-  /// malformed/short id would sort OFF the timeline (`compareTo` is lexicographic)
+  /// baseline for a channel empty at settle-time) or a canonical 26-char ULID.
+  /// A malformed id would sort OFF the timeline (`compareTo` is lexicographic)
   /// and, once persisted, pin a bad monotonic floor forever — so it is rejected at
   /// the boundary, in memory AND on disk.
+  ///
+  /// Length alone is not enough (cage-match #109, Carnot): a corrupt 26-char value
+  /// with out-of-alphabet chars (or one lexicographically above every real ULID)
+  /// would pass a length check, enter the marks map, block first-sight baseline via
+  /// the `containsKey` guard, and freeze `compareTo` so unread sticks at 0 forever.
+  /// So the alphabet is checked too — canonical uppercase Crockford base32
+  /// (`0-9A-HJKMNP-TV-Z`, i.e. no I/L/O/U), matching the app's canonical (uppercase)
+  /// ULID discipline that keeps lexicographic order == causal order.
+  static final _canonicalUlid = RegExp(r'^[0-9A-HJKMNP-TV-Z]{26}$');
   static bool isSortableWatermark(String ulid) =>
-      ulid.isEmpty || ulid.length == 26;
+      ulid.isEmpty || _canonicalUlid.hasMatch(ulid);
 
   /// Every persisted watermark for [userId], as `channelId → newest-read ULID`.
   /// The map the in-memory notifier seeds from on login / user switch. A missing

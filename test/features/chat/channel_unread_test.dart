@@ -132,6 +132,27 @@ void main() {
       expect(store.readAll('u')['c'], ulid('0A')); // unchanged, uncorrupted
     });
 
+    test('a 26-char but out-of-alphabet id is rejected — length is not enough',
+        () async {
+      final store = ChannelReadStore(testPrefs);
+      await store.setWatermark('u', 'c', ulid('0A')); // valid
+      // 26 chars, so a length-only check would accept it, but lowercase glyphs
+      // are outside Crockford base32 and sort ABOVE every real (uppercase) ULID —
+      // it would freeze compareTo and pin unread at 0 forever (cage-match #109).
+      await store.setWatermark('u', 'c', 'zzzzzzzzzzzzzzzzzzzzzzzzzz');
+      expect(store.readAll('u')['c'], ulid('0A')); // unchanged, uncorrupted
+    });
+
+    test('readAll drops a corrupt 26-char persisted value on load', () async {
+      // A corrupt value already on disk (storage corruption / a legacy format)
+      // must not enter the marks map, where it would block first-sight baseline
+      // (via containsKey) and freeze comparison — it is filtered at load.
+      await testPrefs.setString('aiko_channel_lastread_u',
+          jsonEncode({'good': ulid('0A'), 'bad': 'zzzzzzzzzzzzzzzzzzzzzzzzzz'}));
+      final store = ChannelReadStore(testPrefs);
+      expect(store.readAll('u'), {'good': ulid('0A')}); // bad entry dropped
+    });
+
     test('separate channels for one user coexist in the map', () async {
       final store = ChannelReadStore(testPrefs);
       await store.setWatermark('u', 'c1', ulid('0A'));
