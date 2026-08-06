@@ -335,6 +335,30 @@ class GatewayRestApi implements ChatRestApi {
     }),
   );
 
+  @override
+  Future<AppUser> updateProfile({String? handle, String? displayName}) =>
+      _mapNetwork(() async {
+        try {
+          final r = await _authed.patch('/v1/me', data: <String, dynamic>{
+            'handle': ?handle,
+            'display_name': ?displayName,
+          });
+          return AppUser.fromJson(_map(r.data));
+        } on DioException catch (e) {
+          final code = e.response?.statusCode;
+          if (code == 409) throw const HandleTaken();
+          if (code == 429) {
+            final body = e.response?.data;
+            final secs = (body is Map && body['retry_after'] is num)
+                ? (body['retry_after'] as num).toInt()
+                : 0;
+            throw HandleChangeOnCooldown(secs);
+          }
+          // Never-returning: 401/403 → Unauthorized, else rethrows (400 etc).
+          _throwIfAuthTerminal(e);
+        }
+      });
+
   /// Translate a connection-class [DioException] (no response from the server —
   /// DNS/connect/timeout) into the domain [NetworkUnavailable]. A DioException
   /// that carries a response (the server answered, even an error) is NOT
