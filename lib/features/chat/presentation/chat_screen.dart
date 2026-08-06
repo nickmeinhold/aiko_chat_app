@@ -575,6 +575,50 @@ class _ComposerState extends ConsumerState<Composer> {
     await repo.sendMessage(widget.channelId, body);
   }
 
+  // A small curated set — enough to be useful without a picker dependency.
+  static const _emojis = [
+    '😀', '😄', '😁', '😆', '😅', '😂', '🤣', '😊',
+    '🙂', '😉', '😍', '🥰', '😘', '😋', '😎', '🤩',
+    '🤔', '🤨', '😐', '🙄', '😴', '😢', '😭', '😤',
+    '😠', '🥳', '🤯', '😳', '🥺', '😇', '🤗', '🤫',
+    '👍', '👎', '👌', '🙏', '👏', '🙌', '💪', '🤝',
+    '🔥', '✨', '🎉', '💯', '👀', '❤️', '💜', '💔',
+  ];
+
+  void _insertEmoji(String emoji) {
+    final sel = _controller.selection;
+    final text = _controller.text;
+    final start = sel.start >= 0 ? sel.start : text.length;
+    final end = sel.end >= 0 ? sel.end : text.length;
+    _controller.value = TextEditingValue(
+      text: text.replaceRange(start, end, emoji),
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+  }
+
+  Future<void> _showEmojiPicker() async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: GridView.count(
+          crossAxisCount: 8,
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(8),
+          children: [
+            for (final e in _emojis)
+              InkWell(
+                onTap: () => Navigator.pop(context, e),
+                child: Center(
+                  child: Text(e, style: const TextStyle(fontSize: 26)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) _insertEmoji(picked);
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -583,6 +627,11 @@ class _ComposerState extends ConsumerState<Composer> {
         padding: const EdgeInsets.all(8),
         child: Row(
           children: [
+            IconButton(
+              onPressed: _showEmojiPicker,
+              icon: const Icon(Icons.emoji_emotions_outlined),
+              tooltip: 'Emoji',
+            ),
             Expanded(
               child: Focus(
                 // Physical keyboard: Enter sends, Shift+Enter inserts a newline.
