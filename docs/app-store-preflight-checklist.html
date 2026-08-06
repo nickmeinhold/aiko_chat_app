@@ -57,15 +57,16 @@ git log --oneline -1                     # HEAD you built from
 <div class="check">
   <h3>2 · Every metadata URL resolves 200</h3>
   <div class="tags"><span class="tag auto">automatable</span><span class="tag">all platforms</span></div>
-  <div class="why"><b>Wall it prevents:</b> privacy / support / marketing URLs 404ing → rejection or a broken public listing. The live iOS listing still points at a dead <code>imagineering.cc/aiko/privacy</code>; the canonical pages moved into the island's FastAPI routes.</div>
+  <div class="why"><b>Wall it prevents:</b> privacy / support / marketing URLs 404ing → rejection or a broken public listing. Canonical legal pages now live in the standalone <code>nickmeinhold/aikochat</code> repo, served at <code>aikochat.org</code> — decoupled from both the app release cadence and the island host (which is what let the old <code>imagineering.cc</code> URLs 404 during a migration).</div>
   <b>Verify:</b>
   <pre>for U in \
-  "https://chat.imagineering.cc/privacy" \
-  "https://chat.imagineering.cc/terms" \
+  "https://aikochat.org/privacy" \
+  "https://aikochat.org/terms" \
+  "https://aikochat.org/delete-account" \
   "$MARKETING_URL"; do
   echo "[$(curl -s -o /dev/null -w '%{http_code}' -L "$U")] $U"
 done   # every line must be 200</pre>
-  Canonical: privacy = <code>chat.imagineering.cc/privacy</code>, terms = <code>chat.imagineering.cc/terms</code>. <strong>Note:</strong> the account-deletion URL Apple/Play require must also resolve (covered inline via the privacy page <code>#retention</code> anchor as the current stopgap).
+  Canonical: privacy = <code>aikochat.org/privacy</code>, terms = <code>aikochat.org/terms</code>, deletion = <code>aikochat.org/delete-account</code> (a real standalone page now — replaces the old privacy <code>#retention</code> anchor stopgap). Marketing URL = <code>aikochat.org/</code> (optional field; the compliance landing doubles as it).
 </div>
 
 <div class="check">
@@ -112,14 +113,15 @@ grep -A1 ITSAppUsesNonExemptEncryption ios/Runner/Info.plist
 <div class="snapshot">
 <table>
   <tr><th>Check</th><th>Result</th></tr>
-  <tr><td>2 · <code>chat.imagineering.cc/privacy</code></td><td class="pass">200 ✅</td></tr>
-  <tr><td>2 · <code>chat.imagineering.cc/terms</code></td><td class="pass">200 ✅</td></tr>
-  <tr><td>2 · Marketing URL <code>nickmeinhold.github.io/aiko_chat_app/</code></td><td class="pass">200 ✅ — repointed off the dead <code>chat.imagineering.cc</code> root to the Pages hub (2026-08-06)</td></tr>
+  <tr><td>2 · <code>aikochat.org/privacy</code></td><td class="pass">200 ✅</td></tr>
+  <tr><td>2 · <code>aikochat.org/terms</code></td><td class="pass">200 ✅</td></tr>
+  <tr><td>2 · <code>aikochat.org/delete-account</code></td><td class="pass">200 ✅</td></tr>
+  <tr><td>2 · Marketing URL <code>aikochat.org/</code></td><td class="pass">200 ✅ — branded compliance landing (optional field)</td></tr>
   <tr><td>5 · macOS <code>LSApplicationCategoryType</code></td><td class="pass">present (public.app-category.social-networking) ✅</td></tr>
   <tr><td>5 · iOS <code>ITSAppUsesNonExemptEncryption</code></td><td class="pass">present (false) ✅</td></tr>
   <tr><td>1 · Version</td><td class="pass">0.0.2+10 (staged; 0.0.1+9 was last live) ✅</td></tr>
 </table>
-<p style="margin:.4rem 0 0; font-size:.9rem;"><strong>Resolved 2026-08-06:</strong> the Marketing URL was repointed from the dead <code>chat.imagineering.cc</code> root to <code>https://nickmeinhold.github.io/aiko_chat_app/</code> (verified 200), and the version bumped to <code>0.0.2+10</code> off the last-live <code>0.0.1+9</code>. Both land in App Store Connect / Play at the ASO push (still to apply at submit).</p>
+<p style="margin:.4rem 0 0; font-size:.9rem;"><strong>Superseded 2026-08-07:</strong> all store-facing URLs repointed to the branded <code>aikochat.org</code> (privacy / terms / delete-account, plus the optional marketing URL) — replacing the earlier <code>chat.imagineering.cc</code> (privacy/terms) and <code>github.io/aiko_chat_app</code> (marketing) declarations. Legal pages are now served by the dedicated <code>nickmeinhold/aikochat</code> repo, decoupled from island-host uptime. Version <code>0.0.2+10</code> staged off last-live <code>0.0.1+9</code>. <strong>Still to apply at submit:</strong> these land in App Store Connect / Play only at the next ASO push — the live listings still carry the old URLs until then.</p>
 </div>
 
 <p class="sub" style="margin-top:1.5rem;">Automating this: each check above maps to an <code>asc preflight</code> / <code>gplay preflight</code> subcommand (config-driven URLs + keys per app) in <code>~/git/tools/cli-tools/appstore</code>. Checks 2 and 5 are pure automation; 1 and 3 have an automatable part + a human gate; 4 is a per-account constant. This doc is the spec.</p>
