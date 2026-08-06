@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -583,18 +584,32 @@ class _ComposerState extends ConsumerState<Composer> {
         child: Row(
           children: [
             Expanded(
-              child: TextField(
-                controller: _controller,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.send,
-                decoration: const InputDecoration(
-                  hintText: 'Message',
-                  border: OutlineInputBorder(),
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Focus(
+                // Physical keyboard: Enter sends, Shift+Enter inserts a newline.
+                // Scoped to hardware key events, so mobile soft keyboards keep
+                // their existing newline + send-button behaviour untouched.
+                onKeyEvent: (node, event) {
+                  if (event is KeyDownEvent &&
+                      event.logicalKey == LogicalKeyboardKey.enter &&
+                      !HardwareKeyboard.instance.isShiftPressed) {
+                    _send();
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                },
+                child: TextField(
+                  controller: _controller,
+                  minLines: 1,
+                  maxLines: 4,
+                  textInputAction: TextInputAction.send,
+                  decoration: const InputDecoration(
+                    hintText: 'Message',
+                    border: OutlineInputBorder(),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  onSubmitted: (_) => _send(),
                 ),
-                onSubmitted: (_) => _send(),
               ),
             ),
             const SizedBox(width: 8),
