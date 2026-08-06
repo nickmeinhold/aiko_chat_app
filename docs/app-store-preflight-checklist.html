@@ -114,12 +114,12 @@ grep -A1 ITSAppUsesNonExemptEncryption ios/Runner/Info.plist
   <tr><th>Check</th><th>Result</th></tr>
   <tr><td>2 · <code>chat.imagineering.cc/privacy</code></td><td class="pass">200 ✅</td></tr>
   <tr><td>2 · <code>chat.imagineering.cc/terms</code></td><td class="pass">200 ✅</td></tr>
-  <tr><td>2 · Marketing URL <code>chat.imagineering.cc</code> (root)</td><td class="fail">404 ❌ — root serves nothing; repoint or drop this URL</td></tr>
+  <tr><td>2 · Marketing URL <code>nickmeinhold.github.io/aiko_chat_app/</code></td><td class="pass">200 ✅ — repointed off the dead <code>chat.imagineering.cc</code> root to the Pages hub (2026-08-06)</td></tr>
   <tr><td>5 · macOS <code>LSApplicationCategoryType</code></td><td class="pass">present (public.app-category.social-networking) ✅</td></tr>
   <tr><td>5 · iOS <code>ITSAppUsesNonExemptEncryption</code></td><td class="pass">present (false) ✅</td></tr>
-  <tr><td>1 · Version</td><td class="pass">0.0.1+9 (live) ✅</td></tr>
+  <tr><td>1 · Version</td><td class="pass">0.0.2+10 (staged; 0.0.1+9 was last live) ✅</td></tr>
 </table>
-<p style="margin:.4rem 0 0; font-size:.9rem;"><strong>Open finding:</strong> the Marketing URL on file (<code>chat.imagineering.cc</code> root) 404s. Marketing URL is optional — either drop it or repoint it at a page that resolves (e.g. the GitHub Pages hub) before the next submission.</p>
+<p style="margin:.4rem 0 0; font-size:.9rem;"><strong>Resolved 2026-08-06:</strong> the Marketing URL was repointed from the dead <code>chat.imagineering.cc</code> root to <code>https://nickmeinhold.github.io/aiko_chat_app/</code> (verified 200), and the version bumped to <code>0.0.2+10</code> off the last-live <code>0.0.1+9</code>. Both land in App Store Connect / Play at the ASO push (still to apply at submit).</p>
 </div>
 
 <p class="sub" style="margin-top:1.5rem;">Automating this: each check above maps to an <code>asc preflight</code> / <code>gplay preflight</code> subcommand (config-driven URLs + keys per app) in <code>~/git/tools/cli-tools/appstore</code>. Checks 2 and 5 are pure automation; 1 and 3 have an automatable part + a human gate; 4 is a per-account constant. This doc is the spec.</p>
