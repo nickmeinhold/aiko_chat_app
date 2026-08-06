@@ -554,6 +554,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// routing (cage-match Carnot + Tesla round 4). Routes through the single
   /// suspended door (`_settleSuspension` → `/suspended`), same as sign-in/restore.
   /// Idempotent: if suspension is already settled it is a harmless re-flag.
+  /// Publish a profile change the user just made in settings (handle and/or
+  /// display name, via [ChatRestApi.updateProfile]). [user] is the gateway's
+  /// echo of the new labels; refresh UI state + the offline cache so the change
+  /// shows everywhere at once (identity is the key — these are mutable labels on
+  /// it). No-op if the session changed underneath (logged out / switched user
+  /// mid-edit) — fail closed rather than publish a stale identity onto a new one.
+  Future<void> applyProfileUpdate(AppUser user) async {
+    if (state.value?.userId != user.userId) return;
+    await _writeCachedUser(user); // keep the offline cache fresh
+    if (state.value?.userId != user.userId) return; // re-fence after the write
+    state = AsyncData(user);
+  }
+
   Future<void> settleBan() async {
     state = AsyncError(const AccountSuspended(), StackTrace.current);
     await _settleSuspension();

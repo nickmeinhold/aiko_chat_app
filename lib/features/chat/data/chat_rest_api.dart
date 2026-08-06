@@ -211,6 +211,19 @@ class HandleTaken implements Exception {
   String toString() => 'HandleTaken';
 }
 
+/// Thrown by [ChatRestApi.updateProfile] when a handle CHANGE is attempted
+/// within the cooldown window (the gateway returns 429 + `retry_after`
+/// seconds). Identity is the key; the handle is a mutable label but changes are
+/// rate-limited. The settings UI surfaces "you can change your handle again in
+/// N days" rather than a generic failure. [retryAfterSeconds] is the gateway's
+/// whole-second `retry_after` (0 if it was absent).
+class HandleChangeOnCooldown implements Exception {
+  final int retryAfterSeconds;
+  const HandleChangeOnCooldown(this.retryAfterSeconds);
+  @override
+  String toString() => 'HandleChangeOnCooldown($retryAfterSeconds)';
+}
+
 /// Thrown by [ChatRestApi.addPasskey] when the gateway rejects the credential as
 /// already registered (409) — a given passkey can be linked once. The 409 means
 /// the credential is registered to THIS or another account, so the settings UI
@@ -306,6 +319,15 @@ abstract interface class ChatRestApi {
   Future<GatewayCapabilities?> getCapabilities();
 
   Future<AppUser> me();
+
+  /// Update the authenticated user's mutable profile labels — [handle] and/or
+  /// [displayName], at least one required. Identity is the key; these are
+  /// mutable labels on it (handle unique-at-a-time + change cooldown; display
+  /// name free). Sends `handle` / `display_name`; returns the updated [AppUser]
+  /// (the handle reads back as `username`, matching `GET /v1/me`). Throws
+  /// [HandleTaken] on 409, [HandleChangeOnCooldown] on 429, and [Unauthorized]
+  /// on terminal auth rejection. (Island contract: PATCH /v1/me, #2631.)
+  Future<AppUser> updateProfile({String? handle, String? displayName});
 
   /// Permanently delete the authenticated user's account (Apple 5.1.1(v)).
   /// Succeeds silently (the gateway returns 204). Throws

@@ -216,6 +216,9 @@ class FakeChatRestApi implements ChatRestApi {
     required String displayName,
   }) =>
       throw UnimplementedError();
+  @override
+  Future<AppUser> updateProfile({String? handle, String? displayName}) =>
+      throw UnimplementedError();
 }
 
 /// Records the observability calls B4 makes, so tests can assert that the
