@@ -4,6 +4,7 @@ import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -60,6 +61,53 @@ void main() {
 
     expect(transport.sent.map((m) => m.body), contains('hello world'));
     expect(find.text('hello world'), findsOneWidget); // optimistic row rendered
+  });
+
+  testWidgets('emoji picker inserts the picked emoji at the cursor',
+      (tester) async {
+    final container =
+        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpNarrow(tester, container);
+    await signIn(tester);
+
+    await tester.enterText(find.byType(TextField).first, 'hi ');
+    await tester.tap(find.byIcon(Icons.emoji_emotions_outlined));
+    await tester.pumpAndSettle(); // bottom sheet opens
+
+    await tester.tap(find.text('😀').first);
+    await tester.pumpAndSettle(); // sheet closes, emoji inserted at cursor
+
+    final field = tester.widget<TextField>(find.byType(TextField).first);
+    expect(field.controller!.text, 'hi 😀');
+  });
+
+  testWidgets('Enter sends; Shift+Enter does not (newline)', (tester) async {
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: FakeRestApi(), transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpNarrow(tester, container);
+    await signIn(tester);
+
+    // Shift+Enter must NOT send — it falls through to a newline.
+    await tester.enterText(find.byType(TextField).first, 'stay');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    expect(transport.sent.map((m) => m.body), isNot(contains('stay')));
+
+    // A bare Enter sends (physical-keyboard scoped via Focus.onKeyEvent).
+    await tester.enterText(find.byType(TextField).first, 'via-enter');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await tester.pumpAndSettle();
+    expect(transport.sent.map((m) => m.body), contains('via-enter'));
   });
 
   testWidgets('terminal unauthenticated → logged out to login', (tester) async {
