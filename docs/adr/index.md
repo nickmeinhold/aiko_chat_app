@@ -21,7 +21,7 @@ The pipeline: ADR (why) → RFC/spec (what) → code (derived, verified against 
 | 0001 | The federation vocabulary | Accepted (two named forks open) | Andy (write-up: Nick) |
 | 0002 | EC for observation, API for structure | Accepted (retroactive) | Andy (write-up: Nick) |
 | 0003 | Users: ChatServer CRUD + general-purpose ECConsumer | Reserved (supersedes issue #6; ChatServer CRUD example may be Nick's to build, per the call) | Andy + Nick |
-| 0004 | Sovereign identity federation | Reserved (design exists, not yet distilled) | Nick |
+| 0004 | Sovereign identity federation | Draft (distilled 2026-08-08 via crucible: identity=key, email-shaped, no central directory) | Nick |
 | 0005 | The identity graph | Draft | Nick |
 | 0006 | Sybil resistance: reputation, not personhood | Draft | Nick |
 | 0007 | Porting Aiko Services to other languages | Reserved (Andy's research in progress) | Andy |
