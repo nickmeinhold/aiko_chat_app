@@ -784,6 +784,38 @@ class DriftCache extends _$DriftCache {
     return q.watch().map((rows) => rows.map(_toDomain).toList());
   }
 
+  /// Case-insensitive substring search over the body of ALL cached messages (the
+  /// grep tier of #8). One-shot (not a stream): the search screen re-runs it per
+  /// debounced keystroke.
+  ///
+  /// Visibility parity with the message list (concept_visibility_consistency):
+  /// RETRACTED messages are already hard-deleted from this table by
+  /// [applyRetraction], so a plain scan can never surface a taken-down message —
+  /// the suppression is baked into the table's contents, not re-applied here.
+  /// BLOCKED-sender filtering is NOT the cache's job (it has no block list); the
+  /// provider layer applies it, exactly as [messagesProvider] layers it over the
+  /// visibility-agnostic [watchChannel]. Newest-first, capped at [limit] so a
+  /// broad query can't build an unbounded list.
+  Future<List<Message>> searchMessages(String query, {int limit = 200}) {
+    final needle = query.trim().toLowerCase();
+    if (needle.isEmpty) return Future.value(const []);
+    // `%`/`_` are LIKE wildcards; escape them (and the escape char) and declare an
+    // ESCAPE so a literal `50%` search is a literal substring, not a pattern. The
+    // pattern itself is a BOUND variable (drift parameterizes `like`), so this is
+    // injection-safe regardless of contents.
+    final escaped = needle
+        .replaceAll('\\', '\\\\')
+        .replaceAll('%', '\\%')
+        .replaceAll('_', '\\_');
+    final q = select(messages)
+      ..where((t) => t.body.lower().like('%$escaped%', escapeChar: '\\'))
+      ..orderBy([
+        (t) => OrderingTerm(expression: t.createdAt, mode: OrderingMode.desc),
+      ])
+      ..limit(limit);
+    return q.get().then((rows) => rows.map(_toDomain).toList());
+  }
+
   /// Invariant O — the outbox is a QUERY, not a table: every un-acked,
   /// not-failed row, in send order.
   Future<List<Message>> outbox() async {

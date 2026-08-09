@@ -26,6 +26,7 @@ import '../features/auth/presentation/login_screen.dart';
 import '../features/auth/presentation/suspended_screen.dart';
 import '../features/chat/presentation/carried_record_screen.dart';
 import '../features/chat/presentation/chat_screen.dart';
+import '../features/chat/presentation/search_screen.dart';
 import '../features/chat/presentation/splash_screen.dart';
 import '../features/legal/application/eula_controller.dart';
 import '../features/legal/presentation/eula_screen.dart';
@@ -153,6 +154,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: '/claim-handle', builder: (_, _) => const ClaimHandleScreen()),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
+      GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
       GoRoute(
           path: '/settings/carried-record',
