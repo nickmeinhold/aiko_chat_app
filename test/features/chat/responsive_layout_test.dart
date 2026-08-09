@@ -87,6 +87,8 @@ void main() {
     expect(find.byType(ChatMessagePane), findsOneWidget);
     // Settings/logout stay in the app bar on narrow.
     expect(find.byIcon(Icons.logout), findsOneWidget);
+    // Search is reachable on narrow (app-bar icon).
+    expect(find.byIcon(Icons.search), findsOneWidget);
   });
 
   testWidgets('wide: sidebar with channel rows, no app-bar dropdown',
@@ -118,6 +120,10 @@ void main() {
       tester.widget<ListTile>(find.byKey(const Key('sidebar-channel-c2'))).selected,
       isFalse,
     );
+    // Search must be reachable on wide too — it lives in the sidebar footer,
+    // since the wide layout drops the app bar (regression guard: #118 shipped the
+    // icon only in the app bar, which is absent here — caught by live-running).
+    expect(find.byIcon(Icons.search), findsOneWidget);
   });
 
   testWidgets('wide: tapping a sidebar tile swaps the pane (re-keys MessageList)',
