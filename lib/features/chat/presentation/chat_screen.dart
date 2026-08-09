@@ -596,16 +596,21 @@ class _ComposerState extends ConsumerState<Composer> {
     '🔥', '✨', '🎉', '💯', '👀', '❤️', '💜', '💔',
   ];
 
-  void _insertEmoji(String emoji) {
+  /// Insert [s] at the caret (replacing any selection) and collapse the caret
+  /// after it. Shared by the emoji picker and the Shift+Enter newline (a field
+  /// with no caret yet has an invalid -1 selection → append at the end).
+  void _insertAtCursor(String s) {
     final sel = _controller.selection;
     final text = _controller.text;
     final start = sel.start >= 0 ? sel.start : text.length;
     final end = sel.end >= 0 ? sel.end : text.length;
     _controller.value = TextEditingValue(
-      text: text.replaceRange(start, end, emoji),
-      selection: TextSelection.collapsed(offset: start + emoji.length),
+      text: text.replaceRange(start, end, s),
+      selection: TextSelection.collapsed(offset: start + s.length),
     );
   }
+
+  void _insertEmoji(String emoji) => _insertAtCursor(emoji);
 
   Future<void> _showEmojiPicker() async {
     final picked = await showModalBottomSheet<String>(
@@ -650,9 +655,17 @@ class _ComposerState extends ConsumerState<Composer> {
                 // their existing newline + send-button behaviour untouched.
                 onKeyEvent: (node, event) {
                   if (event is KeyDownEvent &&
-                      event.logicalKey == LogicalKeyboardKey.enter &&
-                      !HardwareKeyboard.instance.isShiftPressed) {
-                    _send();
+                      event.logicalKey == LogicalKeyboardKey.enter) {
+                    if (HardwareKeyboard.instance.isShiftPressed) {
+                      // Shift+Enter → newline. Flutter's DefaultTextEditingShortcuts
+                      // map only PLAIN Enter to a newline in a multiline field, and
+                      // the composer reassigns bare Enter to "send" — so Shift+Enter
+                      // has no default handler and the newline must be inserted
+                      // explicitly here (#113 follow-up; was a silent no-op before).
+                      _insertAtCursor('\n');
+                    } else {
+                      _send();
+                    }
                     return KeyEventResult.handled;
                   }
                   return KeyEventResult.ignored;
