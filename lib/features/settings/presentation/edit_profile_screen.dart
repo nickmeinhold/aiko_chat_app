@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
 
@@ -68,13 +67,17 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       _nameError = null;
     });
     try {
-      final updated = await ref.read(restApiProvider).updateProfile(
-            handle: handleChanged ? newHandle : null,
-            displayName: nameChanged ? newName : null,
-          );
-      await ref
-          .read(authControllerProvider.notifier)
-          .applyProfileUpdate(updated);
+      // Single authed-mutation door: saveProfile owns the total commit-time fence
+      // AND every terminal-auth outcome (AccountSuspended → /suspended, terminal
+      // 401 → logout), so this screen only handles the user-actionable errors
+      // below. A null return means a terminal signal was settled and the router
+      // is redirecting — do NOT pop/toast (cage-match #114 confirming round).
+      final updated =
+          await ref.read(authControllerProvider.notifier).saveProfile(
+                handle: handleChanged ? newHandle : null,
+                displayName: nameChanged ? newName : null,
+              );
+      if (updated == null) return;
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Profile updated')));
@@ -87,14 +90,6 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       if (mounted) {
         setState(() => _handleError = _cooldownMessage(e.retryAfterSeconds));
       }
-    } on AccountSuspended {
-      // A ban landed mid-edit. Route through the single suspended door
-      // (settleBan → _settleSuspension → /suspended) exactly as sign-in/restore
-      // do, instead of swallowing it in the generic snackbar below and leaving a
-      // banned user "logged in" with no /suspended zone (cage-match #114,
-      // Carnot+Tesla+Wu). The router redirect replaces this screen, so no further
-      // context use here.
-      await ref.read(authControllerProvider.notifier).settleBan();
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -546,17 +546,59 @@ class AuthController extends AsyncNotifier<AppUser?> {
     }
   }
 
-  /// Publish a profile change the user just made in settings (handle and/or
-  /// display name, via [ChatRestApi.updateProfile]). [user] is the gateway's
-  /// echo of the new labels; refresh UI state + the offline cache so the change
-  /// shows everywhere at once (identity is the key — these are mutable labels on
-  /// it). No-op if the session changed underneath (logged out / switched user
-  /// mid-edit) — fail closed rather than publish a stale identity onto a new one.
-  Future<void> applyProfileUpdate(AppUser user) async {
-    if (state.value?.userId != user.userId) return;
-    await _writeCachedUser(user); // keep the offline cache fresh
-    if (state.value?.userId != user.userId) return; // re-fence after the write
-    state = AsyncData(user);
+  /// Save a profile change (handle and/or display name) through the SINGLE
+  /// authed-mutation door, so the `PATCH /v1/me` inherits the same terminal-auth
+  /// taxonomy AND the same total commit-time fence as [refreshUser] (cage-match
+  /// #114 confirming round, Carnot + Wu). Splitting the mutation across the screen
+  /// (a generic `catch`) and a userId-only [applyProfileUpdate] leaked two ways:
+  /// a terminal 401 was swallowed as a snackbar (dead session left in the UI), and
+  /// a same-identity logout→login mid-flight could pair one session's tokens with
+  /// another's cached face (the PR #71 class). Both are dissolved by owning the
+  /// whole thing here.
+  ///
+  /// The caller (settings screen) keeps ONLY the user-actionable outcomes —
+  /// [HandleTaken] / [HandleChangeOnCooldown] are rethrown for inline field errors.
+  /// Every terminal/authZ outcome is settled HERE and can never be swallowed:
+  ///   - [AccountSuspended] (ban mid-edit) → the single suspended door.
+  ///   - [Unauthorized] (a 401 that survived the interceptor's refresh) →
+  ///     [_becomeUnauthenticated] teardown.
+  /// Returns the updated [AppUser] on success, or null when a terminal signal was
+  /// settled (the router then redirects — the caller must NOT pop/toast on null).
+  Future<AppUser?> saveProfile({String? handle, String? displayName}) async {
+    final startUserId = state.value?.userId;
+    if (startUserId == null) return null; // not authenticated
+    try {
+      final user = await _rest.updateProfile(
+        handle: handle,
+        displayName: displayName,
+      );
+      // Total commit-time fence, identical to refreshUser (PR #71 / Tesla R5):
+      // token · userId · cache · publish — so a logout, or a logout+sign-in as
+      // the SAME identity, mid-flight can never pair one session's tokens with
+      // another's cached face. Fence BEFORE the cache write, then re-fence
+      // synchronously immediately before the publish.
+      if (await _tokens.currentAccessToken() == null) return null;
+      if (state.value?.userId != startUserId) return null;
+      await _writeCachedUser(user);
+      if (state.value?.userId != startUserId) return null;
+      state = AsyncData(user);
+      return user;
+    } on AccountSuspended catch (e, st) {
+      // Ban mid-edit — route through the single suspended door (NOT the generic
+      // teardown, which lands on /login and 403-loops on re-auth). Surface the
+      // ban in state first (_settleSuspension reads state.error), then delegate.
+      state = AsyncError(e, st);
+      await _settleSuspension();
+      return null;
+    } on Unauthorized {
+      // Terminal authN (a 401 that survived the interceptor's refresh-and-retry)
+      // — tear the dead session down rather than leave it published in UI state.
+      // Idempotent with the interceptor's onUnauthenticated path.
+      _becomeUnauthenticated();
+      return null;
+    }
+    // HandleTaken / HandleChangeOnCooldown (user-actionable) and any other error
+    // propagate to the screen — deliberately NOT caught here.
   }
 
   /// Settle a KNOWN ban directly, WITHOUT a confirming `/v1/me` round-trip.
