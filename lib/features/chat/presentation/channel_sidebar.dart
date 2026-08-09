@@ -232,6 +232,11 @@ class _SidebarFooter extends ConsumerWidget {
             ),
           ),
           IconButton(
+            tooltip: 'Search',
+            icon: const Icon(Icons.search),
+            onPressed: () => context.push('/search'),
+          ),
+          IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
             onPressed: () =>

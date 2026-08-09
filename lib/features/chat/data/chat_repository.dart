@@ -164,6 +164,13 @@ class ChatRepository {
   Stream<List<Message>> watchChannel(String channelId) =>
       _cache.watchChannel(channelId);
 
+  /// Cross-channel grep search over cached message bodies (#8, grep tier).
+  /// Delegates to the cache; retraction-safe by construction (retracted rows are
+  /// hard-deleted). Blocked-sender filtering is layered by the search provider,
+  /// mirroring how [messagesProvider] layers it over [watchChannel].
+  Future<List<Message>> searchMessages(String query, {int limit = 200}) =>
+      _cache.searchMessages(query, limit: limit);
+
   /// TEST-ONLY read access to the injected telemetry sink. Exists so a
   /// provider-wiring test can assert the production graph injects a REAL sink
   /// (never the silent [_NoopTelemetry] default) — the #16 regression that

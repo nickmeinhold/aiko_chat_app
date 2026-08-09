@@ -82,6 +82,11 @@ class ChatScreen extends ConsumerWidget {
                   : Text(active?.name ?? 'Chat'),
               actions: [
                 IconButton(
+                  tooltip: 'Search',
+                  icon: const Icon(Icons.search),
+                  onPressed: () => context.push('/search'),
+                ),
+                IconButton(
                   tooltip: 'Settings',
                   icon: const Icon(Icons.settings),
                   onPressed: () => context.push('/settings'),
