@@ -11,6 +11,7 @@ import '../domain/channel.dart';
 import '../domain/message.dart';
 import 'channel_sidebar.dart';
 import 'chat_message_pane.dart';
+import 'emoji_shortcodes.dart';
 
 /// At or above this logical width the chat surface shows the Slack/Element-style
 /// left rail ([ChatSidebar]); below it collapses to the phone app-bar dropdown.
@@ -572,10 +573,76 @@ class Composer extends ConsumerStatefulWidget {
 class _ComposerState extends ConsumerState<Composer> {
   final _controller = TextEditingController();
 
+  /// Active `:shortcode` autocomplete suggestions (#12). Empty ⇒ picker closed.
+  List<MapEntry<String, String>> _suggestions = const [];
+  int _selected = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_updateSuggestions);
+  }
+
   @override
   void dispose() {
+    _controller.removeListener(_updateSuggestions);
     _controller.dispose();
     super.dispose();
+  }
+
+  /// The caret offset when it is a valid, collapsed cursor; else -1 (a range
+  /// selection or no focus has no single insertion point to complete against).
+  int get _caret {
+    final sel = _controller.selection;
+    return (sel.isValid && sel.isCollapsed) ? sel.baseOffset : -1;
+  }
+
+  /// Recompute suggestions from the token under the caret. Only calls setState
+  /// when the visible list actually changes, so ordinary typing doesn't churn
+  /// the tree on every keystroke.
+  void _updateSuggestions() {
+    final tok = activeShortcodeToken(_controller.text, _caret);
+    final next = tok == null
+        ? const <MapEntry<String, String>>[]
+        : filterEmojiShortcodes(tok.query);
+    final changed = next.length != _suggestions.length ||
+        [for (var i = 0; i < next.length; i++) next[i].key != _suggestions[i].key]
+            .any((d) => d);
+    if (changed) {
+      setState(() {
+        _suggestions = next;
+        _selected = 0;
+      });
+    }
+  }
+
+  void _closeSuggestions() {
+    if (_suggestions.isNotEmpty) {
+      setState(() {
+        _suggestions = const [];
+        _selected = 0;
+      });
+    }
+  }
+
+  /// Replace the active `:token` with the chosen emoji and close the picker.
+  void _acceptSuggestion(MapEntry<String, String> s) {
+    final tok = activeShortcodeToken(_controller.text, _caret);
+    if (tok == null) return;
+    final text = _controller.text;
+    _controller.value = TextEditingValue(
+      text: text.replaceRange(tok.start, _caret, s.value),
+      selection: TextSelection.collapsed(offset: tok.start + s.value.length),
+    );
+    _closeSuggestions();
+  }
+
+  void _moveSelection(int delta) {
+    if (_suggestions.isEmpty) return;
+    setState(() {
+      _selected = (_selected + delta) % _suggestions.length;
+      if (_selected < 0) _selected += _suggestions.length;
+    });
   }
 
   Future<void> _send() async {
@@ -639,9 +706,14 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget build(BuildContext context) {
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_suggestions.isNotEmpty) _buildSuggestions(context),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
           children: [
             IconButton(
               onPressed: _showEmojiPicker,
@@ -654,8 +726,32 @@ class _ComposerState extends ConsumerState<Composer> {
                 // Scoped to hardware key events, so mobile soft keyboards keep
                 // their existing newline + send-button behaviour untouched.
                 onKeyEvent: (node, event) {
-                  if (event is KeyDownEvent &&
-                      event.logicalKey == LogicalKeyboardKey.enter) {
+                  if (event is! KeyDownEvent) return KeyEventResult.ignored;
+                  final key = event.logicalKey;
+                  // When the shortcode picker is open it captures the navigation
+                  // keys, so Enter/Tab commit the highlighted emoji instead of
+                  // sending the message and the arrows move the highlight.
+                  if (_suggestions.isNotEmpty) {
+                    if (key == LogicalKeyboardKey.enter &&
+                            !HardwareKeyboard.instance.isShiftPressed ||
+                        key == LogicalKeyboardKey.tab) {
+                      _acceptSuggestion(_suggestions[_selected]);
+                      return KeyEventResult.handled;
+                    }
+                    if (key == LogicalKeyboardKey.arrowDown) {
+                      _moveSelection(1);
+                      return KeyEventResult.handled;
+                    }
+                    if (key == LogicalKeyboardKey.arrowUp) {
+                      _moveSelection(-1);
+                      return KeyEventResult.handled;
+                    }
+                    if (key == LogicalKeyboardKey.escape) {
+                      _closeSuggestions();
+                      return KeyEventResult.handled;
+                    }
+                  }
+                  if (key == LogicalKeyboardKey.enter) {
                     if (HardwareKeyboard.instance.isShiftPressed) {
                       // Shift+Enter → newline. Flutter's DefaultTextEditingShortcuts
                       // map only PLAIN Enter to a newline in a multiline field, and
@@ -691,6 +787,62 @@ class _ComposerState extends ConsumerState<Composer> {
               icon: const Icon(Icons.send),
             ),
           ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The `:shortcode` autocomplete panel shown above the input while a token is
+  /// being typed. Theme-driven (no hardcoded colours) so it rides whatever skin
+  /// is active. The highlighted row is what Enter/Tab commits.
+  Widget _buildSuggestions(BuildContext context) {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+        constraints: const BoxConstraints(maxHeight: 220, maxWidth: 340),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: theme.dividerColor),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ListView.builder(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          itemCount: _suggestions.length,
+          itemBuilder: (context, i) {
+            final s = _suggestions[i];
+            final selected = i == _selected;
+            return InkWell(
+              onTap: () => _acceptSuggestion(s),
+              child: Container(
+                color: selected ? theme.colorScheme.primaryContainer : null,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Text(s.value, style: const TextStyle(fontSize: 20)),
+                    const SizedBox(width: 12),
+                    // Flexible + ellipsis: a long shortcode (e.g.
+                    // `:smiling_face_with_three_hearts:`) must clip to the panel
+                    // width, not overflow the bounded row.
+                    Flexible(
+                      child: Text(
+                        ':${s.key}:',
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(fontFamily: 'monospace'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
