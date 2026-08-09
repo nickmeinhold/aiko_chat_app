@@ -91,7 +91,11 @@ void main() {
     await pumpNarrow(tester, container);
     await signIn(tester);
 
-    // Shift+Enter must NOT send — it falls through to a newline.
+    // Shift+Enter must NOT send AND must actually insert a newline. The prior
+    // version of this test only asserted "did not send" — which stayed green even
+    // when Shift+Enter was a silent no-op (Flutter has no default Shift+Enter →
+    // newline mapping; the composer must insert it explicitly). Assert the newline
+    // itself so the behaviour the title claims is real (#113 follow-up).
     await tester.enterText(find.byType(TextField).first, 'stay');
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -100,6 +104,9 @@ void main() {
         () => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
     expect(transport.sent.map((m) => m.body), isNot(contains('stay')));
+    final field = tester.widget<TextField>(find.byType(TextField).first);
+    expect(field.controller!.text, 'stay\n',
+        reason: 'Shift+Enter inserts a newline at the caret, not a no-op');
 
     // A bare Enter sends (physical-keyboard scoped via Focus.onKeyEvent).
     await tester.enterText(find.byType(TextField).first, 'via-enter');
