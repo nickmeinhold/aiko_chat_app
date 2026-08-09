@@ -542,7 +542,13 @@ class _DeliveryIndicator extends ConsumerWidget {
       case DeliveryState.sent:
       case DeliveryState.delivered:
       case DeliveryState.read:
-        return const Icon(Icons.check, size: 14);
+        // No persistent glyph once sent: a checkmark is the read-receipt
+        // signifier (WhatsApp/Signal), and this app has no read receipts — the
+        // `read` state is never even set. The adjacent timestamp already means
+        // "sent at HH:MM", so a terminal-state message just shows the time. Only
+        // the in-flight `sending` clock and the `failed` Retry remain as trailing
+        // affordances — the absence of the clock IS "sent" (iMessage/Telegram).
+        return const SizedBox.shrink();
     }
   }
 }
