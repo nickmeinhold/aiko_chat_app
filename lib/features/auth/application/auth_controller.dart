@@ -546,14 +546,6 @@ class AuthController extends AsyncNotifier<AppUser?> {
     }
   }
 
-  /// Settle a KNOWN ban directly, WITHOUT a confirming `/v1/me` round-trip.
-  ///
-  /// Use when a call already returned [AccountSuspended] — that response IS the
-  /// terminal ban signal, so re-fetching `/me` to "confirm" it only adds a second
-  /// network hop that can fail transiently and strand a banned user with no
-  /// routing (cage-match Carnot + Tesla round 4). Routes through the single
-  /// suspended door (`_settleSuspension` → `/suspended`), same as sign-in/restore.
-  /// Idempotent: if suspension is already settled it is a harmless re-flag.
   /// Publish a profile change the user just made in settings (handle and/or
   /// display name, via [ChatRestApi.updateProfile]). [user] is the gateway's
   /// echo of the new labels; refresh UI state + the offline cache so the change
@@ -567,6 +559,14 @@ class AuthController extends AsyncNotifier<AppUser?> {
     state = AsyncData(user);
   }
 
+  /// Settle a KNOWN ban directly, WITHOUT a confirming `/v1/me` round-trip.
+  ///
+  /// Use when a call already returned [AccountSuspended] — that response IS the
+  /// terminal ban signal, so re-fetching `/me` to "confirm" it only adds a second
+  /// network hop that can fail transiently and strand a banned user with no
+  /// routing (cage-match Carnot + Tesla round 4). Routes through the single
+  /// suspended door (`_settleSuspension` → `/suspended`), same as sign-in/restore.
+  /// Idempotent: if suspension is already settled it is a harmless re-flag.
   Future<void> settleBan() async {
     state = AsyncError(const AccountSuspended(), StackTrace.current);
     await _settleSuspension();

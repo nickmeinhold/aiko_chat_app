@@ -66,6 +66,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             title: const Text('Edit profile'),
             subtitle: const Text('Change your handle or display name.'),
             trailing: const Icon(Icons.chevron_right),
+            // NOTE: raw MaterialPageRoute (not go_router) — deliberate, see
+            // claude-tasks follow-up. A go_router migration must first handle the
+            // auth-refresh-during-open pop interaction (cage-match #114 finding B).
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const EditProfileScreen())),
           ),

@@ -20,6 +20,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   late final TextEditingController _handle;
   late final TextEditingController _displayName;
   String? _handleError;
+  String? _nameError;
   bool _saving = false;
 
   @override
@@ -42,8 +43,15 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     if (user == null) return;
     final newHandle = _handle.text.trim();
     final newName = _displayName.text.trim();
-    if (newHandle.isEmpty) {
-      setState(() => _handleError = 'Handle cannot be empty');
+    // Client-side symmetry with the island's PatchMeReq validator, which 422s a
+    // provided-but-blank handle AND display_name (cage-match #114, Tesla+Wu): guard
+    // both here so a cleared field shows an inline "can't be empty" rather than the
+    // generic "couldn't update" snackbar a raw 422 would fall through to.
+    if (newHandle.isEmpty || newName.isEmpty) {
+      setState(() {
+        _handleError = newHandle.isEmpty ? 'Handle cannot be empty' : null;
+        _nameError = newName.isEmpty ? 'Display name cannot be empty' : null;
+      });
       return;
     }
     // Send only what changed — a same-value handle is a server-side no-op, but
@@ -57,6 +65,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     setState(() {
       _saving = true;
       _handleError = null;
+      _nameError = null;
     });
     try {
       final updated = await ref.read(restApiProvider).updateProfile(
@@ -78,6 +87,14 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       if (mounted) {
         setState(() => _handleError = _cooldownMessage(e.retryAfterSeconds));
       }
+    } on AccountSuspended {
+      // A ban landed mid-edit. Route through the single suspended door
+      // (settleBan → _settleSuspension → /suspended) exactly as sign-in/restore
+      // do, instead of swallowing it in the generic snackbar below and leaving a
+      // banned user "logged in" with no /suspended zone (cage-match #114,
+      // Carnot+Tesla+Wu). The router redirect replaces this screen, so no further
+      // context use here.
+      await ref.read(authControllerProvider.notifier).settleBan();
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -111,7 +128,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
               labelText: 'Handle',
               prefixText: '@',
               helperText:
-                  'Unique. You can change it again after a 30-day cooldown.',
+                  'Unique. You can change it again after a cooldown period.',
               errorText: _handleError,
               border: const OutlineInputBorder(),
             ),
@@ -120,10 +137,11 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
           TextField(
             controller: _displayName,
             enabled: !_saving,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Display name',
               helperText: 'Shown in chat. Change it anytime.',
-              border: OutlineInputBorder(),
+              errorText: _nameError,
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 24),

@@ -75,4 +75,35 @@ void main() {
     expect(
         find.text('You can change your handle again in 3 days'), findsOneWidget);
   });
+
+  testWidgets('a cleared display name is guarded client-side, never sent',
+      (tester) async {
+    final rest = await openEditProfile(tester);
+
+    // Blank the display name (the island 422s a provided-but-blank display_name;
+    // the client must guard it symmetrically with the handle — cage-match #114).
+    await tester.enterText(find.byType(TextField).at(1), '');
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Display name cannot be empty'), findsOneWidget);
+    expect(rest.updateProfileCalls, 0, reason: 'blank field never hits the wire');
+    expect(find.widgetWithText(AppBar, 'Edit profile'), findsOneWidget);
+  });
+
+  testWidgets('a ban landing mid-edit routes to the suspended screen',
+      (tester) async {
+    // AccountSuspended from PATCH /v1/me must reach the single suspended door
+    // (settleBan → /suspended), not be swallowed by the generic snackbar
+    // (cage-match #114, Carnot+Tesla+Wu).
+    await openEditProfile(tester, updateThrows: const AccountSuspended());
+
+    await tester.enterText(find.byType(TextField).at(0), 'new_handle');
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Account suspended'), findsOneWidget);
+  });
 }
