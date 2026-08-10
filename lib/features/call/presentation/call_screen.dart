@@ -220,9 +220,11 @@ class _CallScreenState extends ConsumerState<CallScreen> {
           _circleButton(
             icon: Icons.call_end,
             background: Colors.red,
-            onTap: () {
-              if (context.canPop()) context.pop();
-            },
+            // Fall back to '/' when there's nothing to pop — a cold/deep-linked
+            // /call/:id has an empty stack, so a bare pop() would be a dead
+            // button and leave() would never run (cage-match Carnot+Tesla HIGH).
+            onTap: () =>
+                context.canPop() ? context.pop() : context.go('/'),
           ),
         ],
       ),

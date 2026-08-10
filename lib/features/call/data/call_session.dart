@@ -90,8 +90,13 @@ class CallSession {
       token = await _api.requestVideoToken(channelId);
     } on VideoNotEnabled {
       return ConnectionResult.videoUnavailable; // terminal, not an error
+    } on AccountSuspended {
+      // MUST precede Unauthorized (it's a subtype) — a ban is not a session
+      // expiry, so it must not render "sign in again" (cage-match Carnot+Tesla
+      // HIGH: ban-as-session-expired re-login theater).
+      return ConnectionResult.accountSuspended;
     } on Unauthorized {
-      return ConnectionResult.tokenAuthError; // incl. AccountSuspended; abort
+      return ConnectionResult.tokenAuthError; // abort, route to re-auth
     } on Forbidden {
       return ConnectionResult.channelUnavailable; // 404/denied; terminal
     } on NetworkUnavailable {
@@ -144,8 +149,9 @@ class CallSession {
           return;
         }
 
-        // Auth / video-disabled / channel-gone won't heal on retry — stop now.
+        // Auth / ban / video-disabled / channel-gone won't heal on retry.
         if (result == ConnectionResult.tokenAuthError ||
+            result == ConnectionResult.accountSuspended ||
             result == ConnectionResult.videoUnavailable ||
             result == ConnectionResult.channelUnavailable) {
           state.value = result == ConnectionResult.videoUnavailable
@@ -184,6 +190,8 @@ class CallSession {
   static String _messageFor(ConnectionResult result) => switch (result) {
         ConnectionResult.tokenAuthError =>
           'Session expired — please sign in again',
+        ConnectionResult.accountSuspended =>
+          'This account is suspended',
         ConnectionResult.tokenNetworkError =>
           'Could not reach the server — check your connection',
         ConnectionResult.videoUnavailable =>

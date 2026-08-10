@@ -12,7 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakeApi implements ChatRestApi {
   _FakeApi({this.token, this.error});
   final VideoToken? token;
-  final Object? error;
+  Object? error; // mutable so a test can flip it mid-session (e.g. token expiry).
   int calls = 0;
 
   @override
@@ -128,12 +128,16 @@ void main() {
       await session.leave();
     });
 
-    test('an auth error during reconnect aborts the loop (no endless retry)',
+    test('an auth error DURING reconnect aborts the loop (no endless retry)',
         () async {
-      // Connect ok, then the token turns bad: reconnect must NOT keep retrying.
-      var callsBeforeAuthFails = 0;
+      // Genuinely exercise reconnect: connect OK, then the token turns bad and
+      // the room drops. The backoff loop must fetch a token, get Unauthorized,
+      // and STOP — not burn all three delays. (cage-match Carnot+Tesla: the old
+      // test built a second session that failed on INITIAL connect and never
+      // fired connectionLost, so it never touched _handleConnectionLost.)
       final api = _FakeApi(token: _token);
-      final service = _FakeService([ConnectionResult.connected]);
+      final service = _FakeService(
+          [ConnectionResult.connected, ConnectionResult.connected]);
       final session = CallSession(
         api: api,
         channelId: 'c1',
@@ -141,20 +145,39 @@ void main() {
         reconnectDelays: const [Duration.zero, Duration.zero, Duration.zero],
       );
       await session.connect();
-      callsBeforeAuthFails = api.calls;
+      expect(session.state.value, CallConnectionState.connected);
+      expect(api.calls, 1);
 
-      // Flip the api to throw auth errors for the reconnect attempts.
-      final failing = CallSession(
-        api: _FakeApi(error: const Unauthorized(401)),
-        channelId: 'c1',
-        service: _FakeService([ConnectionResult.connected]),
-        reconnectDelays: const [Duration.zero, Duration.zero, Duration.zero],
-      );
-      await failing.connect();
-      expect(failing.state.value, CallConnectionState.failed);
-      expect(callsBeforeAuthFails, 1);
+      // Token now rejected; drop the live call.
+      api.error = const Unauthorized(401);
+      service.fireLost();
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+
+      expect(session.state.value, CallConnectionState.failed);
+      // Exactly ONE reconnect token-fetch, then abort — not three.
+      expect(api.calls, 2);
+      // Token fetch failed before any LiveKit connect on the reconnect.
+      expect(service.connectCalls, 1);
       await session.leave();
-      await failing.leave();
+    });
+
+    test('a ban during reconnect surfaces suspended copy, not "session expired"',
+        () async {
+      final api = _FakeApi(token: _token);
+      final service = _FakeService([ConnectionResult.connected]);
+      final session = CallSession(
+        api: api,
+        channelId: 'c1',
+        service: service,
+        reconnectDelays: const [Duration.zero],
+      );
+      await session.connect();
+      api.error = const AccountSuspended();
+      service.fireLost();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(session.state.value, CallConnectionState.failed);
+      expect(session.message.value, 'This account is suspended');
+      await session.leave();
     });
 
     test('leaving during the backoff does not mutate state after dispose',

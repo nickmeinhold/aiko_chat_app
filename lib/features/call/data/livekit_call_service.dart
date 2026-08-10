@@ -58,6 +58,13 @@ class LiveKitCallService {
   /// service and survives, so the screen's subscription never goes stale.
   final tracksRevision = ValueNotifier<int>(0);
 
+  /// Set true by [dispose]; read after every `await` in the media methods so a
+  /// slow enable/toggle that resumes AFTER the user left can't write a disposed
+  /// [ValueNotifier] (`leave()` → `service.dispose()` disposes these notifiers
+  /// while an in-flight `setCameraEnabled` await is still pending — cage-match
+  /// Carnot+Tesla HIGH: dispose is generation-unsafe without this).
+  bool _disposed = false;
+
   Room? get room => _room;
   LocalParticipant? get localParticipant => _room?.localParticipant;
   Map<String, RemoteParticipant> get remoteParticipants =>
@@ -103,7 +110,9 @@ class LiveKitCallService {
 
       // Listener BEFORE connect so no early event is missed.
       _listener = _room!.createListener();
-      void bump(dynamic _) => tracksRevision.value++;
+      void bump(dynamic _) {
+        if (!_disposed) tracksRevision.value++;
+      }
       _listener!
         ..on<RoomDisconnectedEvent>((e) {
           // Only a drop AFTER a good connect is a "lost" event worth
@@ -114,6 +123,12 @@ class LiveKitCallService {
         ..on<TrackUnsubscribedEvent>(bump)
         ..on<LocalTrackPublishedEvent>(bump)
         ..on<LocalTrackUnpublishedEvent>(bump)
+        // Mute/unmute must bump too: the UI's _videoOf() filters on pub.muted,
+        // so toggling camera or a remote muting video would otherwise leave the
+        // video area/PiP stale (cage-match Carnot+Tesla — tracksRevision was
+        // blind to mute state).
+        ..on<TrackMutedEvent>(bump)
+        ..on<TrackUnmutedEvent>(bump)
         ..on<ParticipantConnectedEvent>(bump)
         ..on<ParticipantDisconnectedEvent>(bump);
 
@@ -159,30 +174,43 @@ class LiveKitCallService {
     if (lp == null) return;
     try {
       await lp.setCameraEnabled(true);
+      if (_disposed) return; // left mid-enable → notifiers already disposed.
       cameraEnabled.value = true;
     } catch (_) {
-      cameraEnabled.value = false; // denied → audio-only, toolbar shows off.
+      if (!_disposed) cameraEnabled.value = false; // denied → audio-only.
     }
     try {
       await lp.setMicrophoneEnabled(true);
+      if (_disposed) return;
       micEnabled.value = true;
     } catch (_) {
-      micEnabled.value = false;
+      if (!_disposed) micEnabled.value = false;
     }
   }
 
   Future<void> setCameraEnabled(bool enabled) async {
     final lp = _room?.localParticipant;
     if (lp == null) return;
-    await lp.setCameraEnabled(enabled);
-    cameraEnabled.value = enabled;
+    // Same catch as enableMedia (Tesla: "same door, same catch") — a mid-call
+    // permission revocation must not surface as an unhandled async error. The
+    // disposed guard covers a toggle racing teardown.
+    try {
+      await lp.setCameraEnabled(enabled);
+      if (!_disposed) cameraEnabled.value = enabled;
+    } catch (_) {
+      if (!_disposed) cameraEnabled.value = false;
+    }
   }
 
   Future<void> setMicrophoneEnabled(bool enabled) async {
     final lp = _room?.localParticipant;
     if (lp == null) return;
-    await lp.setMicrophoneEnabled(enabled);
-    micEnabled.value = enabled;
+    try {
+      await lp.setMicrophoneEnabled(enabled);
+      if (!_disposed) micEnabled.value = enabled;
+    } catch (_) {
+      if (!_disposed) micEnabled.value = false;
+    }
   }
 
   /// Tear down the current room without disposing the service (a reconnect will
@@ -197,13 +225,17 @@ class LiveKitCallService {
     } catch (_) {}
     _listener = null;
     _room = null;
-    cameraEnabled.value = false;
-    micEnabled.value = false;
+    if (!_disposed) {
+      cameraEnabled.value = false;
+      micEnabled.value = false;
+    }
     _state = CallConnectionState.failed;
   }
 
   /// Permanently dispose the service (call on leave). Idempotent.
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true; // set FIRST: in-flight media awaits now skip notifier writes.
     await disconnect();
     cameraEnabled.dispose();
     micEnabled.dispose();

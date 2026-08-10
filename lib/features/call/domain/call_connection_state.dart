@@ -37,6 +37,12 @@ enum ConnectionResult {
   /// loop and route to re-auth.
   tokenAuthError,
 
+  /// The island BANNED this account (`AccountSuspended`). Terminal like
+  /// [tokenAuthError], but must NOT show "session expired — sign in again"
+  /// (re-login theater for a banned user); it gets suspended-specific copy. The
+  /// app's global suspended gate still fires on the next authed REST call.
+  accountSuspended,
+
   /// Couldn't reach the island to mint a token (offline). Transient — retry.
   tokenNetworkError,
 
