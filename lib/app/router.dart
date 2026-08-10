@@ -24,6 +24,7 @@ import '../features/chat/data/chat_rest_api.dart' show AccountSuspended;
 import '../features/auth/presentation/claim_handle_screen.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/auth/presentation/suspended_screen.dart';
+import '../features/call/presentation/call_screen.dart';
 import '../features/chat/presentation/carried_record_screen.dart';
 import '../features/chat/presentation/chat_screen.dart';
 import '../features/chat/presentation/search_screen.dart';
@@ -155,6 +156,11 @@ final routerProvider = Provider<GoRouter>((ref) {
           path: '/claim-handle', builder: (_, _) => const ClaimHandleScreen()),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
       GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
+      GoRoute(
+        path: '/call/:channelId',
+        builder: (_, s) =>
+            CallScreen(channelId: s.pathParameters['channelId']!),
+      ),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
       GoRoute(
           path: '/settings/carried-record',

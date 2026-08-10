@@ -5,6 +5,20 @@
          app reports "can't reach the server". Caught on the first release build
          run on a real device (vc7 device-verify). -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- A/V calls (LiveKit / WebRTC, #2726). CAMERA + RECORD_AUDIO gate
+         getUserMedia; the rest are the flutter_webrtc-recommended set for audio
+         routing (incl. Bluetooth headsets). Camera/mic are declared not-required
+         so the install isn't gated for users who never call. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <application
         android:label="Aiko Chat"
         android:name="${applicationName}"
