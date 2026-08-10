@@ -72,7 +72,14 @@ class Channel {
         j,
       );
     }
-    return Channel(id: j['channel_id'] as String, name: '', kind: kind);
+    // Uniform FormatException on a malformed id too (cage-match Carnot r2), so a
+    // missing/blank channel_id surfaces the same diagnosable wire-drift error as
+    // a bad kind rather than a bare TypeError from a raw cast.
+    final id = j['channel_id'];
+    if (id is! String || id.isEmpty) {
+      throw FormatException('POST /v1/dm response missing a string channel_id', j);
+    }
+    return Channel(id: id, name: '', kind: kind);
   }
 
   @override
