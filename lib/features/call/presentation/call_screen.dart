@@ -9,6 +9,32 @@ import '../../../app/providers.dart';
 import '../data/call_session.dart';
 import '../domain/call_connection_state.dart';
 
+/// Single door for opening a call (#18). Rapid double-taps — or a tap while a
+/// call is already open — would otherwise push N [CallScreen]s, each spinning up
+/// its own `Room.connect` (N joins for one user, leaked sessions).
+/// `context.push` completes only when the call route is POPPED, so the latch is
+/// held for the whole call: any launch attempt while one is initiating or live is
+/// a no-op. Module-global by design — "is a call being launched" is one app-wide
+/// fact, not a per-widget one. (Belt-and-braces with `openDm` idempotency: even a
+/// double-fired open resolves to the same room, and this dedups the screen.)
+bool _callLaunchInFlight = false;
+
+Future<void> pushCall(BuildContext context, String channelId) async {
+  if (_callLaunchInFlight) return;
+  _callLaunchInFlight = true;
+  try {
+    await context.push('/call/$channelId');
+  } finally {
+    _callLaunchInFlight = false;
+  }
+}
+
+/// Clear the launch guard between widget tests (a test that navigates to the
+/// call route never pops it, so the latch would leak into the next test). Not a
+/// production seam.
+@visibleForTesting
+void resetCallLaunchGuard() => _callLaunchInFlight = false;
+
 /// Full-screen A/V call for a channel (handoff #2726). Owns a [CallSession] for
 /// its lifetime; the room is the channel id. Renders the first remote
 /// participant full-screen with a mirrored local PiP overlay.

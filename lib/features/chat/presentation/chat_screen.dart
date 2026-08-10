@@ -385,16 +385,17 @@ class MessageTile extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final bubbleColor = isMine ? scheme.primaryContainer : scheme.surfaceContainerHighest;
 
-    // Moderation affordance (#7): long-press ANOTHER human's message to
-    // report/block. Gated to a non-mine message with a real account behind it —
-    // you can't block yourself or an external actor (LLM/robot have no userId).
-    final canModerate = !isMine && message.sender.userId != null;
+    // Sender-action affordance: long-press ANOTHER human's message for the
+    // action sheet — call them (#2758), report, or block (#7). Gated to a
+    // non-mine message with a real account behind it — you can't call/block
+    // yourself or an external actor (LLM/robot have no userId).
+    final canActOnSender = !isMine && message.sender.userId != null;
 
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress:
-            canModerate ? () => showMessageActions(context, ref, message) : null,
+            canActOnSender ? () => showMessageActions(context, ref, message) : null,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),

@@ -400,6 +400,32 @@ class GatewayRestApi implements ChatRestApi {
     }),
   );
 
+  // find-or-create the DM channel. Wrapped in _mapNetwork so an unreachable
+  // island surfaces as NetworkUnavailable (the DM-open UI can retry/offline),
+  // and the 404 is branched to DmTargetNotFound BEFORE any generic surfacing so
+  // "no such user" never reads as a logout or a raw transport error. `POST /v1/dm`
+  // is idempotent on the island, so a retry after an ambiguous failure is safe.
+  @override
+  Future<Channel> openDm(String targetUserId) => _mapNetwork(
+    () async {
+      try {
+        return await _authedCall(() async {
+          final r = await _authed.post(
+            '/v1/dm',
+            data: {'target_user_id': targetUserId},
+          );
+          return Channel.fromDmJson(_map(r.data));
+        });
+      } on DioException catch (e) {
+        // _authedCall already mapped 401 → Unauthorized (terminal) / plain 403 →
+        // Forbidden and rethrew the rest. The only other documented code here is
+        // 404 = target isn't a real user (DM handoff §Endpoints).
+        if (e.response?.statusCode == 404) throw DmTargetNotFound(targetUserId);
+        rethrow;
+      }
+    },
+  );
+
   @override
   Future<VideoToken> requestVideoToken(String channelId) => _mapNetwork(
     () async {
