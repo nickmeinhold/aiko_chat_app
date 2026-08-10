@@ -37,6 +37,7 @@ dependencies:
   flutter_riverpod: ^3.3.2
   riverpod_annotation: ^4.0.3
   go_router: ^17.3.0
+  livekit_client: ^2.10.0
   web_socket_channel: ^3.0.3
   dio: ^5.9.2
   flutter_secure_storage: ^10.3.1
@@ -62,6 +63,14 @@ dependencies:
   device_info_plus: ^13.2.0
   package_info_plus: ^10.2.0
   share_plus: ^13.2.0
+
+# livekit_client ^2.10.0 (latest) pins device_info_plus ^12.3.0, but the rest of
+# our tree is on 13.x (package_info_plus needs win32 ^6, which 12.x can't give).
+# device_info_plus 13.x is API-compatible for the model/version fields both we
+# (error_report.dart) and livekit read; the 12→13 bump was a min-SDK requirement.
+# Drop this override once livekit_client supports device_info_plus 13.
+dependency_overrides:
+  device_info_plus: ^13.2.0
 
 dev_dependencies:
   flutter_test:
