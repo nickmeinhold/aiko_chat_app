@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
+import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
@@ -397,6 +398,28 @@ class GatewayRestApi implements ChatRestApi {
           .map((e) => Channel.fromJson((e as Map).cast<String, dynamic>()))
           .toList();
     }),
+  );
+
+  @override
+  Future<VideoToken> requestVideoToken(String channelId) => _mapNetwork(
+    () async {
+      try {
+        return await _authedCall(() async {
+          final r = await _authed.post('/v1/channels/$channelId/video-token');
+          return VideoToken.fromJson(_map(r.data));
+        });
+      } on DioException catch (e) {
+        // _authedCall already mapped 401/403 → Unauthorized/Forbidden and
+        // rethrew the rest. Branch the two video-specific codes here, BEFORE
+        // any generic surfacing, so a video-less deployment (503) or a
+        // non-member/private channel (404, existence-hiding) never reads as a
+        // logout or a raw transport error.
+        final code = e.response?.statusCode;
+        if (code == 503) throw const VideoNotEnabled();
+        if (code == 404) throw Forbidden('video-token:$channelId');
+        rethrow;
+      }
+    },
   );
 
   @override

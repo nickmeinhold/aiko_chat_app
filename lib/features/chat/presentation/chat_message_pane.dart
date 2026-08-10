@@ -16,6 +16,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/network/network_status_banner.dart';
 import '../application/chat_providers.dart';
@@ -46,6 +47,9 @@ class ChatMessagePane extends ConsumerWidget {
               }
               return Column(
                 children: [
+                  // A/V call header — renders in BOTH layouts (the wide layout
+                  // has no AppBar), so the call affordance is always reachable.
+                  _CallHeader(channelId: active.id, channelName: active.name),
                   // Key by channel id so a switch gives MessageList a FRESH
                   // State (dispose→recreate) — otherwise the old channel's
                   // ScrollController carries over and lands the new channel at a
@@ -69,6 +73,49 @@ class ChatMessagePane extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A slim header above the message list carrying the channel name and the A/V
+/// call affordance. Present in both responsive layouts (the wide layout has no
+/// AppBar). Tapping the camera pushes the full-screen [CallScreen] for this
+/// channel (the LiveKit room == the channel id, handoff #2726).
+class _CallHeader extends StatelessWidget {
+  const _CallHeader({required this.channelId, required this.channelName});
+
+  final String channelId;
+  final String channelName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    channelName,
+                    style: Theme.of(context).textTheme.titleMedium,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.videocam_outlined),
+                  tooltip: 'Start a video call',
+                  onPressed: () => context.push('/call/$channelId'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+        ],
+      ),
     );
   }
 }

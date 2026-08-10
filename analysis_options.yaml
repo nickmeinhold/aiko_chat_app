@@ -9,6 +9,15 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  # Never analyze build output. The iOS/macOS SwiftPM integration checks out
+  # dependency SOURCE (incl. their example apps) under build/*/SourcePackages/,
+  # which otherwise floods `flutter analyze` — and the pre-push hook — with
+  # hundreds of errors from third-party example code we don't own. Surfaced when
+  # livekit_client (SwiftPM) landed; excluding build/ is the standard fix.
+  exclude:
+    - build/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

@@ -1,5 +1,6 @@
 import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
+import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../domain/channel.dart';
 import '../domain/gateway_capabilities.dart';
@@ -202,6 +203,19 @@ class NetworkUnavailable implements Exception {
   String toString() => 'NetworkUnavailable($cause)';
 }
 
+/// Video calling is not enabled on this deployment — the island's `503` on
+/// `POST /v1/channels/{id}/video-token` (LiveKit creds not configured, handoff
+/// #2726). NOT a failure to apologise for: it's a capability the deployment
+/// lacks, so the UI hides/disables the call affordance and shows "video calling
+/// isn't available here" rather than an error. Branched BEFORE the generic
+/// [Unauthorized]/`5xx` mapping so a reachable-but-video-less server never reads
+/// as a logout or a transient blip.
+class VideoNotEnabled implements Exception {
+  const VideoNotEnabled();
+  @override
+  String toString() => 'VideoNotEnabled';
+}
+
 /// Thrown by [ChatRestApi.claimHandle] when the requested handle is already
 /// taken (the gateway returns 409). The claim UI surfaces this inline ("that
 /// handle is taken") rather than as a generic failure.
@@ -314,6 +328,14 @@ abstract interface class ChatRestApi {
   Future<void> deleteAccount();
 
   Future<List<Channel>> listChannels();
+
+  /// Mint a LiveKit join token for an A/V call in [channelId] (handoff #2726).
+  /// The room IS the channel; participant identity is server-derived. Throws
+  /// [VideoNotEnabled] on a 503 (deployment has no video), [Unauthorized] on a
+  /// terminal auth rejection, [Forbidden]/not-found on a 404 (non-member /
+  /// existence-hiding), and [NetworkUnavailable] when the island is unreachable.
+  Future<VideoToken> requestVideoToken(String channelId);
+
   /// A page of channel history (ascending). [before] pages older (scroll-up);
   /// [after] pages newer (reconnect catch-up). Mutually exclusive — the gateway
   /// uses `after` if both are given.

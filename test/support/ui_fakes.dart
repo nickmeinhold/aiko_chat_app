@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:aiko_chat_app/features/auth/data/passkey_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
+import 'package:aiko_chat_app/features/call/domain/video_token.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/gateway_capabilities.dart';
@@ -170,6 +171,22 @@ class FakeRestApi implements ChatRestApi {
       throw e;
     }
     return channels;
+  }
+
+  /// If set, [requestVideoToken] throws this (e.g. `VideoNotEnabled`).
+  Object? requestVideoTokenThrows;
+
+  /// The token [requestVideoToken] returns when not throwing.
+  VideoToken videoToken = const VideoToken(
+      token: 'fake-jwt', url: 'wss://livekit.test', room: 'fake-room');
+
+  int requestVideoTokenCalls = 0;
+
+  @override
+  Future<VideoToken> requestVideoToken(String channelId) async {
+    requestVideoTokenCalls++;
+    if (requestVideoTokenThrows != null) throw requestVideoTokenThrows!;
+    return videoToken;
   }
 
   @override

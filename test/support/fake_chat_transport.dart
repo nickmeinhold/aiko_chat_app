@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
+import 'package:aiko_chat_app/features/call/domain/video_token.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
@@ -174,6 +175,9 @@ class FakeChatRestApi implements ChatRestApi {
   Future<void> deleteAccount() => throw UnimplementedError();
   @override
   Future<List<Channel>> listChannels() => throw UnimplementedError();
+  @override
+  Future<VideoToken> requestVideoToken(String channelId) =>
+      throw UnimplementedError();
   @override
   Future<void> blockUser(String userId) => throw UnimplementedError();
   @override
