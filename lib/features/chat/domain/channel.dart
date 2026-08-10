@@ -51,6 +51,19 @@ class Channel {
         aikoChannel: j['aiko_channel'] as String?,
       );
 
+  /// Build from the `POST /v1/dm` find-or-create response, whose shape differs
+  /// from `GET /v1/channels`: `{channel_id, kind, members[], created_at}` — the
+  /// id field is `channel_id` (not `id`) and there is **no `name`** (a DM's
+  /// display title is "the other participant", derived by the caller from the
+  /// peer it opened the DM with, not carried on this row). `kind` is always
+  /// `dm` here, but we decode it off the wire rather than hardcoding so a server
+  /// that ever returns a different kind surfaces honestly.
+  factory Channel.fromDmJson(Map<String, dynamic> j) => Channel(
+        id: j['channel_id'] as String,
+        name: '',
+        kind: ChannelKind.fromWire(j['kind'] as String?),
+      );
+
   @override
   bool operator ==(Object other) =>
       other is Channel &&

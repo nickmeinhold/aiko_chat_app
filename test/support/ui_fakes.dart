@@ -189,6 +189,28 @@ class FakeRestApi implements ChatRestApi {
     return videoToken;
   }
 
+  /// If set, [openDm] throws this (e.g. `DmTargetNotFound`, `NetworkUnavailable`).
+  Object? openDmThrows;
+
+  /// The DM channel [openDm] returns when not throwing. Defaults to a `kind: dm`
+  /// channel so the call-affordance gate (kind == dm) lights up in tests.
+  Channel openDmReturns = const Channel(
+      id: 'dm:me:peer', name: '', kind: ChannelKind.dm);
+
+  int openDmCalls = 0;
+
+  /// The last target passed to [openDm] — lets a test assert the tapped sender's
+  /// `userId` was threaded through (not, say, a display label).
+  String? lastOpenDmTarget;
+
+  @override
+  Future<Channel> openDm(String targetUserId) async {
+    openDmCalls++;
+    lastOpenDmTarget = targetUserId;
+    if (openDmThrows != null) throw openDmThrows!;
+    return openDmReturns;
+  }
+
   @override
   Future<HistoryPage> getHistory(String channelId,
           {String? before, String? after, int limit = 50}) async =>

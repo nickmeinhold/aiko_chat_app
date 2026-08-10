@@ -16,9 +16,9 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../core/network/network_status_banner.dart';
+import '../../call/presentation/call_screen.dart' show pushCall;
 import '../application/chat_providers.dart';
 import '../domain/channel.dart';
 import 'chat_screen.dart';
@@ -48,8 +48,16 @@ class ChatMessagePane extends ConsumerWidget {
               return Column(
                 children: [
                   // A/V call header — renders in BOTH layouts (the wide layout
-                  // has no AppBar), so the call affordance is always reachable.
-                  _CallHeader(channelId: active.id, channelName: active.name),
+                  // has no AppBar). The call affordance itself is gated to DM
+                  // channels (#19): the island only mints a video token for a
+                  // private DM (kind == dm), so offering it on a standard channel
+                  // just 503s. Non-DM channels still get the header (the name),
+                  // minus the videocam.
+                  _CallHeader(
+                    channelId: active.id,
+                    channelName: active.name,
+                    canCall: active.kind == ChannelKind.dm,
+                  ),
                   // Key by channel id so a switch gives MessageList a FRESH
                   // State (dispose→recreate) — otherwise the old channel's
                   // ScrollController carries over and lands the new channel at a
@@ -82,10 +90,18 @@ class ChatMessagePane extends ConsumerWidget {
 /// AppBar). Tapping the camera pushes the full-screen [CallScreen] for this
 /// channel (the LiveKit room == the channel id, handoff #2726).
 class _CallHeader extends StatelessWidget {
-  const _CallHeader({required this.channelId, required this.channelName});
+  const _CallHeader({
+    required this.channelId,
+    required this.channelName,
+    required this.canCall,
+  });
 
   final String channelId;
   final String channelName;
+
+  /// Whether to show the video-call affordance. Gated to DM channels (#19) —
+  /// the island refuses a video token on anything but a private DM.
+  final bool canCall;
 
   @override
   Widget build(BuildContext context) {
@@ -105,11 +121,13 @@ class _CallHeader extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.videocam_outlined),
-                  tooltip: 'Start a video call',
-                  onPressed: () => context.push('/call/$channelId'),
-                ),
+                if (canCall)
+                  IconButton(
+                    icon: const Icon(Icons.videocam_outlined),
+                    tooltip: 'Start a video call',
+                    // Single-door guard against duplicate CallScreen mounts (#18).
+                    onPressed: () => pushCall(context, channelId),
+                  ),
               ],
             ),
           ),

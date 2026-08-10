@@ -175,6 +175,9 @@ class FakeChatRestApi implements ChatRestApi {
   Future<void> deleteAccount() => throw UnimplementedError();
   @override
   Future<List<Channel>> listChannels() => throw UnimplementedError();
+
+  @override
+  Future<Channel> openDm(String targetUserId) => throw UnimplementedError();
   @override
   Future<VideoToken> requestVideoToken(String channelId) =>
       throw UnimplementedError();
