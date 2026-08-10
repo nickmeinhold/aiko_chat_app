@@ -89,7 +89,25 @@ Future<void> _call(
   String name,
 ) async {
   final messenger = ScaffoldMessenger.of(context);
+  // Defence-in-depth on the UGC block boundary (cage-match Tesla, HIGH). A
+  // blocked user's messages are already filtered out of the list, so their tile
+  // — and this action — is normally unreachable; but Call is a NEW presence
+  // surface and must FAIL CLOSED rather than lean on that upstream filter. The
+  // island is the real boundary (backend-first — tracked to confirm the DM
+  // video-token path block-gates like the DM *send* does, #2633 Decision 5);
+  // this refuses the client attempt so a blocked pair never even requests a room.
+  if (ref.read(blockedUserIdsProvider).contains(userId)) {
+    messenger.showSnackBar(
+      SnackBar(content: Text("You've blocked $name — unblock in Settings to call.")),
+    );
+    return;
+  }
   try {
+    // openDm is idempotent (find-or-create): if a second Call slips through
+    // during this await it resolves to the SAME room, and pushCall's latch then
+    // dedups the navigation. The first tap always navigates — a double-fire
+    // costs at most one redundant idempotent open, never a second call nor a
+    // swallowed tap (cage-match Tesla, latch-scope).
     final dm = await ref.read(restApiProvider).openDm(userId);
     if (!context.mounted) return;
     await pushCall(context, dm.id);
@@ -102,6 +120,13 @@ Future<void> _call(
       const SnackBar(content: Text("You're offline — can't start a call.")),
     );
   } catch (_) {
+    // Terminal auth (Unauthorized/AccountSuspended) lands here as a generic
+    // message — MATCHING the sibling _block/_report handlers below. The
+    // repository/transport layer owns terminal-auth routing (a 401 on the next
+    // sync disconnects → logout / suspended screen); a per-action rethrow here
+    // would be an unhandled async error and diverge from the file's pattern.
+    // Named tradeoff (cage-match Tesla): one generic hop here, real routing next
+    // sync.
     messenger.showSnackBar(
       const SnackBar(content: Text('Could not start the call. Please try again.')),
     );

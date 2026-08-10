@@ -55,14 +55,25 @@ class Channel {
   /// from `GET /v1/channels`: `{channel_id, kind, members[], created_at}` — the
   /// id field is `channel_id` (not `id`) and there is **no `name`** (a DM's
   /// display title is "the other participant", derived by the caller from the
-  /// peer it opened the DM with, not carried on this row). `kind` is always
-  /// `dm` here, but we decode it off the wire rather than hardcoding so a server
-  /// that ever returns a different kind surfaces honestly.
-  factory Channel.fromDmJson(Map<String, dynamic> j) => Channel(
-        id: j['channel_id'] as String,
-        name: '',
-        kind: ChannelKind.fromWire(j['kind'] as String?),
+  /// peer it opened the DM with, not carried on this row).
+  ///
+  /// FAILS CLOSED on `kind != dm` (cage-match Carnot): this is a trust boundary,
+  /// and `ChannelKind.fromWire` collapses an unknown/absent kind to `standard` —
+  /// so a malformed or contract-drifted response would otherwise yield a non-DM
+  /// channel that the caller pushes into a doomed call route (video is DM-only).
+  /// Throwing here surfaces the drift at the wire boundary instead, where the
+  /// caller degrades it to a "couldn't start the call" message.
+  factory Channel.fromDmJson(Map<String, dynamic> j) {
+    final kind = ChannelKind.fromWire(j['kind'] as String?);
+    if (kind != ChannelKind.dm) {
+      throw FormatException(
+        'POST /v1/dm returned a non-dm channel (kind=${j['kind']}); '
+        'refusing to treat it as a DM',
+        j,
       );
+    }
+    return Channel(id: j['channel_id'] as String, name: '', kind: kind);
+  }
 
   @override
   bool operator ==(Object other) =>

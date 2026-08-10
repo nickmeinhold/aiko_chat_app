@@ -4,6 +4,7 @@ import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:aiko_chat_app/features/moderation/application/moderation_controller.dart';
 import 'package:aiko_chat_app/features/moderation/presentation/message_actions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,7 +31,7 @@ void main() {
     deliveryState: DeliveryState.sent,
   );
 
-  Widget harness(FakeRestApi fake) {
+  Widget harness(FakeRestApi fake, {Set<String> blocked = const {}}) {
     final router = GoRouter(
       routes: [
         GoRoute(
@@ -54,8 +55,10 @@ void main() {
       ],
     );
     return UncontrolledProviderScope(
-      container: ProviderContainer(
-          overrides: [restApiProvider.overrideWithValue(fake)]),
+      container: ProviderContainer(overrides: [
+        restApiProvider.overrideWithValue(fake),
+        blockedUserIdsProvider.overrideWithValue(blocked),
+      ]),
       child: MaterialApp.router(routerConfig: router),
     );
   }
@@ -91,5 +94,20 @@ void main() {
 
     expect(find.textContaining("Couldn't reach Robin"), findsOneWidget);
     expect(find.textContaining('CALL:'), findsNothing); // never entered a call
+  });
+
+  testWidgets('Call fails closed on a blocked target — no openDm, no navigation',
+      (tester) async {
+    final fake = FakeRestApi();
+    await tester.pumpWidget(harness(fake, blocked: {'robin-key-opaque'}));
+
+    await tester.tap(find.text('open-actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Call Robin'));
+    await tester.pumpAndSettle();
+
+    expect(fake.openDmCalls, 0); // never even requested a room (defence-in-depth)
+    expect(find.textContaining("You've blocked Robin"), findsOneWidget);
+    expect(find.textContaining('CALL:'), findsNothing);
   });
 }

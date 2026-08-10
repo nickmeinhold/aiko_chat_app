@@ -19,10 +19,17 @@ void main() {
     expect(c.name, ''); // a DM has no server name; the peer is the display title
   });
 
-  test('fromDmJson decodes kind off the wire rather than assuming dm', () {
-    // Defensive: if the server ever returns a non-dm kind here we surface it
-    // honestly instead of hardcoding dm.
-    final c = Channel.fromDmJson(const {'channel_id': 'x', 'kind': 'standard'});
-    expect(c.kind, ChannelKind.standard);
+  test('fromDmJson FAILS CLOSED on a non-dm kind (contract drift)', () {
+    // A trust boundary: fromWire collapses unknown/absent → standard, so a
+    // drifted POST /v1/dm response must throw here rather than yield a non-DM
+    // channel the caller would push into a doomed (video-less) call route.
+    expect(
+      () => Channel.fromDmJson(const {'channel_id': 'x', 'kind': 'standard'}),
+      throwsFormatException,
+    );
+    expect(
+      () => Channel.fromDmJson(const {'channel_id': 'x'}), // absent kind → standard → throw
+      throwsFormatException,
+    );
   });
 }
