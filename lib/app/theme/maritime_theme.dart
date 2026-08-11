@@ -26,9 +26,9 @@ const _signalCyan = Color(0xFF57C9D8); // primary — links, focus, my-bubble ti
 const _beaconAmber = Color(0xFFF0B649); // secondary — beacons, FAB, highlights
 const _signalRed = Color(0xFFE0715E); // error — a warm maritime red, not stock
 
-/// Type — Lora (warm old-style serif, the logbook voice) for text; IBM Plex Mono
-/// (the instrument voice) for ids/timestamps, applied at the call site.
-const kMaritimeSerif = 'Lora';
+/// Type — the platform-native UI font (SF on Apple, Roboto on Android; set by
+/// leaving `fontFamily` unset) for text; IBM Plex Mono (the instrument voice) for
+/// ids/timestamps, applied at the call site.
 const kMaritimeMono = 'IBM Plex Mono';
 
 const _maritimeColors = ColorScheme(
@@ -63,10 +63,9 @@ const _maritimeColors = ColorScheme(
 );
 
 TextTheme _maritimeText(TextTheme base) {
-  // Everything is Lora by default; the mono voice is applied explicitly at
-  // id/timestamp call sites (see chat_screen.dart) so it stays deliberate.
+  // Body text uses the platform default (no fontFamily set); the mono voice is
+  // applied explicitly at id/timestamp call sites (chat_screen.dart).
   final t = base.apply(
-    fontFamily: kMaritimeSerif,
     bodyColor: _parchment,
     displayColor: _parchment,
   );
@@ -87,7 +86,6 @@ ThemeData maritimeTheme() {
     colorScheme: _maritimeColors,
     useMaterial3: true,
     brightness: Brightness.dark,
-    fontFamily: kMaritimeSerif,
     scaffoldBackgroundColor: _seaNight,
     canvasColor: _seaNight,
     dividerColor: _hairline,
@@ -106,7 +104,6 @@ ThemeData maritimeTheme() {
       scrolledUnderElevation: 0,
       centerTitle: false,
       titleTextStyle: TextStyle(
-        fontFamily: kMaritimeSerif,
         color: _parchment,
         fontSize: 20,
         fontWeight: FontWeight.w600,
@@ -164,7 +161,7 @@ ThemeData maritimeTheme() {
     ),
     snackBarTheme: const SnackBarThemeData(
       backgroundColor: _seaPanelHigh,
-      contentTextStyle: TextStyle(color: _parchment, fontFamily: kMaritimeSerif),
+      contentTextStyle: TextStyle(color: _parchment),
       actionTextColor: _signalCyan,
       behavior: SnackBarBehavior.floating,
     ),
@@ -183,14 +180,14 @@ ThemeData maritimeTheme() {
       backgroundColor: _seaNight,
       selectedIconTheme: IconThemeData(color: _signalCyan),
       unselectedIconTheme: IconThemeData(color: _parchmentDim),
-      selectedLabelTextStyle: TextStyle(color: _parchment, fontFamily: kMaritimeSerif),
-      unselectedLabelTextStyle: TextStyle(color: _parchmentDim, fontFamily: kMaritimeSerif),
+      selectedLabelTextStyle: TextStyle(color: _parchment),
+      unselectedLabelTextStyle: TextStyle(color: _parchmentDim),
     ),
     iconTheme: const IconThemeData(color: _parchmentDim),
     chipTheme: ChipThemeData(
       backgroundColor: _seaPanel,
       side: const BorderSide(color: _hairline),
-      labelStyle: const TextStyle(color: _parchment, fontFamily: kMaritimeSerif),
+      labelStyle: const TextStyle(color: _parchment),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     ),
     switchTheme: SwitchThemeData(
@@ -213,7 +210,7 @@ ThemeData maritimeTheme() {
         backgroundColor: _signalCyan,
         foregroundColor: _seaNight,
         elevation: 0,
-        textStyle: const TextStyle(fontFamily: kMaritimeSerif, fontWeight: FontWeight.w600),
+        textStyle: const TextStyle(fontWeight: FontWeight.w600),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
@@ -235,7 +232,7 @@ ThemeData maritimeTheme() {
         color: _seaPanelHigh,
         borderRadius: BorderRadius.all(Radius.circular(6)),
       ),
-      textStyle: TextStyle(color: _parchment, fontFamily: kMaritimeSerif),
+      textStyle: TextStyle(color: _parchment),
     ),
     progressIndicatorTheme: const ProgressIndicatorThemeData(color: _signalCyan),
   );

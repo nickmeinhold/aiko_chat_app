@@ -134,18 +134,9 @@ flutter:
     - assets/legal/eula.md
 
   # Maritime redesign type system (crucible docs/crucible/chatskin):
-  #   Lora        — warm old-style serif for display/body (the logbook voice).
-  #                 Iowan Old Style (the design-record face) is Apple-only, so a
-  #                 cross-platform open serif in the same old-style register.
-  #   IBM Plex Mono — ids, timestamps, keys (the instrument voice).
-  # Lora ships as a single variable (weight-axis) file; Flutter selects weight
-  # from the axis via TextStyle.fontWeight, so one asset covers 400-700.
+  # body/display text uses the platform-native UI font (no bundled family);
+  # IBM Plex Mono is the "instrument voice" for ids, timestamps, and keys.
   fonts:
-    - family: Lora
-      fonts:
-        - asset: assets/fonts/Lora.ttf
-        - asset: assets/fonts/Lora-Italic.ttf
-          style: italic
     - family: IBM Plex Mono
       fonts:
         - asset: assets/fonts/IBMPlexMono-Regular.ttf
