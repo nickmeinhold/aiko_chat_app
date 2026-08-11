@@ -11,6 +11,7 @@ class VideoToken {
     required this.token,
     required this.url,
     required this.room,
+    this.canPublish = true,
   });
 
   /// The LiveKit JWT — short TTL, checked only at connect (the session outlives
@@ -24,9 +25,18 @@ class VideoToken {
   /// The LiveKit room == the channel id.
   final String room;
 
+  /// Whether the server granted publish (camera/mic). A subscribe-only member
+  /// — e.g. a read-only DM participant, or anyone in a channel where publish is
+  /// gated on posting-membership — gets `false`. Render receive-only rather than
+  /// prompting for the camera and failing at the SFU. Absent → `true`
+  /// (backward-compat: deployments predating the `can_publish` field granted
+  /// publish unconditionally).
+  final bool canPublish;
+
   factory VideoToken.fromJson(Map<String, dynamic> json) => VideoToken(
         token: json['token'] as String,
         url: json['url'] as String,
         room: json['room'] as String,
+        canPublish: json['can_publish'] as bool? ?? true,
       );
 }

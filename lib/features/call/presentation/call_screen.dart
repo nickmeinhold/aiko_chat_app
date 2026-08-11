@@ -104,9 +104,11 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                     right: 0,
                     child: _statusBanner(state),
                   ),
-                // Local camera PiP (only once we're in the room).
-                if (state == CallConnectionState.connected ||
-                    state == CallConnectionState.reconnecting)
+                // Local camera PiP (only once we're in the room, and only if we
+                // can publish — a subscribe-only member has no local camera).
+                if ((state == CallConnectionState.connected ||
+                        state == CallConnectionState.reconnecting) &&
+                    _session.service.canPublish)
                   Positioned(
                     right: 16,
                     bottom: 96,
@@ -223,7 +225,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          if (live) ...[
+          if (live && _session.service.canPublish) ...[
             ValueListenableBuilder<bool>(
               valueListenable: _session.service.micEnabled,
               builder: (context, on, _) => _circleButton(
@@ -242,6 +244,20 @@ class _CallScreenState extends ConsumerState<CallScreen> {
               ),
             ),
             const SizedBox(width: 24),
+          ] else if (live) ...[
+            // Subscribe-only (can_publish:false) — no camera/mic to toggle.
+            const Padding(
+              padding: EdgeInsets.only(right: 24),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.visibility, size: 18, color: Colors.white70),
+                  SizedBox(width: 8),
+                  Text('Receive only',
+                      style: TextStyle(color: Colors.white70, fontSize: 13)),
+                ],
+              ),
+            ),
           ],
           _circleButton(
             icon: Icons.call_end,
