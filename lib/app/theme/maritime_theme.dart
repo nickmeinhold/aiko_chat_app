@@ -12,8 +12,17 @@ import 'package:flutter/material.dart';
 /// value through standard `ThemeData` fields is what makes a stock widget
 /// maritime for free.
 
+/// Public maritime tokens for the few ALWAYS-maritime surfaces that live outside
+/// `ThemeData` and can't read the [ColorScheme] (the immersive call screen; the
+/// status banner). Everything else inherits maritime through ColorScheme +
+/// component subthemes — reach for these only when a widget is deliberately
+/// theme-independent.
+const kMaritimeSeaNight = Color(0xFF0A1720);
+const kMaritimeSignalCyan = Color(0xFF57C9D8);
+const kMaritimeBeaconAmber = Color(0xFFF0B649);
+
 /// Grounds.
-const _seaNight = Color(0xFF0A1720); // base surface — deep sea at night
+const _seaNight = kMaritimeSeaNight; // base surface — deep sea at night
 const _seaPanel = Color(0xFF0F2330); // raised panel — others' bubbles, sidebar
 const _seaPanelHigh = Color(0xFF15303F); // highest panel — menus, sheets
 const _seaPanelMine = Color(0xFF123A44); // cyan-tinted panel — my own bubbles
@@ -22,8 +31,8 @@ const _parchmentDim = Color(0xFF93A2A3); // secondary ink — timestamps, captio
 const _hairline = Color(0xFF24384A); // panel edges + dividers (no elevation)
 
 /// Accents.
-const _signalCyan = Color(0xFF57C9D8); // primary — links, focus, my-bubble tint
-const _beaconAmber = Color(0xFFF0B649); // secondary — beacons, FAB, highlights
+const _signalCyan = kMaritimeSignalCyan; // primary — links, focus, my-bubble tint
+const _beaconAmber = kMaritimeBeaconAmber; // secondary — beacons, FAB, highlights
 const _signalRed = Color(0xFFE0715E); // error — a warm maritime red, not stock
 
 /// Type — the platform-native UI font (SF on Apple, Roboto on Android; set by
