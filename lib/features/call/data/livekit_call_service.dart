@@ -71,6 +71,14 @@ class LiveKitCallService {
   /// Carnot+Tesla HIGH: dispose is generation-unsafe without this).
   bool _disposed = false;
 
+  /// The publish grant from the last connected token (`can_publish`). When
+  /// false this participant is subscribe-only, so [enableMedia] and any
+  /// enable-side toggle no-op — the single door through which every publish
+  /// attempt passes its capability check, so a receive-only member never
+  /// triggers a doomed camera prompt and the UI can hide the media controls.
+  bool _canPublish = true;
+  bool get canPublish => _canPublish;
+
   Room? get room => _room;
   LocalParticipant? get localParticipant => _room?.localParticipant;
   Map<String, RemoteParticipant> get remoteParticipants =>
@@ -89,6 +97,7 @@ class LiveKitCallService {
       return ConnectionResult.alreadyConnected;
     }
     _state = CallConnectionState.connecting;
+    _canPublish = token.canPublish;
 
     try {
       // A FRESH Room per connect — never patch a dead one across a reconnect.
@@ -176,6 +185,7 @@ class LiveKitCallService {
   /// Enable the local camera + mic after a successful connect. Camera failure
   /// (permission denied) degrades to audio-only rather than crashing the call.
   Future<void> enableMedia() async {
+    if (!_canPublish) return; // subscribe-only — never prompt for the camera.
     final lp = _room?.localParticipant;
     if (lp == null) return;
     try {
@@ -195,6 +205,7 @@ class LiveKitCallService {
   }
 
   Future<void> setCameraEnabled(bool enabled) async {
+    if (enabled && !_canPublish) return; // subscribe-only can't publish.
     final lp = _room?.localParticipant;
     if (lp == null) return;
     // Same catch as enableMedia (Tesla: "same door, same catch") — a mid-call
@@ -209,6 +220,7 @@ class LiveKitCallService {
   }
 
   Future<void> setMicrophoneEnabled(bool enabled) async {
+    if (enabled && !_canPublish) return; // subscribe-only can't publish.
     final lp = _room?.localParticipant;
     if (lp == null) return;
     try {

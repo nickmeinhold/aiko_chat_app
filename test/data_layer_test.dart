@@ -1,5 +1,6 @@
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/envelopes.dart';
+import 'package:aiko_chat_app/features/call/domain/video_token.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -237,6 +238,30 @@ void main() {
       final c = Channel.fromJson({'id': 'c1', 'name': 'general', 'kind': 'standard'});
       expect(c.aikoChannel, isNull);
       expect(c.kind, ChannelKind.standard);
+    });
+  });
+
+  group('VideoToken.fromJson can_publish', () {
+    Map<String, dynamic> base() =>
+        {'token': 't', 'url': 'wss://x', 'room': 'g:c1'};
+
+    test('can_publish:true → canPublish true', () {
+      final v = VideoToken.fromJson(base()..['can_publish'] = true);
+      expect(v.canPublish, isTrue);
+    });
+    test('can_publish:false → canPublish false (subscribe-only)', () {
+      final v = VideoToken.fromJson(base()..['can_publish'] = false);
+      expect(v.canPublish, isFalse);
+    });
+    test('absent can_publish → defaults true (backward-compat)', () {
+      final v = VideoToken.fromJson(base());
+      expect(v.canPublish, isTrue);
+    });
+    test('parses the rest of the contract verbatim', () {
+      final v = VideoToken.fromJson(base()..['can_publish'] = false);
+      expect(v.token, 't');
+      expect(v.url, 'wss://x');
+      expect(v.room, 'g:c1');
     });
   });
 }
