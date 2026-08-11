@@ -8,9 +8,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/providers.dart';
+import '../../../core/widgets/reading_column.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
+import '../application/theme_mode_controller.dart';
 import 'edit_profile_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -29,97 +30,137 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
-        children: [
-          const _SectionHeader('Server'),
-          ListTile(
-            leading: const Icon(Icons.dns_outlined),
-            title: const Text('Server'),
-            subtitle: Text(_hostOf(ref.watch(configProvider).httpBaseUrl)),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/settings/gateway'),
-          ),
-          const _SectionHeader('Safety'),
-          ListTile(
-            leading: const Icon(Icons.block),
-            title: const Text('Blocked users'),
-            subtitle: const Text("People you've blocked won't see your messages."),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/settings/blocked'),
-          ),
-          // Operator seat (#33/#35): visible ONLY to a moderator. Presentation
-          // gate only — the server ModeratorUser check is the real boundary — so
-          // a stale-true flag at worst shows a tile whose actions 403 → Forbidden
-          // (handled, not a logout). isModeratorProvider is fail-closed (false
-          // when logged out / mid-restore / on an older gateway).
-          if (ref.watch(isModeratorProvider))
-            ListTile(
-              leading: const Icon(Icons.shield_outlined),
-              title: const Text('Reports'),
-              subtitle: const Text('Review reported messages and act on them.'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => context.push('/moderation/reports'),
+      body: ReadingColumn(
+        child: ListView(
+          children: [
+            const _SectionHeader('Appearance'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SegmentedButton<ThemeMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: ThemeMode.system,
+                      label: Text('System'),
+                      icon: Icon(Icons.brightness_auto_outlined),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.light,
+                      label: Text('Light'),
+                      icon: Icon(Icons.light_mode_outlined),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.dark,
+                      label: Text('Dark'),
+                      icon: Icon(Icons.dark_mode_outlined),
+                    ),
+                  ],
+                  selected: {ref.watch(themeModeProvider)},
+                  onSelectionChanged: (s) =>
+                      ref.read(themeModeProvider.notifier).set(s.first),
+                ),
+              ),
             ),
-          const _SectionHeader('Identity'),
-          ListTile(
-            leading: const Icon(Icons.badge_outlined),
-            title: const Text('Edit profile'),
-            subtitle: const Text('Change your handle or display name.'),
-            trailing: const Icon(Icons.chevron_right),
-            // NOTE: raw MaterialPageRoute (not go_router) — deliberate, see
-            // claude-tasks follow-up. A go_router migration must first handle the
-            // auth-refresh-during-open pop interaction (cage-match #114 finding B).
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const EditProfileScreen())),
-          ),
-          ListTile(
-            leading: const Icon(Icons.verified_outlined),
-            title: const Text('Your Carried Record'),
-            subtitle: const Text(
+            const _SectionHeader('Safety'),
+            ListTile(
+              leading: const Icon(Icons.block),
+              title: const Text('Blocked users'),
+              subtitle: const Text(
+                "People you've blocked won't see your messages.",
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/blocked'),
+            ),
+            // Operator seat (#33/#35): visible ONLY to a moderator. Presentation
+            // gate only — the server ModeratorUser check is the real boundary — so
+            // a stale-true flag at worst shows a tile whose actions 403 → Forbidden
+            // (handled, not a logout). isModeratorProvider is fail-closed (false
+            // when logged out / mid-restore / on an older gateway).
+            if (ref.watch(isModeratorProvider))
+              ListTile(
+                leading: const Icon(Icons.shield_outlined),
+                title: const Text('Reports'),
+                subtitle: const Text(
+                  'Review reported messages and act on them.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/moderation/reports'),
+              ),
+            const _SectionHeader('Identity'),
+            ListTile(
+              leading: const Icon(Icons.badge_outlined),
+              title: const Text('Edit profile'),
+              subtitle: const Text('Change your handle or display name.'),
+              trailing: const Icon(Icons.chevron_right),
+              // NOTE: raw MaterialPageRoute (not go_router) — deliberate, see
+              // claude-tasks follow-up. A go_router migration must first handle the
+              // auth-refresh-during-open pop interaction (cage-match #114 finding B).
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const EditProfileScreen()),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.verified_outlined),
+              title: const Text('Your Carried Record'),
+              subtitle: const Text(
                 'Messages attributed to you, and which you can cryptographically '
-                'prove you signed on this device.'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/settings/carried-record'),
-          ),
-          const _SectionHeader('Sign-in'),
-          ListTile(
-            leading: const Icon(Icons.key_outlined),
-            title: const Text('Add a passkey'),
-            subtitle: Text(_passkeyBiometricHint()),
-            enabled: !_addingPasskey,
-            trailing: _addingPasskey
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.chevron_right),
-            onTap: _addingPasskey ? null : _addPasskey,
-          ),
-          const _SectionHeader('Account'),
-          ListTile(
-            leading: Icon(Icons.delete_forever, color: theme.colorScheme.error),
-            title: Text('Delete account',
-                style: TextStyle(color: theme.colorScheme.error)),
-            subtitle: const Text(
-                'Permanently delete your account. This cannot be undone.'),
-            enabled: !_deleting,
-            trailing: _deleting
-                ? const SizedBox(
-                    width: 20, height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : null,
-            onTap: _deleting ? null : _confirmAndDelete,
-          ),
-          const _SectionHeader('Legal'),
-          ListTile(
-            leading: const Icon(Icons.description_outlined),
-            title: const Text('Terms of Use & Community Guidelines'),
-            subtitle: const Text('The terms you agreed to, including our '
-                'zero-tolerance policy.'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/settings/eula'),
-          ),
-        ],
+                'prove you signed on this device.',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/carried-record'),
+            ),
+            const _SectionHeader('Sign-in'),
+            ListTile(
+              leading: const Icon(Icons.key_outlined),
+              title: const Text('Add a passkey'),
+              subtitle: Text(_passkeyBiometricHint()),
+              enabled: !_addingPasskey,
+              trailing: _addingPasskey
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: _addingPasskey ? null : _addPasskey,
+            ),
+            const _SectionHeader('Account'),
+            ListTile(
+              leading: Icon(
+                Icons.delete_forever,
+                color: theme.colorScheme.error,
+              ),
+              title: Text(
+                'Delete account',
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+              subtitle: const Text(
+                'Permanently delete your account. This cannot be undone.',
+              ),
+              enabled: !_deleting,
+              trailing: _deleting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : null,
+              onTap: _deleting ? null : _confirmAndDelete,
+            ),
+            const _SectionHeader('Legal'),
+            ListTile(
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('Terms of Use & Community Guidelines'),
+              subtitle: const Text(
+                'The terms you agreed to, including our '
+                'zero-tolerance policy.',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/eula'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -142,25 +183,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (!mounted) return;
     setState(() => _addingPasskey = false);
     if (message != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
   // Neutral 409 copy: the gateway's "already registered" (409) can mean this OR
   // another account, so it must not assert the credential is on *this* one.
   String _addPasskeyError(Object e) => switch (e) {
-        PasskeyAlreadyRegistered() => 'That passkey is already registered. Try '
-            'signing in with it, or use a different passkey.',
-        // Before Unauthorized (its supertype): a ban is not "session expired."
-        // Short snackbar deliberately says "this island" rather than naming the
-        // host (as authErrorText does) — Settings already shows the active server
-        // in the Server tile, so the host is on-screen; a terse snackbar reads
-        // better here (cage-match Tesla P3, copy-drift is intentional).
-        AccountSuspended() => 'This account is suspended on this island.',
-        Unauthorized() => 'Your session has expired. Please sign in again.',
-        _ => 'Could not add a passkey. Please try again.',
-      };
+    PasskeyAlreadyRegistered() =>
+      'That passkey is already registered. Try '
+          'signing in with it, or use a different passkey.',
+    // Before Unauthorized (its supertype): a ban is not "session expired."
+    // Short snackbar deliberately says "this island" rather than naming the
+    // host (as authErrorText does) — Settings already shows the active server
+    // in the Server tile, so the host is on-screen; a terse snackbar reads
+    // better here (cage-match Tesla P3, copy-drift is intentional).
+    AccountSuspended() => 'This account is suspended on this island.',
+    Unauthorized() => 'Your session has expired. Please sign in again.',
+    _ => 'Could not add a passkey. Please try again.',
+  };
 
   Future<void> _confirmAndDelete() async {
     final confirmed = await showDialog<bool>(
@@ -174,11 +217,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(
-                backgroundColor: Theme.of(ctx).colorScheme.error),
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
             onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text('Delete'),
           ),
@@ -194,8 +239,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _deleting = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(_deleteError(e))));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_deleteError(e))));
     }
   }
 
@@ -204,16 +250,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // A ban (403) can land on delete mid-session too — say so honestly rather
     // than the vague "try again" (cage-match Tesla P3). AccountSuspended is a
     // subtype of Unauthorized, so it must be checked first.
-    if (e is AccountSuspended) return 'This account is suspended on this island.';
+    if (e is AccountSuspended) {
+      return 'This account is suspended on this island.';
+    }
     return 'Could not delete your account. Please try again.';
-  }
-
-  /// The host for the Server tile subtitle, parsed defensively — a corrupt
-  /// persisted value (read directly in [GatewayConfigController.build]) must not
-  /// throw on the Settings screen. Falls back to the raw value.
-  static String _hostOf(String httpBaseUrl) {
-    final host = Uri.tryParse(httpBaseUrl)?.host;
-    return (host == null || host.isEmpty) ? httpBaseUrl : host;
   }
 
   /// Passkey-unlock hint, named for the local platform's authenticators.
@@ -244,9 +284,12 @@ class _SectionHeader extends StatelessWidget {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(title,
-          style: theme.textTheme.labelMedium
-              ?.copyWith(color: theme.colorScheme.primary)),
+      child: Text(
+        title,
+        style: theme.textTheme.labelMedium?.copyWith(
+          color: theme.colorScheme.primary,
+        ),
+      ),
     );
   }
 }

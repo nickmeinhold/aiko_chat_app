@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/theme/maritime_theme.dart';
 import '../data/call_session.dart';
 import '../domain/call_connection_state.dart';
 
@@ -82,7 +83,9 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      // Always maritime-dark (an immersive video surface stays dark regardless of
+      // the app's light/dark mode), but the brand sea-night, not generic black.
+      backgroundColor: kMaritimeSeaNight,
       body: SafeArea(
         child: ValueListenableBuilder<CallConnectionState>(
           valueListenable: _session.state,
@@ -230,7 +233,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
               valueListenable: _session.service.micEnabled,
               builder: (context, on, _) => _circleButton(
                 icon: on ? Icons.mic : Icons.mic_off,
-                background: on ? Colors.white24 : Colors.white10,
+                background:
+                    on ? kMaritimeSignalCyan.withValues(alpha: 0.30) : Colors.white10,
                 onTap: () => _session.service.setMicrophoneEnabled(!on),
               ),
             ),
@@ -239,7 +243,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
               valueListenable: _session.service.cameraEnabled,
               builder: (context, on, _) => _circleButton(
                 icon: on ? Icons.videocam : Icons.videocam_off,
-                background: on ? Colors.white24 : Colors.white10,
+                background:
+                    on ? kMaritimeSignalCyan.withValues(alpha: 0.30) : Colors.white10,
                 onTap: () => _session.service.setCameraEnabled(!on),
               ),
             ),

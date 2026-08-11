@@ -10,6 +10,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/reading_column.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart' show AccountSuspended, Forbidden;
 import '../application/moderation_controller.dart';
@@ -27,12 +28,14 @@ class ReportQueueScreen extends ConsumerWidget {
     if (!isModerator) {
       return Scaffold(
         appBar: AppBar(title: const Text('Reports')),
-        body: const Center(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: Text(
-              'You no longer have moderator access on this island.',
-              textAlign: TextAlign.center,
+        body: ReadingColumn(
+          child: const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'You no longer have moderator access on this island.',
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
         ),
@@ -42,7 +45,8 @@ class ReportQueueScreen extends ConsumerWidget {
     final reportsAsync = ref.watch(pendingReportsProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Reports')),
-      body: RefreshIndicator(
+      body: ReadingColumn(
+        child: RefreshIndicator(
         onRefresh: () => ref.refresh(pendingReportsProvider.future),
         child: reportsAsync.when(
           // Scrollable so the RefreshIndicator's pull works on every branch, not
@@ -94,6 +98,7 @@ class ReportQueueScreen extends ConsumerWidget {
             );
           },
         ),
+      ),
       ),
     );
   }

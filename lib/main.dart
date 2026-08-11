@@ -4,6 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/providers.dart';
 import 'app/router.dart';
+import 'app/theme/maritime_theme.dart';
+import 'features/settings/application/theme_mode_controller.dart';
 
 Future<void> main() async {
   // The picker (#4) persists the chosen gateway; SharedPreferences is async to
@@ -27,10 +29,12 @@ class AikoChatApp extends ConsumerWidget {
     final router = ref.watch(routerProvider);
     return MaterialApp.router(
       title: 'Aiko Chat',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
+      // Light echoes the original; dark is the maritime redesign. themeMode
+      // follows the OS by default (ThemeMode.system) until the user overrides it
+      // in Settings → Appearance.
+      theme: lightTheme(),
+      darkTheme: maritimeTheme(),
+      themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
     );
   }

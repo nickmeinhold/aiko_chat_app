@@ -133,6 +133,16 @@ flutter:
   assets:
     - assets/legal/eula.md
 
+  # Maritime redesign type system (crucible docs/crucible/chatskin):
+  # body/display text uses the platform-native UI font (no bundled family);
+  # IBM Plex Mono is the "instrument voice" for ids, timestamps, and keys.
+  fonts:
+    - family: IBM Plex Mono
+      fonts:
+        - asset: assets/fonts/IBMPlexMono-Regular.ttf
+        - asset: assets/fonts/IBMPlexMono-Medium.ttf
+          weight: 500
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
+import '../../../core/widgets/reading_column.dart';
 import '../application/gateway_directory_provider.dart';
 import '../data/gateway_directory_client.dart';
 import 'gateway_switch_action.dart';
@@ -56,7 +57,8 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Server')),
-      body: AbsorbPointer(
+      body: ReadingColumn(
+        child: AbsorbPointer(
         absorbing: _switching,
         child: ListView(
           children: [
@@ -111,6 +113,7 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
               ),
           ],
         ),
+      ),
       ),
     );
   }

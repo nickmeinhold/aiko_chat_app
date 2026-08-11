@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
+import '../../../core/widgets/reading_column.dart';
 import '../application/chat_providers.dart';
 import '../domain/carried_record.dart';
 import '../domain/message.dart';
@@ -70,7 +71,8 @@ class CarriedRecordScreen extends ConsumerWidget {
     final recordAsync = ref.watch(carriedRecordProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Your Carried Record')),
-      body: recordAsync.when(
+      body: ReadingColumn(
+        child: recordAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(
           child: Padding(
@@ -82,6 +84,7 @@ class CarriedRecordScreen extends ConsumerWidget {
           ),
         ),
         data: (record) => _RecordBody(record),
+        ),
       ),
     );
   }
