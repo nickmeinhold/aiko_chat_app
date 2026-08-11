@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
+import 'edit_profile_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -60,6 +61,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/moderation/reports'),
             ),
           const _SectionHeader('Identity'),
+          ListTile(
+            leading: const Icon(Icons.badge_outlined),
+            title: const Text('Edit profile'),
+            subtitle: const Text('Change your handle or display name.'),
+            trailing: const Icon(Icons.chevron_right),
+            // NOTE: raw MaterialPageRoute (not go_router) — deliberate, see
+            // claude-tasks follow-up. A go_router migration must first handle the
+            // auth-refresh-during-open pop interaction (cage-match #114 finding B).
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const EditProfileScreen())),
+          ),
           ListTile(
             leading: const Icon(Icons.verified_outlined),
             title: const Text('Your Carried Record'),

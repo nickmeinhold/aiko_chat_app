@@ -336,6 +336,39 @@ class GatewayRestApi implements ChatRestApi {
     }),
   );
 
+  @override
+  Future<AppUser> updateProfile({String? handle, String? displayName}) =>
+      _mapNetwork(
+        () => _authedCall(() async {
+          try {
+            final r = await _authed.patch('/v1/me', data: <String, dynamic>{
+              'handle': ?handle,
+              'display_name': ?displayName,
+            });
+            return AppUser.fromJson(_map(r.data));
+          } on DioException catch (e) {
+            // Map ONLY this endpoint's own codes here; everything else rethrows
+            // so `_authedCall` applies the AUTHED-door taxonomy (cage-match #114,
+            // Carnot+Tesla+Wu). This is a bearer endpoint, NOT a `_bare` login
+            // door: `_throwIfAuthTerminal` would wrongly baptise a transient
+            // refresh-401 AND a plain authZ-403 as terminal `Unauthorized` →
+            // spurious logout. `_authedCall` instead honours the `auth_transient`
+            // marker, maps a suspended-403 → AccountSuspended, a terminal 401 →
+            // Unauthorized, and a plain 403 → Forbidden (session stays valid).
+            final code = e.response?.statusCode;
+            if (code == 409) throw const HandleTaken();
+            if (code == 429) {
+              final body = e.response?.data;
+              final secs = (body is Map && body['retry_after'] is num)
+                  ? (body['retry_after'] as num).toInt()
+                  : 0;
+              throw HandleChangeOnCooldown(secs);
+            }
+            rethrow;
+          }
+        }),
+      );
+
   /// Translate a connection-class [DioException] (no response from the server —
   /// DNS/connect/timeout) into the domain [NetworkUnavailable]. A DioException
   /// that carries a response (the server answered, even an error) is NOT

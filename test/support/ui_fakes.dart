@@ -51,11 +51,16 @@ class FakeRestApi implements ChatRestApi {
   /// If set, `claimHandle` throws this (e.g. `HandleTaken`).
   Object? claimThrows;
 
+  /// If set, `updateProfile` throws this (e.g. `HandleTaken`,
+  /// `HandleChangeOnCooldown`) — exercises the settings edit-profile error UI.
+  Object? updateProfileThrows;
+
   /// If set, `deleteAccount` throws this (e.g. `SoleAdminDeletionBlocked`).
   Object? deleteThrows;
 
   int meCalls = 0;
   int claimCalls = 0;
+  int updateProfileCalls = 0;
   int deleteCalls = 0;
   int listChannelsCalls = 0;
 
@@ -154,6 +159,20 @@ class FakeRestApi implements ChatRestApi {
     claimCalls++;
     if (claimThrows != null) throw claimThrows!;
     return _session();
+  }
+
+  @override
+  Future<AppUser> updateProfile({String? handle, String? displayName}) async {
+    updateProfileCalls++;
+    if (updateProfileThrows != null) throw updateProfileThrows!;
+    user = AppUser(
+      userId: user.userId,
+      username: handle ?? user.username,
+      displayName: displayName ?? user.displayName,
+      aikoUsername: handle ?? user.aikoUsername,
+      isModerator: user.isModerator,
+    );
+    return user;
   }
 
   @override
