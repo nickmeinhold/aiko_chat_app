@@ -7,6 +7,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
+import 'package:aiko_chat_app/features/chat/domain/channel_member.dart';
 import 'package:aiko_chat_app/features/chat/domain/gateway_capabilities.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/domain/retraction.dart';
@@ -175,6 +176,10 @@ class FakeChatRestApi implements ChatRestApi {
   Future<void> deleteAccount() => throw UnimplementedError();
   @override
   Future<List<Channel>> listChannels() => throw UnimplementedError();
+
+  @override
+  Future<List<ChannelMember>> listMembers(String channelId) =>
+      throw UnimplementedError();
 
   @override
   Future<Channel> openDm(String targetUserId) => throw UnimplementedError();

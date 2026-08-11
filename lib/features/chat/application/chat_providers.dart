@@ -30,6 +30,24 @@ final currentUserProvider = Provider<AppUser?>(
   (ref) => ref.watch(authControllerProvider).value,
 );
 
+/// `userId → current handle` for a channel's members, from the island roster
+/// (`GET /v1/channels/{id}/members`). Lets a message's sender name render the
+/// sender's handle AS IT IS NOW rather than the send-time label snapshot — the
+/// display half of "identity is the key, the handle is a mutable label" (see
+/// [senderDisplayName]). `autoDispose` so it is fetched when a channel is open
+/// and released on switch; a fetch failure leaves the map absent and callers
+/// fall back to the stored label (never a crash). My OWN rename shows instantly
+/// without this — [currentUserProvider] is already current — this covers OTHER
+/// members, refreshed on channel (re)open (a peer's mid-view rename lags until
+/// the next fetch; acceptable for v1).
+final channelRosterProvider =
+    FutureProvider.autoDispose.family<Map<String, String>, String>(
+  (ref, channelId) async {
+    final members = await ref.watch(restApiProvider).listMembers(channelId);
+    return {for (final m in members) m.userId: m.handle};
+  },
+);
+
 /// The channels the user can see. Gated on auth: empty when logged out so the
 /// repository (which derives its subscription set from this) never tries to
 /// subscribe with no session.

@@ -8,6 +8,7 @@ import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
 import '../domain/channel.dart';
+import '../domain/channel_member.dart';
 import '../domain/message.dart';
 import 'channel_sidebar.dart';
 import 'chat_message_pane.dart';
@@ -364,7 +365,11 @@ class _MessageListState extends ConsumerState<MessageList> {
           itemCount: messages.length,
           itemBuilder: (_, i) {
             final m = messages[i];
-            return MessageTile(message: m, isMine: m.sender.userId == myUserId);
+            return MessageTile(
+              message: m,
+              isMine: m.sender.userId == myUserId,
+              channelId: widget.channelId,
+            );
           },
         );
       },
@@ -375,15 +380,34 @@ class _MessageListState extends ConsumerState<MessageList> {
 /// One message bubble: sender + body, right-aligned when it's mine, with a
 /// delivery indicator and an inline Retry when a send failed (W5).
 class MessageTile extends ConsumerWidget {
-  const MessageTile({super.key, required this.message, required this.isMine});
+  const MessageTile({
+    super.key,
+    required this.message,
+    required this.isMine,
+    required this.channelId,
+  });
 
   final Message message;
   final bool isMine;
+
+  /// The channel this message is shown in — scopes the roster lookup that
+  /// resolves the sender's CURRENT handle (see [senderDisplayName]).
+  final String channelId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final bubbleColor = isMine ? scheme.primaryContainer : scheme.surfaceContainerHighest;
+
+    // Render the sender's CURRENT handle (my own from the live user, others from
+    // the channel roster), falling back to the send-time label — so a rename
+    // retitles past messages, matching the key-derived avatar below.
+    final senderName = senderDisplayName(
+      message.sender,
+      isMine: isMine,
+      myHandle: ref.watch(currentUserProvider)?.username,
+      roster: ref.watch(channelRosterProvider(channelId)).value,
+    );
 
     // Sender-action affordance: long-press ANOTHER human's message for the
     // action sheet — call them (#2758), report, or block (#7). Gated to a
@@ -423,7 +447,7 @@ class MessageTile extends ConsumerWidget {
                   const SizedBox(width: 6),
                   Flexible(
                     child: Text(
-                      message.sender.displayLabel,
+                      senderName,
                       style: Theme.of(context).textTheme.labelSmall,
                       overflow: TextOverflow.ellipsis,
                     ),

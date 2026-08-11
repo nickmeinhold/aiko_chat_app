@@ -6,6 +6,7 @@ import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/call/domain/video_token.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
+import 'package:aiko_chat_app/features/chat/domain/channel_member.dart';
 import 'package:aiko_chat_app/features/chat/domain/gateway_capabilities.dart';
 import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart';
 
@@ -179,6 +180,16 @@ class FakeRestApi implements ChatRestApi {
   Future<void> deleteAccount() async {
     deleteCalls++;
     if (deleteThrows != null) throw deleteThrows!;
+  }
+
+  /// Roster returned by [listMembers], keyed per channel id.
+  final Map<String, List<ChannelMember>> membersByChannel = {};
+  int listMembersCalls = 0;
+
+  @override
+  Future<List<ChannelMember>> listMembers(String channelId) async {
+    listMembersCalls++;
+    return membersByChannel[channelId] ?? const [];
   }
 
   @override
