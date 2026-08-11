@@ -10,6 +10,7 @@ import '../../moderation/domain/moderation_models.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
+import '../domain/channel_member.dart';
 import '../domain/gateway_capabilities.dart';
 import '../domain/message.dart';
 import '../domain/retraction.dart';
@@ -429,6 +430,17 @@ class GatewayRestApi implements ChatRestApi {
       final list = (_map(r.data)['channels'] as List?) ?? const [];
       return list
           .map((e) => Channel.fromJson((e as Map).cast<String, dynamic>()))
+          .toList();
+    }),
+  );
+
+  @override
+  Future<List<ChannelMember>> listMembers(String channelId) => _mapNetwork(
+    () => _authedCall(() async {
+      final r = await _authed.get('/v1/channels/$channelId/members');
+      final list = (_map(r.data)['members'] as List?) ?? const [];
+      return list
+          .map((e) => ChannelMember.fromJson((e as Map).cast<String, dynamic>()))
           .toList();
     }),
   );

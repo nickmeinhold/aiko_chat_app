@@ -3,6 +3,7 @@ import '../../auth/domain/identity_models.dart';
 import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../domain/channel.dart';
+import '../domain/channel_member.dart';
 import '../domain/gateway_capabilities.dart';
 import '../domain/message.dart';
 import '../domain/retraction.dart';
@@ -364,6 +365,15 @@ abstract interface class ChatRestApi {
   Future<void> deleteAccount();
 
   Future<List<Channel>> listChannels();
+
+  /// The current member roster of [channelId] (`GET /v1/channels/{id}/members`)
+  /// — each member's `userId` paired with their CURRENT [ChannelMember.handle]
+  /// (live from the island, not a snapshot). ADR-0004 makes this the per-island
+  /// key→handle lookup: it lets message sender names render the sender's handle
+  /// as it is NOW, so a rename retitles past messages. Gated by the channel read
+  /// check server-side (a private channel's roster is existence-hidden from
+  /// non-members); [Unauthorized] on a terminal auth rejection.
+  Future<List<ChannelMember>> listMembers(String channelId);
 
   /// Find-or-create the 1:1 DM channel with [targetUserId] (`POST /v1/dm`, DM
   /// handoff #2633). Idempotent: the unordered pair {me, target} always resolves

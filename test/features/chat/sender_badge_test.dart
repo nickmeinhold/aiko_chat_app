@@ -1,8 +1,11 @@
+import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../../support/ui_fakes.dart';
 
 /// The participant badge (#2414): a non-human `sender_kind` must render a
 /// visible "who/what" chip so an agent/bot message is distinguishable from a
@@ -21,9 +24,17 @@ Message _msg(MessageSender sender) => Message(
 
 Future<void> _pump(WidgetTester tester, MessageSender sender) async {
   await tester.pumpWidget(ProviderScope(
+    // The tile now watches the channel roster (current-handle resolution); a
+    // fake REST api keeps it offline — an empty roster falls back to the label,
+    // which is what these badge assertions read.
+    overrides: [restApiProvider.overrideWithValue(FakeRestApi())],
     child: MaterialApp(
       home: Scaffold(
-        body: MessageTile(message: _msg(sender), isMine: false),
+        body: MessageTile(
+          message: _msg(sender),
+          isMine: false,
+          channelId: 'c1',
+        ),
       ),
     ),
   ));
