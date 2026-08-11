@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../application/theme_mode_controller.dart';
@@ -39,14 +38,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           constraints: const BoxConstraints(maxWidth: 560),
           child: ListView(
             children: [
-              const _SectionHeader('Server'),
-              ListTile(
-                leading: const Icon(Icons.dns_outlined),
-                title: const Text('Server'),
-                subtitle: Text(_hostOf(ref.watch(configProvider).httpBaseUrl)),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => context.push('/settings/gateway'),
-              ),
               const _SectionHeader('Appearance'),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -268,14 +259,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (e is AccountSuspended)
       return 'This account is suspended on this island.';
     return 'Could not delete your account. Please try again.';
-  }
-
-  /// The host for the Server tile subtitle, parsed defensively — a corrupt
-  /// persisted value (read directly in [GatewayConfigController.build]) must not
-  /// throw on the Settings screen. Falls back to the raw value.
-  static String _hostOf(String httpBaseUrl) {
-    final host = Uri.tryParse(httpBaseUrl)?.host;
-    return (host == null || host.isEmpty) ? httpBaseUrl : host;
   }
 
   /// Passkey-unlock hint, named for the local platform's authenticators.
