@@ -237,3 +237,19 @@ ThemeData maritimeTheme() {
     progressIndicatorTheme: const ProgressIndicatorThemeData(color: _signalCyan),
   );
 }
+
+/// The light theme — a clean daylight surface that echoes the app's ORIGINAL
+/// look (Material 3 seeded from deepPurple) rather than a maritime inversion, so
+/// light mode feels familiar. Only the mono "instrument voice" for ids/timestamps
+/// carries over (it's set at the call site, see chat_screen.dart), threading the
+/// two modes together without forcing the sea palette onto a light surface.
+ThemeData lightTheme() {
+  return ThemeData(
+    colorScheme: ColorScheme.fromSeed(seedColor: _originalSeed),
+    useMaterial3: true,
+  );
+}
+
+/// The app's pre-redesign seed (Material `Colors.deepPurple`), kept as the light
+/// theme's DNA so "light mode looks a bit like the original" stays literally true.
+const _originalSeed = Color(0xFF673AB7);

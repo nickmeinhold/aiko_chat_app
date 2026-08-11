@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
+import '../application/theme_mode_controller.dart';
 import 'edit_profile_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -38,6 +39,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             subtitle: Text(_hostOf(ref.watch(configProvider).httpBaseUrl)),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/gateway'),
+          ),
+          const _SectionHeader('Appearance'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: SegmentedButton<ThemeMode>(
+              segments: const [
+                ButtonSegment(
+                  value: ThemeMode.system,
+                  label: Text('System'),
+                  icon: Icon(Icons.brightness_auto_outlined),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.light,
+                  label: Text('Light'),
+                  icon: Icon(Icons.light_mode_outlined),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.dark,
+                  label: Text('Dark'),
+                  icon: Icon(Icons.dark_mode_outlined),
+                ),
+              ],
+              selected: {ref.watch(themeModeProvider)},
+              onSelectionChanged: (s) =>
+                  ref.read(themeModeProvider.notifier).set(s.first),
+            ),
           ),
           const _SectionHeader('Safety'),
           ListTile(
