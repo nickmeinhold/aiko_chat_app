@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/theme/maritime_theme.dart';
 import '../../../core/mark/mark_avatar.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
@@ -427,6 +428,12 @@ class MessageTile extends ConsumerWidget {
           decoration: BoxDecoration(
             color: bubbleColor,
             borderRadius: BorderRadius.circular(12),
+            // Maritime texture: a sea-panel separated by a hairline, not by
+            // Material elevation/shadow.
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outline,
+              width: 1,
+            ),
           ),
           child: Column(
             crossAxisAlignment:
@@ -469,7 +476,11 @@ class MessageTile extends ConsumerWidget {
                 children: [
                   Text(
                     _formatTime(message.createdAt),
-                    style: Theme.of(context).textTheme.labelSmall,
+                    // Ids/timestamps speak in the mono instrument voice.
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          fontFamily: kMaritimeMono,
+                          fontSize: 11,
+                        ),
                   ),
                   if (isMine) ...[
                     const SizedBox(width: 6),
