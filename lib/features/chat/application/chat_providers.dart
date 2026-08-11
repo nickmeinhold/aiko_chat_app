@@ -213,6 +213,43 @@ Stream<List<Message>> _watchVisibleMessages(Ref ref, String channelId) async* {
       : msgs.where((m) => !blocked.contains(m.sender.userId)).toList());
 }
 
+// --- cross-channel message search (#8, grep tier) --------------------------
+
+/// The current search query. The search screen writes it (debounced) and
+/// [messageSearchResultsProvider] reacts. `.autoDispose` so closing the search
+/// surface drops both the query and its results. A [Notifier] (not the legacy
+/// `StateProvider`) to match the house style ([SelectedChannelId] et al.).
+final messageSearchQueryProvider =
+    NotifierProvider.autoDispose<MessageSearchQuery, String>(
+        MessageSearchQuery.new);
+
+class MessageSearchQuery extends Notifier<String> {
+  @override
+  String build() => '';
+
+  /// Set the query (already trimmed by the caller). Idempotent.
+  void set(String query) => state = query;
+}
+
+/// Cross-channel grep results for [messageSearchQueryProvider] — blocked-sender
+/// filtered so search obeys the SAME visibility predicate as the message list
+/// (concept_visibility_consistency). Retraction is already excluded one layer
+/// down (retracted rows are hard-deleted from the cache — see
+/// [DriftCache.searchMessages]), so only the block filter is layered here,
+/// exactly as [messagesProvider] layers it over the visibility-agnostic
+/// [ChatRepository.watchChannel]. An empty/whitespace query short-circuits to an
+/// empty list with no scan.
+final messageSearchResultsProvider =
+    FutureProvider.autoDispose<List<Message>>((ref) async {
+  final query = ref.watch(messageSearchQueryProvider).trim();
+  if (query.isEmpty) return const [];
+  final repo = await ref.watch(chatRepositoryProvider.future);
+  final blocked = ref.watch(blockedUserIdsProvider);
+  final hits = await repo.searchMessages(query);
+  if (blocked.isEmpty) return hits;
+  return hits.where((m) => !blocked.contains(m.sender.userId)).toList();
+});
+
 // --- per-channel unread (channel-switcher badges) --------------------------
 
 /// The durable per-channel last-read watermark store, over the app-wide

@@ -1,5 +1,6 @@
 import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
+import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../domain/channel.dart';
 import '../domain/gateway_capabilities.dart';
@@ -202,6 +203,19 @@ class NetworkUnavailable implements Exception {
   String toString() => 'NetworkUnavailable($cause)';
 }
 
+/// Video calling is not enabled on this deployment — the island's `503` on
+/// `POST /v1/channels/{id}/video-token` (LiveKit creds not configured, handoff
+/// #2726). NOT a failure to apologise for: it's a capability the deployment
+/// lacks, so the UI hides/disables the call affordance and shows "video calling
+/// isn't available here" rather than an error. Branched BEFORE the generic
+/// [Unauthorized]/`5xx` mapping so a reachable-but-video-less server never reads
+/// as a logout or a transient blip.
+class VideoNotEnabled implements Exception {
+  const VideoNotEnabled();
+  @override
+  String toString() => 'VideoNotEnabled';
+}
+
 /// Thrown by [ChatRestApi.claimHandle] when the requested handle is already
 /// taken (the gateway returns 409). The claim UI surfaces this inline ("that
 /// handle is taken") rather than as a generic failure.
@@ -222,6 +236,20 @@ class HandleChangeOnCooldown implements Exception {
   const HandleChangeOnCooldown(this.retryAfterSeconds);
   @override
   String toString() => 'HandleChangeOnCooldown($retryAfterSeconds)';
+}
+
+/// Thrown by [ChatRestApi.openDm] when the `target_user_id` is not a real user
+/// on this island (the gateway returns 404, DM handoff §Endpoints). Distinct
+/// from a non-member/existence-hiding 404 on other endpoints: `POST /v1/dm`
+/// find-or-creates, so its only 404 is "no such target". The DM-open UI surfaces
+/// this as "couldn't reach that person" rather than a generic failure or a
+/// logout. NOT an [Unauthorized] — the caller's session is valid.
+class DmTargetNotFound implements Exception {
+  /// The opaque target id that didn't resolve, for telemetry/caller copy.
+  final String? targetUserId;
+  const DmTargetNotFound([this.targetUserId]);
+  @override
+  String toString() => 'DmTargetNotFound($targetUserId)';
 }
 
 /// Thrown by [ChatRestApi.addPasskey] when the gateway rejects the credential as
@@ -336,6 +364,25 @@ abstract interface class ChatRestApi {
   Future<void> deleteAccount();
 
   Future<List<Channel>> listChannels();
+
+  /// Find-or-create the 1:1 DM channel with [targetUserId] (`POST /v1/dm`, DM
+  /// handoff #2633). Idempotent: the unordered pair {me, target} always resolves
+  /// to the same channel, so a double-tap yields one channel, not two (the island
+  /// mints a deterministic `dm:<lo>:<hi>` key, atomic on the existing UNIQUE
+  /// constraint). A self-target (`target == me`) is allowed and returns the
+  /// notes-to-self channel. The returned [Channel] has `kind == dm` and an empty
+  /// `name` — the DM's display title is the peer, supplied by the caller. Throws
+  /// [DmTargetNotFound] on a 404 (no such user), [Unauthorized] on a terminal
+  /// auth rejection, and [NetworkUnavailable] when the island is unreachable.
+  Future<Channel> openDm(String targetUserId);
+
+  /// Mint a LiveKit join token for an A/V call in [channelId] (handoff #2726).
+  /// The room IS the channel; participant identity is server-derived. Throws
+  /// [VideoNotEnabled] on a 503 (deployment has no video), [Unauthorized] on a
+  /// terminal auth rejection, [Forbidden]/not-found on a 404 (non-member /
+  /// existence-hiding), and [NetworkUnavailable] when the island is unreachable.
+  Future<VideoToken> requestVideoToken(String channelId);
+
   /// A page of channel history (ascending). [before] pages older (scroll-up);
   /// [after] pages newer (reconnect catch-up). Mutually exclusive — the gateway
   /// uses `after` if both are given.

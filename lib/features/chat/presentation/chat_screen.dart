@@ -11,6 +11,7 @@ import '../domain/channel.dart';
 import '../domain/message.dart';
 import 'channel_sidebar.dart';
 import 'chat_message_pane.dart';
+import 'emoji_shortcodes.dart';
 
 /// At or above this logical width the chat surface shows the Slack/Element-style
 /// left rail ([ChatSidebar]); below it collapses to the phone app-bar dropdown.
@@ -81,6 +82,11 @@ class ChatScreen extends ConsumerWidget {
                   ? _ChannelSwitcher(channels: channels, activeId: active.id)
                   : Text(active?.name ?? 'Chat'),
               actions: [
+                IconButton(
+                  tooltip: 'Search',
+                  icon: const Icon(Icons.search),
+                  onPressed: () => context.push('/search'),
+                ),
                 IconButton(
                   tooltip: 'Settings',
                   icon: const Icon(Icons.settings),
@@ -379,16 +385,17 @@ class MessageTile extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final bubbleColor = isMine ? scheme.primaryContainer : scheme.surfaceContainerHighest;
 
-    // Moderation affordance (#7): long-press ANOTHER human's message to
-    // report/block. Gated to a non-mine message with a real account behind it —
-    // you can't block yourself or an external actor (LLM/robot have no userId).
-    final canModerate = !isMine && message.sender.userId != null;
+    // Sender-action affordance: long-press ANOTHER human's message for the
+    // action sheet — call them (#2758), report, or block (#7). Gated to a
+    // non-mine message with a real account behind it — you can't call/block
+    // yourself or an external actor (LLM/robot have no userId).
+    final canActOnSender = !isMine && message.sender.userId != null;
 
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress:
-            canModerate ? () => showMessageActions(context, ref, message) : null,
+            canActOnSender ? () => showMessageActions(context, ref, message) : null,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -542,7 +549,13 @@ class _DeliveryIndicator extends ConsumerWidget {
       case DeliveryState.sent:
       case DeliveryState.delivered:
       case DeliveryState.read:
-        return const Icon(Icons.check, size: 14);
+        // No persistent glyph once sent: a checkmark is the read-receipt
+        // signifier (WhatsApp/Signal), and this app has no read receipts — the
+        // `read` state is never even set. The adjacent timestamp already means
+        // "sent at HH:MM", so a terminal-state message just shows the time. Only
+        // the in-flight `sending` clock and the `failed` Retry remain as trailing
+        // affordances — the absence of the clock IS "sent" (iMessage/Telegram).
+        return const SizedBox.shrink();
     }
   }
 }
@@ -561,10 +574,76 @@ class Composer extends ConsumerStatefulWidget {
 class _ComposerState extends ConsumerState<Composer> {
   final _controller = TextEditingController();
 
+  /// Active `:shortcode` autocomplete suggestions (#12). Empty ⇒ picker closed.
+  List<MapEntry<String, String>> _suggestions = const [];
+  int _selected = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_updateSuggestions);
+  }
+
   @override
   void dispose() {
+    _controller.removeListener(_updateSuggestions);
     _controller.dispose();
     super.dispose();
+  }
+
+  /// The caret offset when it is a valid, collapsed cursor; else -1 (a range
+  /// selection or no focus has no single insertion point to complete against).
+  int get _caret {
+    final sel = _controller.selection;
+    return (sel.isValid && sel.isCollapsed) ? sel.baseOffset : -1;
+  }
+
+  /// Recompute suggestions from the token under the caret. Only calls setState
+  /// when the visible list actually changes, so ordinary typing doesn't churn
+  /// the tree on every keystroke.
+  void _updateSuggestions() {
+    final tok = activeShortcodeToken(_controller.text, _caret);
+    final next = tok == null
+        ? const <MapEntry<String, String>>[]
+        : filterEmojiShortcodes(tok.query);
+    final changed = next.length != _suggestions.length ||
+        [for (var i = 0; i < next.length; i++) next[i].key != _suggestions[i].key]
+            .any((d) => d);
+    if (changed) {
+      setState(() {
+        _suggestions = next;
+        _selected = 0;
+      });
+    }
+  }
+
+  void _closeSuggestions() {
+    if (_suggestions.isNotEmpty) {
+      setState(() {
+        _suggestions = const [];
+        _selected = 0;
+      });
+    }
+  }
+
+  /// Replace the active `:token` with the chosen emoji and close the picker.
+  void _acceptSuggestion(MapEntry<String, String> s) {
+    final tok = activeShortcodeToken(_controller.text, _caret);
+    if (tok == null) return;
+    final text = _controller.text;
+    _controller.value = TextEditingValue(
+      text: text.replaceRange(tok.start, _caret, s.value),
+      selection: TextSelection.collapsed(offset: tok.start + s.value.length),
+    );
+    _closeSuggestions();
+  }
+
+  void _moveSelection(int delta) {
+    if (_suggestions.isEmpty) return;
+    setState(() {
+      _selected = (_selected + delta) % _suggestions.length;
+      if (_selected < 0) _selected += _suggestions.length;
+    });
   }
 
   Future<void> _send() async {
@@ -585,16 +664,21 @@ class _ComposerState extends ConsumerState<Composer> {
     '🔥', '✨', '🎉', '💯', '👀', '❤️', '💜', '💔',
   ];
 
-  void _insertEmoji(String emoji) {
+  /// Insert [s] at the caret (replacing any selection) and collapse the caret
+  /// after it. Shared by the emoji picker and the Shift+Enter newline (a field
+  /// with no caret yet has an invalid -1 selection → append at the end).
+  void _insertAtCursor(String s) {
     final sel = _controller.selection;
     final text = _controller.text;
     final start = sel.start >= 0 ? sel.start : text.length;
     final end = sel.end >= 0 ? sel.end : text.length;
     _controller.value = TextEditingValue(
-      text: text.replaceRange(start, end, emoji),
-      selection: TextSelection.collapsed(offset: start + emoji.length),
+      text: text.replaceRange(start, end, s),
+      selection: TextSelection.collapsed(offset: start + s.length),
     );
   }
+
+  void _insertEmoji(String emoji) => _insertAtCursor(emoji);
 
   Future<void> _showEmojiPicker() async {
     final picked = await showModalBottomSheet<String>(
@@ -623,9 +707,14 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget build(BuildContext context) {
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_suggestions.isNotEmpty) _buildSuggestions(context),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
           children: [
             IconButton(
               onPressed: _showEmojiPicker,
@@ -638,10 +727,42 @@ class _ComposerState extends ConsumerState<Composer> {
                 // Scoped to hardware key events, so mobile soft keyboards keep
                 // their existing newline + send-button behaviour untouched.
                 onKeyEvent: (node, event) {
-                  if (event is KeyDownEvent &&
-                      event.logicalKey == LogicalKeyboardKey.enter &&
-                      !HardwareKeyboard.instance.isShiftPressed) {
-                    _send();
+                  if (event is! KeyDownEvent) return KeyEventResult.ignored;
+                  final key = event.logicalKey;
+                  // When the shortcode picker is open it captures the navigation
+                  // keys, so Enter/Tab commit the highlighted emoji instead of
+                  // sending the message and the arrows move the highlight.
+                  if (_suggestions.isNotEmpty) {
+                    if (key == LogicalKeyboardKey.enter &&
+                            !HardwareKeyboard.instance.isShiftPressed ||
+                        key == LogicalKeyboardKey.tab) {
+                      _acceptSuggestion(_suggestions[_selected]);
+                      return KeyEventResult.handled;
+                    }
+                    if (key == LogicalKeyboardKey.arrowDown) {
+                      _moveSelection(1);
+                      return KeyEventResult.handled;
+                    }
+                    if (key == LogicalKeyboardKey.arrowUp) {
+                      _moveSelection(-1);
+                      return KeyEventResult.handled;
+                    }
+                    if (key == LogicalKeyboardKey.escape) {
+                      _closeSuggestions();
+                      return KeyEventResult.handled;
+                    }
+                  }
+                  if (key == LogicalKeyboardKey.enter) {
+                    if (HardwareKeyboard.instance.isShiftPressed) {
+                      // Shift+Enter → newline. Flutter's DefaultTextEditingShortcuts
+                      // map only PLAIN Enter to a newline in a multiline field, and
+                      // the composer reassigns bare Enter to "send" — so Shift+Enter
+                      // has no default handler and the newline must be inserted
+                      // explicitly here (#113 follow-up; was a silent no-op before).
+                      _insertAtCursor('\n');
+                    } else {
+                      _send();
+                    }
                     return KeyEventResult.handled;
                   }
                   return KeyEventResult.ignored;
@@ -667,6 +788,62 @@ class _ComposerState extends ConsumerState<Composer> {
               icon: const Icon(Icons.send),
             ),
           ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The `:shortcode` autocomplete panel shown above the input while a token is
+  /// being typed. Theme-driven (no hardcoded colours) so it rides whatever skin
+  /// is active. The highlighted row is what Enter/Tab commits.
+  Widget _buildSuggestions(BuildContext context) {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+        constraints: const BoxConstraints(maxHeight: 220, maxWidth: 340),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: theme.dividerColor),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ListView.builder(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          itemCount: _suggestions.length,
+          itemBuilder: (context, i) {
+            final s = _suggestions[i];
+            final selected = i == _selected;
+            return InkWell(
+              onTap: () => _acceptSuggestion(s),
+              child: Container(
+                color: selected ? theme.colorScheme.primaryContainer : null,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Text(s.value, style: const TextStyle(fontSize: 20)),
+                    const SizedBox(width: 12),
+                    // Flexible + ellipsis: a long shortcode (e.g.
+                    // `:smiling_face_with_three_hearts:`) must clip to the panel
+                    // width, not overflow the bounded row.
+                    Flexible(
+                      child: Text(
+                        ':${s.key}:',
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(fontFamily: 'monospace'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

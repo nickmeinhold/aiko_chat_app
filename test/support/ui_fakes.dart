@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:aiko_chat_app/features/auth/data/passkey_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
+import 'package:aiko_chat_app/features/call/domain/video_token.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/gateway_capabilities.dart';
@@ -189,6 +190,44 @@ class FakeRestApi implements ChatRestApi {
       throw e;
     }
     return channels;
+  }
+
+  /// If set, [requestVideoToken] throws this (e.g. `VideoNotEnabled`).
+  Object? requestVideoTokenThrows;
+
+  /// The token [requestVideoToken] returns when not throwing.
+  VideoToken videoToken = const VideoToken(
+      token: 'fake-jwt', url: 'wss://livekit.test', room: 'fake-room');
+
+  int requestVideoTokenCalls = 0;
+
+  @override
+  Future<VideoToken> requestVideoToken(String channelId) async {
+    requestVideoTokenCalls++;
+    if (requestVideoTokenThrows != null) throw requestVideoTokenThrows!;
+    return videoToken;
+  }
+
+  /// If set, [openDm] throws this (e.g. `DmTargetNotFound`, `NetworkUnavailable`).
+  Object? openDmThrows;
+
+  /// The DM channel [openDm] returns when not throwing. Defaults to a `kind: dm`
+  /// channel so the call-affordance gate (kind == dm) lights up in tests.
+  Channel openDmReturns = const Channel(
+      id: 'dm:me:peer', name: '', kind: ChannelKind.dm);
+
+  int openDmCalls = 0;
+
+  /// The last target passed to [openDm] — lets a test assert the tapped sender's
+  /// `userId` was threaded through (not, say, a display label).
+  String? lastOpenDmTarget;
+
+  @override
+  Future<Channel> openDm(String targetUserId) async {
+    openDmCalls++;
+    lastOpenDmTarget = targetUserId;
+    if (openDmThrows != null) throw openDmThrows!;
+    return openDmReturns;
   }
 
   @override

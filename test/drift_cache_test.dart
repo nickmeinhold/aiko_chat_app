@@ -384,4 +384,47 @@ void main() {
           reason: 'the retracted split must not swallow a genuine orphan');
     });
   });
+
+  group('searchMessages — grep tier (#8)', () {
+    test('case-insensitive substring match across channels, newest first',
+        () async {
+      await cache.upsertInbound(server('01A', 'chanA', 'The quick brown fox',
+          at: DateTime.utc(2026, 1, 1, 12, 0)));
+      await cache.upsertInbound(server('01B', 'chanB', 'lazy FOX sleeping',
+          at: DateTime.utc(2026, 1, 1, 12, 5)));
+      await cache.upsertInbound(server('01C', 'chanA', 'no match here',
+          at: DateTime.utc(2026, 1, 1, 12, 9)));
+
+      final hits = await cache.searchMessages('fox');
+      expect(hits.map((m) => m.id), ['01B', '01A'],
+          reason: 'both channels matched, case-insensitive, newest-first');
+    });
+
+    test('a retracted message never appears in results (hard-deleted)',
+        () async {
+      await cache.upsertInbound(server('01A', 'chan', 'secret plans'));
+      expect(await cache.searchMessages('secret'), hasLength(1));
+      await cache.applyRetraction(
+          Retraction(channelId: 'chan', id: '01Z', targetMsgId: '01A'));
+      expect(await cache.searchMessages('secret'), isEmpty,
+          reason: 'retraction hard-deletes the row, so search cannot surface it');
+    });
+
+    test('LIKE wildcards in the query are literal (escaped), not patterns',
+        () async {
+      await cache.upsertInbound(server('01A', 'chan', 'discount is 50% today'));
+      await cache.upsertInbound(server('01B', 'chan', 'plain text'));
+      // '%' must match the literal percent, NOT act as a match-anything wildcard.
+      final pct = await cache.searchMessages('50%');
+      expect(pct.map((m) => m.id), ['01A']);
+      expect(await cache.searchMessages('%'), hasLength(1),
+          reason: 'a bare % is a literal, matching only the row containing it');
+    });
+
+    test('empty / whitespace query returns nothing without scanning', () async {
+      await cache.upsertInbound(server('01A', 'chan', 'anything'));
+      expect(await cache.searchMessages(''), isEmpty);
+      expect(await cache.searchMessages('   '), isEmpty);
+    });
+  });
 }

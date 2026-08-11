@@ -11,6 +11,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/providers.dart';
+import '../../call/presentation/call_screen.dart' show pushCall;
+import '../../chat/data/chat_rest_api.dart'
+    show DmTargetNotFound, NetworkUnavailable;
 import '../../chat/domain/message.dart';
 import '../application/moderation_controller.dart';
 import '../domain/moderation_models.dart';
@@ -32,6 +36,16 @@ Future<void> showMessageActions(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Start a 1:1 A/V call with this sender. Opens (find-or-creates) the
+          // DM channel with them and joins its LiveKit room. `openDm` is
+          // idempotent, so both parties tapping Call resolve to the SAME room
+          // (DM handoff #2633; call gating #2726). The DM messaging surface is a
+          // separate build — this is the call-only path (#2758).
+          ListTile(
+            leading: const Icon(Icons.videocam_outlined),
+            title: Text('Call $name'),
+            onTap: () => Navigator.pop(ctx, _Action.call),
+          ),
           ListTile(
             leading: const Icon(Icons.flag_outlined),
             title: const Text('Report message'),
@@ -52,6 +66,8 @@ Future<void> showMessageActions(
   if (action == null || !context.mounted) return;
 
   switch (action) {
+    case _Action.call:
+      await _call(context, ref, userId, name);
     case _Action.report:
       await _report(context, ref, message.id ?? message.clientTempId);
     case _Action.block:
@@ -59,7 +75,63 @@ Future<void> showMessageActions(
   }
 }
 
-enum _Action { report, block }
+enum _Action { call, report, block }
+
+/// Open (find-or-create) the DM with [userId] and push the call screen for it.
+/// The room is the DM channel id; `openDm` idempotency means a re-tap (or the
+/// peer tapping too) lands in the SAME room. Failures surface as a SnackBar and
+/// never navigate — [DmTargetNotFound] (no such user) and [NetworkUnavailable]
+/// (offline) get specific copy; anything else a generic retry message.
+Future<void> _call(
+  BuildContext context,
+  WidgetRef ref,
+  String userId,
+  String name,
+) async {
+  final messenger = ScaffoldMessenger.of(context);
+  // Defence-in-depth on the UGC block boundary (cage-match Tesla, HIGH). A
+  // blocked user's messages are already filtered out of the list, so their tile
+  // — and this action — is normally unreachable; but Call is a NEW presence
+  // surface and must FAIL CLOSED rather than lean on that upstream filter. The
+  // island is the real boundary (backend-first — tracked to confirm the DM
+  // video-token path block-gates like the DM *send* does, #2633 Decision 5);
+  // this refuses the client attempt so a blocked pair never even requests a room.
+  if (ref.read(blockedUserIdsProvider).contains(userId)) {
+    messenger.showSnackBar(
+      SnackBar(content: Text("You've blocked $name — unblock in Settings to call.")),
+    );
+    return;
+  }
+  try {
+    // openDm is idempotent (find-or-create): if a second Call slips through
+    // during this await it resolves to the SAME room, and pushCall's latch then
+    // dedups the navigation. The first tap always navigates — a double-fire
+    // costs at most one redundant idempotent open, never a second call nor a
+    // swallowed tap (cage-match Tesla, latch-scope).
+    final dm = await ref.read(restApiProvider).openDm(userId);
+    if (!context.mounted) return;
+    await pushCall(context, dm.id);
+  } on DmTargetNotFound {
+    messenger.showSnackBar(
+      SnackBar(content: Text("Couldn't reach $name for a call.")),
+    );
+  } on NetworkUnavailable {
+    messenger.showSnackBar(
+      const SnackBar(content: Text("You're offline — can't start a call.")),
+    );
+  } catch (_) {
+    // Terminal auth (Unauthorized/AccountSuspended) lands here as a generic
+    // message — MATCHING the sibling _block/_report handlers below. The
+    // repository/transport layer owns terminal-auth routing (a 401 on the next
+    // sync disconnects → logout / suspended screen); a per-action rethrow here
+    // would be an unhandled async error and diverge from the file's pattern.
+    // Named tradeoff (cage-match Tesla): one generic hop here, real routing next
+    // sync.
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Could not start the call. Please try again.')),
+    );
+  }
+}
 
 Future<void> _report(
   BuildContext context,
