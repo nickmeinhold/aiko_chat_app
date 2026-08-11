@@ -68,6 +68,12 @@ Future<void> _pump(WidgetTester tester, List<Message> messages) async {
     myCarriedMessagesProvider.overrideWith((ref) async => messages),
   ]);
   addTearDown(container.dispose);
+  // Taller-than-default surface: the screen constrains content to a 560px
+  // reading column (ReadingColumn), so entries wrap taller than at full width —
+  // a multi-entry record needs the extra height to render every row on screen
+  // (the default 800x600 pushes the last row past the ListView cache extent).
+  await tester.binding.setSurfaceSize(const Size(800, 1600));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,

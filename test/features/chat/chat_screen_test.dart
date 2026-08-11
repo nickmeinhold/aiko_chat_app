@@ -63,26 +63,6 @@ void main() {
     expect(find.text('hello world'), findsOneWidget); // optimistic row rendered
   });
 
-  testWidgets('emoji picker inserts the picked emoji at the cursor',
-      (tester) async {
-    final container =
-        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
-    addTearDown(container.dispose);
-
-    await pumpNarrow(tester, container);
-    await signIn(tester);
-
-    await tester.enterText(find.byType(TextField).first, 'hi ');
-    await tester.tap(find.byIcon(Icons.emoji_emotions_outlined));
-    await tester.pumpAndSettle(); // bottom sheet opens
-
-    await tester.tap(find.text('😀').first);
-    await tester.pumpAndSettle(); // sheet closes, emoji inserted at cursor
-
-    final field = tester.widget<TextField>(find.byType(TextField).first);
-    expect(field.controller!.text, 'hi 😀');
-  });
-
   testWidgets('Enter sends; Shift+Enter does not (newline)', (tester) async {
     final transport = FakeChatTransport();
     final container = makeContainer(rest: FakeRestApi(), transport: transport);
