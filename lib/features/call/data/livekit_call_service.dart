@@ -6,16 +6,22 @@ import 'package:livekit_client/livekit_client.dart';
 import '../domain/call_connection_state.dart';
 import '../domain/video_token.dart';
 
-/// The ICE transport policy for A/V calls.
+/// The ICE transport policy for A/V calls: **always relay-only** (`.relay`).
 ///
-/// The island handoff (#2726) states **"FORCE RELAY"** but parenthesises
-/// `iceTransportPolicy.all` — a contradiction: `.all` allows direct UDP + srflx
-/// *alongside* relay, so it is NOT force-relay. `.relay` is (relay-only, peer
-/// IPs never exposed, all media through `turn.imagineering.cc`). We honour the
-/// stated security *intent* and ship `.relay`, isolated here as a single
-/// flippable constant: if TURN is unreachable during a rehearsal, flip to
-/// `.all` as a one-line fallback. Surfaced to the island tab to fix the wording
-/// (claude-tasks#2726). See ADR-0005 grounding note.
+/// Peer-IP privacy is a HARD requirement (Nick, 2026-08-11): media must never
+/// traverse a direct path that exposes participant IPs, so all media is forced
+/// through TURN. This is NOT flippable and NOT per-island adaptive — `.all`
+/// (direct UDP/srflx alongside relay) leaks peer IPs and is an explicitly
+/// REJECTED fallback (this rejects the island tab's "default ICE / don't force
+/// relay" Correction 2 on claude-tasks#2726, which traded the privacy property
+/// away).
+///
+/// Consequence: force-relay makes **TURN a hard dependency of any video-enabled
+/// island**. An island without TURN (e.g. enspyr as of 2026-08-11) cannot offer
+/// privacy-preserving video and must fail CLOSED server-side (503
+/// video-not-enabled), never mint a token that can't connect. TURN-provisioning
+/// + the fail-closed 503 are tracked in the island handoff; see
+/// claude-tasks#2726 and ADR-0005 grounding note.
 const RTCIceTransportPolicy kCallIceTransportPolicy =
     RTCIceTransportPolicy.relay;
 
