@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/reading_column.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../application/theme_mode_controller.dart';
@@ -29,143 +30,136 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
-      // Constrain to a centered reading column so the list doesn't stretch
-      // full-bleed on a wide desktop window (title far-left, chevron far-right,
-      // dead space between). On a phone the window is narrower than the cap, so
-      // it fills as before — no mobile regression.
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: ListView(
-            children: [
-              const _SectionHeader('Appearance'),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: SegmentedButton<ThemeMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: ThemeMode.system,
-                        label: Text('System'),
-                        icon: Icon(Icons.brightness_auto_outlined),
-                      ),
-                      ButtonSegment(
-                        value: ThemeMode.light,
-                        label: Text('Light'),
-                        icon: Icon(Icons.light_mode_outlined),
-                      ),
-                      ButtonSegment(
-                        value: ThemeMode.dark,
-                        label: Text('Dark'),
-                        icon: Icon(Icons.dark_mode_outlined),
-                      ),
-                    ],
-                    selected: {ref.watch(themeModeProvider)},
-                    onSelectionChanged: (s) =>
-                        ref.read(themeModeProvider.notifier).set(s.first),
-                  ),
+      body: ReadingColumn(
+        child: ListView(
+          children: [
+            const _SectionHeader('Appearance'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SegmentedButton<ThemeMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: ThemeMode.system,
+                      label: Text('System'),
+                      icon: Icon(Icons.brightness_auto_outlined),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.light,
+                      label: Text('Light'),
+                      icon: Icon(Icons.light_mode_outlined),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.dark,
+                      label: Text('Dark'),
+                      icon: Icon(Icons.dark_mode_outlined),
+                    ),
+                  ],
+                  selected: {ref.watch(themeModeProvider)},
+                  onSelectionChanged: (s) =>
+                      ref.read(themeModeProvider.notifier).set(s.first),
                 ),
               ),
-              const _SectionHeader('Safety'),
+            ),
+            const _SectionHeader('Safety'),
+            ListTile(
+              leading: const Icon(Icons.block),
+              title: const Text('Blocked users'),
+              subtitle: const Text(
+                "People you've blocked won't see your messages.",
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/blocked'),
+            ),
+            // Operator seat (#33/#35): visible ONLY to a moderator. Presentation
+            // gate only — the server ModeratorUser check is the real boundary — so
+            // a stale-true flag at worst shows a tile whose actions 403 → Forbidden
+            // (handled, not a logout). isModeratorProvider is fail-closed (false
+            // when logged out / mid-restore / on an older gateway).
+            if (ref.watch(isModeratorProvider))
               ListTile(
-                leading: const Icon(Icons.block),
-                title: const Text('Blocked users'),
+                leading: const Icon(Icons.shield_outlined),
+                title: const Text('Reports'),
                 subtitle: const Text(
-                  "People you've blocked won't see your messages.",
+                  'Review reported messages and act on them.',
                 ),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => context.push('/settings/blocked'),
+                onTap: () => context.push('/moderation/reports'),
               ),
-              // Operator seat (#33/#35): visible ONLY to a moderator. Presentation
-              // gate only — the server ModeratorUser check is the real boundary — so
-              // a stale-true flag at worst shows a tile whose actions 403 → Forbidden
-              // (handled, not a logout). isModeratorProvider is fail-closed (false
-              // when logged out / mid-restore / on an older gateway).
-              if (ref.watch(isModeratorProvider))
-                ListTile(
-                  leading: const Icon(Icons.shield_outlined),
-                  title: const Text('Reports'),
-                  subtitle: const Text(
-                    'Review reported messages and act on them.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => context.push('/moderation/reports'),
-                ),
-              const _SectionHeader('Identity'),
-              ListTile(
-                leading: const Icon(Icons.badge_outlined),
-                title: const Text('Edit profile'),
-                subtitle: const Text('Change your handle or display name.'),
-                trailing: const Icon(Icons.chevron_right),
-                // NOTE: raw MaterialPageRoute (not go_router) — deliberate, see
-                // claude-tasks follow-up. A go_router migration must first handle the
-                // auth-refresh-during-open pop interaction (cage-match #114 finding B).
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const EditProfileScreen()),
-                ),
+            const _SectionHeader('Identity'),
+            ListTile(
+              leading: const Icon(Icons.badge_outlined),
+              title: const Text('Edit profile'),
+              subtitle: const Text('Change your handle or display name.'),
+              trailing: const Icon(Icons.chevron_right),
+              // NOTE: raw MaterialPageRoute (not go_router) — deliberate, see
+              // claude-tasks follow-up. A go_router migration must first handle the
+              // auth-refresh-during-open pop interaction (cage-match #114 finding B).
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const EditProfileScreen()),
               ),
-              ListTile(
-                leading: const Icon(Icons.verified_outlined),
-                title: const Text('Your Carried Record'),
-                subtitle: const Text(
-                  'Messages attributed to you, and which you can cryptographically '
-                  'prove you signed on this device.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => context.push('/settings/carried-record'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.verified_outlined),
+              title: const Text('Your Carried Record'),
+              subtitle: const Text(
+                'Messages attributed to you, and which you can cryptographically '
+                'prove you signed on this device.',
               ),
-              const _SectionHeader('Sign-in'),
-              ListTile(
-                leading: const Icon(Icons.key_outlined),
-                title: const Text('Add a passkey'),
-                subtitle: Text(_passkeyBiometricHint()),
-                enabled: !_addingPasskey,
-                trailing: _addingPasskey
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.chevron_right),
-                onTap: _addingPasskey ? null : _addPasskey,
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/carried-record'),
+            ),
+            const _SectionHeader('Sign-in'),
+            ListTile(
+              leading: const Icon(Icons.key_outlined),
+              title: const Text('Add a passkey'),
+              subtitle: Text(_passkeyBiometricHint()),
+              enabled: !_addingPasskey,
+              trailing: _addingPasskey
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: _addingPasskey ? null : _addPasskey,
+            ),
+            const _SectionHeader('Account'),
+            ListTile(
+              leading: Icon(
+                Icons.delete_forever,
+                color: theme.colorScheme.error,
               ),
-              const _SectionHeader('Account'),
-              ListTile(
-                leading: Icon(
-                  Icons.delete_forever,
-                  color: theme.colorScheme.error,
-                ),
-                title: Text(
-                  'Delete account',
-                  style: TextStyle(color: theme.colorScheme.error),
-                ),
-                subtitle: const Text(
-                  'Permanently delete your account. This cannot be undone.',
-                ),
-                enabled: !_deleting,
-                trailing: _deleting
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : null,
-                onTap: _deleting ? null : _confirmAndDelete,
+              title: Text(
+                'Delete account',
+                style: TextStyle(color: theme.colorScheme.error),
               ),
-              const _SectionHeader('Legal'),
-              ListTile(
-                leading: const Icon(Icons.description_outlined),
-                title: const Text('Terms of Use & Community Guidelines'),
-                subtitle: const Text(
-                  'The terms you agreed to, including our '
-                  'zero-tolerance policy.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => context.push('/settings/eula'),
+              subtitle: const Text(
+                'Permanently delete your account. This cannot be undone.',
               ),
-            ],
-          ),
+              enabled: !_deleting,
+              trailing: _deleting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : null,
+              onTap: _deleting ? null : _confirmAndDelete,
+            ),
+            const _SectionHeader('Legal'),
+            ListTile(
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('Terms of Use & Community Guidelines'),
+              subtitle: const Text(
+                'The terms you agreed to, including our '
+                'zero-tolerance policy.',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/eula'),
+            ),
+          ],
         ),
       ),
     );
@@ -256,8 +250,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // A ban (403) can land on delete mid-session too — say so honestly rather
     // than the vague "try again" (cage-match Tesla P3). AccountSuspended is a
     // subtype of Unauthorized, so it must be checked first.
-    if (e is AccountSuspended)
+    if (e is AccountSuspended) {
       return 'This account is suspended on this island.';
+    }
     return 'Could not delete your account. Please try again.';
   }
 

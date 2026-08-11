@@ -7,6 +7,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/reading_column.dart';
 import '../application/moderation_controller.dart';
 import '../domain/moderation_models.dart';
 
@@ -18,7 +19,8 @@ class BlockedUsersScreen extends ConsumerWidget {
     final blocksAsync = ref.watch(blockedUsersProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Blocked users')),
-      body: blocksAsync.when(
+      body: ReadingColumn(
+        child: blocksAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(
           child: Padding(
@@ -48,6 +50,7 @@ class BlockedUsersScreen extends ConsumerWidget {
             itemBuilder: (_, i) => _BlockedTile(blocks[i]),
           );
         },
+        ),
       ),
     );
   }
