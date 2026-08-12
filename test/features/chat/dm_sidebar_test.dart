@@ -164,7 +164,8 @@ void main() {
     expect(find.text('alice'), findsOneWidget);
   });
 
-  testWidgets('dmsProvider fails soft on a NON-network error too (repo survives)',
+  testWidgets(
+      'first-load DM failure (no last-known) degrades to [] — repo survives',
       (tester) async {
     setWide(tester);
     final rest = FakeRestApi(channels: channels)
@@ -177,11 +178,41 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    // Degraded to [] — and crucially the channel chat is fully intact (the repo,
-    // which awaits dmsProvider.future, did not die on the non-network throw).
+    // Nothing was ever fetched, so there is no last-known list → []. Crucially the
+    // channel chat is fully intact (the repo, which awaits dmsProvider.future, did
+    // not die on the non-network throw).
     expect(await container.read(dmsProvider.future), isEmpty);
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('sidebar-channel-c1')), findsOneWidget);
     expect(find.text('Direct messages'), findsNothing);
+  });
+
+  testWidgets(
+      'a transient failure AFTER a good fetch keeps the selected DM (last-known)',
+      (tester) async {
+    setWide(tester);
+    final rest = restWithDm(); // listDms succeeds → [dm1]
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sidebar-dm-dm1')));
+    await tester.pumpAndSettle();
+    expect(container.read(selectedChannelIdProvider), 'dm1');
+
+    // A transient DM-list failure now hits a refetch.
+    rest.listDmsThrows = StateError('boom');
+    container.invalidate(dmsProvider);
+    await tester.pumpAndSettle();
+
+    // Degrades to STALE (last-known [dm1]), NOT [] — so the DM stays present and
+    // the self-heal does NOT eject the selection (the degraded-empty resonance the
+    // cage-match flagged: soft-empty must not read as "conversation deleted").
+    expect(await container.read(dmsProvider.future), isNotEmpty);
+    expect(container.read(selectedChannelIdProvider), 'dm1');
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
   });
 }

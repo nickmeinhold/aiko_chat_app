@@ -120,45 +120,59 @@ final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   }
 });
 
+/// Last SUCCESSFUL DM list, PER USER, so a transient [dmsProvider] failure can
+/// degrade to STALE (keep the section, the subscriptions, and a live DM selection)
+/// rather than to `[]` — which the self-heal cannot tell apart from "authoritatively
+/// no DMs" and would eject the selection over (cage-match #132). Keyed by user id so
+/// a fetch failure right after a user switch can never surface the PREVIOUS user's
+/// DMs. Kept alive across [dmsProvider]'s autoDispose churn (a plain, keep-alive
+/// Notifier); a closed record is safe state.
+class _LastKnownDms extends Notifier<({String userId, List<Channel> dms})?> {
+  @override
+  ({String userId, List<Channel> dms})? build() => null;
+
+  void remember(String userId, List<Channel> dms) =>
+      state = (userId: userId, dms: dms);
+
+  /// The last-known DMs for [userId], or `[]` when nothing is cached for THIS user
+  /// (fresh, or the cache belongs to a prior session) — never another user's list.
+  List<Channel> forUser(String userId) =>
+      (state != null && state!.userId == userId) ? state!.dms : const [];
+}
+
+final _lastKnownDmsProvider =
+    NotifierProvider<_LastKnownDms, ({String userId, List<Channel> dms})?>(
+        _LastKnownDms.new);
+
 /// My DM channels (`GET /v1/dm`) — the SEPARATE source feeding the sidebar's DM
 /// section (DMs are excluded from [channelsProvider] by island design) AND the
 /// repo's subscription set (their ids are merged in [chatRepositoryProvider], so
 /// the repo subscribes + fetches history for DMs exactly as for channels).
 ///
-/// Fails SOFT: on [NetworkUnavailable] it returns `[]` rather than throwing, so
-/// an offline / gateway-down DM fetch degrades to "no DMs" instead of tearing
-/// down the whole chat surface — the repo watches this provider's future, and a
-/// throw here would take the channel chat down with it. DMs are not offline-cached
-/// yet (a later increment); until then offline simply means no DM section. Watches
-/// the device-online edge so the list refetches when the network returns, matching
-/// [channelsProvider]'s recovery.
+/// FAIL DIRECTIONS (both cage-match-hardened, #132):
+///  * terminal auth ([Unauthorized] / its subclass [AccountSuspended]) RETHROWS —
+///    a dead session must eject, never be masked as "no DMs" (Carnot HIGH);
+///  * every OTHER failure (NetworkUnavailable, 5xx, a poisoned `fromDmJson` row)
+///    degrades to the LAST-KNOWN list for this user, NOT `[]`. The repo
+///    hard-depends on this future for its subscription set, so a transient error
+///    must not reject and take channel chat down with it — and a stale-but-present
+///    list keeps the section, the subscriptions, and a live DM selection intact
+///    (an empty list is indistinguishable from authoritative-empty to the
+///    self-heal, which would then eject the selection). First-ever fetch failure →
+///    `[]` (nothing known yet). Watches the device-online edge so it refetches when
+///    the network returns.
 final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) return const [];
   ref.watch(deviceOnlineProvider);
   try {
-    return await ref.watch(restApiProvider).listDms();
+    final dms = await ref.watch(restApiProvider).listDms();
+    ref.read(_lastKnownDmsProvider.notifier).remember(user.userId, dms);
+    return dms;
   } on Unauthorized {
-    // Terminal auth / suspension (AccountSuspended extends Unauthorized): RETHROW,
-    // never swallow to [] (cage-match round 2, Carnot HIGH). A dead session on the
-    // DM door must eject the user (same as channelsProvider, which also lets auth
-    // propagate) — masking it as "no DMs" strands them in a stale authenticated
-    // surface until some unrelated path trips auth.
     rethrow;
   } catch (_) {
-    // Fail SOFT on every NON-terminal failure (NetworkUnavailable, 5xx, a
-    // parse/fromDmJson throw on one poisoned DM row): chatRepositoryProvider
-    // hard-depends on this future for its subscription set, so a transient DM-list
-    // error must NOT reject and take channel chat + the reconcile engine down with
-    // it. A failed DM list simply doesn't render; channels are untouched. The
-    // blast radius of the soft-fail matches the hard coupling.
-    //
-    // KNOWN Inc-1 limitation (claude-tasks — deferred, named): this [] is
-    // indistinguishable from "authoritatively no DMs", so a transient failure while
-    // a DM is selected lets the self-heal eject that selection to a channel
-    // (recoverable — re-select). The clean fix is a last-known DM list so a
-    // degraded fetch degrades to STALE, not empty.
-    return const [];
+    return ref.read(_lastKnownDmsProvider.notifier).forUser(user.userId);
   }
 });
 
