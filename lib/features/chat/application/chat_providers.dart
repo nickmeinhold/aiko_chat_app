@@ -17,7 +17,7 @@ import '../../auth/domain/auth_models.dart';
 import '../../moderation/application/moderation_controller.dart';
 import '../data/channel_read_store.dart';
 import '../data/chat_repository.dart';
-import '../data/chat_rest_api.dart' show NetworkUnavailable;
+import '../data/chat_rest_api.dart' show NetworkUnavailable, Unauthorized;
 import '../data/transport/chat_transport.dart' show ConnectionState;
 import '../data/logging_chat_telemetry.dart';
 import '../domain/channel.dart';
@@ -138,13 +138,26 @@ final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   ref.watch(deviceOnlineProvider);
   try {
     return await ref.watch(restApiProvider).listDms();
+  } on Unauthorized {
+    // Terminal auth / suspension (AccountSuspended extends Unauthorized): RETHROW,
+    // never swallow to [] (cage-match round 2, Carnot HIGH). A dead session on the
+    // DM door must eject the user (same as channelsProvider, which also lets auth
+    // propagate) — masking it as "no DMs" strands them in a stale authenticated
+    // surface until some unrelated path trips auth.
+    rethrow;
   } catch (_) {
-    // Fail SOFT on ANY error, not just NetworkUnavailable (cage-match Carnot +
-    // Tesla): chatRepositoryProvider hard-depends on this future for its
-    // subscription set, so a 5xx, a parse/fromDmJson throw on one poisoned DM row,
-    // or any other failure must NOT reject and take channel chat + the reconcile
-    // engine down with it. A failed DM list simply doesn't render; channels are
-    // untouched. The blast radius of the soft-fail must MATCH the hard coupling.
+    // Fail SOFT on every NON-terminal failure (NetworkUnavailable, 5xx, a
+    // parse/fromDmJson throw on one poisoned DM row): chatRepositoryProvider
+    // hard-depends on this future for its subscription set, so a transient DM-list
+    // error must NOT reject and take channel chat + the reconcile engine down with
+    // it. A failed DM list simply doesn't render; channels are untouched. The
+    // blast radius of the soft-fail matches the hard coupling.
+    //
+    // KNOWN Inc-1 limitation (claude-tasks — deferred, named): this [] is
+    // indistinguishable from "authoritatively no DMs", so a transient failure while
+    // a DM is selected lets the self-heal eject that selection to a channel
+    // (recoverable — re-select). The clean fix is a last-known DM list so a
+    // degraded fetch degrades to STALE, not empty.
     return const [];
   }
 });
