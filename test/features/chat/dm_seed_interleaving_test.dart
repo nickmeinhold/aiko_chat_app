@@ -250,4 +250,102 @@ void main() {
         reason: 'an element-equal channels settle must still re-notify, so the '
             'departed DM pick clears rather than becoming a ghost');
   });
+
+  testWidgets(
+      'a post-mint fetch that OMITS the DM does not retire the seed (r4)',
+      (tester) async {
+    // Carnot round-4 HIGH. Retiring a seed because a fetch merely STARTED after
+    // the mint assumes the island lists a DM the instant `POST /v1/dm` returns —
+    // an assumption this PR has never verified (#2947 owns the island half). If
+    // it lags by one request, the retiring fetch omits the DM and the user is
+    // ejected from the conversation they just opened, through eventual
+    // consistency rather than a stale refresh. So the seed waits to be NAMED.
+    setWide(tester);
+    final rest = FakeRestApi(channels: const [generalChannel])
+      ..openDmReturns = dm;
+    rest.membersByChannel['dm:me:alice'] = roster;
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    transport.emitMessage(aliceMsg);
+    await tester.pumpAndSettle();
+
+    // The island mints the DM but its list has NOT caught up — `rest.dms` stays
+    // empty, so every post-mint fetch succeeds while omitting the new DM.
+    await tester.longPress(find.text('hey'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Message Alice'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice',
+        reason: 'a lagging list must not evict the conversation just opened');
+    expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsOneWidget);
+
+    // Several more successful, still-lagging fetches change nothing.
+    for (var i = 0; i < 3; i++) {
+      container.invalidate(dmsProvider);
+      await tester.pumpAndSettle();
+    }
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
+
+    // The island catches up: the seed is now redundant and retires, leaving the
+    // DM present exactly once (server truth), not duplicated.
+    rest.dms = const [dm];
+    container.invalidate(dmsProvider);
+    await tester.pumpAndSettle();
+
+    expect(
+        container
+            .read(navigableChannelsProvider)
+            .where((c) => c.id == 'dm:me:alice')
+            .length,
+        1,
+        reason: 'a confirmed seed retires rather than double-listing the DM');
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
+  });
+
+  testWidgets('the sidebar and the message pane agree on which DMs exist',
+      (tester) async {
+    // Not a reviewer finding — found while checking one. The sidebar read
+    // `dmsProvider` directly while the active-conversation resolver went through
+    // `navigableChannelsProvider`, so across the post-mint refresh window the
+    // pane showed a DM the sidebar had no row for. Both now read
+    // [visibleDmsProvider], so the two cannot disagree.
+    setWide(tester);
+    final rest = FakeRestApi(channels: const [generalChannel])
+      ..openDmReturns = dm;
+    rest.membersByChannel['dm:me:alice'] = roster;
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    transport.emitMessage(aliceMsg);
+    await tester.pumpAndSettle();
+
+    // Wedge the post-mint refetch open and inspect the window itself.
+    final gate = Completer<void>();
+    rest.listDmsGate = gate;
+    await tester.longPress(find.text('hey'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Message Alice'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+
+    final active = ChatScreen.resolveActive(
+        container.read(navigableChannelsProvider),
+        container.read(selectedChannelIdProvider));
+    expect(active?.id, 'dm:me:alice');
+    expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsOneWidget,
+        reason: 'the sidebar must list the DM the pane is already showing');
+
+    gate.complete();
+    await tester.pumpAndSettle();
+  });
 }

@@ -238,11 +238,30 @@ class _SeededDms
           ? state!.items.map((e) => e.dm).toList()
           : const [];
 
-  /// A successful fetch that STARTED at [gen] has had its chance to observe
-  /// every seed minted before it — retire exactly those, and no others.
-  void retireObservableBy(String userId, int gen) {
+  /// Retire the seeds [server] has CONFIRMED — the ones it now lists itself.
+  ///
+  /// Retirement is on confirmation, not on opportunity. The earlier rule retired
+  /// any seed a fetch *could* have observed (one ticketed after the mint), which
+  /// quietly encoded a guarantee we have never checked: that a `GET /v1/dm`
+  /// issued after `POST /v1/dm` returns must already list it. If the island lags
+  /// that write by even one request, the retiring fetch omits the DM, the seed
+  /// goes, `navigableChannelsProvider` drops it and the self-heal ejects the user
+  /// from the conversation they just opened — the exact failure this whole seed
+  /// mechanism exists to prevent, reached through eventual consistency instead of
+  /// a stale refresh (cage-match #133, Carnot HIGH). Waiting for the server to
+  /// name the DM needs no assumption at all.
+  ///
+  /// Residual, named rather than mechanised: a DM the island stops listing
+  /// WITHOUT ever having listed it stays in the sidebar for the rest of the
+  /// session. That costs a visible row for a conversation the user really did
+  /// create; the alternative costs them the conversation. `_gen` still governs
+  /// which fetch may PUBLISH — that guard is about ordering, which we observe
+  /// directly, not about a server promise.
+  void retireConfirmed(String userId, List<Channel> server) {
     if (state == null || state!.userId != userId) return;
-    final kept = state!.items.where((e) => e.gen >= gen).toList();
+    final confirmed = server.map((c) => c.id).toSet();
+    final kept =
+        state!.items.where((e) => !confirmed.contains(e.dm.id)).toList();
     if (kept.length == state!.items.length) return;
     state = kept.isEmpty ? null : (userId: userId, items: kept);
   }
@@ -332,7 +351,7 @@ final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
       return _withSeeds(dms, seeds.forUser(user.userId));
     }
     ref.read(_lastKnownDmsProvider.notifier).remember(user.userId, dms);
-    seeds.retireObservableBy(user.userId, gen);
+    seeds.retireConfirmed(user.userId, dms);
     return _withSeeds(dms, seeds.forUser(user.userId));
   } on Unauthorized {
     rethrow;
@@ -349,8 +368,16 @@ final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
 /// selected DM id exactly like a channel id (a DM pick must resolve, not fall
 /// back to the first channel). The sidebar still renders the two SOURCES in
 /// separate sections; this is only the resolver's combined view.
-final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
-  final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
+/// Every DM the client knows exists: server truth UNIONED with any seed the
+/// server has not confirmed yet.
+///
+/// The single answer to "which DMs are there", so the sidebar and the active
+/// conversation resolver cannot disagree. They did: the sidebar read
+/// `dmsProvider` directly while the resolver went through
+/// [navigableChannelsProvider], so across a refresh window the message pane
+/// showed a just-opened DM that the sidebar had no row for. Two readers deriving
+/// the same fact by different routes is drift waiting for a witness.
+final visibleDmsProvider = Provider.autoDispose<List<Channel>>((ref) {
   final dms = ref.watch(dmsProvider).value ?? const <Channel>[];
   // Union the unretired seeds HERE, not only inside [dmsProvider]'s result. A
   // provider mid-refresh hands its listeners the PREVIOUS value, and the value
@@ -360,14 +387,19 @@ final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
   // downstream keys off this list: `resolveActive` would fall through to the
   // first CHANNEL while `selectedChannelIdProvider` held the DM, which means the
   // composer would have sent the user's message to the wrong conversation
-  // (cage-match #133, Tesla). Seeds retire as soon as a fetch that started after
-  // the mint succeeds, so this union is self-limiting, never a resurrection.
+  // (cage-match #133, Tesla). Seeds retire once the server names them, so this
+  // union is self-limiting, never a resurrection.
   final seedState = ref.watch(_seededDmsProvider);
   final myId = ref.watch(currentUserProvider)?.userId;
   final seeds = (seedState != null && seedState.userId == myId)
       ? seedState.items.map((e) => e.dm).toList()
       : const <Channel>[];
-  return [...channels, ..._withSeeds(dms, seeds)];
+  return _withSeeds(dms, seeds);
+});
+
+final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
+  final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
+  return [...channels, ...ref.watch(visibleDmsProvider)];
 });
 
 /// The reconcile engine, fully wired and connected. Construction requires the
