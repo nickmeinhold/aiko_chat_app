@@ -138,7 +138,13 @@ final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   ref.watch(deviceOnlineProvider);
   try {
     return await ref.watch(restApiProvider).listDms();
-  } on NetworkUnavailable {
+  } catch (_) {
+    // Fail SOFT on ANY error, not just NetworkUnavailable (cage-match Carnot +
+    // Tesla): chatRepositoryProvider hard-depends on this future for its
+    // subscription set, so a 5xx, a parse/fromDmJson throw on one poisoned DM row,
+    // or any other failure must NOT reject and take channel chat + the reconcile
+    // engine down with it. A failed DM list simply doesn't render; channels are
+    // untouched. The blast radius of the soft-fail must MATCH the hard coupling.
     return const [];
   }
 });

@@ -127,4 +127,61 @@ void main() {
         container.read(navigableChannelsProvider).map((c) => c.id).toSet();
     expect(ids, containsAll(<String>{'c1', 'dm1'}));
   });
+
+  testWidgets('a DM selected on wide does NOT crash the narrow AppBar switcher',
+      (tester) async {
+    // ≥2 channels so the narrow layout WOULD build the channel dropdown — the
+    // exact condition under which a DM activeId fed to DropdownButton.value asserts.
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = roster;
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    // Wide: select the DM through the sidebar.
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sidebar-dm-dm1')));
+    await tester.pumpAndSettle();
+    expect(container.read(selectedChannelIdProvider), 'dm1');
+
+    // Resize across the breakpoint — the AppBar rebuilds with a DM active.
+    tester.view.physicalSize = const Size(400, 900);
+    await tester.pumpAndSettle();
+
+    // No DropdownButton value/items assertion, and the DM is titled by its peer —
+    // the channel switcher is NOT fed a foreign DM id.
+    expect(tester.takeException(), isNull);
+    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.text('alice'), findsOneWidget);
+  });
+
+  testWidgets('dmsProvider fails soft on a NON-network error too (repo survives)',
+      (tester) async {
+    setWide(tester);
+    final rest = FakeRestApi(channels: channels)
+      ..listDmsThrows = StateError('boom'); // a 5xx / poisoned-row class, not offline
+    final container =
+        makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // Degraded to [] — and crucially the channel chat is fully intact (the repo,
+    // which awaits dmsProvider.future, did not die on the non-network throw).
+    expect(await container.read(dmsProvider.future), isEmpty);
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('sidebar-channel-c1')), findsOneWidget);
+    expect(find.text('Direct messages'), findsNothing);
+  });
 }

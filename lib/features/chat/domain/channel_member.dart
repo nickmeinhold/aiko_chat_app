@@ -58,3 +58,21 @@ String senderDisplayName(
   }
   return sender.displayLabel;
 }
+
+/// The display title for a DM conversation — a DM has no server `name`
+/// (identity=key, ADR-0004), so its title is the peer's CURRENT handle, resolved
+/// from the channel [roster] (`{userId: handle}`) exactly as [senderDisplayName]
+/// resolves message authors. Shared by the sidebar DM row and the narrow-layout
+/// title so the two never drift.
+///
+/// * roster absent (loading / fetch failed) → a neutral label, never the raw key.
+/// * [myId] null (a brief auth gap) → a neutral label, NEVER a guessed peer: with
+///   no "me" to exclude, every member reads as a peer and the row could be titled
+///   with the viewer's OWN handle (cage-match Tesla).
+/// * only-me in the roster → a self-DM ("Notes to self").
+String dmPeerTitle(Map<String, String>? roster, String? myId) {
+  if (roster == null || roster.isEmpty || myId == null) return 'Direct message';
+  final peer =
+      roster.entries.where((e) => e.key != myId).map((e) => e.value).firstOrNull;
+  return peer ?? 'Notes to self';
+}

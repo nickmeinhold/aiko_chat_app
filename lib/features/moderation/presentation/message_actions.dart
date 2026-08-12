@@ -110,11 +110,16 @@ Future<void> _call(
     // costs at most one redundant idempotent open, never a second call nor a
     // swallowed tap (cage-match Tesla, latch-scope).
     final dm = await ref.read(restApiProvider).openDm(userId);
-    // Surface the just-opened DM in the sidebar (and the repo's subscription set)
-    // so it is navigable when the user returns from the call — otherwise a DM you
-    // created by calling someone wouldn't appear until the next dmsProvider refresh
-    // (#2798). Idempotent openDm means this may re-list an existing DM (a no-op).
-    ref.invalidate(dmsProvider);
+    // Surface a NEWLY-opened DM in the sidebar + subscription set so it is
+    // navigable on return from the call. Invalidate ONLY when the DM isn't already
+    // listed: openDm is idempotent, so calling someone you already DM with must not
+    // trigger a full repo rebuild (dispose→reconnect→resubscribe-all) on the hot
+    // call path (cage-match Tesla — call-path churn). A first-ever DM rebuilds once,
+    // the same path a reconnect uses; every subsequent call is churn-free.
+    final knownDms = ref.read(dmsProvider).value ?? const [];
+    if (!knownDms.any((d) => d.id == dm.id)) {
+      ref.invalidate(dmsProvider);
+    }
     if (!context.mounted) return;
     await pushCall(context, dm.id);
   } on DmTargetNotFound {

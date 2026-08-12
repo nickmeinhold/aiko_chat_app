@@ -23,6 +23,7 @@ import '../../settings/data/gateway_directory_client.dart';
 import '../../settings/presentation/gateway_switch_action.dart';
 import '../application/chat_providers.dart';
 import '../domain/channel.dart';
+import '../domain/channel_member.dart';
 import 'chat_screen.dart';
 
 class ChatSidebar extends ConsumerWidget {
@@ -163,21 +164,11 @@ class _SidebarDmTile extends ConsumerWidget {
       selected: selected,
       dense: true,
       leading: const Icon(Icons.alternate_email, size: 20),
-      title: Text(_dmTitle(roster, myId), overflow: TextOverflow.ellipsis),
+      title: Text(dmPeerTitle(roster, myId), overflow: TextOverflow.ellipsis),
       onTap: selected
           ? null
           : () => ref.read(selectedChannelIdProvider.notifier).select(dm.id),
     );
-  }
-
-  /// The peer's handle, or a graceful fallback. Peer = the roster member that is
-  /// not me; only-me is a self-DM; an absent roster (loading / fetch failed)
-  /// yields a neutral label, never the raw key.
-  String _dmTitle(Map<String, String>? roster, String? myId) {
-    if (roster == null || roster.isEmpty) return 'Direct message';
-    final peer =
-        roster.entries.where((e) => e.key != myId).map((e) => e.value).firstOrNull;
-    return peer ?? 'Notes to self';
   }
 }
 

@@ -94,9 +94,16 @@ class ChatScreen extends ConsumerWidget {
       appBar: isWide
           ? null
           : AppBar(
-              title: channels.length > 1 && active != null
+              // Gate the channel switcher to a NON-DM active channel: its
+              // DropdownButton uses activeId as `value`, and a DM id is never in
+              // the channels-only item list → Flutter asserts. A DM (selected on
+              // wide, then resized to narrow) renders a title instead of the
+              // switcher (cage-match Carnot+Tesla — this crashed at the fork).
+              title: channels.length > 1 &&
+                      active != null &&
+                      active.kind != ChannelKind.dm
                   ? _ChannelSwitcher(channels: channels, activeId: active.id)
-                  : Text(active?.name ?? 'Chat'),
+                  : _ConversationTitle(active: active),
               actions: [
                 IconButton(
                   tooltip: 'Search',
@@ -135,6 +142,28 @@ class ChatScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+/// The narrow-layout AppBar title for whatever conversation is active when the
+/// channel switcher is NOT shown (≤1 channel, or a DM is active). A channel shows
+/// its name; a DM shows the peer's handle (roster-resolved, like the sidebar row),
+/// since a DM has no name. This exists so a DM id never reaches [_ChannelSwitcher]'s
+/// DropdownButton `value` (no matching item → assertion) — narrow DM *entry* stays
+/// deferred (#2798 Inc 1); this only titles an already-active DM sanely.
+class _ConversationTitle extends ConsumerWidget {
+  const _ConversationTitle({required this.active});
+
+  final Channel? active;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final a = active;
+    if (a == null) return const Text('Chat');
+    if (a.kind != ChannelKind.dm) return Text(a.name);
+    final myId = ref.watch(currentUserProvider)?.userId;
+    final roster = ref.watch(channelRosterProvider(a.id)).value;
+    return Text(dmPeerTitle(roster, myId));
   }
 }
 
