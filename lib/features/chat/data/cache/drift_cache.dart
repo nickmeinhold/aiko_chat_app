@@ -309,13 +309,19 @@ class DriftCache extends GeneratedDatabase {
   /// PRESENT in [set] is written (a null value ⇒ `SET col = NULL`); a column
   /// ABSENT from [set] is left untouched (the old `Value.absent()`). Callers
   /// build [set] conditionally, exactly as they built companions.
-  Future<void> _update(String table, Map<String, Object?> set, String where,
+  ///
+  /// Returns the number of rows changed (via `customUpdate`), so a writer whose
+  /// WHERE may match nothing — an already-sent row under `serverUlid IS NULL` —
+  /// can gate its `notifyUpdates` on a real mutation, the "no spurious emit on a
+  /// zero-row no-op" half of the manual-notify contract PR #130 made explicit.
+  Future<int> _update(String table, Map<String, Object?> set, String where,
       List<Object?> whereArgs) async {
-    if (set.isEmpty) return;
+    if (set.isEmpty) return 0;
     final assignments = set.keys.map((c) => '$c = ?').join(', ');
-    await customStatement(
+    return customUpdate(
       'UPDATE $table SET $assignments WHERE $where',
-      [...set.values, ...whereArgs],
+      variables: [...set.values, ...whereArgs].map((v) => Variable(v)).toList(),
+      updateKind: UpdateKind.update,
     );
   }
 
@@ -890,9 +896,15 @@ class DriftCache extends GeneratedDatabase {
   Future<List<Message>> markFailed(String? refClientMsgId,
       {String? systemicChannelId}) async {
     if (refClientMsgId != null) {
-      await _update(_M.table, {_M.deliveryState: DeliveryState.failed.wire},
-          '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL', [refClientMsgId]);
-      notifyUpdates({const TableUpdate(_M.table)});
+      // Gate notify on a real change: the `serverUlid IS NULL` guard means a late
+      // error for an already-sent row matches zero rows — finishing the octave
+      // with reconcileAck/upsertInbound/advanceHistoryContiguous (cage-match Tesla).
+      final changed = await _update(
+          _M.table,
+          {_M.deliveryState: DeliveryState.failed.wire},
+          '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
+          [refClientMsgId]);
+      if (changed > 0) notifyUpdates({const TableUpdate(_M.table)});
       return const [];
     }
     // Systemic: surface the affected pending rows to B4 (it decides policy).
@@ -920,9 +932,14 @@ class DriftCache extends GeneratedDatabase {
   /// moving a retried message past later ones is the wrong UX. Cage-match
   /// caught the incoherent contract.)
   Future<void> retry(String clientTempId) async {
-    await _update(_M.table, {_M.deliveryState: DeliveryState.sending.wire},
-        '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL', [clientTempId]);
-    notifyUpdates({const TableUpdate(_M.table)});
+    // Same zero-row gate as markFailed: a retry of an already-sent row (serverUlid
+    // no longer NULL) matches nothing and must not emit a spurious re-query.
+    final changed = await _update(
+        _M.table,
+        {_M.deliveryState: DeliveryState.sending.wire},
+        '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
+        [clientTempId]);
+    if (changed > 0) notifyUpdates({const TableUpdate(_M.table)});
   }
 
   // --- reads -----------------------------------------------------------------
