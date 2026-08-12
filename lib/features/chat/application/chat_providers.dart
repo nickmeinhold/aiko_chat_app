@@ -160,6 +160,91 @@ final _lastKnownDmsProvider =
     NotifierProvider<_LastKnownDms, ({String userId, List<Channel> dms})?>(
         _LastKnownDms.new);
 
+/// DMs the island has AUTHORITATIVELY minted (`POST /v1/dm` returned them),
+/// held visible until a DM-list fetch that started AFTER the mint has had its
+/// say — then retired in favour of server truth.
+///
+/// Distinct from [_LastKnownDms] on purpose, and the distinction is the fix for
+/// a bug cluster rather than a taste call. Last-known is a *fallback*: it only
+/// surfaces when a fetch FAILS. A just-opened DM is not a fallback — it is a
+/// fact, and it has to be visible on the SUCCESS path too, because that is the
+/// path the user is standing on when they select it. Conflating the two meant
+/// (a) `navigableChannelsProvider` could not see a DM the user had just opened
+/// until a refetch confirmed it, so `resolveActive` fell through to the first
+/// CHANNEL and the composer would have sent there (cage-match #133, Tesla), and
+/// (b) any successful fetch — including one already in flight before the mint —
+/// erased the DM entirely.
+///
+/// Retirement is watermarked, not immediate: a fetch retires only the seeds
+/// taken BEFORE it started. This is where the read-your-write assumption on the
+/// island's find-or-create lives, stated instead of implied — we trust a fetch
+/// that began after our write to reflect it, and we never trust one that began
+/// before (task #2947 covers verifying the island half).
+class _SeededDms
+    extends Notifier<({String userId, List<({Channel dm, int gen})> items})?> {
+  @override
+  ({String userId, List<({Channel dm, int gen})> items})? build() => null;
+
+  /// Monotonic ticket taken by every DM-list fetch WHEN IT STARTS — the
+  /// watermark separating "this fetch could have observed my write" from "this
+  /// fetch was already in the air when I wrote", which is the only question
+  /// that tells a legitimate deletion apart from a stale or lagging read.
+  ///
+  /// Deliberately a plain field, NOT Notifier state: the ticket is taken during
+  /// [dmsProvider]'s synchronous build phase, and mutating provider state there
+  /// trips Riverpod's `_debugCurrentlyBuildingElement` assertion. Nothing should
+  /// rebuild when a fetch starts, so reactive state would be wrong anyway.
+  int _gen = 0;
+
+  /// Take the next ticket. Called at fetch START, never after the await.
+  int takeFetchGen() => ++_gen;
+
+  bool isLatestFetch(int gen) => _gen == gen;
+
+  /// The ticket a seed minted *now* carries: strictly below any fetch that has
+  /// not yet started, so a fetch already in the air cannot retire it.
+  int get currentGen => _gen;
+
+  /// Record [dm] as minted at [gen]. Returns whether anything changed, so a
+  /// re-seed of a DM already held costs no refetch (cage-match #133).
+  bool add(String userId, Channel dm, int gen) {
+    final current = (state != null && state!.userId == userId)
+        ? state!.items
+        : const <({Channel dm, int gen})>[];
+    if (current.any((e) => e.dm.id == dm.id)) return false;
+    state = (userId: userId, items: [...current, (dm: dm, gen: gen)]);
+    return true;
+  }
+
+  List<Channel> forUser(String userId) =>
+      (state != null && state!.userId == userId)
+          ? state!.items.map((e) => e.dm).toList()
+          : const [];
+
+  /// A successful fetch that STARTED at [gen] has had its chance to observe
+  /// every seed minted before it — retire exactly those, and no others.
+  void retireObservableBy(String userId, int gen) {
+    if (state == null || state!.userId != userId) return;
+    final kept = state!.items.where((e) => e.gen >= gen).toList();
+    if (kept.length == state!.items.length) return;
+    state = kept.isEmpty ? null : (userId: userId, items: kept);
+  }
+
+  void clear() => state = null;
+}
+
+final _seededDmsProvider = NotifierProvider<_SeededDms,
+    ({String userId, List<({Channel dm, int gen})> items})?>(_SeededDms.new);
+
+/// [server] plus any still-unretired seed it does not already contain, in a
+/// stable order (server truth first). Ids dedupe, so a confirmed seed appears
+/// exactly once.
+List<Channel> _withSeeds(List<Channel> server, List<Channel> seeds) {
+  final ids = server.map((c) => c.id).toSet();
+  final extra = seeds.where((s) => !ids.contains(s.id));
+  return extra.isEmpty ? server : [...server, ...extra];
+}
+
 /// Seed a just-opened DM into the DM set so it is navigable + subscribed even if
 /// the `GET /v1/dm` refetch that would normally surface it fails soft (cage-match
 /// #132, Tesla HIGH): `openDm`'s returned channel is AUTHORITATIVE for that
@@ -182,7 +267,14 @@ final _lastKnownDmsProvider =
 void seedOpenedDm(WidgetRef ref, Channel dm) {
   final userId = ref.read(currentUserProvider)?.userId;
   if (userId == null) return;
-  if (!ref.read(_lastKnownDmsProvider.notifier).union(userId, dm)) return;
+  // Stamp the seed with the CURRENT fetch generation: any fetch that starts
+  // after this (including the one the invalidate below kicks off) carries a
+  // higher ticket and may retire it; anything already in the air may not.
+  final seeds = ref.read(_seededDmsProvider.notifier);
+  if (!seeds.add(userId, dm, seeds.currentGen)) return;
+  // Also union into last-known so the fail-soft path keeps the DM even after
+  // the seed is legitimately retired.
+  ref.read(_lastKnownDmsProvider.notifier).union(userId, dm);
   ref.invalidate(dmsProvider);
 }
 
@@ -207,14 +299,31 @@ final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) return const [];
   ref.watch(deviceOnlineProvider);
+  // Take the ticket BEFORE the await — the watermark has to record when this
+  // fetch started, not when it finished.
+  final seeds = ref.read(_seededDmsProvider.notifier);
+  final gen = seeds.takeFetchGen();
   try {
     final dms = await ref.watch(restApiProvider).listDms();
+    // A superseded run's RETURN value is discarded by Riverpod, but its SIDE
+    // EFFECTS are not — a Dart Future cannot be cancelled, so an older fetch
+    // that was mid-flight when a seed invalidated us will still arrive here and
+    // would otherwise `remember` a list predating the seed, wiping it (and, once
+    // nothing is loading, letting the self-heal eject the selection). Only the
+    // newest started run is allowed to publish (cage-match #133, Tesla HIGH).
+    if (!seeds.isLatestFetch(gen)) {
+      return _withSeeds(dms, seeds.forUser(user.userId));
+    }
     ref.read(_lastKnownDmsProvider.notifier).remember(user.userId, dms);
-    return dms;
+    seeds.retireObservableBy(user.userId, gen);
+    return _withSeeds(dms, seeds.forUser(user.userId));
   } on Unauthorized {
     rethrow;
   } catch (_) {
-    return ref.read(_lastKnownDmsProvider.notifier).forUser(user.userId);
+    return _withSeeds(
+      ref.read(_lastKnownDmsProvider.notifier).forUser(user.userId),
+      seeds.forUser(user.userId),
+    );
   }
 });
 
@@ -226,7 +335,22 @@ final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
 final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
   final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
   final dms = ref.watch(dmsProvider).value ?? const <Channel>[];
-  return [...channels, ...dms];
+  // Union the unretired seeds HERE, not only inside [dmsProvider]'s result. A
+  // provider mid-refresh hands its listeners the PREVIOUS value, and the value
+  // preceding a seed is by definition the one that predates the DM we just
+  // opened — so a consumer reading `dmsProvider.value` across that window sees a
+  // list without it. That window is a full round-trip wide, and everything
+  // downstream keys off this list: `resolveActive` would fall through to the
+  // first CHANNEL while `selectedChannelIdProvider` held the DM, which means the
+  // composer would have sent the user's message to the wrong conversation
+  // (cage-match #133, Tesla). Seeds retire as soon as a fetch that started after
+  // the mint succeeds, so this union is self-limiting, never a resurrection.
+  final seedState = ref.watch(_seededDmsProvider);
+  final myId = ref.watch(currentUserProvider)?.userId;
+  final seeds = (seedState != null && seedState.userId == myId)
+      ? seedState.items.map((e) => e.dm).toList()
+      : const <Channel>[];
+  return [...channels, ..._withSeeds(dms, seeds)];
 });
 
 /// The reconcile engine, fully wired and connected. Construction requires the
@@ -347,6 +471,15 @@ final messagesProvider =
 /// drift streams; see [_unreadMessagesProvider] for why that separation matters.
 Stream<List<Message>> _watchVisibleMessages(Ref ref, String channelId) async* {
   final repo = await ref.watch(chatRepositoryProvider.future);
+  // The repository future is an async gap, and this provider is autoDispose in a
+  // family — a rebuild of anything upstream (or a channel switch) can dispose it
+  // WHILE that await is pending. The `ref.watch` below would then throw
+  // `UnmountedRefException` as an unhandled async error. Same class as the
+  // post-await ref use in `conversation_actions.dart`: a ref does not outlive the
+  // thing that owns it, and an await is where that gets forgotten (cage-match
+  // #133 — latent before, reachable once the navigable set started rebuilding on
+  // seed changes).
+  if (!ref.mounted) return;
   final blocked = ref.watch(blockedUserIdsProvider);
   yield* repo.watchChannel(channelId).map((msgs) => blocked.isEmpty
       ? msgs
@@ -384,6 +517,10 @@ final messageSearchResultsProvider =
   final query = ref.watch(messageSearchQueryProvider).trim();
   if (query.isEmpty) return const [];
   final repo = await ref.watch(chatRepositoryProvider.future);
+  // Same class as `_watchVisibleMessages`: a debounced query rebuilds this
+  // autoDispose provider constantly, so the previous run is routinely still
+  // parked on the repository future when it is disposed (cage-match #133).
+  if (!ref.mounted) return const [];
   final blocked = ref.watch(blockedUserIdsProvider);
   final hits = await repo.searchMessages(query);
   if (blocked.isEmpty) return hits;

@@ -215,11 +215,24 @@ class FakeRestApi implements ChatRestApi {
   /// a repository rebuild).
   int listDmsCalls = 0;
 
+  /// If set, `listDms()` awaits this before returning — lets a test wedge a
+  /// fetch mid-flight and drive the interleavings a settled fake cannot reach
+  /// (a stale in-flight run completing AFTER a newer one invalidated it; the
+  /// window between selecting a just-opened DM and the list confirming it).
+  Completer<void>? listDmsGate;
+
   @override
   Future<List<Channel>> listDms() async {
     listDmsCalls++;
+    // Snapshot at CALL time, like a real request: a fetch returns what the
+    // server knew when it was issued, not when it happened to resolve. Lets a
+    // test hold two fetches open and have them answer differently — the only way
+    // to model a stale in-flight run racing a newer one.
+    final snapshot = dms;
+    final gate = listDmsGate;
+    if (gate != null) await gate.future;
     if (listDmsThrows != null) throw listDmsThrows!;
-    return dms;
+    return snapshot;
   }
 
   /// If set, [requestVideoToken] throws this (e.g. `VideoNotEnabled`).
