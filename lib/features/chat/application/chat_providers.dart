@@ -143,10 +143,16 @@ class _LastKnownDms extends Notifier<({String userId, List<Channel> dms})?> {
   /// authoritatively-minted DM survives even if the refetch meant to surface it
   /// fails soft (see [seedOpenedDm]). Replaces any cache belonging to a different
   /// user, matching [forUser]'s per-user gate.
-  void union(String userId, Channel dm) {
+  ///
+  /// Returns whether the cache actually CHANGED, so [seedOpenedDm] can skip a
+  /// refetch that has nothing to surface (cage-match #133, Carnot + Tesla).
+  bool union(String userId, Channel dm) {
     final current = forUser(userId);
-    if (current.any((c) => c.id == dm.id)) return;
+    if (state?.userId == userId && current.any((c) => c.id == dm.id)) {
+      return false;
+    }
     state = (userId: userId, dms: [...current, dm]);
+    return true;
   }
 }
 
@@ -162,11 +168,21 @@ final _lastKnownDmsProvider =
 /// new DM, dropping it from the sidebar and the repo's subscription set while a
 /// call to that room is already in flight. Unions into last-known FIRST, then
 /// invalidates so a successful refetch still overwrites with server truth. No-op
-/// when logged out. Idempotent (the caller only seeds a DM not already listed).
+/// when logged out.
+///
+/// Idempotent in the STRONG sense: a seed that changes nothing also invalidates
+/// nothing. The caller only seeds a DM absent from [dmsProvider]'s current value,
+/// but that value reads `null → []` while the provider is mid-refresh, so two
+/// racing taps — or one tap during a refresh — both see "not listed" and both
+/// seed. Union-only idempotency stopped the duplicate ROW but not the duplicate
+/// INVALIDATE, and each invalidate rebuilds the repository
+/// (dispose → reconnect → resubscribe-all) for a conversation that was already
+/// there. Gating the refetch on a real cache change removes the race rather than
+/// asking every caller to guard it (cage-match #133, Carnot + Tesla).
 void seedOpenedDm(WidgetRef ref, Channel dm) {
   final userId = ref.read(currentUserProvider)?.userId;
   if (userId == null) return;
-  ref.read(_lastKnownDmsProvider.notifier).union(userId, dm);
+  if (!ref.read(_lastKnownDmsProvider.notifier).union(userId, dm)) return;
   ref.invalidate(dmsProvider);
 }
 

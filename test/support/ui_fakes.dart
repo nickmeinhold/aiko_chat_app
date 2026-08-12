@@ -210,8 +210,14 @@ class FakeRestApi implements ChatRestApi {
   /// fail-soft branch in `dmsProvider`).
   Object? listDmsThrows;
 
+  /// How many times `listDms()` was called — lets a test assert that a no-op
+  /// seed did NOT invalidate `dmsProvider` (each invalidate costs a refetch AND
+  /// a repository rebuild).
+  int listDmsCalls = 0;
+
   @override
   Future<List<Channel>> listDms() async {
+    listDmsCalls++;
     if (listDmsThrows != null) throw listDmsThrows!;
     return dms;
   }

@@ -35,9 +35,15 @@ Future<void> startDm(
   String name,
 ) async {
   final messenger = ScaffoldMessenger.of(context);
-  if (_refuseBlocked(messenger, ref, userId, name, verb: 'message')) return;
+  if (_refuseBlocked(messenger, ref, userId, _Verb.message, name)) return;
   try {
-    final dm = await _openAndSeed(ref, userId);
+    final dm = await ref.read(restApiProvider).openDm(userId);
+    // Everything past this point touches the WIDGET-SCOPED ref, which throws once
+    // the widget is disposed — so the liveness check gates the ref work, not just
+    // the navigation (cage-match #133: Carnot HIGH, Tesla, Maxwell). The DM itself
+    // is already created server-side; the next `GET /v1/dm` surfaces it.
+    if (!context.mounted) return;
+    _seedIfNew(ref, dm);
     ref.read(selectedChannelIdProvider.notifier).select(dm.id);
   } on DmTargetNotFound {
     messenger.showSnackBar(
@@ -69,15 +75,19 @@ Future<void> startCall(
   String name,
 ) async {
   final messenger = ScaffoldMessenger.of(context);
-  if (_refuseBlocked(messenger, ref, userId, name, verb: 'call')) return;
+  if (_refuseBlocked(messenger, ref, userId, _Verb.call, name)) return;
   try {
     // openDm is idempotent: if a second Call slips through during this await it
     // resolves to the SAME room, and pushCall's latch then dedups the
     // navigation. The first tap always navigates — a double-fire costs at most
     // one redundant idempotent open, never a second call nor a swallowed tap
     // (cage-match #132 Tesla, latch-scope).
-    final dm = await _openAndSeed(ref, userId);
+    final dm = await ref.read(restApiProvider).openDm(userId);
+    // Liveness BEFORE the ref work, not just before the navigation — the seed
+    // uses the widget-scoped ref and throws on a disposed widget. This ordering
+    // was inverted in the pre-move `_call` (cage-match #133).
     if (!context.mounted) return;
+    _seedIfNew(ref, dm);
     await pushCall(context, dm.id);
   } on DmTargetNotFound {
     messenger.showSnackBar(
@@ -94,6 +104,17 @@ Future<void> startCall(
   }
 }
 
+/// The contact surfaces this file offers, as a closed set rather than a free
+/// `String` — the copy below is the only thing that varies between them, and a
+/// mistyped verb would ship silently to a user (cage-match #133, Carnot).
+enum _Verb {
+  message('message'),
+  call('call');
+
+  const _Verb(this.label);
+  final String label;
+}
+
 /// True when [userId] is blocked — and shows the explanatory SnackBar.
 ///
 /// Defence-in-depth on the UGC block boundary (cage-match #132 Tesla, HIGH). A
@@ -107,18 +128,20 @@ bool _refuseBlocked(
   ScaffoldMessengerState messenger,
   WidgetRef ref,
   String userId,
-  String name, {
-  required String verb,
-}) {
+  _Verb verb,
+  String name,
+) {
   if (!ref.read(blockedUserIdsProvider).contains(userId)) return false;
   messenger.showSnackBar(
-    SnackBar(content: Text("You've blocked $name — unblock in Settings to $verb.")),
+    SnackBar(
+      content: Text("You've blocked $name — unblock in Settings to ${verb.label}."),
+    ),
   );
   return true;
 }
 
-/// `POST /v1/dm`, then surface a NEWLY-opened DM in the sidebar + subscription
-/// set so it is navigable the moment we land in it.
+/// Surface a NEWLY-opened DM in the sidebar + subscription set so it is
+/// navigable the moment we land in it.
 ///
 /// Seeds ONLY when the DM isn't already listed: `openDm` is idempotent, so
 /// re-opening a conversation you already have must not trigger a full repo
@@ -128,11 +151,14 @@ bool _refuseBlocked(
 /// the refetch fails soft — otherwise a failed refetch returns the stale list
 /// WITHOUT this DM and drops it from the subscription set while we are standing
 /// in it.
-Future<Channel> _openAndSeed(WidgetRef ref, String userId) async {
-  final dm = await ref.read(restApiProvider).openDm(userId);
+///
+/// This check reads `null → []` while [dmsProvider] is mid-refresh, so it can say
+/// "not listed" about a DM that IS listed. That is why the no-op suppression
+/// lives in [seedOpenedDm] rather than here — a guard on this side would have to
+/// be repeated correctly by every caller (cage-match #133).
+void _seedIfNew(WidgetRef ref, Channel dm) {
   final knownDms = ref.read(dmsProvider).value ?? const <Channel>[];
   if (!knownDms.any((d) => d.id == dm.id)) {
     seedOpenedDm(ref, dm);
   }
-  return dm;
 }

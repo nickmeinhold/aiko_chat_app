@@ -209,6 +209,108 @@ void main() {
     );
   });
 
+  testWidgets(
+      'the self-heal still clears a DEPARTED selection — the isLoading guard '
+      'defers healing, it does not cancel it', (tester) async {
+    // Tesla's cage-match #133 harmonic, run rather than argued: with the heal now
+    // skipping a mid-refresh source, does a selection whose DM genuinely departed
+    // still get cleared once both sources settle — or does it strand because the
+    // sibling source was loading at the one moment the list changed?
+    //
+    // This is the other half of the guard's contract. The e2e test above proves it
+    // does not eject TOO EAGERLY; this proves it still ejects AT ALL.
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final rest = FakeRestApi(channels: const [generalChannel]);
+    rest.dms = const [existingDm];
+    rest.membersByChannel['dm:me:alice'] = const [
+      ChannelMember(
+          userId: 'u1', role: 'member', canPost: true, handle: 'me',
+          displayName: 'Me'),
+      ChannelMember(
+          userId: 'alice-key-opaque', role: 'member', canPost: true,
+          handle: 'alice', displayName: 'Alice'),
+    ];
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('sidebar-dm-dm:me:alice')));
+    await tester.pumpAndSettle();
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
+
+    // The DM departs server-side (left / blocked / retracted), and BOTH sources
+    // refresh together — so each spends time loading while the other changes.
+    rest.dms = const [];
+    container.invalidate(channelsProvider);
+    container.invalidate(dmsProvider);
+    await tester.pumpAndSettle();
+
+    expect(container.read(selectedChannelIdProvider), isNull,
+        reason: 'a departed selection must still clear once both sources settle');
+    expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsNothing);
+  });
+
+  testWidgets('a seed that changes nothing does NOT refetch the DM list',
+      (tester) async {
+    // Two racing taps (or one tap during a refresh) both read dmsProvider as
+    // "not listed" — its value is null → [] mid-refresh — so both call
+    // seedOpenedDm. The union is idempotent by id, but the INVALIDATE was not,
+    // and each one rebuilds the repository (cage-match #133, Carnot + Tesla).
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final rest = FakeRestApi(channels: const [generalChannel])
+      ..openDmReturns = existingDm
+      ..listDmsThrows = const NetworkUnavailable();
+    rest.membersByChannel['dm:me:alice'] = const [
+      ChannelMember(
+          userId: 'u1', role: 'member', canPost: true, handle: 'me',
+          displayName: 'Me'),
+      ChannelMember(
+          userId: 'alice-key-opaque', role: 'member', canPost: true,
+          handle: 'alice', displayName: 'Alice'),
+    ];
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    transport.emitMessage(from('general'));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('hey'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Message Alice'));
+    await tester.pumpAndSettle();
+    final listDmsAfterFirst = rest.listDmsCalls;
+
+    // Message the same person again — the DM is already in last-known, so the
+    // seed changes nothing and must not trigger another list refetch. (Step back
+    // to the channel first: the first Message navigated us INTO the DM, where
+    // Alice's channel message is no longer on screen.)
+    await tester.tap(find.byKey(const Key('sidebar-channel-general')));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('hey'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Message Alice'));
+    await tester.pumpAndSettle();
+
+    expect(rest.listDmsCalls, listDmsAfterFirst,
+        reason: 'a no-op seed must not invalidate dmsProvider');
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
+  });
+
   testWidgets('Message is HIDDEN inside a DM (it would be a no-op there)',
       (tester) async {
     final fake = FakeRestApi();
