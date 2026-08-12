@@ -212,10 +212,14 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     transport: ref.watch(transportProvider),
     rest: ref.watch(restApiProvider),
     me: user,
-    subscribedChannelIds: [
+    // A set literal (insertion-ordered) dedupes: DMs are excluded from
+    // listChannels by island design, so channels ∩ dms is empty TODAY — but a
+    // contract drift (a DM leaking into GET /v1/channels) must fail closed to a
+    // single subscription, never a double-subscribe (cage-match Tesla).
+    subscribedChannelIds: <String>{
       ...channels.map((c) => c.id),
       ...dms.map((d) => d.id),
-    ],
+    }.toList(),
     signingKey: signingKey,
     // Wire the REAL telemetry sink (via [chatTelemetryProvider]) so the
     // reconcile engine's must-be-seen events (orphan ack, reconnect failure, the
