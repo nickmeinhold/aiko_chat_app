@@ -34,7 +34,7 @@ class ChatSidebar extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final channelsAsync = ref.watch(channelsProvider);
     final channels = channelsAsync.value ?? const <Channel>[];
-    final dms = ref.watch(dmsProvider).value ?? const <Channel>[];
+    final dms = ref.watch(visibleDmsProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
     final active =
         ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);

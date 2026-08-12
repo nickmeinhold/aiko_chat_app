@@ -74,10 +74,21 @@ class ChatScreen extends ConsumerWidget {
     ref.listen(navigableChannelsProvider, (_, next) {
       final sel = ref.read(selectedChannelIdProvider);
       if (sel == null) return;
-      if (!ref.read(channelsProvider).hasValue ||
-          !ref.read(dmsProvider).hasValue) {
-        return; // don't heal until both sources are loaded
+      final channelsState = ref.read(channelsProvider);
+      final dmsState = ref.read(dmsProvider);
+      if (!channelsState.hasValue || !dmsState.hasValue) {
+        return; // don't heal until both sources have loaded at least once
       }
+      // ...and don't heal off a value that is merely the LAST one while a
+      // refresh is in flight. `hasValue` stays true through an invalidate
+      // (Riverpod hands listeners the previous data), so it answers "has this
+      // ever loaded", not "is this settled" — and the gap between those two is a
+      // real ejection: opening a DM seeds it and invalidates [dmsProvider], and
+      // the pre-refresh list does NOT contain the DM you just opened, so healing
+      // there clears the selection the user made a frame ago (#2798). The same
+      // window sits under the call path's seed; it only hides there because Call
+      // navigates by route rather than by selection.
+      if (channelsState.isLoading || dmsState.isLoading) return;
       if (!next.any((c) => c.id == sel)) {
         ref.read(selectedChannelIdProvider.notifier).clear();
       }
