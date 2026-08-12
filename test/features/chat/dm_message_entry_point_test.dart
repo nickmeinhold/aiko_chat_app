@@ -180,6 +180,35 @@ void main() {
     expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
   });
 
+  testWidgets(
+      'messaging someone you ALREADY DM with selects it WITHOUT re-seeding',
+      (tester) async {
+    // The common path once a conversation exists. `openDm` is idempotent, so
+    // this must NOT seed: seeding invalidates dmsProvider, which rebuilds the
+    // repository (dispose → reconnect → resubscribe-all). Re-opening a
+    // conversation you already have should cost a selection change, nothing more
+    // (cage-match #132 Tesla — the same churn argument as the call path).
+    final fake = FakeRestApi()..openDmReturns = existingDm;
+    final h = harness(fake, from('general'), dms: const [existingDm]);
+    addTearDown(h.container.dispose);
+    await tester.pumpWidget(h.widget);
+    // Let the (overridden) DM list resolve, so `openDm`'s answer is recognised
+    // as already-known rather than new.
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('open-actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Message Alice'));
+    await tester.pumpAndSettle();
+
+    expect(h.container.read(selectedChannelIdProvider), 'dm:me:alice');
+    // Still exactly one list entry — no duplicate row from a redundant seed.
+    expect(
+      h.container.read(navigableChannelsProvider).where((c) => c.kind == ChannelKind.dm).length,
+      1,
+    );
+  });
+
   testWidgets('Message is HIDDEN inside a DM (it would be a no-op there)',
       (tester) async {
     final fake = FakeRestApi();
