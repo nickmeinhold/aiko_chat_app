@@ -17,10 +17,11 @@
 /// [ChannelRow] + raw SQL keyed on the column-name constants (`_M`/`_C`/`_S`/`_R`).
 /// Reactivity is drift's string-keyed change tracking (`notifyUpdates`/
 /// `tableUpdates`); atomicity is drift's `transaction()` (raw statements inside it
-/// resolve the transaction executor via a zone, so they commit together). The
-/// on-disk schema is byte-identical to the previous generated one, so existing
-/// installs upgrade in place. A schema-consistency test asserts the DDL below
-/// matches the live schema — the guarantee the generator used to give for free.
+/// resolve the transaction executor via a zone, so they commit together). The DDL
+/// reuses the previous generated column names + types (snake_case), so the schema
+/// is upgrade-compatible and existing installs migrate in place — verified by the
+/// migration test (real downgrade→reopen) and the schema-consistency test (live
+/// `PRAGMA` == the declared schema, the guarantee the generator gave for free).
 library;
 
 import 'dart:async';
@@ -234,6 +235,18 @@ class DriftCache extends GeneratedDatabase {
   @override
   int get schemaVersion => 6;
 
+  /// The declared schema (table → its column-fragment map + PK column), exposed
+  /// so the schema-consistency test can assert the LIVE DB matches it exactly —
+  /// type, nullability, default, and PK, not just column names. This is the
+  /// generator's schema-sync guarantee made explicit. Not a runtime API.
+  static const tableSchemas =
+      <String, ({Map<String, String> columns, String pk})>{
+    _M.table: (columns: _M.schema, pk: _M.clientTempId),
+    _C.table: (columns: _C.schema, pk: _C.id),
+    _S.table: (columns: _S.schema, pk: _S.channelId),
+    _R.table: (columns: _R.schema, pk: _R.targetMsgId),
+  };
+
   /// No generated tables. Reads/writes go through raw SQL keyed on the `_M`/`_C`/
   /// `_S`/`_R` name constants; change tracking is by table-name string.
   @override
@@ -328,15 +341,21 @@ class DriftCache extends GeneratedDatabase {
   /// (`createStream`/`QueryStreamFetcher`) is not on the public API, so this
   /// rebuilds its contract from the public `tableUpdates`.
   ///
-  /// `Stream.multi` matches drift's watch cardinality (broadcast — multiple
-  /// widgets may watch the same query): each listener runs this callback fresh,
-  /// getting its OWN initial fetch, update subscription, and cancel. Within a
-  /// listener, updates are subscribed BEFORE the initial fetch (no missed write)
-  /// and fetches are chained so emissions stay in arrival order.
+  /// `Stream.multi` matches drift's watch cardinality: it is multi-subscription
+  /// (multiple widgets may watch the same query concurrently), each listener
+  /// running this callback fresh — its OWN initial fetch, update subscription,
+  /// and cancel. `isBroadcast: true` reports that to downstream transformers, as
+  /// drift's `.watch()` did. (Unlike a shared broadcast stream, each listener
+  /// re-queries independently — correct here, since every listener wants current
+  /// rows.) Within a listener, updates are subscribed BEFORE the initial fetch
+  /// (no missed write) and fetches are chained so emissions stay in arrival order.
   Stream<T> _watch<T>(String table, Future<T> Function() fetch) {
     return Stream.multi((controller) {
       var chain = Future<void>.value();
       void schedule() {
+        // .catchError keeps the chain from settling into a rejected state — a
+        // rejected future would make every later .then a no-op and silently
+        // deafen the listener while the DB keeps mutating.
         chain = chain.then((_) async {
           if (controller.isClosed) return;
           try {
@@ -344,14 +363,14 @@ class DriftCache extends GeneratedDatabase {
           } catch (e, st) {
             if (!controller.isClosed) controller.addError(e, st);
           }
-        });
+        }).catchError((_) {});
       }
 
       final sub =
           tableUpdates(TableUpdateQuery.onTableName(table)).listen((_) => schedule());
       controller.onCancel = sub.cancel;
       schedule(); // initial emission
-    });
+    }, isBroadcast: true);
   }
 
   // --- channel-list cache (offline-first) -----------------------------------
@@ -554,6 +573,7 @@ class DriftCache extends GeneratedDatabase {
   /// still `serverUlid IS NULL` is reconciled (never regress a sent row).
   Future<AckOutcome> reconcileAck(
       String clientTempId, String serverUlid, DateTime serverCreatedAt) async {
+    var wrote = false;
     final outcome = await transaction(() async {
       final rc = await _messageBy(_M.clientTempId, clientTempId);
       if (rc == null) {
@@ -580,6 +600,7 @@ class DriftCache extends GeneratedDatabase {
       if (await _isRetracted(serverUlid)) {
         await customStatement(
             'DELETE FROM ${_M.table} WHERE ${_M.clientTempId} = ?', [clientTempId]);
+        wrote = true;
         return AckOutcome.retracted;
       }
 
@@ -592,6 +613,7 @@ class DriftCache extends GeneratedDatabase {
           _M.createdAt: serverCreatedAt.toUtc().millisecondsSinceEpoch,
           _M.deliveryState: DeliveryState.sent.wire,
         }, '${_M.clientTempId} = ?', [clientTempId]);
+        wrote = true;
         return AckOutcome.reconciled;
       } else {
         // Collapse: merge ALL server-authoritative fields from R_u onto R_c,
@@ -655,10 +677,14 @@ class DriftCache extends GeneratedDatabase {
         sigCol(_M.originCryptoValid, ru.originCryptoValid);
 
         await _update(_M.table, set, '${_M.clientTempId} = ?', [clientTempId]);
+        wrote = true;
         return AckOutcome.collapsed;
       }
     });
-    notifyUpdates({const TableUpdate(_M.table)});
+    // Only signal watchers when a row actually changed — an orphaned or
+    // already-reconciled ack writes nothing, and drift's typed streams likewise
+    // only fired on real mutations (cage-match Tesla: spurious re-emissions).
+    if (wrote) notifyUpdates({const TableUpdate(_M.table)});
     return outcome;
   }
 
@@ -692,6 +718,7 @@ class DriftCache extends GeneratedDatabase {
           'ingest-time verdict (verify runs before persist in _persistInbound); '
           'origin-present with a null verdict is illegal');
     }
+    var wrote = false;
     final newlyInvalid = await transaction(() async {
       // Door A of two-door retraction suppression (island #104). A dead id is
       // presence-independent, so a taken-down message that arrives AFTER its
@@ -756,6 +783,7 @@ class DriftCache extends GeneratedDatabase {
         }
 
         await _update(_M.table, set, '${_M.serverUlid} = ?', [u]);
+        wrote = true;
         // Newly-invalid: the row's stored verdict transitions INTO false (origin
         // present + verdict false) AND was not already false. A re-echo of an
         // already-false row (existing == 0), including a false→false re-sign, is
@@ -766,12 +794,15 @@ class DriftCache extends GeneratedDatabase {
             existing.originCryptoValid != 0;
       } else {
         await _insert(_M.table, _cols(serverMsg, localSeq: 0));
+        wrote = true;
         // First insert: newly-invalid iff a carried origin verified false (origin
         // present ⟹ verdict non-null, guarded at method entry).
         return serverMsg.origin != null && serverMsg.originCryptoValid == false;
       }
     });
-    notifyUpdates({const TableUpdate(_M.table)});
+    // A dead-id suppression (early return) writes nothing — don't signal watchers
+    // for a no-op (cage-match Tesla), matching drift's write-only stream signals.
+    if (wrote) notifyUpdates({const TableUpdate(_M.table)});
     return newlyInvalid;
   }
 
@@ -994,6 +1025,7 @@ class DriftCache extends GeneratedDatabase {
     // watermark. Assert at the boundary (debug-only; PR#7 finding 4). Empty
     // fence ('' = below every ULID) is the valid empty-channel sentinel.
     if (ulid.isNotEmpty) assertCanonicalUlid(ulid, context: 'watermark');
+    var wrote = false;
     await transaction(() async {
       final current = await historyContiguousThrough(channelId);
       if (current != null && ulid.compareTo(current) <= 0) {
@@ -1005,7 +1037,10 @@ class DriftCache extends GeneratedDatabase {
         '(${_S.channelId}, ${_S.historyContiguousThrough}) VALUES (?, ?)',
         [channelId, ulid],
       );
+      wrote = true;
     });
-    notifyUpdates({const TableUpdate(_S.table)});
+    // A non-monotonic (rewind-attempt) call writes nothing — don't re-emit the
+    // unchanged watermark to an edge-triggered consumer (cage-match Tesla).
+    if (wrote) notifyUpdates({const TableUpdate(_S.table)});
   }
 }
