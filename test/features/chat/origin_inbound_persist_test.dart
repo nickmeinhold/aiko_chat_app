@@ -3,7 +3,7 @@ import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart' show driftRuntimeOptions, Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -27,9 +27,10 @@ void main() {
   });
   tearDown(() => cache.close());
 
-  Future<MessageRow> rawRow(String ulid) =>
-      (cache.select(cache.messages)..where((t) => t.serverUlid.equals(ulid)))
-          .getSingle();
+  Future<MessageRow> rawRow(String ulid) async => MessageRow.fromRow(await cache
+      .customSelect('SELECT * FROM messages WHERE server_ulid = ?',
+          variables: [Variable(ulid)])
+      .getSingle());
 
   Future<Message> readDomain(String ulid) async {
     final rows = await cache.watchChannel(_chan).first;
@@ -300,8 +301,10 @@ void main() {
       final rows = await cache.watchChannel(_chan).first;
       final mine = rows.firstWhere((m) => m.clientTempId == 'my-tmp');
       // sig columns ARE set (local verifiable history)...
-      expect((await (cache.select(cache.messages)
-                    ..where((t) => t.clientTempId.equals('my-tmp')))
+      expect(
+          MessageRow.fromRow(await cache
+                  .customSelect('SELECT * FROM messages WHERE client_temp_id = ?',
+                      variables: [Variable('my-tmp')])
                   .getSingle())
               .sig,
           isNotNull);
