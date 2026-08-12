@@ -1,4 +1,4 @@
-/// Component 3 — the drift cache (design: docs/design/03-drift-cache.html).
+/// Component 3 — the cache (design: docs/design/03-drift-cache.html).
 ///
 /// The on-device SQLite store the repository / B4 reconcile engine writes
 /// through. This file owns *storage, atomic operations, and invariant
@@ -11,8 +11,20 @@
 ///   W4 markFailed · W5 retry · W6 applyRetraction (moderator takedown, #104 —
 ///   hard-deletes the taken-down row + records a presence-independent dead id;
 ///   W2 and W3 both suppress a dead id, the two-door invariant).
+///
+/// Storage engine: drift's RUNTIME only — no `drift_dev`/`build_runner` codegen.
+/// The typed tables a generator would emit are hand-written here as [MessageRow]/
+/// [ChannelRow] + raw SQL keyed on the column-name constants (`_M`/`_C`/`_S`/`_R`).
+/// Reactivity is drift's string-keyed change tracking (`notifyUpdates`/
+/// `tableUpdates`); atomicity is drift's `transaction()` (raw statements inside it
+/// resolve the transaction executor via a zone, so they commit together). The DDL
+/// reuses the previous generated column names + types (snake_case), so the schema
+/// is upgrade-compatible and existing installs migrate in place — verified by the
+/// migration test (real downgrade→reopen) and the schema-consistency test (live
+/// `PRAGMA` == the declared schema, the guarantee the generator gave for free).
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
@@ -24,20 +36,18 @@ import '../../domain/origin_envelope.dart';
 import '../../domain/retraction.dart';
 import '../../domain/ulid.dart';
 
-part 'drift_cache.g.dart';
-
 /// The observable result of a [DriftCache.reconcileAck] (design 04 Gap 1). Turns
 /// the cache's previously-silent defensive branches into a contract B4 can act
-/// on. Adds no writer — the census stays closed.
+/// on: happy-path stamp, birth-race collapse, an impossible orphan, or a
+/// takedown that raced the ack.
 ///
 /// * [reconciled] — the optimistic row was stamped with its server ULID (happy
-///   path), or was already stamped (an idempotent re-ack — no regression).
-/// * [collapsed] — history had already inserted the server row; the ack merged
-///   server truth onto the optimistic row and freed the duplicate (one row).
-/// * [orphaned] — no optimistic row matched the ack, AND the ack's ULID is not
-///   retracted. **Unreachable in Phase 1 by construction** (W1 always persists
-///   before the wire send; the only local delete is [applyRetraction], which is
-///   split out as [retracted]), so B4 treats it as an invariant assertion +
+///   path) OR was already stamped (idempotent re-ack).
+/// * [collapsed] — a server copy of this message (self-echo / history) had
+///   already landed under its ULID; the two rows collapsed into one.
+/// * [orphaned] — NO optimistic row matched `clientTempId` and the id is not a
+///   known dead id. Ordinarily unreachable (an ack implies we sent it and the
+///   row is committed-before-wire), so B4 treats it as an invariant assertion +
 ///   telemetry, never a recovery path.
 /// * [retracted] — the ack is for an own-message that was TAKEN DOWN before its
 ///   ack landed (island #104). The retraction recorded a presence-independent
@@ -47,167 +57,321 @@ part 'drift_cache.g.dart';
 ///   and renders nothing; there is nothing to recover.
 enum AckOutcome { reconciled, collapsed, orphaned, retracted }
 
-/// The `messages` table. `@DataClassName('MessageRow')` avoids colliding with
-/// the domain [Message] type.
-@DataClassName('MessageRow')
-class Messages extends Table {
-  /// Durable PK — client uuid for optimistic rows, the server ULID for inbound.
-  TextColumn get clientTempId => text()();
+// --- column-name single source of truth ------------------------------------
+// The SQL names (snake_case) shared by the DDL, the row readers, and every
+// query — matching the previous generated schema 1:1. A rename touches one
+// place; the schema-consistency test asserts these match the live DB.
 
-  /// Dedup authority. NULL until acked; SQLite allows many NULLs in a UNIQUE
-  /// index, which is exactly what lets un-acked optimistic rows coexist
-  /// (Invariant U is "every NON-NULL serverUlid is unique").
-  TextColumn get serverUlid => text().nullable().unique()();
+/// `messages` table columns. PK `client_temp_id`; `server_ulid` UNIQUE but
+/// nullable (many un-acked NULLs coexist — Invariant U).
+abstract final class _M {
+  static const table = 'messages';
+  static const clientTempId = 'client_temp_id';
+  static const serverUlid = 'server_ulid';
+  static const channelId = 'channel_id';
+  static const senderUserId = 'sender_user_id';
+  static const senderKind = 'sender_kind';
+  static const senderLabel = 'sender_label';
+  static const kind = 'kind';
+  static const body = 'body';
+  static const replyToId = 'reply_to_id';
+  static const createdAt = 'created_at';
+  static const localSeq = 'local_seq';
+  static const deliveryState = 'delivery_state';
+  static const sig = 'sig';
+  static const senderPubkey = 'sender_pubkey';
+  static const signedAtMs = 'signed_at_ms';
+  static const keyVersion = 'key_version';
+  static const signedClientMsgId = 'signed_client_msg_id';
+  static const originCryptoValid = 'origin_crypto_valid';
 
-  TextColumn get channelId => text()();
-  TextColumn get senderUserId => text().nullable()();
-  TextColumn get senderKind => text()();
-  TextColumn get senderLabel => text().nullable()();
-  TextColumn get kind => text()();
-  TextColumn get body => text()();
-  TextColumn get replyToId => text().nullable()();
-
-  /// UTC unix millis. Server time once acked; clamped client time while pending.
-  IntColumn get createdAt => integer()();
-
-  /// DB-derived monotonic compose counter (W1: MAX+1 in-txn). Send-order
-  /// tiebreak so rapid sends under a skewed clock keep compose order. 0 inbound.
-  IntColumn get localSeq => integer().withDefault(const Constant(0))();
-
-  TextColumn get deliveryState => text()();
-
-  /// Sovereign message signature (sovereign-message-signing, schema v3). All
-  /// nullable: pre-feature rows and inbound rows have none. LOCAL verifiable
-  /// history only — NOT emitted on the wire yet (gated on gateway carriage). See
-  /// `docs/crucible/sovereign-message-signing/SIGNING-SPEC.md`.
-  TextColumn get sig => text().nullable()(); // base64 raw-64 Ed25519
-  TextColumn get senderPubkey => text().nullable()(); // base64 raw-32 key
-  /// The SIGNED compose time — persisted separately from [createdAt] because ack
-  /// reconciliation overwrites createdAt with server time, which would break
-  /// verification of the signed bytes.
-  IntColumn get signedAtMs => integer().nullable()();
-  IntColumn get keyVersion => integer().nullable()();
-
-  /// The SIGNED `client_msg_id` (wire-half, schema v4). For an OUTBOUND row the
-  /// signed id IS [clientTempId], so this stays NULL and readers fall back to it.
-  /// For an INBOUND row [clientTempId] is the server ULID — NOT what was signed —
-  /// so the sender's signed `origin.client_msg_id` is stored here, keeping the
-  /// persisted signature independently re-verifiable (same rationale as storing
-  /// [signedAtMs] separately from [createdAt]).
-  TextColumn get signedClientMsgId => text().nullable()();
-
-  /// The local verify verdict for an INBOUND origin, computed once at ingest
-  /// (wire-half, schema v4). NULL = no origin / our own outbound sig (self-
-  /// verified at sign-time, never re-checked); 1 = carried-and-verified; 0 =
-  /// carried-but-invalid. DATA, not UI (no "verified sender" badge until PR B).
-  IntColumn get originCryptoValid => integer().nullable()();
-
-  @override
-  Set<Column> get primaryKey => {clientTempId};
+  static const schema = <String, String>{
+    clientTempId: 'TEXT NOT NULL',
+    serverUlid: 'TEXT UNIQUE',
+    channelId: 'TEXT NOT NULL',
+    senderUserId: 'TEXT',
+    senderKind: 'TEXT NOT NULL',
+    senderLabel: 'TEXT',
+    kind: 'TEXT NOT NULL',
+    body: 'TEXT NOT NULL',
+    replyToId: 'TEXT',
+    createdAt: 'INTEGER NOT NULL',
+    localSeq: 'INTEGER NOT NULL DEFAULT 0',
+    deliveryState: 'TEXT NOT NULL',
+    sig: 'TEXT',
+    senderPubkey: 'TEXT',
+    signedAtMs: 'INTEGER',
+    keyVersion: 'INTEGER',
+    signedClientMsgId: 'TEXT',
+    originCryptoValid: 'INTEGER',
+  };
 }
 
-/// The `channels` table — the offline-first channel-list cache. `ChannelRow`
-/// (not the auto-named `Channel`, which would collide with the domain type, same
-/// reason [Messages] uses `MessageRow`).
-@DataClassName('ChannelRow')
-class Channels extends Table {
-  TextColumn get id => text()();
-  TextColumn get name => text()();
-  TextColumn get kind => text()();
-  TextColumn get aikoChannel => text().nullable()();
+/// `channels` table columns. PK `id`.
+abstract final class _C {
+  static const table = 'channels';
+  static const id = 'id';
+  static const name = 'name';
+  static const kind = 'kind';
+  static const aikoChannel = 'aiko_channel';
+  static const ordinal = 'ordinal';
 
-  /// The channel's position in the authoritative server list, so the offline
-  /// read replays the SAME order the online fetch would (the UI picks
-  /// `channels.firstOrNull` as the default channel — a different offline order
-  /// would silently pick a different default). Set from the list index on save.
-  IntColumn get ordinal => integer().withDefault(const Constant(0))();
-
-  @override
-  Set<Column> get primaryKey => {id};
+  static const schema = <String, String>{
+    id: 'TEXT NOT NULL',
+    name: 'TEXT NOT NULL',
+    kind: 'TEXT NOT NULL',
+    aikoChannel: 'TEXT',
+    ordinal: 'INTEGER NOT NULL DEFAULT 0',
+  };
 }
 
-/// Per-channel sync bookkeeping. Phase 1 holds one column: the reconnect resume
-/// watermark (design 04 §Gap 2, round 4). Kept in its own table (not a column on
-/// `channels`) so the watermark exists independently of channel-list sync.
-class SyncMeta extends Table {
-  TextColumn get channelId => text()();
+/// `sync_meta` table columns. PK `channel_id`.
+abstract final class _S {
+  static const table = 'sync_meta';
+  static const channelId = 'channel_id';
+  static const historyContiguousThrough = 'history_contiguous_through';
 
-  /// The newest ULID through which history is *contiguously* cached for this
-  /// channel — the reconnect resume cursor. **SINGLE WRITER: the pager loop
-  /// only** (`advanceHistoryContiguous`). Live W3 inserts never touch it; that
-  /// separation is the round-4 fix (MAX(serverUlid) had two writers and lost
-  /// messages on an interrupted sync). NULL = nothing fetched yet → page from
-  /// the start.
-  TextColumn get historyContiguousThrough => text().nullable()();
-
-  @override
-  Set<Column> get primaryKey => {channelId};
+  static const schema = <String, String>{
+    channelId: 'TEXT NOT NULL',
+    historyContiguousThrough: 'TEXT',
+  };
 }
 
-/// Dead ids from moderator takedowns (island #104, schema v6). A takedown emits a
-/// forward-ULID *retraction*; this table records the id it suppresses so the
-/// suppression is **presence-independent** — a `Messages` flag can't work because
-/// the target row may never have been synced (a takedown of an already-husked
-/// message still emits a retraction). Follows the `SyncMeta`-as-separate-table
-/// precedent. One row per takedown ever (PK ⇒ idempotent), negligible growth at
-/// current scale — pruning is safe but DEFERRED (an [pruneRetractedBelow] hook
-/// exists but is unused; a real prune would add a second watermark reader for no
-/// present benefit).
-class RetractedIds extends Table {
-  /// The suppressed message id (the retraction's `target_msg_id`). PK ⇒ recording
-  /// the same takedown twice is an idempotent no-op.
-  TextColumn get targetMsgId => text()();
+/// `retracted_ids` table columns. PK `target_msg_id`.
+abstract final class _R {
+  static const table = 'retracted_ids';
+  static const targetMsgId = 'target_msg_id';
+  static const channelId = 'channel_id';
+  static const retractionId = 'retraction_id';
 
-  /// The channel the taken-down message lived in (prunability + observability).
-  TextColumn get channelId => text()();
-
-  /// The retraction event's own (higher) ULID — enables an optional monotonic
-  /// prune later; carries no behaviour today.
-  TextColumn get retractionId => text()();
-
-  @override
-  Set<Column> get primaryKey => {targetMsgId};
+  static const schema = <String, String>{
+    targetMsgId: 'TEXT NOT NULL',
+    channelId: 'TEXT NOT NULL',
+    retractionId: 'TEXT NOT NULL',
+  };
 }
 
-@DriftDatabase(tables: [Messages, Channels, SyncMeta, RetractedIds])
-class DriftCache extends _$DriftCache {
-  DriftCache(super.e);
+/// `ifNotExists` mirrors drift's `Migrator.createTable` (which is a no-op when
+/// the table is already present) — used on the onUpgrade paths, where an
+/// artificially-downgraded DB may still carry a table the ladder re-creates.
+String _createTable(String table, Map<String, String> schema, String pk,
+        {bool ifNotExists = false}) =>
+    'CREATE TABLE ${ifNotExists ? 'IF NOT EXISTS ' : ''}$table ('
+    '${schema.entries.map((e) => '${e.key} ${e.value}').join(', ')}, '
+    'PRIMARY KEY ($pk))';
+
+// --- typed rows (the hand-written equivalent of the generated data classes) --
+
+/// A `messages` row. The `MessageRow -> Message` mapping ([DriftCache._toDomain])
+/// is unchanged; only the row's construction (from a raw [QueryRow]) is hand-written.
+class MessageRow {
+  const MessageRow({
+    required this.clientTempId,
+    this.serverUlid,
+    required this.channelId,
+    this.senderUserId,
+    required this.senderKind,
+    this.senderLabel,
+    required this.kind,
+    required this.body,
+    this.replyToId,
+    required this.createdAt,
+    this.localSeq = 0,
+    required this.deliveryState,
+    this.sig,
+    this.senderPubkey,
+    this.signedAtMs,
+    this.keyVersion,
+    this.signedClientMsgId,
+    this.originCryptoValid,
+  });
+
+  final String clientTempId;
+  final String? serverUlid;
+  final String channelId;
+  final String? senderUserId;
+  final String senderKind;
+  final String? senderLabel;
+  final String kind;
+  final String body;
+  final String? replyToId;
+  final int createdAt;
+  final int localSeq;
+  final String deliveryState;
+  final String? sig;
+  final String? senderPubkey;
+  final int? signedAtMs;
+  final int? keyVersion;
+  final String? signedClientMsgId;
+  final int? originCryptoValid;
+
+  factory MessageRow.fromRow(QueryRow r) => MessageRow(
+        clientTempId: r.read<String>(_M.clientTempId),
+        serverUlid: r.readNullable<String>(_M.serverUlid),
+        channelId: r.read<String>(_M.channelId),
+        senderUserId: r.readNullable<String>(_M.senderUserId),
+        senderKind: r.read<String>(_M.senderKind),
+        senderLabel: r.readNullable<String>(_M.senderLabel),
+        kind: r.read<String>(_M.kind),
+        body: r.read<String>(_M.body),
+        replyToId: r.readNullable<String>(_M.replyToId),
+        createdAt: r.read<int>(_M.createdAt),
+        localSeq: r.read<int>(_M.localSeq),
+        deliveryState: r.read<String>(_M.deliveryState),
+        sig: r.readNullable<String>(_M.sig),
+        senderPubkey: r.readNullable<String>(_M.senderPubkey),
+        signedAtMs: r.readNullable<int>(_M.signedAtMs),
+        keyVersion: r.readNullable<int>(_M.keyVersion),
+        signedClientMsgId: r.readNullable<String>(_M.signedClientMsgId),
+        originCryptoValid: r.readNullable<int>(_M.originCryptoValid),
+      );
+}
+
+/// Component 3 — the on-device cache. Hand-authored typed layer over drift's
+/// runtime; see the library doc for the no-codegen rationale.
+class DriftCache extends GeneratedDatabase {
+  DriftCache(super.executor);
 
   @override
   int get schemaVersion => 6;
 
+  /// The declared schema (table → its column-fragment map + PK column), exposed
+  /// so the schema-consistency test can assert the LIVE DB matches it exactly —
+  /// type, nullability, default, and PK, not just column names. This is the
+  /// generator's schema-sync guarantee made explicit. Not a runtime API.
+  static const tableSchemas =
+      <String, ({Map<String, String> columns, String pk})>{
+    _M.table: (columns: _M.schema, pk: _M.clientTempId),
+    _C.table: (columns: _C.schema, pk: _C.id),
+    _S.table: (columns: _S.schema, pk: _S.channelId),
+    _R.table: (columns: _R.schema, pk: _R.targetMsgId),
+  };
+
+  /// No generated tables. Reads/writes go through raw SQL keyed on the `_M`/`_C`/
+  /// `_S`/`_R` name constants; change tracking is by table-name string.
+  @override
+  Iterable<TableInfo> get allTables => const [];
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) => m.createAll(),
+        onCreate: (m) async {
+          await customStatement(_createTable(_M.table, _M.schema, _M.clientTempId));
+          await customStatement(_createTable(_C.table, _C.schema, _C.id));
+          await customStatement(_createTable(_S.table, _S.schema, _S.channelId));
+          await customStatement(_createTable(_R.table, _R.schema, _R.targetMsgId));
+        },
         onUpgrade: (m, from, to) async {
           // v1 -> v2: the reconnect resume watermark (design 04 round 4).
-          if (from < 2) await m.createTable(syncMeta);
+          if (from < 2) {
+            await customStatement(
+                _createTable(_S.table, _S.schema, _S.channelId, ifNotExists: true));
+          }
           // v2 -> v3: sovereign message-signing columns (all nullable — existing
           // rows keep NULLs). LOCAL verifiable history; not on the wire yet.
           if (from < 3) {
-            await m.addColumn(messages, messages.sig);
-            await m.addColumn(messages, messages.senderPubkey);
-            await m.addColumn(messages, messages.signedAtMs);
-            await m.addColumn(messages, messages.keyVersion);
+            await customStatement('ALTER TABLE ${_M.table} ADD COLUMN ${_M.sig} TEXT');
+            await customStatement(
+                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.senderPubkey} TEXT');
+            await customStatement(
+                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.signedAtMs} INTEGER');
+            await customStatement(
+                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.keyVersion} INTEGER');
           }
-          // v3 -> v4: wire-half inbound carriage. The signed client_msg_id (for
-          // inbound rows whose PK is the ULID, not the signed id) + the local
-          // verify verdict. Both nullable — existing rows keep NULLs.
+          // v3 -> v4: wire-half inbound carriage — the signed client_msg_id + the
+          // local verify verdict. Both nullable — existing rows keep NULLs.
           if (from < 4) {
-            await m.addColumn(messages, messages.signedClientMsgId);
-            await m.addColumn(messages, messages.originCryptoValid);
+            await customStatement(
+                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.signedClientMsgId} TEXT');
+            await customStatement(
+                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.originCryptoValid} INTEGER');
           }
           // v4 -> v5: channel-list ordinal so the offline read preserves the
           // authoritative server order (default 0 — self-heals on the next
           // saveChannels, which rewrites every row's ordinal).
-          if (from < 5) await m.addColumn(channels, channels.ordinal);
+          if (from < 5) {
+            await customStatement(
+                'ALTER TABLE ${_C.table} ADD COLUMN ${_C.ordinal} INTEGER NOT NULL DEFAULT 0');
+          }
           // v5 -> v6: the retraction dead-id table (moderator takedowns, #104).
           // A new empty table — existing rows are untouched; a takedown that
           // predates the upgrade re-arrives on the next history catch-up and is
           // recorded then (presence-independent), so no backfill is needed.
-          if (from < 6) await m.createTable(retractedIds);
+          if (from < 6) {
+            await customStatement(
+                _createTable(_R.table, _R.schema, _R.targetMsgId, ifNotExists: true));
+          }
         },
       );
+
+  // --- raw-SQL helpers -------------------------------------------------------
+
+  /// A partial UPDATE that reproduces drift companion semantics: a column
+  /// PRESENT in [set] is written (a null value ⇒ `SET col = NULL`); a column
+  /// ABSENT from [set] is left untouched (the old `Value.absent()`). Callers
+  /// build [set] conditionally, exactly as they built companions.
+  Future<void> _update(String table, Map<String, Object?> set, String where,
+      List<Object?> whereArgs) async {
+    if (set.isEmpty) return;
+    final assignments = set.keys.map((c) => '$c = ?').join(', ');
+    await customStatement(
+      'UPDATE $table SET $assignments WHERE $where',
+      [...set.values, ...whereArgs],
+    );
+  }
+
+  Future<void> _insert(String table, Map<String, Object?> cols) async {
+    final names = cols.keys.join(', ');
+    final placeholders = List.filled(cols.length, '?').join(', ');
+    await customStatement(
+      'INSERT INTO $table ($names) VALUES ($placeholders)',
+      cols.values.toList(),
+    );
+  }
+
+  Future<MessageRow?> _messageBy(String column, String value) async {
+    final rows = await customSelect(
+      'SELECT * FROM ${_M.table} WHERE $column = ?',
+      variables: [Variable(value)],
+    ).get();
+    return rows.isEmpty ? null : MessageRow.fromRow(rows.first);
+  }
+
+  /// A reactive stream that emits the current [fetch] result on listen, then
+  /// re-emits whenever [table] changes. drift's own `.watch()` primitive
+  /// (`createStream`/`QueryStreamFetcher`) is not on the public API, so this
+  /// rebuilds its contract from the public `tableUpdates`.
+  ///
+  /// `Stream.multi` matches drift's watch cardinality: it is multi-subscription
+  /// (multiple widgets may watch the same query concurrently), each listener
+  /// running this callback fresh — its OWN initial fetch, update subscription,
+  /// and cancel. `isBroadcast: true` reports that to downstream transformers, as
+  /// drift's `.watch()` did. (Unlike a shared broadcast stream, each listener
+  /// re-queries independently — correct here, since every listener wants current
+  /// rows.) Within a listener, updates are subscribed BEFORE the initial fetch
+  /// (no missed write) and fetches are chained so emissions stay in arrival order.
+  Stream<T> _watch<T>(String table, Future<T> Function() fetch) {
+    return Stream.multi((controller) {
+      var chain = Future<void>.value();
+      void schedule() {
+        // .catchError keeps the chain from settling into a rejected state — a
+        // rejected future would make every later .then a no-op and silently
+        // deafen the listener while the DB keeps mutating.
+        chain = chain.then((_) async {
+          if (controller.isClosed) return;
+          try {
+            controller.add(await fetch());
+          } catch (e, st) {
+            if (!controller.isClosed) controller.addError(e, st);
+          }
+        }).catchError((_) {});
+      }
+
+      final sub =
+          tableUpdates(TableUpdateQuery.onTableName(table)).listen((_) => schedule());
+      controller.onCancel = sub.cancel;
+      schedule(); // initial emission
+    }, isBroadcast: true);
+  }
 
   // --- channel-list cache (offline-first) -----------------------------------
 
@@ -218,40 +382,37 @@ class DriftCache extends _$DriftCache {
   /// successful `listChannels()`; the offline read below serves it back.
   Future<void> saveChannels(List<Channel> channels) async {
     await transaction(() async {
-      await delete(this.channels).go();
-      await batch((b) => b.insertAll(
-            this.channels,
-            channels.indexed.map((e) => ChannelsCompanion.insert(
-                  id: e.$2.id,
-                  name: e.$2.name,
-                  kind: e.$2.kind.wire,
-                  aikoChannel: Value(e.$2.aikoChannel),
-                  ordinal: Value(e.$1), // preserve authoritative list order
-                )),
-          ));
+      await customStatement('DELETE FROM ${_C.table}');
+      for (final (i, c) in channels.indexed) {
+        await _insert(_C.table, {
+          _C.id: c.id,
+          _C.name: c.name,
+          _C.kind: c.kind.wire,
+          _C.aikoChannel: c.aikoChannel,
+          _C.ordinal: i, // preserve authoritative list order
+        });
+      }
     });
+    notifyUpdates({const TableUpdate(_C.table)});
   }
 
   /// The cached channel list — the offline fallback when `listChannels()` can't
   /// reach the gateway. Empty when nothing has been cached yet (first-ever launch
   /// offline): the UI shows an empty list, never the raw-error screen.
   Future<List<Channel>> readChannels() async {
-    final rows = await (select(channels)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.ordinal),
-            // Deterministic tiebreak: pre-v5 rows all migrate to ordinal 0, so
-            // without a secondary key an immediately-offline migrated user could
-            // get nondeterministic default-channel selection (Carnot, PR #72).
-            // Self-heals on the first online saveChannels (real indexes).
-            (t) => OrderingTerm.asc(t.id),
-          ]))
-        .get();
+    // Deterministic tiebreak on id: pre-v5 rows all migrate to ordinal 0, so
+    // without a secondary key an immediately-offline migrated user could get
+    // nondeterministic default-channel selection (Carnot, PR #72). Self-heals on
+    // the first online saveChannels (real indexes).
+    final rows = await customSelect(
+      'SELECT * FROM ${_C.table} ORDER BY ${_C.ordinal} ASC, ${_C.id} ASC',
+    ).get();
     return rows
         .map((r) => Channel(
-              id: r.id,
-              name: r.name,
-              kind: ChannelKind.fromWire(r.kind),
-              aikoChannel: r.aikoChannel,
+              id: r.read<String>(_C.id),
+              name: r.read<String>(_C.name),
+              kind: ChannelKind.fromWire(r.read<String>(_C.kind)),
+              aikoChannel: r.readNullable<String>(_C.aikoChannel),
             ))
         .toList();
   }
@@ -273,12 +434,13 @@ class DriftCache extends _$DriftCache {
         createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt, isUtc: true),
         deliveryState: DeliveryState.fromWire(r.deliveryState),
         origin: _originFromRow(r),
-        originCryptoValid: r.originCryptoValid == null ? null : r.originCryptoValid == 1,
+        originCryptoValid:
+            r.originCryptoValid == null ? null : r.originCryptoValid == 1,
       );
 
   /// Rebuild the CARRIED [OriginEnvelope] from the typed signature columns (there
   /// is NO stored JSON — wire-half TEMPER T3). The signed `client_msg_id` is
-  /// [signedClientMsgId] for inbound rows, else [clientTempId].
+  /// [MessageRow.signedClientMsgId] for inbound rows, else [MessageRow.clientTempId].
   ///
   /// Gated on `originCryptoValid != null` (cage-match Carnot): the SAME columns
   /// are populated by our own OUTBOUND local signature (LOCAL verifiable history,
@@ -293,10 +455,10 @@ class DriftCache extends _$DriftCache {
   }
 
   /// Rebuild an [OriginEnvelope] from the typed signature columns WITHOUT the
-  /// carriage gate. `client_msg_id` is [signedClientMsgId] for inbound rows,
-  /// else [clientTempId] (an outbound row's PK IS its wire client_msg_id).
-  /// Shared by [_originFromRow] (gated, inbound) and [outboundOrigin] (ungated,
-  /// our own send being emitted).
+  /// carriage gate. `client_msg_id` is [MessageRow.signedClientMsgId] for inbound
+  /// rows, else [MessageRow.clientTempId] (an outbound row's PK IS its wire
+  /// client_msg_id). Shared by [_originFromRow] (gated, inbound) and
+  /// [outboundOrigin] (ungated, our own send being emitted).
   OriginEnvelope? _originFromColumns(MessageRow r) {
     final sig = r.sig, pub = r.senderPubkey, ts = r.signedAtMs, kv = r.keyVersion;
     if (sig == null || pub == null || ts == null || kv == null) return null;
@@ -333,56 +495,48 @@ class DriftCache extends _$DriftCache {
   /// one — the gate exists to keep `Message.origin` inbound-only, and the emit
   /// path must not be subject to it. Null when the row is unsigned or absent.
   Future<OriginEnvelope?> outboundOrigin(String clientTempId) async {
-    final r = await (select(messages)
-          ..where((t) => t.clientTempId.equals(clientTempId)))
-        .getSingleOrNull();
+    final r = await _messageBy(_M.clientTempId, clientTempId);
     return r == null ? null : _originFromColumns(r);
   }
 
-  MessagesCompanion _fromDomain(Message m, {required int localSeq}) {
+  /// The full column map for [m] (the old `_fromDomain` companion). Signature
+  /// columns are null when there is no inbound origin; [signedClientMsgId] is
+  /// null (falls back to clientTempId) unless it genuinely differs — i.e. inbound,
+  /// where the PK is the ULID.
+  Map<String, Object?> _cols(Message m, {required int localSeq}) {
     final o = m.origin;
-    return MessagesCompanion.insert(
-      clientTempId: m.clientTempId,
-      serverUlid: Value(m.id),
-      channelId: m.channelId,
-      senderUserId: Value(m.sender.userId),
-      senderKind: m.sender.kind.wire,
-      senderLabel: Value(m.sender.label),
-      kind: m.kind.wire,
-      body: m.body,
-      replyToId: Value(m.replyToId),
-      createdAt: m.createdAt.toUtc().millisecondsSinceEpoch,
-      localSeq: Value(localSeq),
-      deliveryState: m.deliveryState.wire,
-      // Persist an inbound origin as the typed signature columns (the framework
-      // serializes them — no JSON blob). Only store signedClientMsgId when it
-      // DIFFERS from clientTempId (i.e. inbound, where the PK is the ULID) so an
-      // outbound row keeps NULL and falls back to its own clientTempId.
-      sig: o == null ? const Value.absent() : Value(base64Encode(o.sig)),
-      senderPubkey:
-          o == null ? const Value.absent() : Value(base64Encode(o.rawPublicKey)),
-      signedAtMs: o == null ? const Value.absent() : Value(o.signedAtMs),
-      keyVersion: o == null ? const Value.absent() : Value(o.keyVersion),
-      signedClientMsgId: (o == null || o.clientMsgId == m.clientTempId)
-          ? const Value.absent()
-          : Value(o.clientMsgId),
-      originCryptoValid: m.originCryptoValid == null
-          ? const Value.absent()
-          : Value(m.originCryptoValid! ? 1 : 0),
-    );
+    return {
+      _M.clientTempId: m.clientTempId,
+      _M.serverUlid: m.id,
+      _M.channelId: m.channelId,
+      _M.senderUserId: m.sender.userId,
+      _M.senderKind: m.sender.kind.wire,
+      _M.senderLabel: m.sender.label,
+      _M.kind: m.kind.wire,
+      _M.body: m.body,
+      _M.replyToId: m.replyToId,
+      _M.createdAt: m.createdAt.toUtc().millisecondsSinceEpoch,
+      _M.localSeq: localSeq,
+      _M.deliveryState: m.deliveryState.wire,
+      _M.sig: o == null ? null : base64Encode(o.sig),
+      _M.senderPubkey: o == null ? null : base64Encode(o.rawPublicKey),
+      _M.signedAtMs: o?.signedAtMs,
+      _M.keyVersion: o?.keyVersion,
+      _M.signedClientMsgId:
+          (o == null || o.clientMsgId == m.clientTempId) ? null : o.clientMsgId,
+      _M.originCryptoValid:
+          m.originCryptoValid == null ? null : (m.originCryptoValid! ? 1 : 0),
+    };
   }
 
-  /// `MAX(localSeq)+1`. Race-free ONLY because drift serializes queries on a
-  /// single connection and SQLite is single-writer, so the enclosing
-  /// transaction's SELECT-then-INSERT can't interleave with another. This holds
-  /// for Phase 1 (one isolate, one cache instance). If multiple isolates/
-  /// connections ever open the same file, this becomes a TOCTOU — switch to a
+  /// `MAX(localSeq)+1`. Race-free ONLY because SQLite is single-writer and the
+  /// enclosing transaction's SELECT-then-INSERT can't interleave with another.
+  /// Holds for Phase 1 (one isolate, one cache instance). If multiple isolates/
+  /// connections ever open the same file this becomes a TOCTOU — switch to a
   /// dedicated atomic counter table then (flagged in the design's §schema).
   Future<int> _nextLocalSeq() async {
-    final q = selectOnly(messages)..addColumns([messages.localSeq.max()]);
-    final row = await q.getSingleOrNull();
-    final maxSeq = row?.read(messages.localSeq.max());
-    return (maxSeq ?? 0) + 1;
+    final rows = await customSelect('SELECT MAX(${_M.localSeq}) AS m FROM ${_M.table}').get();
+    return (rows.first.readNullable<int>('m') ?? 0) + 1;
   }
 
   // --- W1: optimistic insert -------------------------------------------------
@@ -395,20 +549,19 @@ class DriftCache extends _$DriftCache {
       {MessageSignature? signature}) async {
     await transaction(() async {
       final seq = await _nextLocalSeq();
-      var row = _fromDomain(optimistic, localSeq: seq);
+      final cols = _cols(optimistic, localSeq: seq);
       if (signature != null) {
         // Sovereign signature persisted in the SAME txn as the optimistic row,
         // so the commit-before-wire invariant covers it too. base64 for text
         // columns; LOCAL history only (not on the wire).
-        row = row.copyWith(
-          sig: Value(base64Encode(signature.sig)),
-          senderPubkey: Value(base64Encode(signature.rawPublicKey)),
-          signedAtMs: Value(signature.signedAtMs),
-          keyVersion: Value(signature.keyVersion),
-        );
+        cols[_M.sig] = base64Encode(signature.sig);
+        cols[_M.senderPubkey] = base64Encode(signature.rawPublicKey);
+        cols[_M.signedAtMs] = signature.signedAtMs;
+        cols[_M.keyVersion] = signature.keyVersion;
       }
-      await into(messages).insert(row);
+      await _insert(_M.table, cols);
     });
+    notifyUpdates({const TableUpdate(_M.table)});
   }
 
   // --- W2: ack reconcile -----------------------------------------------------
@@ -420,10 +573,9 @@ class DriftCache extends _$DriftCache {
   /// still `serverUlid IS NULL` is reconciled (never regress a sent row).
   Future<AckOutcome> reconcileAck(
       String clientTempId, String serverUlid, DateTime serverCreatedAt) async {
-    return transaction(() async {
-      final rc = await (select(messages)
-            ..where((t) => t.clientTempId.equals(clientTempId)))
-          .getSingleOrNull();
+    var wrote = false;
+    final outcome = await transaction(() async {
+      final rc = await _messageBy(_M.clientTempId, clientTempId);
       if (rc == null) {
         // Door B of two-door retraction suppression (island #104). No optimistic
         // row matched. Ordinarily unreachable (see AckOutcome.orphaned), but a
@@ -446,25 +598,22 @@ class DriftCache extends _$DriftCache {
       // (applyRetraction's delete-by-serverUlid never reached it — serverUlid was
       // NULL), same transaction as the dead-id read (no TOCTOU).
       if (await _isRetracted(serverUlid)) {
-        await (delete(messages)
-              ..where((t) => t.clientTempId.equals(clientTempId)))
-            .go();
+        await customStatement(
+            'DELETE FROM ${_M.table} WHERE ${_M.clientTempId} = ?', [clientTempId]);
+        wrote = true;
         return AckOutcome.retracted;
       }
 
-      final ru = await (select(messages)
-            ..where((t) => t.serverUlid.equals(serverUlid)))
-          .getSingleOrNull();
+      final ru = await _messageBy(_M.serverUlid, serverUlid);
 
       if (ru == null) {
         // Happy path: stamp the ULID + server time, mark sent.
-        await (update(messages)
-              ..where((t) => t.clientTempId.equals(clientTempId)))
-            .write(MessagesCompanion(
-          serverUlid: Value(serverUlid),
-          createdAt: Value(serverCreatedAt.toUtc().millisecondsSinceEpoch),
-          deliveryState: Value(DeliveryState.sent.wire),
-        ));
+        await _update(_M.table, {
+          _M.serverUlid: serverUlid,
+          _M.createdAt: serverCreatedAt.toUtc().millisecondsSinceEpoch,
+          _M.deliveryState: DeliveryState.sent.wire,
+        }, '${_M.clientTempId} = ?', [clientTempId]);
+        wrote = true;
         return AckOutcome.reconciled;
       } else {
         // Collapse: merge ALL server-authoritative fields from R_u onto R_c,
@@ -473,70 +622,70 @@ class DriftCache extends _$DriftCache {
         // serverUlid=u on R_c while R_u still holds u would violate U
         // mid-transaction. Order is load-bearing; both statements are in one
         // txn (Invariant A), so no intermediate state is ever observed.
-        await (delete(messages)
-              ..where((t) => t.clientTempId.equals(ru.clientTempId)))
-            .go();
+        await customStatement(
+            'DELETE FROM ${_M.table} WHERE ${_M.clientTempId} = ?', [ru.clientTempId]);
         // Collapse is a ULID-COLLISION (birth-race) path, not a mutation path: a
         // self-echo / history row (ru) landed before our ack, and the SURVIVING
         // row is our SIGNED optimistic row (rc). In the common self-echo case
         // ru's body/reply/channel equal what rc signed, so our sig is STILL VALID
         // — clearing unconditionally would erase valid local history by race order
         // (cage-match Tesla R3). Clear ONLY when a signed field truly diverges;
-        // otherwise preserve rc's existing signature via Value.absent().
+        // otherwise preserve rc's existing signature (absent from the set).
         final signedFieldChanged = rc.body != ru.body ||
             rc.replyToId != ru.replyToId ||
             rc.channelId != ru.channelId;
         // ru carried a verified origin off the wire (its verdict is non-null only
         // via the inbound verify path) → the survivor adopts it (see below).
         final adoptCarried = !signedFieldChanged && ru.originCryptoValid != null;
-        await (update(messages)
-              ..where((t) => t.clientTempId.equals(clientTempId)))
-            .write(MessagesCompanion(
-          serverUlid: Value(serverUlid),
-          channelId: Value(ru.channelId),
-          senderUserId: Value(ru.senderUserId),
-          senderKind: Value(ru.senderKind),
-          senderLabel: Value(ru.senderLabel),
-          kind: Value(ru.kind),
-          body: Value(ru.body),
-          replyToId: Value(ru.replyToId),
+
+        final set = <String, Object?>{
+          _M.serverUlid: serverUlid,
+          _M.channelId: ru.channelId,
+          _M.senderUserId: ru.senderUserId,
+          _M.senderKind: ru.senderKind,
+          _M.senderLabel: ru.senderLabel,
+          _M.kind: ru.kind,
+          _M.body: ru.body,
+          _M.replyToId: ru.replyToId,
           // createdAt from the ACK (serverCreatedAt), NOT ru.createdAt — so the
           // collapse path and the happy path stamp the SAME value for the same
           // reconciliation. They are provably equal anyway (the gateway sends
           // ack.created_at = view["created_at"] from one row, ws.py:82), but
           // using one source removes the path-dependent asymmetry.
-          createdAt: Value(serverCreatedAt.toUtc().millisecondsSinceEpoch),
-          deliveryState: Value(DeliveryState.sent.wire),
-          // Diverged → drop the now-stale sig. Identical: if the deleted ru CARRIED
-          // a verified origin (post-emit self-echo — `ru.originCryptoValid != null`),
-          // ADOPT ru's carriage state onto the survivor, else the discriminator dies
-          // with the deleted row and _originFromRow can't surface the origin
-          // (cage-match Carnot/Tesla: the collapse must SET from ru, not only
-          // preserve rc). Pre-emit ru carries nothing → preserve rc's LOCAL seal via
-          // Value.absent() (Tesla R3). rc's sig == ru's origin sig for our own send,
-          // so adopting is coherent, and it additionally carries ru's verdict/signed-id.
-          sig: signedFieldChanged
-              ? const Value(null)
-              : (adoptCarried ? Value(ru.sig) : const Value.absent()),
-          senderPubkey: signedFieldChanged
-              ? const Value(null)
-              : (adoptCarried ? Value(ru.senderPubkey) : const Value.absent()),
-          signedAtMs: signedFieldChanged
-              ? const Value(null)
-              : (adoptCarried ? Value(ru.signedAtMs) : const Value.absent()),
-          keyVersion: signedFieldChanged
-              ? const Value(null)
-              : (adoptCarried ? Value(ru.keyVersion) : const Value.absent()),
-          signedClientMsgId: signedFieldChanged
-              ? const Value(null)
-              : (adoptCarried ? Value(ru.signedClientMsgId) : const Value.absent()),
-          originCryptoValid: signedFieldChanged
-              ? const Value(null)
-              : (adoptCarried ? Value(ru.originCryptoValid) : const Value.absent()),
-        ));
+          _M.createdAt: serverCreatedAt.toUtc().millisecondsSinceEpoch,
+          _M.deliveryState: DeliveryState.sent.wire,
+        };
+        // Signature columns (cage-match Carnot/Tesla): diverged → drop the stale
+        // sig (SET NULL); identical + ru CARRIED a verified origin (post-emit
+        // self-echo) → ADOPT ru's carriage state so the discriminator survives the
+        // deleted row; identical + ru carries nothing (pre-emit) → preserve rc's
+        // LOCAL seal (absent). rc's sig == ru's origin sig for our own send, so
+        // adopting is coherent AND additionally carries ru's verdict/signed-id.
+        void sigCol(String col, Object? ruVal) {
+          if (signedFieldChanged) {
+            set[col] = null; // Value(null)
+          } else if (adoptCarried) {
+            set[col] = ruVal; // Value(ru.x)
+          } // else: absent → preserve rc
+        }
+
+        sigCol(_M.sig, ru.sig);
+        sigCol(_M.senderPubkey, ru.senderPubkey);
+        sigCol(_M.signedAtMs, ru.signedAtMs);
+        sigCol(_M.keyVersion, ru.keyVersion);
+        sigCol(_M.signedClientMsgId, ru.signedClientMsgId);
+        sigCol(_M.originCryptoValid, ru.originCryptoValid);
+
+        await _update(_M.table, set, '${_M.clientTempId} = ?', [clientTempId]);
+        wrote = true;
         return AckOutcome.collapsed;
       }
     });
+    // Only signal watchers when a row actually changed — an orphaned or
+    // already-reconciled ack writes nothing, and drift's typed streams likewise
+    // only fired on real mutations (cage-match Tesla: spurious re-emissions).
+    if (wrote) notifyUpdates({const TableUpdate(_M.table)});
+    return outcome;
   }
 
   // --- W3: inbound dedup-upsert ----------------------------------------------
@@ -569,7 +718,8 @@ class DriftCache extends _$DriftCache {
           'ingest-time verdict (verify runs before persist in _persistInbound); '
           'origin-present with a null verdict is illegal');
     }
-    return transaction(() async {
+    var wrote = false;
+    final newlyInvalid = await transaction(() async {
       // Door A of two-door retraction suppression (island #104). A dead id is
       // presence-independent, so a taken-down message that arrives AFTER its
       // retraction (reconnect re-walk, buffered fanout frame, live+history dual
@@ -577,9 +727,7 @@ class DriftCache extends _$DriftCache {
       // transaction as the insert/update below, so no TOCTOU. Returns false: no
       // row was written, so no per-message origin probe should fire either.
       if (await _isRetracted(u)) return false;
-      final existing = await (select(messages)
-            ..where((t) => t.serverUlid.equals(u)))
-          .getSingleOrNull();
+      final existing = await _messageBy(_M.serverUlid, u);
       if (existing != null) {
         if (existing.channelId != serverMsg.channelId) {
           throw StateError(
@@ -599,38 +747,43 @@ class DriftCache extends _$DriftCache {
         final signedFieldChanged = existing.body != serverMsg.body ||
             existing.replyToId != serverMsg.replyToId;
         final o = serverMsg.origin;
-        // Precedence helpers: SET-from-origin wins; else clear-on-diverge; else keep.
-        Value<String?> str(String? Function(OriginEnvelope) f) => o != null
-            ? Value(f(o))
-            : (signedFieldChanged ? const Value(null) : const Value.absent());
-        Value<int?> intg(int? Function(OriginEnvelope) f) => o != null
-            ? Value(f(o))
-            : (signedFieldChanged ? const Value(null) : const Value.absent());
-        await (update(messages)..where((t) => t.serverUlid.equals(u))).write(
-          MessagesCompanion(
-            senderUserId: Value(serverMsg.sender.userId),
-            senderKind: Value(serverMsg.sender.kind.wire),
-            senderLabel: Value(serverMsg.sender.label),
-            kind: Value(serverMsg.kind.wire),
-            body: Value(serverMsg.body),
-            replyToId: Value(serverMsg.replyToId),
-            createdAt:
-                Value(serverMsg.createdAt.toUtc().millisecondsSinceEpoch),
-            sig: str((e) => base64Encode(e.sig)),
-            senderPubkey: str((e) => base64Encode(e.rawPublicKey)),
-            signedAtMs: intg((e) => e.signedAtMs),
-            keyVersion: intg((e) => e.keyVersion),
-            // Store the signed id only when it differs from the PK (inbound).
-            signedClientMsgId:
-                str((e) => e.clientMsgId != existing.clientTempId ? e.clientMsgId : null),
-            // Origin present ⟹ verdict non-null (guarded at method entry). Store
-            // the ingest-time verdict; an incoming origin REPLACES, and the verdict
-            // is cleared only when no origin arrives and a signed field changed.
-            originCryptoValid: o != null
-                ? Value(serverMsg.originCryptoValid! ? 1 : 0)
-                : (signedFieldChanged ? const Value(null) : const Value.absent()),
-          ),
-        );
+
+        final set = <String, Object?>{
+          _M.senderUserId: serverMsg.sender.userId,
+          _M.senderKind: serverMsg.sender.kind.wire,
+          _M.senderLabel: serverMsg.sender.label,
+          _M.kind: serverMsg.kind.wire,
+          _M.body: serverMsg.body,
+          _M.replyToId: serverMsg.replyToId,
+          _M.createdAt: serverMsg.createdAt.toUtc().millisecondsSinceEpoch,
+        };
+        // Precedence: SET-from-origin wins; else clear-on-diverge; else keep (absent).
+        void originCol(String col, Object? Function(OriginEnvelope) f) {
+          if (o != null) {
+            set[col] = f(o);
+          } else if (signedFieldChanged) {
+            set[col] = null;
+          } // else: absent → preserve
+        }
+
+        originCol(_M.sig, (e) => base64Encode(e.sig));
+        originCol(_M.senderPubkey, (e) => base64Encode(e.rawPublicKey));
+        originCol(_M.signedAtMs, (e) => e.signedAtMs);
+        originCol(_M.keyVersion, (e) => e.keyVersion);
+        // Store the signed id only when it differs from the PK (inbound).
+        originCol(_M.signedClientMsgId,
+            (e) => e.clientMsgId != existing.clientTempId ? e.clientMsgId : null);
+        // Origin present ⟹ verdict non-null (guarded at method entry). Store the
+        // ingest-time verdict; an incoming origin REPLACES, and the verdict is
+        // cleared only when no origin arrives and a signed field changed.
+        if (o != null) {
+          set[_M.originCryptoValid] = serverMsg.originCryptoValid! ? 1 : 0;
+        } else if (signedFieldChanged) {
+          set[_M.originCryptoValid] = null;
+        }
+
+        await _update(_M.table, set, '${_M.serverUlid} = ?', [u]);
+        wrote = true;
         // Newly-invalid: the row's stored verdict transitions INTO false (origin
         // present + verdict false) AND was not already false. A re-echo of an
         // already-false row (existing == 0), including a false→false re-sign, is
@@ -640,12 +793,17 @@ class DriftCache extends _$DriftCache {
             serverMsg.originCryptoValid == false &&
             existing.originCryptoValid != 0;
       } else {
-        await into(messages).insert(_fromDomain(serverMsg, localSeq: 0));
+        await _insert(_M.table, _cols(serverMsg, localSeq: 0));
+        wrote = true;
         // First insert: newly-invalid iff a carried origin verified false (origin
         // present ⟹ verdict non-null, guarded at method entry).
         return serverMsg.origin != null && serverMsg.originCryptoValid == false;
       }
     });
+    // A dead-id suppression (early return) writes nothing — don't signal watchers
+    // for a no-op (cage-match Tesla), matching drift's write-only stream signals.
+    if (wrote) notifyUpdates({const TableUpdate(_M.table)});
+    return newlyInvalid;
   }
 
   // --- W6: retraction (moderator takedown, island #104) ----------------------
@@ -659,10 +817,11 @@ class DriftCache extends _$DriftCache {
   /// by contract. See [applyRetraction] for why this path does NOT do a bespoke
   /// release-time case-normalization.
   Future<bool> _isRetracted(String ulid) async {
-    final row = await (select(retractedIds)
-          ..where((t) => t.targetMsgId.equals(ulid)))
-        .getSingleOrNull();
-    return row != null;
+    final rows = await customSelect(
+      'SELECT 1 FROM ${_R.table} WHERE ${_R.targetMsgId} = ?',
+      variables: [Variable(ulid)],
+    ).get();
+    return rows.isNotEmpty;
   }
 
   /// W6 — apply a moderator takedown [r]. One transaction, two effects:
@@ -700,16 +859,16 @@ class DriftCache extends _$DriftCache {
     assertCanonicalUlid(r.targetMsgId, context: 'retraction target');
     assertCanonicalUlid(r.id, context: 'retraction id');
     await transaction(() async {
-      await into(retractedIds).insertOnConflictUpdate(
-        RetractedIdsCompanion.insert(
-          targetMsgId: r.targetMsgId,
-          channelId: r.channelId,
-          retractionId: r.id,
-        ),
+      // INSERT OR REPLACE = idempotent record via the target_msg_id PK.
+      await customStatement(
+        'INSERT OR REPLACE INTO ${_R.table} '
+        '(${_R.targetMsgId}, ${_R.channelId}, ${_R.retractionId}) VALUES (?, ?, ?)',
+        [r.targetMsgId, r.channelId, r.id],
       );
-      await (delete(messages)..where((t) => t.serverUlid.equals(r.targetMsgId)))
-          .go();
+      await customStatement(
+          'DELETE FROM ${_M.table} WHERE ${_M.serverUlid} = ?', [r.targetMsgId]);
     });
+    notifyUpdates({const TableUpdate(_M.table), const TableUpdate(_R.table)});
   }
 
   /// DEFERRED prune hook (unused today): drop dead ids whose retraction ULID is
@@ -717,9 +876,8 @@ class DriftCache extends _$DriftCache {
   /// negligible at current scale — so this is not wired to any watermark. Present
   /// so the prune policy has a home when/if it is needed, not because it is.
   Future<void> pruneRetractedBelow(String floorRetractionId) async {
-    await (delete(retractedIds)
-          ..where((t) => t.retractionId.isSmallerThanValue(floorRetractionId)))
-        .go();
+    await customStatement(
+        'DELETE FROM ${_R.table} WHERE ${_R.retractionId} < ?', [floorRetractionId]);
   }
 
   // --- W4: error handler -----------------------------------------------------
@@ -732,21 +890,23 @@ class DriftCache extends _$DriftCache {
   Future<List<Message>> markFailed(String? refClientMsgId,
       {String? systemicChannelId}) async {
     if (refClientMsgId != null) {
-      await (update(messages)
-            ..where((t) =>
-                t.clientTempId.equals(refClientMsgId) & t.serverUlid.isNull()))
-          .write(MessagesCompanion(
-        deliveryState: Value(DeliveryState.failed.wire),
-      ));
+      await _update(_M.table, {_M.deliveryState: DeliveryState.failed.wire},
+          '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL', [refClientMsgId]);
+      notifyUpdates({const TableUpdate(_M.table)});
       return const [];
     }
     // Systemic: surface the affected pending rows to B4 (it decides policy).
-    final q = select(messages)..where((t) => t.serverUlid.isNull());
+    final where = StringBuffer('${_M.serverUlid} IS NULL');
+    final args = <Object?>[];
     if (systemicChannelId != null) {
-      q.where((t) => t.channelId.equals(systemicChannelId));
+      where.write(' AND ${_M.channelId} = ?');
+      args.add(systemicChannelId);
     }
-    final rows = await q.get();
-    return rows.map(_toDomain).toList();
+    final rows = await customSelect(
+      'SELECT * FROM ${_M.table} WHERE $where',
+      variables: args.map((a) => Variable(a)).toList(),
+    ).get();
+    return rows.map((r) => _toDomain(MessageRow.fromRow(r))).toList();
   }
 
   // --- W5: manual retry ------------------------------------------------------
@@ -760,12 +920,9 @@ class DriftCache extends _$DriftCache {
   /// moving a retried message past later ones is the wrong UX. Cage-match
   /// caught the incoherent contract.)
   Future<void> retry(String clientTempId) async {
-    await (update(messages)
-          ..where((t) =>
-              t.clientTempId.equals(clientTempId) & t.serverUlid.isNull()))
-        .write(MessagesCompanion(
-      deliveryState: Value(DeliveryState.sending.wire),
-    ));
+    await _update(_M.table, {_M.deliveryState: DeliveryState.sending.wire},
+        '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL', [clientTempId]);
+    notifyUpdates({const TableUpdate(_M.table)});
   }
 
   // --- reads -----------------------------------------------------------------
@@ -773,15 +930,17 @@ class DriftCache extends _$DriftCache {
   /// Reactive ordered message list for a channel. Ordering key:
   /// `(createdAt, localSeq, COALESCE(serverUlid, clientTempId))` — see design.
   Stream<List<Message>> watchChannel(String channelId) {
-    final q = select(messages)
-      ..where((t) => t.channelId.equals(channelId))
-      ..orderBy([
-        (t) => OrderingTerm(expression: t.createdAt),
-        (t) => OrderingTerm(expression: t.localSeq),
-        (t) => OrderingTerm(
-            expression: coalesce([t.serverUlid, t.clientTempId])),
-      ]);
-    return q.watch().map((rows) => rows.map(_toDomain).toList());
+    return _watch(_M.table, () => _readChannel(channelId));
+  }
+
+  Future<List<Message>> _readChannel(String channelId) async {
+    final rows = await customSelect(
+      'SELECT * FROM ${_M.table} WHERE ${_M.channelId} = ? '
+      'ORDER BY ${_M.createdAt}, ${_M.localSeq}, '
+      'COALESCE(${_M.serverUlid}, ${_M.clientTempId})',
+      variables: [Variable(channelId)],
+    ).get();
+    return rows.map((r) => _toDomain(MessageRow.fromRow(r))).toList();
   }
 
   /// Case-insensitive substring search over the body of ALL cached messages (the
@@ -796,38 +955,35 @@ class DriftCache extends _$DriftCache {
   /// provider layer applies it, exactly as [messagesProvider] layers it over the
   /// visibility-agnostic [watchChannel]. Newest-first, capped at [limit] so a
   /// broad query can't build an unbounded list.
-  Future<List<Message>> searchMessages(String query, {int limit = 200}) {
+  Future<List<Message>> searchMessages(String query, {int limit = 200}) async {
     final needle = query.trim().toLowerCase();
-    if (needle.isEmpty) return Future.value(const []);
+    if (needle.isEmpty) return const [];
     // `%`/`_` are LIKE wildcards; escape them (and the escape char) and declare an
     // ESCAPE so a literal `50%` search is a literal substring, not a pattern. The
-    // pattern itself is a BOUND variable (drift parameterizes `like`), so this is
-    // injection-safe regardless of contents.
+    // pattern itself is a BOUND variable, so this is injection-safe regardless of
+    // contents.
     final escaped = needle
         .replaceAll('\\', '\\\\')
         .replaceAll('%', '\\%')
         .replaceAll('_', '\\_');
-    final q = select(messages)
-      ..where((t) => t.body.lower().like('%$escaped%', escapeChar: '\\'))
-      ..orderBy([
-        (t) => OrderingTerm(expression: t.createdAt, mode: OrderingMode.desc),
-      ])
-      ..limit(limit);
-    return q.get().then((rows) => rows.map(_toDomain).toList());
+    final rows = await customSelect(
+      "SELECT * FROM ${_M.table} WHERE LOWER(${_M.body}) LIKE ? ESCAPE '\\' "
+      'ORDER BY ${_M.createdAt} DESC LIMIT ?',
+      variables: [Variable('%$escaped%'), Variable(limit)],
+    ).get();
+    return rows.map((r) => _toDomain(MessageRow.fromRow(r))).toList();
   }
 
   /// Invariant O — the outbox is a QUERY, not a table: every un-acked,
   /// not-failed row, in send order.
   Future<List<Message>> outbox() async {
-    final q = select(messages)
-      ..where((t) => t.serverUlid.isNull() &
-          t.deliveryState.equals(DeliveryState.failed.wire).not())
-      ..orderBy([
-        (t) => OrderingTerm(expression: t.createdAt),
-        (t) => OrderingTerm(expression: t.localSeq),
-      ]);
-    final rows = await q.get();
-    return rows.map(_toDomain).toList();
+    final rows = await customSelect(
+      'SELECT * FROM ${_M.table} WHERE ${_M.serverUlid} IS NULL '
+      "AND ${_M.deliveryState} != ? "
+      'ORDER BY ${_M.createdAt}, ${_M.localSeq}',
+      variables: [Variable(DeliveryState.failed.wire)],
+    ).get();
+    return rows.map((r) => _toDomain(MessageRow.fromRow(r))).toList();
   }
 
   // --- reconnect resume watermark (design 04 §Gap 2, round 4) -----------------
@@ -836,10 +992,11 @@ class DriftCache extends _$DriftCache {
   /// history is contiguously cached. NULL until the first page is durably
   /// applied (fresh install) → the pager fetches from the start.
   Future<String?> historyContiguousThrough(String channelId) async {
-    final row = await (select(syncMeta)
-          ..where((t) => t.channelId.equals(channelId)))
-        .getSingleOrNull();
-    return row?.historyContiguousThrough;
+    final rows = await customSelect(
+      'SELECT ${_S.historyContiguousThrough} AS h FROM ${_S.table} WHERE ${_S.channelId} = ?',
+      variables: [Variable(channelId)],
+    ).get();
+    return rows.isEmpty ? null : rows.first.readNullable<String>('h');
   }
 
   /// Reactive [historyContiguousThrough]: emits the resume fence for [channelId]
@@ -849,8 +1006,10 @@ class DriftCache extends _$DriftCache {
   /// unread indicator uses it to know when a channel's baseline may be taken,
   /// rather than trusting a pre-sync empty stream emission.
   Stream<String?> watchHistoryContiguousThrough(String channelId) {
-    final q = select(syncMeta)..where((t) => t.channelId.equals(channelId));
-    return q.watchSingleOrNull().map((row) => row?.historyContiguousThrough);
+    // Wrap in a 1-element list so the fetched value is a non-null Object (the
+    // stream helper is generic over Object); unwrap on the way out.
+    return _watch(_S.table, () async => [await historyContiguousThrough(channelId)])
+        .map((wrapped) => wrapped.single);
   }
 
   /// Advance the resume watermark for [channelId] to [ulid]. The **ONLY** writer
@@ -866,18 +1025,22 @@ class DriftCache extends _$DriftCache {
     // watermark. Assert at the boundary (debug-only; PR#7 finding 4). Empty
     // fence ('' = below every ULID) is the valid empty-channel sentinel.
     if (ulid.isNotEmpty) assertCanonicalUlid(ulid, context: 'watermark');
+    var wrote = false;
     await transaction(() async {
-      final current = await (select(syncMeta)
-            ..where((t) => t.channelId.equals(channelId)))
-          .getSingleOrNull();
-      if (current?.historyContiguousThrough != null &&
-          ulid.compareTo(current!.historyContiguousThrough!) <= 0) {
+      final current = await historyContiguousThrough(channelId);
+      if (current != null && ulid.compareTo(current) <= 0) {
         return; // not strictly forward — never rewind.
       }
-      await into(syncMeta).insertOnConflictUpdate(
-        SyncMetaCompanion.insert(
-            channelId: channelId, historyContiguousThrough: Value(ulid)),
+      // INSERT OR REPLACE = upsert on the channel_id PK.
+      await customStatement(
+        'INSERT OR REPLACE INTO ${_S.table} '
+        '(${_S.channelId}, ${_S.historyContiguousThrough}) VALUES (?, ?)',
+        [channelId, ulid],
       );
+      wrote = true;
     });
+    // A non-monotonic (rewind-attempt) call writes nothing — don't re-emit the
+    // unchanged watermark to an edge-triggered consumer (cage-match Tesla).
+    if (wrote) notifyUpdates({const TableUpdate(_S.table)});
   }
 }

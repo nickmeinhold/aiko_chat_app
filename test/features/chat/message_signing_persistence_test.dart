@@ -10,7 +10,7 @@ import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart' show driftRuntimeOptions, Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -47,9 +47,10 @@ void main() {
   }
 
   // Read the raw drift row (domain Message doesn't expose the signing columns).
-  Future<MessageRow> rawRow() =>
-      (cache.select(cache.messages)..where((t) => t.channelId.equals(_chan)))
-          .getSingle();
+  Future<MessageRow> rawRow() async => MessageRow.fromRow(await cache
+      .customSelect('SELECT * FROM messages WHERE channel_id = ?',
+          variables: [Variable(_chan)])
+      .getSingle());
 
   setUp(() async {
     installSecureStorageMock();
