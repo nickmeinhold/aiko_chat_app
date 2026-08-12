@@ -36,6 +36,9 @@ Future<void> startDm(
 ) async {
   final messenger = ScaffoldMessenger.of(context);
   if (_refuseBlocked(messenger, ref, userId, _Verb.message, name)) return;
+  // Collected rather than shown inline: every arm fires after an await, so the
+  // ONE liveness check at the tail covers them all instead of six scattered ones.
+  final String failure;
   try {
     final dm = await ref.read(restApiProvider).openDm(userId);
     // Everything past this point touches the WIDGET-SCOPED ref, which throws once
@@ -45,24 +48,26 @@ Future<void> startDm(
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
     ref.read(selectedChannelIdProvider.notifier).select(dm.id);
+    return;
   } on DmTargetNotFound {
-    messenger.showSnackBar(
-      SnackBar(content: Text("Couldn't message $name — no such person here.")),
-    );
+    failure = "Couldn't message $name — no such person here.";
   } on NetworkUnavailable {
-    messenger.showSnackBar(
-      const SnackBar(content: Text("You're offline — can't start a message.")),
-    );
+    failure = "You're offline — can't start a message.";
   } catch (_) {
     // Terminal auth (Unauthorized/AccountSuspended) lands here as a generic
     // message, matching the sibling handlers: the repository/transport layer
     // owns terminal-auth routing (a 401 on the next sync disconnects → logout /
     // suspended screen), and a per-action rethrow here would be an unhandled
     // async error. Named tradeoff: one generic hop, real routing next sync.
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Could not open that conversation. Please try again.')),
-    );
+    failure = 'Could not open that conversation. Please try again.';
   }
+  // Liveness on the ERROR path too. Every arm above fires after an await and the
+  // messenger was captured before it, so telling a torn-down surface about a
+  // failed action is noise at best and an assertion on a disposed messenger at
+  // worst (cage-match #133, Carnot + Tesla — the success path got this gate
+  // first, which left the error path as the last place the old habit survived).
+  if (!context.mounted) return;
+  messenger.showSnackBar(SnackBar(content: Text(failure)));
 }
 
 /// Open (find-or-create) the DM with [userId] and push its call screen. The room
@@ -76,6 +81,7 @@ Future<void> startCall(
 ) async {
   final messenger = ScaffoldMessenger.of(context);
   if (_refuseBlocked(messenger, ref, userId, _Verb.call, name)) return;
+  final String failure;
   try {
     // openDm is idempotent: if a second Call slips through during this await it
     // resolves to the SAME room, and pushCall's latch then dedups the
@@ -89,19 +95,21 @@ Future<void> startCall(
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
     await pushCall(context, dm.id);
+    return;
   } on DmTargetNotFound {
-    messenger.showSnackBar(
-      SnackBar(content: Text("Couldn't reach $name for a call.")),
-    );
+    failure = "Couldn't reach $name for a call.";
   } on NetworkUnavailable {
-    messenger.showSnackBar(
-      const SnackBar(content: Text("You're offline — can't start a call.")),
-    );
+    failure = "You're offline — can't start a call.";
   } catch (_) {
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Could not start the call. Please try again.')),
-    );
+    failure = 'Could not start the call. Please try again.';
   }
+  // Liveness on the ERROR path too. Every arm above fires after an await and the
+  // messenger was captured before it, so telling a torn-down surface about a
+  // failed action is noise at best and an assertion on a disposed messenger at
+  // worst (cage-match #133, Carnot + Tesla — the success path got this gate
+  // first, which left the error path as the last place the old habit survived).
+  if (!context.mounted) return;
+  messenger.showSnackBar(SnackBar(content: Text(failure)));
 }
 
 /// The contact surfaces this file offers, as a closed set rather than a free

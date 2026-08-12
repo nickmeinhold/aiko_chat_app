@@ -195,9 +195,16 @@ class FakeRestApi implements ChatRestApi {
     return membersByChannel[channelId] ?? const [];
   }
 
+  /// If set, `listChannels()` awaits this before returning — the channels-side
+  /// twin of [listDmsGate], so a test can control the SETTLE ORDER of the two
+  /// sources the self-heal reads.
+  Completer<void>? listChannelsGate;
+
   @override
   Future<List<Channel>> listChannels() async {
     listChannelsCalls++;
+    final gate = listChannelsGate;
+    if (gate != null) await gate.future;
     if (listChannelsThrows != null) {
       final e = listChannelsThrows!;
       if (listChannelsThrowsOnce) listChannelsThrows = null;

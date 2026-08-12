@@ -185,6 +185,23 @@ class _SeededDms
   @override
   ({String userId, List<({Channel dm, int gen})> items})? build() => null;
 
+  // NOT cleared on logout, deliberately (cage-match #133, Carnot raised it; the
+  // clear was written, regressed two logout tests, and was withdrawn rather than
+  // worked around). Two reasons, in order of importance:
+  //
+  //  1. It is not a leak worth a mechanism. The per-user gate on [forUser] and
+  //     [add] already makes a seed unreadable by a DIFFERENT user. What survives
+  //     is a same-user re-login seeing a DM that the island genuinely minted for
+  //     them — a real conversation, shown slightly before the first fetch
+  //     confirms it, and retired by that fetch (its generation is below any
+  //     newly-taken ticket). Showing a real DM early is not the failure the
+  //     clear would be defending against.
+  //  2. The clear cannot be written here safely. Mutating this notifier from a
+  //     `ref.listen` on the auth state fires inside a dependent's build and trips
+  //     Riverpod's notification assertion — the same "setState during build"
+  //     trap [channelReadMarksProvider] documents and reads non-reactively to
+  //     avoid.
+
   /// Monotonic ticket taken by every DM-list fetch WHEN IT STARTS — the
   /// watermark separating "this fetch could have observed my write" from "this
   /// fetch was already in the air when I wrote", which is the only question
@@ -373,24 +390,60 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     // make the precondition loud rather than constructing a sessionless repo.
     throw StateError('chatRepository requires an authenticated user');
   }
-  final channels = await ref.watch(channelsProvider.future);
-  // DMs join the subscription set the same way channels do. Watching this future
+  // EVERY `ref.watch` is taken HERE, in the synchronous phase, before any await.
+  // A `ref` does not outlive the provider, and each await is a chance for this
+  // autoDispose provider to be disposed mid-build — after which `ref.watch`
+  // throws `UnmountedRefException` as an unhandled async error. This build has
+  // three awaits and used to watch across all of them; hoisting the watches
+  // removes the hazard structurally instead of sprinkling `ref.mounted` checks
+  // that every future edit would have to remember (cage-match #133 — the same
+  // class as the post-await ref use in `conversation_actions.dart`, found when a
+  // slow channel fetch widened the window enough to hit it).
+  //
+  // DMs join the subscription set the same way channels do. Watching that future
   // means opening a brand-new DM (which invalidates [dmsProvider]) rebuilds the
   // repo through the SAME path a reconnect already uses — subscribe + history for
   // the new id — rather than an internal mutable-set path racing the backpressure
   // valve and reconnect epochs (approach A, #2798). Fails soft to [] offline.
-  final dms = await ref.watch(dmsProvider.future);
+  //
+  // The two lists are also awaited TOGETHER rather than in series: they are
+  // independent fetches, and the old sequential form paid both round-trips
+  // end-to-end on every repo build.
+  final channelsFuture = ref.watch(channelsProvider.future);
+  final dmsFuture = ref.watch(dmsProvider.future);
+  // The device sovereign signing key (sovereign-message-signing). Wired here in
+  // the PRODUCTION provider — a nullable injectable silently no-ops if the
+  // wiring is forgotten, the same DI trap the telemetry sink hit (PR #45), so a
+  // provider-default test asserts a real key reaches the repo.
+  final keyStore = ref.watch(sovereignKeyStoreProvider);
+  final cache = ref.watch(cacheProvider);
+  final transport = ref.watch(transportProvider);
+  final rest = ref.watch(restApiProvider);
+  final telemetry = ref.watch(chatTelemetryProvider);
 
-  // Load the device sovereign signing key (sovereign-message-signing). Wired
-  // here in the PRODUCTION provider — a nullable injectable silently no-ops if
-  // the wiring is forgotten, the same DI trap the telemetry sink hit (PR #45),
-  // so a provider-default test asserts a real key reaches the repo.
-  final signingKey = await ref.watch(sovereignKeyStoreProvider).loadOrCreate();
+  // Register the teardown BEFORE the awaits, against a holder the build fills in
+  // later. `ref.onDispose` is itself a ref use, so calling it after an await
+  // throws on an already-disposed provider — and that failure LEAKS: the
+  // repository we just built keeps its transport subscriptions forever because
+  // nothing is left to tear it down. `disposed` covers the opposite order too (we
+  // were disposed before the holder was filled), so the repo is disposed exactly
+  // once whichever side wins (cage-match #133).
+  ChatRepository? built;
+  var disposed = false;
+  ref.onDispose(() {
+    disposed = true;
+    built?.dispose();
+  });
+
+  final lists = await Future.wait([channelsFuture, dmsFuture]);
+  final channels = lists[0];
+  final dms = lists[1];
+  final signingKey = await keyStore.loadOrCreate();
 
   final repo = ChatRepository(
-    cache: ref.watch(cacheProvider),
-    transport: ref.watch(transportProvider),
-    rest: ref.watch(restApiProvider),
+    cache: cache,
+    transport: transport,
+    rest: rest,
     me: user,
     // A set literal (insertion-ordered) dedupes: DMs are excluded from
     // listChannels by island design, so channels ∩ dms is empty TODAY — but a
@@ -406,13 +459,19 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     // #16 sync fault) actually surface — without this the repo falls back to the
     // silent _NoopTelemetry default and every signal is swallowed in the shipped
     // app (cage-match Carnot HIGH, PR #45).
-    telemetry: ref.watch(chatTelemetryProvider),
+    telemetry: telemetry,
     newTempId: () => _uuid.v4(),
   );
-  ref.onDispose(repo.dispose); // tear down on logout/rebuild — no leaked subs
+  built = repo; // tear down on logout/rebuild — no leaked subs
+  if (disposed) {
+    // Disposed while we were building. Nothing will ever observe this repo, but
+    // it exists and owns resources, so it is ours to close.
+    repo.dispose();
+    return repo;
+  }
 
   repo.start(); // wire transport streams ONCE (B-live)
-  await ref.watch(transportProvider).connect(); // `connected` → choreography
+  await transport.connect(); // `connected` → choreography
   return repo;
 });
 

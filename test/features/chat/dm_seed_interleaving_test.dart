@@ -151,4 +151,103 @@ void main() {
     expect(container.read(dmsProvider).value, contains(dm),
         reason: 'a stale run must not have overwritten the fail-soft fallback');
   });
+
+  testWidgets(
+      'a FLAPPING source defers healing but does not starve it — the departed '
+      'selection clears on the first settle', (tester) async {
+    // The question Carnot asked in every round, answered by running it rather
+    // than by argument: with the heal skipping whenever either source is
+    // loading, can repeated invalidation before settle keep a genuinely departed
+    // selection alive forever?
+    //
+    // The honest answer this pins: while the flap continues the pick is DEFERRED
+    // (and `resolveActive` heals the display meanwhile, so the UI is never wrong
+    // — only the notifier lags), and the moment the sources settle it clears.
+    // Deferring a bookkeeping fix beats ejecting a selection the user made one
+    // frame ago, which is the alternative the guard exists to prevent.
+    setWide(tester);
+    final rest = FakeRestApi(channels: const [generalChannel]);
+    rest.dms = const [dm];
+    rest.membersByChannel['dm:me:alice'] = roster;
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sidebar-dm-dm:me:alice')));
+    await tester.pumpAndSettle();
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
+
+    // The DM departs, and the DM list is now kept permanently mid-flight — the
+    // flapping-connectivity shape, where a refresh never gets to settle.
+    rest.dms = const [];
+    final flap = Completer<void>();
+    rest.listDmsGate = flap;
+    for (var i = 0; i < 3; i++) {
+      container.invalidate(dmsProvider);
+      await tester.pump();
+    }
+
+    // Deferred, exactly as designed — and the DISPLAY is already healed even
+    // though the notifier still holds the pick.
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice',
+        reason: 'the guard defers while a source is in flight');
+
+    // The ether quiets: the flap ends and the sources settle.
+    flap.complete();
+    rest.listDmsGate = null;
+    container.invalidate(dmsProvider);
+    await tester.pumpAndSettle();
+
+    expect(container.read(selectedChannelIdProvider), isNull,
+        reason: 'healing resumes on the first settle — deferred, never starved');
+  });
+
+  testWidgets(
+      'DMs-settle-first ordering still heals a departed selection (Tesla r3)',
+      (tester) async {
+    // Tesla's round-3 HIGH names completion ORDER as the decider: DM list
+    // settles WITHOUT the selected DM while channels is still mid-refresh, the
+    // heal skips, then channels settles to an element-equal roster — and if the
+    // combined list does not re-notify, the notifier keeps the dead id forever.
+    // The stated mechanism ("List.== is deep") does not hold in Dart, but the
+    // ORDERING is a real variable my earlier test left to chance, so it gets
+    // driven explicitly rather than argued about.
+    setWide(tester);
+    final rest = FakeRestApi(channels: const [generalChannel]);
+    rest.dms = const [dm];
+    rest.membersByChannel['dm:me:alice'] = roster;
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sidebar-dm-dm:me:alice')));
+    await tester.pumpAndSettle();
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
+
+    // Both sources refresh. The DM departs; the channel roster is unchanged, so
+    // its settle carries element-equal data — the case Tesla says is silent.
+    rest.dms = const [];
+    final channelsGate = Completer<void>();
+    rest.listChannelsGate = channelsGate;
+    container.invalidate(channelsProvider);
+    container.invalidate(dmsProvider);
+    await tester.pump();
+
+    // DMs settle FIRST, while channels is still in flight → the heal must skip.
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(container.read(selectedChannelIdProvider), 'dm:me:alice',
+        reason: 'skipped while channels is mid-refresh, as designed');
+
+    // Now channels settles to the SAME roster — the claimed-silent transition.
+    channelsGate.complete();
+    await tester.pumpAndSettle();
+
+    expect(container.read(selectedChannelIdProvider), isNull,
+        reason: 'an element-equal channels settle must still re-notify, so the '
+            'departed DM pick clears rather than becoming a ghost');
+  });
 }
