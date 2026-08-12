@@ -348,4 +348,49 @@ void main() {
     gate.complete();
     await tester.pumpAndSettle();
   });
+
+  testWidgets('a superseded run completing LAST still cannot publish (r5)',
+      (tester) async {
+    // Carnot round-5 HIGH: the earlier stale-run test let run A finish FIRST.
+    // The untested axis is the reverse — run A (stale) resolving AFTER run B has
+    // already published and retired the seed. If Riverpod's discard of a
+    // superseded result is anything less than total, A's pre-mint list lands
+    // last, `visibleDmsProvider` drops the DM, and the heal clears the
+    // selection. Same probe shape, opposite ordering: repeating the first test
+    // would prove nothing about this.
+    setWide(tester);
+    final rest = FakeRestApi(channels: const [generalChannel]);
+    rest.membersByChannel['dm:me:alice'] = roster;
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // Run A: issued while the island reports no DMs, held open.
+    final gateA = Completer<void>();
+    rest.listDmsGate = gateA;
+    container.invalidate(dmsProvider);
+    await tester.pump();
+
+    // Run B: issued after the DM exists, held on its OWN gate.
+    rest.dms = const [dm];
+    final gateB = Completer<void>();
+    rest.listDmsGate = gateB;
+    container.invalidate(dmsProvider);
+    await tester.pump();
+
+    // B lands first and publishes the DM; A lands afterwards with its stale list.
+    gateB.complete();
+    await tester.pumpAndSettle();
+    expect(container.read(visibleDmsProvider), contains(dm));
+
+    gateA.complete();
+    await tester.pumpAndSettle();
+
+    expect(container.read(visibleDmsProvider), contains(dm),
+        reason: 'a superseded run must not publish even when it finishes last');
+    expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsOneWidget);
+  });
 }

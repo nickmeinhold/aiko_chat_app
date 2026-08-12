@@ -127,11 +127,18 @@ enum _Verb {
 ///
 /// Defence-in-depth on the UGC block boundary (cage-match #132 Tesla, HIGH). A
 /// blocked user's messages are already filtered out of the list, so these
-/// actions are normally unreachable; but each is a NEW contact surface and must
-/// FAIL CLOSED rather than lean on that upstream filter. The island is the real
-/// boundary (backend-first — #2633 Decision 5 has the DM *send* block-gated,
-/// with the video-token path tracked); this refuses the client attempt so a
-/// blocked pair never even requests a channel.
+/// actions are normally unreachable; each is a NEW contact surface, so it
+/// refuses locally rather than leaning on that upstream filter.
+///
+/// Scope of the claim, stated honestly (cage-match #133, Carnot): this is
+/// BEST-EFFORT, not fail-closed. [blockedUserIdsProvider] collapses loading and
+/// error to an empty set (`orElse`), so while the block list is unresolved this
+/// refuses nothing and the attempt reaches the island. That is the right
+/// direction for a reversible capability — refusing to open a conversation
+/// because a list has not loaded strands the user over a transient fetch — but
+/// it means the ISLAND is the boundary, not this check (backend-first; #2633
+/// Decision 5 has the DM *send* block-gated, with the video-token path tracked).
+/// Read this as "do not even ask when we know better", not as enforcement.
 bool _refuseBlocked(
   ScaffoldMessengerState messenger,
   WidgetRef ref,
