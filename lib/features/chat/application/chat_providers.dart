@@ -138,11 +138,37 @@ class _LastKnownDms extends Notifier<({String userId, List<Channel> dms})?> {
   /// (fresh, or the cache belongs to a prior session) — never another user's list.
   List<Channel> forUser(String userId) =>
       (state != null && state!.userId == userId) ? state!.dms : const [];
+
+  /// Union a single just-opened DM (idempotent by id) into [userId]'s cache, so an
+  /// authoritatively-minted DM survives even if the refetch meant to surface it
+  /// fails soft (see [seedOpenedDm]). Replaces any cache belonging to a different
+  /// user, matching [forUser]'s per-user gate.
+  void union(String userId, Channel dm) {
+    final current = forUser(userId);
+    if (current.any((c) => c.id == dm.id)) return;
+    state = (userId: userId, dms: [...current, dm]);
+  }
 }
 
 final _lastKnownDmsProvider =
     NotifierProvider<_LastKnownDms, ({String userId, List<Channel> dms})?>(
         _LastKnownDms.new);
+
+/// Seed a just-opened DM into the DM set so it is navigable + subscribed even if
+/// the `GET /v1/dm` refetch that would normally surface it fails soft (cage-match
+/// #132, Tesla HIGH): `openDm`'s returned channel is AUTHORITATIVE for that
+/// conversation, so its existence must not ride on a fragile full-list refetch —
+/// a failed refetch would otherwise return the stale last-known list WITHOUT the
+/// new DM, dropping it from the sidebar and the repo's subscription set while a
+/// call to that room is already in flight. Unions into last-known FIRST, then
+/// invalidates so a successful refetch still overwrites with server truth. No-op
+/// when logged out. Idempotent (the caller only seeds a DM not already listed).
+void seedOpenedDm(WidgetRef ref, Channel dm) {
+  final userId = ref.read(currentUserProvider)?.userId;
+  if (userId == null) return;
+  ref.read(_lastKnownDmsProvider.notifier).union(userId, dm);
+  ref.invalidate(dmsProvider);
+}
 
 /// My DM channels (`GET /v1/dm`) — the SEPARATE source feeding the sidebar's DM
 /// section (DMs are excluded from [channelsProvider] by island design) AND the

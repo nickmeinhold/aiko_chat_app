@@ -72,11 +72,13 @@ String senderDisplayName(
 /// * only-me in the roster → a self-DM ("Notes to self").
 String dmPeerTitle(Map<String, String>? roster, String? myId) {
   if (roster == null || roster.isEmpty || myId == null) return 'Direct message';
-  // Skip a blank handle so the row is never titled '' (cage-match Tesla) — a peer
-  // with no handle yet falls through to the neutral label, not an empty string.
-  final peer = roster.entries
-      .where((e) => e.key != myId && e.value.isNotEmpty)
-      .map((e) => e.value)
-      .firstOrNull;
-  return peer ?? 'Notes to self';
+  // Three DISTINCT cases (cage-match #132 Carnot — a blank peer handle must NOT
+  // read as a self-DM): a roster with no non-me member is a true self-DM; a peer
+  // WITH a handle titles the row; a peer with no handle yet is still a peer, so a
+  // neutral label, never '' and never 'Notes to self'.
+  final peers = roster.entries.where((e) => e.key != myId).toList();
+  if (peers.isEmpty) return 'Notes to self';
+  final named =
+      peers.where((e) => e.value.isNotEmpty).map((e) => e.value).firstOrNull;
+  return named ?? 'Direct message';
 }
