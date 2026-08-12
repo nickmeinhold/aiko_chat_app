@@ -472,6 +472,20 @@ class GatewayRestApi implements ChatRestApi {
   );
 
   @override
+  Future<List<Channel>> listDms() => _mapNetwork(
+    () => _authedCall(() async {
+      final r = await _authed.get('/v1/dm');
+      final list = (_map(r.data)['channels'] as List?) ?? const [];
+      // Each item is a dm_channel_view (+ last_message, unused in Inc 1). Parse
+      // via fromDmJson, which reads `channel_id` and FAILS CLOSED on kind != dm —
+      // a contract-drifted non-dm row must never slip into the DM section.
+      return list
+          .map((e) => Channel.fromDmJson((e as Map).cast<String, dynamic>()))
+          .toList();
+    }),
+  );
+
+  @override
   Future<VideoToken> requestVideoToken(String channelId) => _mapNetwork(
     () async {
       try {

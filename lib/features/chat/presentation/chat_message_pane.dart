@@ -19,7 +19,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/network_status_banner.dart';
 import '../application/chat_providers.dart';
-import '../domain/channel.dart';
 import 'chat_screen.dart';
 
 class ChatMessagePane extends ConsumerWidget {
@@ -29,8 +28,10 @@ class ChatMessagePane extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final channelsAsync = ref.watch(channelsProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
-    final channels = channelsAsync.value ?? const <Channel>[];
-    final active = ChatScreen.resolveActive(channels, selectedId);
+    // Active over channels ∪ DMs so a selected DM renders (#2798); the channel
+    // load/error gating below still keys off channelsProvider.
+    final active =
+        ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);
 
     return Column(
       children: [

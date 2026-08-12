@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../call/presentation/call_screen.dart' show pushCall;
+import '../../chat/application/chat_providers.dart' show dmsProvider;
 import '../../chat/data/chat_rest_api.dart'
     show DmTargetNotFound, NetworkUnavailable;
 import '../../chat/domain/message.dart';
@@ -109,6 +110,11 @@ Future<void> _call(
     // costs at most one redundant idempotent open, never a second call nor a
     // swallowed tap (cage-match Tesla, latch-scope).
     final dm = await ref.read(restApiProvider).openDm(userId);
+    // Surface the just-opened DM in the sidebar (and the repo's subscription set)
+    // so it is navigable when the user returns from the call — otherwise a DM you
+    // created by calling someone wouldn't appear until the next dmsProvider refresh
+    // (#2798). Idempotent openDm means this may re-list an existing DM (a no-op).
+    ref.invalidate(dmsProvider);
     if (!context.mounted) return;
     await pushCall(context, dm.id);
   } on DmTargetNotFound {

@@ -120,6 +120,40 @@ final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   }
 });
 
+/// My DM channels (`GET /v1/dm`) — the SEPARATE source feeding the sidebar's DM
+/// section (DMs are excluded from [channelsProvider] by island design) AND the
+/// repo's subscription set (their ids are merged in [chatRepositoryProvider], so
+/// the repo subscribes + fetches history for DMs exactly as for channels).
+///
+/// Fails SOFT: on [NetworkUnavailable] it returns `[]` rather than throwing, so
+/// an offline / gateway-down DM fetch degrades to "no DMs" instead of tearing
+/// down the whole chat surface — the repo watches this provider's future, and a
+/// throw here would take the channel chat down with it. DMs are not offline-cached
+/// yet (a later increment); until then offline simply means no DM section. Watches
+/// the device-online edge so the list refetches when the network returns, matching
+/// [channelsProvider]'s recovery.
+final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
+  final user = ref.watch(authControllerProvider).value;
+  if (user == null) return const [];
+  ref.watch(deviceOnlineProvider);
+  try {
+    return await ref.watch(restApiProvider).listDms();
+  } on NetworkUnavailable {
+    return const [];
+  }
+});
+
+/// Channels ∪ DMs — every navigable conversation, as ONE list, so the active-
+/// channel resolver ([ChatScreen.resolveActive]) and its self-heal treat a
+/// selected DM id exactly like a channel id (a DM pick must resolve, not fall
+/// back to the first channel). The sidebar still renders the two SOURCES in
+/// separate sections; this is only the resolver's combined view.
+final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
+  final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
+  final dms = ref.watch(dmsProvider).value ?? const <Channel>[];
+  return [...channels, ...dms];
+});
+
 /// The reconcile engine, fully wired and connected. Construction requires the
 /// authenticated [AppUser] (for optimistic "me" rendering) and the fixed
 /// subscription set (from [channelsProvider]); it then wires streams once and
@@ -141,6 +175,12 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     throw StateError('chatRepository requires an authenticated user');
   }
   final channels = await ref.watch(channelsProvider.future);
+  // DMs join the subscription set the same way channels do. Watching this future
+  // means opening a brand-new DM (which invalidates [dmsProvider]) rebuilds the
+  // repo through the SAME path a reconnect already uses — subscribe + history for
+  // the new id — rather than an internal mutable-set path racing the backpressure
+  // valve and reconnect epochs (approach A, #2798). Fails soft to [] offline.
+  final dms = await ref.watch(dmsProvider.future);
 
   // Load the device sovereign signing key (sovereign-message-signing). Wired
   // here in the PRODUCTION provider — a nullable injectable silently no-ops if
@@ -153,7 +193,10 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     transport: ref.watch(transportProvider),
     rest: ref.watch(restApiProvider),
     me: user,
-    subscribedChannelIds: channels.map((c) => c.id).toList(),
+    subscribedChannelIds: [
+      ...channels.map((c) => c.id),
+      ...dms.map((d) => d.id),
+    ],
     signingKey: signingKey,
     // Wire the REAL telemetry sink (via [chatTelemetryProvider]) so the
     // reconcile engine's must-be-seen events (orphan ack, reconnect failure, the
