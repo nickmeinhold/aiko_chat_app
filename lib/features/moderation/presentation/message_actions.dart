@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../call/presentation/call_screen.dart' show pushCall;
+import '../../chat/application/chat_providers.dart' show dmsProvider, seedOpenedDm;
 import '../../chat/data/chat_rest_api.dart'
     show DmTargetNotFound, NetworkUnavailable;
 import '../../chat/domain/message.dart';
@@ -109,6 +110,19 @@ Future<void> _call(
     // costs at most one redundant idempotent open, never a second call nor a
     // swallowed tap (cage-match Tesla, latch-scope).
     final dm = await ref.read(restApiProvider).openDm(userId);
+    // Surface a NEWLY-opened DM in the sidebar + subscription set so it is
+    // navigable on return from the call. Seed ONLY when the DM isn't already
+    // listed: openDm is idempotent, so calling someone you already DM with must not
+    // trigger a full repo rebuild (dispose→reconnect→resubscribe-all) on the hot
+    // call path (cage-match Tesla — call-path churn). seedOpenedDm writes the DM
+    // into last-known FIRST, then invalidates, so the just-opened room survives even
+    // if the refetch fails soft (cage-match Tesla HIGH — otherwise a failed refetch
+    // returns the stale list WITHOUT this DM, dropping it from the subscription set
+    // while its call is in flight).
+    final knownDms = ref.read(dmsProvider).value ?? const [];
+    if (!knownDms.any((d) => d.id == dm.id)) {
+      seedOpenedDm(ref, dm);
+    }
     if (!context.mounted) return;
     await pushCall(context, dm.id);
   } on DmTargetNotFound {

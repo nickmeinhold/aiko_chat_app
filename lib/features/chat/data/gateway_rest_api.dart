@@ -472,6 +472,28 @@ class GatewayRestApi implements ChatRestApi {
   );
 
   @override
+  Future<List<Channel>> listDms() => _mapNetwork(
+    () => _authedCall(() async {
+      final r = await _authed.get('/v1/dm');
+      final list = (_map(r.data)['channels'] as List?) ?? const [];
+      // Parse PER ROW so one malformed / contract-drifted row can't vaporize the
+      // whole DM list (cage-match #132, Tesla — cf. the per-row isolation the
+      // reports queue already uses). fromDmJson reads `channel_id` and FAILS CLOSED
+      // on kind != dm; here a throw means "omit THAT row", not "no DMs". A skipped
+      // row leaves a dev breadcrumb rather than vanishing silently.
+      final dms = <Channel>[];
+      for (final e in list) {
+        try {
+          dms.add(Channel.fromDmJson((e as Map).cast<String, dynamic>()));
+        } catch (err) {
+          debugPrint('listDms: skipping a malformed DM row: $err');
+        }
+      }
+      return dms;
+    }),
+  );
+
+  @override
   Future<VideoToken> requestVideoToken(String channelId) => _mapNetwork(
     () async {
       try {

@@ -17,7 +17,7 @@ import '../../auth/domain/auth_models.dart';
 import '../../moderation/application/moderation_controller.dart';
 import '../data/channel_read_store.dart';
 import '../data/chat_repository.dart';
-import '../data/chat_rest_api.dart' show NetworkUnavailable;
+import '../data/chat_rest_api.dart' show NetworkUnavailable, Unauthorized;
 import '../data/transport/chat_transport.dart' show ConnectionState;
 import '../data/logging_chat_telemetry.dart';
 import '../domain/channel.dart';
@@ -120,6 +120,99 @@ final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   }
 });
 
+/// Last SUCCESSFUL DM list, PER USER, so a transient [dmsProvider] failure can
+/// degrade to STALE (keep the section, the subscriptions, and a live DM selection)
+/// rather than to `[]` — which the self-heal cannot tell apart from "authoritatively
+/// no DMs" and would eject the selection over (cage-match #132). Keyed by user id so
+/// a fetch failure right after a user switch can never surface the PREVIOUS user's
+/// DMs. Kept alive across [dmsProvider]'s autoDispose churn (a plain, keep-alive
+/// Notifier); a closed record is safe state.
+class _LastKnownDms extends Notifier<({String userId, List<Channel> dms})?> {
+  @override
+  ({String userId, List<Channel> dms})? build() => null;
+
+  void remember(String userId, List<Channel> dms) =>
+      state = (userId: userId, dms: dms);
+
+  /// The last-known DMs for [userId], or `[]` when nothing is cached for THIS user
+  /// (fresh, or the cache belongs to a prior session) — never another user's list.
+  List<Channel> forUser(String userId) =>
+      (state != null && state!.userId == userId) ? state!.dms : const [];
+
+  /// Union a single just-opened DM (idempotent by id) into [userId]'s cache, so an
+  /// authoritatively-minted DM survives even if the refetch meant to surface it
+  /// fails soft (see [seedOpenedDm]). Replaces any cache belonging to a different
+  /// user, matching [forUser]'s per-user gate.
+  void union(String userId, Channel dm) {
+    final current = forUser(userId);
+    if (current.any((c) => c.id == dm.id)) return;
+    state = (userId: userId, dms: [...current, dm]);
+  }
+}
+
+final _lastKnownDmsProvider =
+    NotifierProvider<_LastKnownDms, ({String userId, List<Channel> dms})?>(
+        _LastKnownDms.new);
+
+/// Seed a just-opened DM into the DM set so it is navigable + subscribed even if
+/// the `GET /v1/dm` refetch that would normally surface it fails soft (cage-match
+/// #132, Tesla HIGH): `openDm`'s returned channel is AUTHORITATIVE for that
+/// conversation, so its existence must not ride on a fragile full-list refetch —
+/// a failed refetch would otherwise return the stale last-known list WITHOUT the
+/// new DM, dropping it from the sidebar and the repo's subscription set while a
+/// call to that room is already in flight. Unions into last-known FIRST, then
+/// invalidates so a successful refetch still overwrites with server truth. No-op
+/// when logged out. Idempotent (the caller only seeds a DM not already listed).
+void seedOpenedDm(WidgetRef ref, Channel dm) {
+  final userId = ref.read(currentUserProvider)?.userId;
+  if (userId == null) return;
+  ref.read(_lastKnownDmsProvider.notifier).union(userId, dm);
+  ref.invalidate(dmsProvider);
+}
+
+/// My DM channels (`GET /v1/dm`) — the SEPARATE source feeding the sidebar's DM
+/// section (DMs are excluded from [channelsProvider] by island design) AND the
+/// repo's subscription set (their ids are merged in [chatRepositoryProvider], so
+/// the repo subscribes + fetches history for DMs exactly as for channels).
+///
+/// FAIL DIRECTIONS (both cage-match-hardened, #132):
+///  * terminal auth ([Unauthorized] / its subclass [AccountSuspended]) RETHROWS —
+///    a dead session must eject, never be masked as "no DMs" (Carnot HIGH);
+///  * every OTHER failure (NetworkUnavailable, 5xx, a poisoned `fromDmJson` row)
+///    degrades to the LAST-KNOWN list for this user, NOT `[]`. The repo
+///    hard-depends on this future for its subscription set, so a transient error
+///    must not reject and take channel chat down with it — and a stale-but-present
+///    list keeps the section, the subscriptions, and a live DM selection intact
+///    (an empty list is indistinguishable from authoritative-empty to the
+///    self-heal, which would then eject the selection). First-ever fetch failure →
+///    `[]` (nothing known yet). Watches the device-online edge so it refetches when
+///    the network returns.
+final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
+  final user = ref.watch(authControllerProvider).value;
+  if (user == null) return const [];
+  ref.watch(deviceOnlineProvider);
+  try {
+    final dms = await ref.watch(restApiProvider).listDms();
+    ref.read(_lastKnownDmsProvider.notifier).remember(user.userId, dms);
+    return dms;
+  } on Unauthorized {
+    rethrow;
+  } catch (_) {
+    return ref.read(_lastKnownDmsProvider.notifier).forUser(user.userId);
+  }
+});
+
+/// Channels ∪ DMs — every navigable conversation, as ONE list, so the active-
+/// channel resolver ([ChatScreen.resolveActive]) and its self-heal treat a
+/// selected DM id exactly like a channel id (a DM pick must resolve, not fall
+/// back to the first channel). The sidebar still renders the two SOURCES in
+/// separate sections; this is only the resolver's combined view.
+final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
+  final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
+  final dms = ref.watch(dmsProvider).value ?? const <Channel>[];
+  return [...channels, ...dms];
+});
+
 /// The reconcile engine, fully wired and connected. Construction requires the
 /// authenticated [AppUser] (for optimistic "me" rendering) and the fixed
 /// subscription set (from [channelsProvider]); it then wires streams once and
@@ -141,6 +234,12 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     throw StateError('chatRepository requires an authenticated user');
   }
   final channels = await ref.watch(channelsProvider.future);
+  // DMs join the subscription set the same way channels do. Watching this future
+  // means opening a brand-new DM (which invalidates [dmsProvider]) rebuilds the
+  // repo through the SAME path a reconnect already uses — subscribe + history for
+  // the new id — rather than an internal mutable-set path racing the backpressure
+  // valve and reconnect epochs (approach A, #2798). Fails soft to [] offline.
+  final dms = await ref.watch(dmsProvider.future);
 
   // Load the device sovereign signing key (sovereign-message-signing). Wired
   // here in the PRODUCTION provider — a nullable injectable silently no-ops if
@@ -153,7 +252,14 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
     transport: ref.watch(transportProvider),
     rest: ref.watch(restApiProvider),
     me: user,
-    subscribedChannelIds: channels.map((c) => c.id).toList(),
+    // A set literal (insertion-ordered) dedupes: DMs are excluded from
+    // listChannels by island design, so channels ∩ dms is empty TODAY — but a
+    // contract drift (a DM leaking into GET /v1/channels) must fail closed to a
+    // single subscription, never a double-subscribe (cage-match Tesla).
+    subscribedChannelIds: <String>{
+      ...channels.map((c) => c.id),
+      ...dms.map((d) => d.id),
+    }.toList(),
     signingKey: signingKey,
     // Wire the REAL telemetry sink (via [chatTelemetryProvider]) so the
     // reconcile engine's must-be-seen events (orphan ack, reconnect failure, the

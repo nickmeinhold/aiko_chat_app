@@ -386,6 +386,16 @@ abstract interface class ChatRestApi {
   /// auth rejection, and [NetworkUnavailable] when the island is unreachable.
   Future<Channel> openDm(String targetUserId);
 
+  /// My DM channels (`GET /v1/dm`, DM handoff #2633) — the SEPARATE source for
+  /// the sidebar's DM section, since DMs are EXCLUDED from [listChannels] by
+  /// island design. Each returned [Channel] has `kind == dm` and an empty `name`
+  /// (a DM's title is the peer, resolved from the roster). Throws [Unauthorized]
+  /// on a terminal auth rejection and [NetworkUnavailable] when the island is
+  /// unreachable. The caller ([dmsProvider]) RETHROWS terminal auth but fails SOFT
+  /// on every other error, degrading to the LAST-KNOWN DM list (stale, not empty)
+  /// so a transient hiccup never ejects a live DM selection nor breaks channel chat.
+  Future<List<Channel>> listDms();
+
   /// Mint a LiveKit join token for an A/V call in [channelId] (handoff #2726).
   /// The room IS the channel; participant identity is server-derived. Throws
   /// [VideoNotEnabled] on a 503 (deployment has no video), [Unauthorized] on a

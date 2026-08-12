@@ -23,6 +23,7 @@ import '../../settings/data/gateway_directory_client.dart';
 import '../../settings/presentation/gateway_switch_action.dart';
 import '../application/chat_providers.dart';
 import '../domain/channel.dart';
+import '../domain/channel_member.dart';
 import 'chat_screen.dart';
 
 class ChatSidebar extends ConsumerWidget {
@@ -33,8 +34,10 @@ class ChatSidebar extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final channelsAsync = ref.watch(channelsProvider);
     final channels = channelsAsync.value ?? const <Channel>[];
+    final dms = ref.watch(dmsProvider).value ?? const <Channel>[];
     final selectedId = ref.watch(selectedChannelIdProvider);
-    final active = ChatScreen.resolveActive(channels, selectedId);
+    final active =
+        ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);
 
     // Tinted a step off the pane's surface so the rail reads as chrome, not
     // content.
@@ -57,9 +60,15 @@ class ChatSidebar extends ConsumerWidget {
                     child: Text('Could not load channels.\n$e'),
                   ),
                   data: (_) {
-                    if (channels.isEmpty) {
+                    // Empty only when BOTH sources are empty — a user with no
+                    // channels but open DMs still sees their DM section (#2798).
+                    if (channels.isEmpty && dms.isEmpty) {
                       return const Center(child: Text('No channels yet.'));
                     }
+                    // Channels and DMs share ONE scrollable list (the DM section
+                    // sits below the channel list, per the design anchor) so a long
+                    // combined list scrolls as a unit rather than overflowing a
+                    // fixed slot.
                     return ListView(
                       padding: const EdgeInsets.symmetric(vertical: 4),
                       children: [
@@ -68,14 +77,25 @@ class ChatSidebar extends ConsumerWidget {
                             channel: c,
                             selected: c.id == active?.id,
                           ),
+                        if (dms.isNotEmpty) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                            child: Text(
+                              'Direct messages',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                          ),
+                          for (final d in dms)
+                            _SidebarDmTile(dm: d, selected: d.id == active?.id),
+                        ],
                       ],
                     );
                   },
                 ),
               ),
-              // DMs slot (deferred): a direct-messages section will mount here,
-              // below the channel list and above the footer. Intentionally no
-              // dead UI shipped — only this anchor.
               const Divider(height: 1),
               const _SidebarFooter(),
             ],
@@ -113,6 +133,41 @@ class _SidebarChannelTile extends ConsumerWidget {
           ? null
           : () =>
               ref.read(selectedChannelIdProvider.notifier).select(channel.id),
+    );
+  }
+}
+
+/// One DM row in the Direct-messages section. A DM has no server `name`
+/// (identity=key, ADR-0004: a DM's title IS the peer), so the label is the peer's
+/// CURRENT handle, resolved from the channel roster the SAME way message sender
+/// names resolve ([channelRosterProvider], PR #127) — a rename retitles the row.
+/// Selection routes through the SAME mutator as channels and the dropdown. A
+/// self-DM (notes-to-self) shows "Notes to self"; an unresolved roster falls back
+/// to a neutral label rather than leaking the opaque key. No unread badge yet
+/// (Inc 2, #2798).
+///
+/// Named tradeoff: this watches one roster per visible DM (a `GET /members` each),
+/// fine at the current handful-of-DMs scale; batch or fold the peer handle into
+/// GET /v1/dm if the DM list grows.
+class _SidebarDmTile extends ConsumerWidget {
+  const _SidebarDmTile({required this.dm, required this.selected});
+
+  final Channel dm;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final myId = ref.watch(currentUserProvider)?.userId;
+    final roster = ref.watch(channelRosterProvider(dm.id)).value;
+    return ListTile(
+      key: Key('sidebar-dm-${dm.id}'),
+      selected: selected,
+      dense: true,
+      leading: const Icon(Icons.alternate_email, size: 20),
+      title: Text(dmPeerTitle(roster, myId), overflow: TextOverflow.ellipsis),
+      onTap: selected
+          ? null
+          : () => ref.read(selectedChannelIdProvider.notifier).select(dm.id),
     );
   }
 }

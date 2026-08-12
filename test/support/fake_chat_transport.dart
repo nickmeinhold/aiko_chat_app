@@ -178,6 +178,9 @@ class FakeChatRestApi implements ChatRestApi {
   Future<List<Channel>> listChannels() => throw UnimplementedError();
 
   @override
+  Future<List<Channel>> listDms() => throw UnimplementedError();
+
+  @override
   Future<List<ChannelMember>> listMembers(String channelId) =>
       throw UnimplementedError();
 

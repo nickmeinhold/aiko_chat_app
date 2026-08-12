@@ -33,6 +33,9 @@ class FakeRestApi implements ChatRestApi {
   AppUser user;
   List<Channel> channels;
 
+  /// The DM channels [listDms] returns (empty by default — most tests have none).
+  List<Channel> dms = const [];
+
   /// If set, `me()` (cold-start restore) throws this.
   Object? meThrows;
 
@@ -201,6 +204,16 @@ class FakeRestApi implements ChatRestApi {
       throw e;
     }
     return channels;
+  }
+
+  /// If set, `listDms()` throws this (e.g. `NetworkUnavailable` to exercise the
+  /// fail-soft branch in `dmsProvider`).
+  Object? listDmsThrows;
+
+  @override
+  Future<List<Channel>> listDms() async {
+    if (listDmsThrows != null) throw listDmsThrows!;
+    return dms;
   }
 
   /// If set, [requestVideoToken] throws this (e.g. `VideoNotEnabled`).

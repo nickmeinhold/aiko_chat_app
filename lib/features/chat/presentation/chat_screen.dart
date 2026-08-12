@@ -53,19 +53,32 @@ class ChatScreen extends ConsumerWidget {
     final channelsAsync = ref.watch(channelsProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
     final channels = channelsAsync.value ?? const <Channel>[];
-    final active = resolveActive(channels, selectedId);
+    // Resolve the active conversation over channels ∪ DMs so a selected DM stays
+    // active (a DM id is never in channelsProvider — DMs are a separate source,
+    // #2798). The narrow app-bar switcher below still lists `channels` only; the
+    // wide sidebar is the DM entry point.
+    final active = resolveActive(ref.watch(navigableChannelsProvider), selectedId);
 
-    // If the picked channel leaves the list (removed / renamed-away on a refetch),
-    // clear the pick so the Notifier and the UI agree. Without this the resolver
-    // heals only the DISPLAY (falls back to first) while the stale id lingers, so a
-    // channel that later reappears would snap the user back to a selection they
-    // never re-made (cage-match #106, Tesla). ref.listen fires outside build, so
-    // mutating the selection notifier here is safe. Runs in BOTH layouts (it's
-    // above the width fork).
-    ref.listen(channelsProvider, (_, next) {
-      final ids = next.value?.map((c) => c.id).toSet();
+    // If the picked conversation leaves the list (removed / renamed-away on a
+    // refetch), clear the pick so the Notifier and the UI agree. Without this the
+    // resolver heals only the DISPLAY (falls back to first) while the stale id
+    // lingers, so a channel that later reappears would snap the user back to a
+    // selection they never re-made (cage-match #106, Tesla). ref.listen fires
+    // outside build, so mutating the selection notifier here is safe.
+    //
+    // Heal over channels ∪ DMs, and ONLY once BOTH sources have settled: a DM id
+    // is absent from channelsProvider, so healing against channels alone would
+    // clear every DM pick, and healing against the combined list mid-load (channels
+    // resolved, DMs still arriving) would clear a valid DM in the gap (#2798 — the
+    // self-heal must know about DMs, first-arrival-before-init included).
+    ref.listen(navigableChannelsProvider, (_, next) {
       final sel = ref.read(selectedChannelIdProvider);
-      if (sel != null && ids != null && !ids.contains(sel)) {
+      if (sel == null) return;
+      if (!ref.read(channelsProvider).hasValue ||
+          !ref.read(dmsProvider).hasValue) {
+        return; // don't heal until both sources are loaded
+      }
+      if (!next.any((c) => c.id == sel)) {
         ref.read(selectedChannelIdProvider.notifier).clear();
       }
     });
@@ -81,9 +94,16 @@ class ChatScreen extends ConsumerWidget {
       appBar: isWide
           ? null
           : AppBar(
-              title: channels.length > 1 && active != null
+              // Gate the channel switcher to a NON-DM active channel: its
+              // DropdownButton uses activeId as `value`, and a DM id is never in
+              // the channels-only item list → Flutter asserts. A DM (selected on
+              // wide, then resized to narrow) renders a title instead of the
+              // switcher (cage-match Carnot+Tesla — this crashed at the fork).
+              title: channels.length > 1 &&
+                      active != null &&
+                      active.kind != ChannelKind.dm
                   ? _ChannelSwitcher(channels: channels, activeId: active.id)
-                  : Text(active?.name ?? 'Chat'),
+                  : _ConversationTitle(active: active),
               actions: [
                 IconButton(
                   tooltip: 'Search',
@@ -122,6 +142,28 @@ class ChatScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+/// The narrow-layout AppBar title for whatever conversation is active when the
+/// channel switcher is NOT shown (≤1 channel, or a DM is active). A channel shows
+/// its name; a DM shows the peer's handle (roster-resolved, like the sidebar row),
+/// since a DM has no name. This exists so a DM id never reaches [_ChannelSwitcher]'s
+/// DropdownButton `value` (no matching item → assertion) — narrow DM *entry* stays
+/// deferred (#2798 Inc 1); this only titles an already-active DM sanely.
+class _ConversationTitle extends ConsumerWidget {
+  const _ConversationTitle({required this.active});
+
+  final Channel? active;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final a = active;
+    if (a == null) return const Text('Chat');
+    if (a.kind != ChannelKind.dm) return Text(a.name);
+    final myId = ref.watch(currentUserProvider)?.userId;
+    final roster = ref.watch(channelRosterProvider(a.id)).value;
+    return Text(dmPeerTitle(roster, myId));
   }
 }
 

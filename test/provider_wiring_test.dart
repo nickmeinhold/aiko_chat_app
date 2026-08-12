@@ -64,6 +64,10 @@ ProviderContainer _repoGraphContainer({ChatTelemetry? telemetryOverride}) {
   return ProviderContainer(overrides: [
     authControllerProvider.overrideWith(() => _FixedAuthController(_me)),
     channelsProvider.overrideWith((ref) async => const <Channel>[]),
+    // The repo also derives its subscription set from dmsProvider; stub it empty
+    // (FakeChatRestApi.listDms throws UnimplementedError — this test wires
+    // telemetry/signing, not DMs).
+    dmsProvider.overrideWith((ref) async => const <Channel>[]),
     // FakeChatTransport.connect() is a no-op, so the production body's
     // `await transport.connect()` never opens a socket.
     transportProvider.overrideWithValue(FakeChatTransport()),
