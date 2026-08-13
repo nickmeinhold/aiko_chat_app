@@ -565,6 +565,68 @@ void main() {
         reason: 'the no-op path must still converge disk onto current state');
   });
 
+  testWidgets('a DM with an UNRESOLVED roster offers no mute verb it cannot honour',
+      (tester) async {
+    // The axis the other DM fixtures never vary: `membersByChannel` is always
+    // planted, so the roster is resolved by the first settle. With it absent, the
+    // peer is unknown — and unread suppression does NOT need a roster, so the row
+    // can be silent for a reason nothing on screen can name. Acting there would
+    // stamp a conversation mute on someone possibly already muted everywhere, or
+    // unmute one cause and leave the other (cage-match #135 round 8, Tesla).
+    setWide(tester);
+    const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
+    final rest = FakeRestApi(channels: twoChannels);
+    rest.dms = [dm];
+    // NOTE: no membersByChannel['dm1'] — the roster never resolves.
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // The row exists and is selectable...
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
+    // ...but long-press offers nothing, because no honest verb exists yet.
+    await tester.longPress(find.byKey(const Key('sidebar-dm-dm1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Mute'), findsNothing);
+    expect(find.text('Unmute'), findsNothing);
+    expect(container.read(mutedChannelIdsProvider), isEmpty);
+  });
+
+  testWidgets('the message sheet mutes an ACCOUNT, with Undo (the only user-mute door)',
+      (tester) async {
+    // The one writer of MuteTarget.user had no widget test — three doors, two
+    // proofs (cage-match #135 round 8, Tesla).
+    setWide(tester);
+    final transport = FakeChatTransport();
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels), transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    transport.emitConn(ConnectionState.connected);
+    await settle(tester);
+    transport.emitMessage(inbound('c1', ulid('0A'), 'u2', 'noisy one'));
+    await settle(tester);
+
+    await tester.longPress(find.text('noisy one'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Mute User u2'));
+    await settle(tester);
+
+    expect(container.read(mutedUserIdsProvider), contains('u2'));
+    // ...and the message is STILL on screen — mute is not block.
+    expect(find.text('noisy one'), findsOneWidget);
+
+    // Undo restores.
+    await tester.tap(find.text('Undo'));
+    await settle(tester);
+    expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
+  });
+
   testWidgets('published mute sets are unmodifiable (no back door past the store)',
       (tester) async {
     // The provider type is `Set<String>`, which invites direct mutation — that

@@ -140,6 +140,10 @@ class _MuteGesture extends ConsumerWidget {
     // logout/user-switch is dropped rather than written into another account
     // (cage-match #135 round 3, Tesla).
     final expectUserId = ref.watch(currentUserProvider)?.userId;
+    // No menu at all while this DM's peer is unknown — offering a verb we cannot
+    // honour is worse than offering none for the moment a roster takes to land
+    // (cage-match #135 round 8, Tesla).
+    if (mute.indeterminate) return child;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onLongPressEnd: (d) => _show(context, container,
@@ -340,7 +344,8 @@ class _SidebarDmTile extends ConsumerWidget {
     // as completely as muting the conversation — the row must say so, and its
     // menu must be able to undo THAT rather than offering a mute the user
     // already has (see [ConversationMute]).
-    final mute = watchConversationMute(ref, dm.id, peerId: dmPeerId(roster, myId));
+    final mute = watchConversationMute(ref, dm.id,
+        peerId: dmPeerId(roster, myId), hasPeer: true);
     return _MuteGesture(
       key: Key('mute-gesture-${dm.id}'), // see _SidebarChannelTile — slot vs identity
       mute: mute,

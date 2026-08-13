@@ -178,6 +178,7 @@ class ConversationMute {
     required this.peerId,
     required this.byConversation,
     required this.byPeer,
+    this.indeterminate = false,
   }) : assert(!byPeer || peerId != null,
             'byPeer without a peerId is a cause apply() cannot clear');
 
@@ -194,12 +195,14 @@ class ConversationMute {
   factory ConversationMute.from({
     required String conversationId,
     required String? peerId,
+    required bool hasPeer,
     required Set<String> mutedConversations,
     required Set<String> mutedUsers,
   }) =>
       ConversationMute(
         conversationId: conversationId,
         peerId: peerId,
+        indeterminate: hasPeer && peerId == null,
         byConversation: mutedConversations.contains(conversationId),
         byPeer: peerId != null && mutedUsers.contains(peerId),
       );
@@ -208,6 +211,19 @@ class ConversationMute {
 
   /// The DM's single peer, or null for a group channel / unresolved roster.
   final String? peerId;
+
+  /// This conversation HAS a peer whose identity is not known yet — a DM whose
+  /// roster is still loading or whose `GET /members` failed.
+  ///
+  /// Distinct from "no peer" (a group channel), and the distinction is
+  /// load-bearing: unread suppression filters muted SENDERS per message with no
+  /// roster at all, so during this window the row can be silent for a reason
+  /// nothing on screen can name. Treating that as "not peer-muted" let controls
+  /// act on a false premise — offering Mute for someone already silenced
+  /// everywhere, or an unmute that clears the conversation and leaves the account
+  /// ringing (cage-match #135 round 8, Tesla). Callers must refuse to ACT while
+  /// this is true: unknown is not unmuted.
+  final bool indeterminate;
 
   final bool byConversation;
   final bool byPeer;
@@ -232,6 +248,13 @@ class ConversationMute {
   /// lesson, in the time domain).
   void apply(Mutes mutes,
       {required bool muted, required String? expectUserId}) {
+    // Refuse to act on an unfinished cause list. `apply` deliberately does not
+    // trust snapshotted FLAGS, but a null peer is not "no peer" here — it is a
+    // peer we have not learned yet, so muting could stamp a conversation mute on
+    // someone already silenced everywhere, and unmuting would clear one cause and
+    // leave the other (cage-match #135 round 8, Tesla). Callers disable their
+    // controls in this window; this is the backstop.
+    if (indeterminate) return;
     if (muted) {
       mutes.setMuted(MuteTarget.channel, conversationId,
           muted: true, expectUserId: expectUserId);
@@ -253,14 +276,20 @@ class ConversationMute {
 ///
 /// Both sets are watched UNCONDITIONALLY before deriving, so this widget's
 /// dependency set never becomes a function of whether a roster has resolved.
+/// [hasPeer] says whether this conversation HAS an other-party at all (true for a
+/// DM, false for a group channel) — so a null [peerId] can be read as "not yet
+/// known" rather than "none", which is what keeps controls from acting on a
+/// premise they have not established.
 ConversationMute watchConversationMute(
   WidgetRef ref,
   String conversationId, {
   String? peerId,
+  bool hasPeer = false,
 }) =>
     ConversationMute.from(
       conversationId: conversationId,
       peerId: peerId,
+      hasPeer: hasPeer,
       mutedConversations: ref.watch(mutedChannelIdsProvider),
       mutedUsers: ref.watch(mutedUserIdsProvider),
     );

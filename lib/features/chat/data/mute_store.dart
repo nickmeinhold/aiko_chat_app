@@ -50,11 +50,33 @@ class MuteStore {
 
   String _key(String userId) => '$_prefix$userId';
 
+  /// The last snapshot this store was ASKED to persist, per user — recorded
+  /// synchronously by [replaceAll] and preferred by [readAll] over the encoded
+  /// payload.
+  ///
+  /// This store is keep-alive while `mutesProvider` is `.autoDispose`, which
+  /// makes it the only component that outlives every write it starts. Without
+  /// this, a mute made just before the chat surface tore down could be read back
+  /// STALE by the next incarnation — the notifier hydrates from a payload the
+  /// queued write has not reached, publishes "unmuted", and then the in-flight
+  /// write lands "muted": memory and disk in opposite phases, resurrecting a mute
+  /// the user cannot see at the next launch (cage-match #135 round 8, Tesla; the
+  /// same class as round 7's undo race, in the other direction).
+  ///
+  /// Recording the intent at CALL time rather than at completion means "what this
+  /// account has muted" has exactly one answer from the moment it is decided, and
+  /// disk is purely the durable copy that catches up.
+  final Map<String, Map<MuteTarget, Set<String>>> _latest = {};
+
   /// Every mute [userId] holds, as `target → ids`. A missing or corrupt payload
   /// reads as empty sets (self-heals on the next write) — a lost mute costs a
   /// badge reappearing, which the user can see and redo, so failing OPEN here is
   /// strictly safer than failing closed on state we cannot repair.
   Map<MuteTarget, Set<String>> readAll(String userId) {
+    final latest = _latest[userId];
+    if (latest != null) {
+      return {for (final t in MuteTarget.values) t: {...latest[t] ?? const {}}};
+    }
     final empty = {for (final t in MuteTarget.values) t: <String>{}};
     final raw = _prefs.getString(_key(userId));
     if (raw == null || raw.isEmpty) return empty;
@@ -103,6 +125,12 @@ class MuteStore {
   /// is its dump, and a failed write SELF-HEALS on the next one because that
   /// next write carries the whole truth rather than a delta onto a stale base.
   Future<void> replaceAll(String userId, Map<MuteTarget, Set<String>> mutes) {
+    // Record the intent SYNCHRONOUSLY, before anything is queued, so a reader
+    // arriving between now and the platform write sees what was decided rather
+    // than what has landed (see [_latest]).
+    _latest[userId] = {
+      for (final t in MuteTarget.values) t: {...mutes[t] ?? const <String>{}}
+    };
     final payload = jsonEncode({
       for (final t in MuteTarget.values)
         t.jsonKey: (mutes[t] ?? const <String>{})

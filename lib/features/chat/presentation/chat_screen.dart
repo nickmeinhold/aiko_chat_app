@@ -185,7 +185,19 @@ class _MuteConversationAction extends ConsumerWidget {
           ? dmPeerId(ref.watch(channelRosterProvider(conversation.id)).value,
               ref.watch(currentUserProvider)?.userId)
           : null,
+      hasPeer: conversation.kind == ChannelKind.dm,
     );
+    // Disabled — not hidden — while a DM's peer is unknown: the control keeps its
+    // place in the bar but cannot stamp a conversation mute on someone who may
+    // already be silenced everywhere (cage-match #135 round 8, Tesla).
+    if (mute.indeterminate) {
+      return const IconButton(
+        key: Key('appbar-mute-conversation'),
+        tooltip: 'Mute (loading…)',
+        icon: Icon(Icons.notifications_none),
+        onPressed: null,
+      );
+    }
     final muted = mute.isMuted;
     // SCOPE DISCLOSURE. When the silence comes from the PERSON rather than this
     // conversation, undoing it makes them audible in every room — a global
