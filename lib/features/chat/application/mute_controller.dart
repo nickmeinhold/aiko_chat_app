@@ -72,6 +72,25 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
 
   bool isMuted(MuteTarget target, String id) => state[target]!.contains(id);
 
+  /// Mute/unmute a CONVERSATION. Prefer this over [setMuted] at call sites: with
+  /// `(MuteTarget, String)` the compiler cannot stop `setMuted(MuteTarget.user,
+  /// conversationId)`, which persists plausible-looking wrong state into the
+  /// other namespace (Carnot, raised every round of #135). Two named methods make
+  /// the mispairing unrepresentable without branding ids repo-wide — every id in
+  /// this codebase is a String, and branding one feature's would leave it
+  /// inconsistent with every neighbour it hands ids to.
+  void setConversationMuted(String conversationId,
+          {required bool muted, required String? expectUserId}) =>
+      setMuted(MuteTarget.channel, conversationId,
+          muted: muted, expectUserId: expectUserId);
+
+  /// Mute/unmute an ACCOUNT — silent in every conversation. See
+  /// [setConversationMuted] for why these are separate methods.
+  void setUserMuted(String userId,
+          {required bool muted, required String? expectUserId}) =>
+      setMuted(MuteTarget.user, userId,
+          muted: muted, expectUserId: expectUserId);
+
   /// Set [id]'s muted state under [target], in memory first (the UI's fast path)
   /// and durably behind it. Idempotent: setting the state it already holds is a
   /// no-op, so a double-tap costs neither a rebuild nor a disk write.
@@ -263,16 +282,15 @@ class ConversationMute {
     // PEER clause simply does nothing while there is no peer to name, and the
     // callers say so rather than claiming to have made the row audible.
     if (muted) {
-      mutes.setMuted(MuteTarget.channel, conversationId,
+      mutes.setConversationMuted(conversationId,
           muted: true, expectUserId: expectUserId);
       return;
     }
-    mutes.setMuted(MuteTarget.channel, conversationId,
+    mutes.setConversationMuted(conversationId,
         muted: false, expectUserId: expectUserId);
     final peer = peerId;
     if (peer != null) {
-      mutes.setMuted(MuteTarget.user, peer,
-          muted: false, expectUserId: expectUserId);
+      mutes.setUserMuted(peer, muted: false, expectUserId: expectUserId);
     }
   }
 }

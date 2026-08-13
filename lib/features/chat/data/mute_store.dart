@@ -66,6 +66,13 @@ class MuteStore {
   /// Recording the intent at CALL time rather than at completion means "what this
   /// account has muted" has exactly one answer from the moment it is decided, and
   /// disk is purely the durable copy that catches up.
+  ///
+  /// PRECONDITION, named because it is load-bearing (cage-match #135 round 11,
+  /// Tesla): this store must be the ONLY writer of `aiko_muted_*` within the
+  /// process. It is — nothing else touches that key — but if a second writer or
+  /// an in-process prefs wipe ever appears, this shadow would win over the real
+  /// payload for the life of the process. An out-of-process wipe (app data
+  /// cleared) is safe: it takes the process with it.
   final Map<String, Map<MuteTarget, Set<String>>> _latest = {};
 
   /// Every mute [userId] holds, as `target → ids`. A missing or corrupt payload

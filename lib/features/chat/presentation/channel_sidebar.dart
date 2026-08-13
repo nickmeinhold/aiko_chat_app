@@ -121,10 +121,18 @@ class _MuteGesture extends ConsumerWidget {
             // see a person is the cause; we know the conversation alone is; or we
             // cannot speak for the peer at all and must not promise the row goes
             // audible (cage-match #135 rounds 5-9).
+            // Both verbs scope themselves. Round 9 taught the MUTE side about
+            // `indeterminate` and left the UNMUTE side promising "show unread
+            // again" — which clears only the conversation, so an unnameable peer
+            // mute keeps the row at zero while the glyph disappears with
+            // `byConversation`, closing the undo door on a row that is still
+            // quiet (cage-match #135 round 11, Tesla).
             subtitle: Text(muted
                 ? (mute.byPeer
                     ? 'This person is muted everywhere — unmute them'
-                    : 'Show unread again')
+                    : mute.indeterminate
+                        ? 'Unmute this conversation'
+                        : 'Show unread again')
                 : mute.indeterminate
                     ? 'No unread badge from this conversation'
                     : 'No unread badge'),
@@ -172,6 +180,18 @@ class _MuteGesture extends ConsumerWidget {
 /// than as *nothing happening*. The badge is never shown for a muted row because
 /// [channelUnreadCountProvider] already reports 0 there; this only makes the
 /// reason legible.
+///
+/// SCOPE OF THAT CLAIM, stated rather than implied (cage-match #135 round 11,
+/// Carnot + Tesla). A zero badge has THREE possible causes and the glyph speaks
+/// for two: this conversation is muted, or (in a 1:1 DM) its named peer is. The
+/// third — every unread sender in a GROUP channel happens to be account-muted —
+/// deliberately shows nothing, because that channel is NOT muted: other members
+/// still badge it, and a bell there would offer to unmute a conversation that was
+/// never muted, which is the inverse of the lie this glyph exists to prevent.
+/// The honest fix for that case is an inventory of who you have silenced (task
+/// #29), not a glyph on a room. Same for a DM whose peer cannot be named
+/// (`indeterminate`): unknown is not muted, and we do not draw a claim we cannot
+/// support.
 Widget? _rowTrailing(
   BuildContext context, {
   required String id,
