@@ -26,6 +26,23 @@ import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import 'chat_screen.dart';
 
+/// Rows are inset from the rail edge so a selected tile reads as a raised pill
+/// rather than a full-bleed band.
+const kSidebarTileInset = 6.0;
+
+/// The selected row's background, chosen HERE — next to the rail's own
+/// `surfaceContainerLow` — because the two must be picked together. The theme's
+/// default `selectedTileColor` is the same maritime panel the rail uses, so a
+/// themed `selected: true` tinted only the label and left the row invisible
+/// against its background. Stepping selection UP one container level is what
+/// makes it legible; the cyan label from `listTileTheme.selectedColor` rides on
+/// top.
+Color _selectedTileColor(ColorScheme scheme) => scheme.surfaceContainerHigh;
+
+const _tileShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.all(Radius.circular(8)),
+);
+
 class ChatSidebar extends ConsumerWidget {
   const ChatSidebar({super.key});
 
@@ -70,7 +87,8 @@ class ChatSidebar extends ConsumerWidget {
                     // combined list scrolls as a unit rather than overflowing a
                     // fixed slot.
                     return ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 4, horizontal: kSidebarTileInset),
                       children: [
                         for (final c in channels)
                           _SidebarChannelTile(
@@ -79,7 +97,7 @@ class ChatSidebar extends ConsumerWidget {
                           ),
                         if (dms.isNotEmpty) ...[
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                            padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
                             child: Text(
                               'Direct messages',
                               style: Theme.of(context)
@@ -123,6 +141,8 @@ class _SidebarChannelTile extends ConsumerWidget {
     return ListTile(
       key: Key('sidebar-channel-${channel.id}'),
       selected: selected,
+      selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
+      shape: _tileShape,
       dense: true,
       leading: const Icon(Icons.tag, size: 20),
       title: Text(channel.name, overflow: TextOverflow.ellipsis),
@@ -143,8 +163,10 @@ class _SidebarChannelTile extends ConsumerWidget {
 /// names resolve ([channelRosterProvider], PR #127) — a rename retitles the row.
 /// Selection routes through the SAME mutator as channels and the dropdown. A
 /// self-DM (notes-to-self) shows "Notes to self"; an unresolved roster falls back
-/// to a neutral label rather than leaking the opaque key. No unread badge yet
-/// (Inc 2, #2798).
+/// to a neutral label rather than leaking the opaque key. Unread reads the SAME
+/// [channelUnreadCountProvider] a channel row does — a DM sits in the repo's
+/// subscription set (#2798 Inc 1), so its messages are cached and its history
+/// fence settles identically; nothing in the unread accounting is DM-specific.
 ///
 /// Named tradeoff: this watches one roster per visible DM (a `GET /members` each),
 /// fine at the current handful-of-DMs scale; batch or fold the peer handle into
@@ -159,12 +181,18 @@ class _SidebarDmTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(dm.id)).value;
+    final unread = selected ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
     return ListTile(
       key: Key('sidebar-dm-${dm.id}'),
       selected: selected,
+      selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
+      shape: _tileShape,
       dense: true,
       leading: const Icon(Icons.alternate_email, size: 20),
       title: Text(dmPeerTitle(roster, myId), overflow: TextOverflow.ellipsis),
+      trailing: unread > 0
+          ? UnreadBadge(key: Key('sidebar-unread-${dm.id}'), count: unread)
+          : null,
       onTap: selected
           ? null
           : () => ref.read(selectedChannelIdProvider.notifier).select(dm.id),
