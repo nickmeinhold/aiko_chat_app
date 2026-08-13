@@ -99,10 +99,18 @@ class _MuteGesture extends ConsumerWidget {
     final muted = mute.isMuted;
     final overlay =
         Overlay.of(context).context.findRenderObject()! as RenderBox;
+    // TRANSFORM, don't assume. `at` is a GLOBAL position and the container rect
+    // below is the overlay's own space; those coincide only while the overlay's
+    // origin is the view's, which is true of a full-screen phone overlay and not
+    // guaranteed on desktop or an embedded view — and the harness would never
+    // show the difference (cage-match #135 round 13, Tesla). The +8 nudge keeps
+    // the menu clear of the finger that summoned it; it is not a coordinate
+    // conversion, so do the conversion too.
+    final local = overlay.globalToLocal(at) + const Offset(8, 8);
     final picked = await showMenu<bool>(
       context: context,
-      position: RelativeRect.fromRect(
-          (at + const Offset(8, 8)) & Size.zero, Offset.zero & overlay.size),
+      position:
+          RelativeRect.fromRect(local & Size.zero, Offset.zero & overlay.size),
       items: [
         PopupMenuItem<bool>(
           value: !muted,
