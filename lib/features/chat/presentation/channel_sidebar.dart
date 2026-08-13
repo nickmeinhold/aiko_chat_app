@@ -116,11 +116,17 @@ class _MuteGesture extends ConsumerWidget {
             // "peer and not conversation" left the both-muted case promising
             // "show unread again" while restoring that account in every room
             // (cage-match #135 round 5, Tesla).
+            // Three states, because the honest sentence differs in each: we can
+            // see a person is the cause; we know the conversation alone is; or we
+            // cannot speak for the peer at all and must not promise the row goes
+            // audible (cage-match #135 rounds 5-9).
             subtitle: Text(muted
                 ? (mute.byPeer
                     ? 'This person is muted everywhere — unmute them'
                     : 'Show unread again')
-                : 'No unread badge'),
+                : mute.indeterminate
+                    ? 'No unread badge from this conversation'
+                    : 'No unread badge'),
           ),
         ),
       ],
@@ -140,10 +146,6 @@ class _MuteGesture extends ConsumerWidget {
     // logout/user-switch is dropped rather than written into another account
     // (cage-match #135 round 3, Tesla).
     final expectUserId = ref.watch(currentUserProvider)?.userId;
-    // No menu at all while this DM's peer is unknown — offering a verb we cannot
-    // honour is worse than offering none for the moment a roster takes to land
-    // (cage-match #135 round 8, Tesla).
-    if (mute.indeterminate) return child;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onLongPressEnd: (d) => _show(context, container,

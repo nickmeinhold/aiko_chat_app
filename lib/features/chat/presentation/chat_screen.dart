@@ -187,17 +187,6 @@ class _MuteConversationAction extends ConsumerWidget {
           : null,
       hasPeer: conversation.kind == ChannelKind.dm,
     );
-    // Disabled — not hidden — while a DM's peer is unknown: the control keeps its
-    // place in the bar but cannot stamp a conversation mute on someone who may
-    // already be silenced everywhere (cage-match #135 round 8, Tesla).
-    if (mute.indeterminate) {
-      return const IconButton(
-        key: Key('appbar-mute-conversation'),
-        tooltip: 'Mute (loading…)',
-        icon: Icon(Icons.notifications_none),
-        onPressed: null,
-      );
-    }
     final muted = mute.isMuted;
     // SCOPE DISCLOSURE. When the silence comes from the PERSON rather than this
     // conversation, undoing it makes them audible in every room — a global
@@ -214,6 +203,10 @@ class _MuteConversationAction extends ConsumerWidget {
     final clearsPerson = muted && mute.byPeer;
     return IconButton(
       key: const Key('appbar-mute-conversation'),
+      // Scoped to what we can actually speak for. With no nameable peer this is
+      // a CONVERSATION verb and says so, rather than "Mute (loading…)" — which
+      // lied in the indicative for the states that never resolve (a self-DM, a
+      // group-shaped DM, a departed member) — cage-match #135 round 9, Tesla.
       tooltip: muted
           ? (clearsPerson
               ? 'This person is muted everywhere'

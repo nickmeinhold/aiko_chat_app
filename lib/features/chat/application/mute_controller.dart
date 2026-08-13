@@ -212,17 +212,22 @@ class ConversationMute {
   /// The DM's single peer, or null for a group channel / unresolved roster.
   final String? peerId;
 
-  /// This conversation HAS a peer whose identity is not known yet — a DM whose
-  /// roster is still loading or whose `GET /members` failed.
+  /// This conversation has an other-party whose identity we cannot name: a DM
+  /// whose roster is still loading, whose `GET /members` failed, or that simply
+  /// is not a clean pair (a self-DM, a group-shaped DM, a departed member, a bot
+  /// in the member list).
   ///
-  /// Distinct from "no peer" (a group channel), and the distinction is
-  /// load-bearing: unread suppression filters muted SENDERS per message with no
-  /// roster at all, so during this window the row can be silent for a reason
-  /// nothing on screen can name. Treating that as "not peer-muted" let controls
-  /// act on a false premise — offering Mute for someone already silenced
-  /// everywhere, or an unmute that clears the conversation and leaves the account
-  /// ringing (cage-match #135 round 8, Tesla). Callers must refuse to ACT while
-  /// this is true: unknown is not unmuted.
+  /// It means one thing only: **we cannot speak about the PEER's mute state**.
+  /// Unread suppression filters muted senders per message with no roster at all,
+  /// so the row may be quiet for a reason nothing on screen can name — so the
+  /// glyph stays silent rather than claiming "idle" or "muted", and the controls
+  /// describe themselves as conversation-scoped instead of promising to make the
+  /// row audible.
+  ///
+  /// It does NOT mean the conversation verb is unavailable. Round 8 read it that
+  /// way and amputated a capability to make it safe (cage-match #135 round 9,
+  /// Tesla): the states above are not transient, so a DM's conversation mute
+  /// would have had no door left to clear it.
   final bool indeterminate;
 
   final bool byConversation;
@@ -248,13 +253,15 @@ class ConversationMute {
   /// lesson, in the time domain).
   void apply(Mutes mutes,
       {required bool muted, required String? expectUserId}) {
-    // Refuse to act on an unfinished cause list. `apply` deliberately does not
-    // trust snapshotted FLAGS, but a null peer is not "no peer" here — it is a
-    // peer we have not learned yet, so muting could stamp a conversation mute on
-    // someone already silenced everywhere, and unmuting would clear one cause and
-    // leave the other (cage-match #135 round 8, Tesla). Callers disable their
-    // controls in this window; this is the backstop.
-    if (indeterminate) return;
+    // NOTE: an unknown peer does NOT block this. Round 8 returned early on
+    // `indeterminate`, which amputated a capability to make it safe: muting a
+    // conversation writes only `MuteTarget.channel` and needs no peer, and
+    // unmuting clears by id — so a DM conversation-mute became unclearable
+    // whenever the roster was not a perfect pair, which is a STABLE state for a
+    // self-DM, a group-shaped DM, a departed member, or a bot in the member list
+    // (cage-match #135 round 9, Tesla). The conversation verb always works; the
+    // PEER clause simply does nothing while there is no peer to name, and the
+    // callers say so rather than claiming to have made the row audible.
     if (muted) {
       mutes.setMuted(MuteTarget.channel, conversationId,
           muted: true, expectUserId: expectUserId);

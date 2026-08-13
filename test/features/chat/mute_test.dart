@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 // Mute — "show me the messages, stop demanding my attention".
 //
 // The whole point of these tests is the line between MUTE and BLOCK: a block
@@ -330,11 +332,20 @@ void main() {
     expect(container.read(mutedChannelIdsProvider), contains('c2'));
     expect(container.read(mutedUserIdsProvider), contains('u2'));
 
-    // Actually READ IT BACK OFF DISK rather than trusting the in-memory notifier
-    // — the earlier version of this test asserted only the live provider, so its
-    // name ("reload from disk") promised a durability guarantee the body never
-    // exercised (cage-match #135, Tesla). BOTH targets, since only `channel` was
-    // covered before.
+    // Read the ACTUAL PERSISTED STRING, not `store.readAll` — the store now
+    // prefers its own in-process snapshot of the last write, so `readAll` would
+    // answer from the same memory this test is trying to prove reached disk. A
+    // verifier sharing a representation with the thing it verifies is blind to
+    // exactly the bug it exists to catch: a `setString` that never ran would keep
+    // this green (cage-match #135 round 9, Tesla — the earlier version of this
+    // test made the same mistake one layer up, against the notifier).
+    final raw = testPrefs.getString('aiko_muted_$me');
+    expect(raw, isNotNull, reason: 'nothing was written to SharedPreferences');
+    final decoded = jsonDecode(raw!) as Map<String, dynamic>;
+    expect(decoded['channels'], contains('c2'));
+    expect(decoded['users'], contains('u2'));
+
+    // The store's own read agrees (this is the path the app uses).
     final store = container.read(muteStoreProvider);
     final onDisk = store.readAll(me);
     expect(onDisk[MuteTarget.channel], contains('c2'));
@@ -565,7 +576,7 @@ void main() {
         reason: 'the no-op path must still converge disk onto current state');
   });
 
-  testWidgets('a DM with an UNRESOLVED roster offers no mute verb it cannot honour',
+  testWidgets('a DM with an UNRESOLVED roster keeps the conversation verb, scoped honestly',
       (tester) async {
     // The axis the other DM fixtures never vary: `membersByChannel` is always
     // planted, so the roster is resolved by the first settle. With it absent, the
@@ -585,13 +596,29 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    // The row exists and is selectable...
     expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
-    // ...but long-press offers nothing, because no honest verb exists yet.
     await tester.longPress(find.byKey(const Key('sidebar-dm-dm1')));
     await tester.pumpAndSettle();
-    expect(find.text('Mute'), findsNothing);
-    expect(find.text('Unmute'), findsNothing);
+
+    // The CONVERSATION verb still works — it writes MuteTarget.channel and needs
+    // no peer. Withholding it (round 8) amputated a capability: "not a clean
+    // pair" is a STABLE state for a self-DM, a group-shaped DM or a departed
+    // member, so a conversation mute set earlier would have had no door to clear
+    // it (cage-match #135 round 9, Tesla).
+    expect(find.text('Mute'), findsOneWidget);
+    // ...but it describes only what it can speak for — no promise about the row
+    // going audible, since an unnameable peer may also be muted.
+    expect(find.text('No unread badge from this conversation'), findsOneWidget);
+
+    await tester.tap(find.text('Mute'));
+    await settle(tester);
+    expect(container.read(mutedChannelIdsProvider), contains('dm1'));
+
+    // And it can be undone — the state is not a one-way door.
+    await tester.longPress(find.byKey(const Key('sidebar-dm-dm1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Unmute'));
+    await settle(tester);
     expect(container.read(mutedChannelIdsProvider), isEmpty);
   });
 
