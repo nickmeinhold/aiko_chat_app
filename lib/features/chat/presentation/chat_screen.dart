@@ -187,17 +187,43 @@ class _MuteConversationAction extends ConsumerWidget {
           : null,
     );
     final muted = mute.isMuted;
+    // SCOPE DISCLOSURE. When the silence comes from the PERSON rather than this
+    // conversation, undoing it makes them audible in every room — a global
+    // preference change behind a control captioned "this conversation". The
+    // sidebar menu confesses that in its subtitle; this one-tap button had no
+    // room to, so it silently performed the bigger act (cage-match #135 round 4,
+    // Carnot MEDIUM + Tesla). Here it asks first: the tap surfaces the real scope
+    // and the user chooses.
+    final peerOnly = mute.byPeer && !mute.byConversation;
     return IconButton(
       key: const Key('appbar-mute-conversation'),
-      tooltip: muted ? 'Unmute this conversation' : 'Mute this conversation',
+      tooltip: muted
+          ? (peerOnly
+              ? 'This person is muted everywhere'
+              : 'Unmute this conversation')
+          : 'Mute this conversation',
       // Bell, not speaker: this app ships 1:1 A/V calls, where a speaker glyph
       // in the chrome reads as "mute the call", a different verb entirely
       // (cage-match #135, Maxwell).
       icon: Icon(muted ? Icons.notifications_off : Icons.notifications_none),
-      // Synchronous — no async gap, so no expectUserId is needed here; the write
-      // lands in the same frame as the tap.
-      onPressed: () =>
-          mute.apply(ref.read(mutesProvider.notifier), muted: !muted),
+      onPressed: () {
+        final mutes = ref.read(mutesProvider.notifier);
+        if (muted && peerOnly) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: const Text('This person is muted in every conversation.'),
+            action: SnackBarAction(
+              label: 'Unmute them',
+              onPressed: () => mute.apply(mutes,
+                  muted: false,
+                  expectUserId: ref.read(currentUserProvider)?.userId),
+            ),
+          ));
+          return;
+        }
+        // Otherwise synchronous — no async gap, so the write lands in the same
+        // frame as the tap and needs no principal binding.
+        mute.apply(mutes, muted: !muted);
+      },
     );
   }
 }

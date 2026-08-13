@@ -112,9 +112,14 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
     ref.read(muteStoreProvider).replaceAll(userId, state);
   }
 
-  void toggle(MuteTarget target, String id) =>
-      setMuted(target, id, muted: !isMuted(target, id));
 }
+// NOTE: a `toggle(target, id)` convenience was deleted rather than kept with a
+// guard (cage-match #135 round 4, Tesla). It had no callers, and it invited
+// exactly the two bugs this file spent three rounds removing: a relative
+// operation races a concurrent change (every live caller writes an ABSOLUTE
+// target state), and it had no `expectUserId`, so a future caller across an async
+// gap would write into whoever is signed in. Deleting the affordance is cheaper
+// than maintaining a safe version nobody uses.
 
 /// The muted CONVERSATION ids (channels and DMs alike).
 final mutedChannelIdsProvider = Provider.autoDispose<Set<String>>(

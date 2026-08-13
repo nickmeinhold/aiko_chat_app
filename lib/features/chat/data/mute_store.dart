@@ -102,8 +102,14 @@ class MuteStore {
             .where((id) => id.isNotEmpty)
             .toList(),
     });
-    final Future<void> result =
-        _writes.then((_) => _prefs.setString(_key(userId), payload));
+    final Future<void> result = _writes.then((_) async {
+      // `setString` reports failure by RETURNING false, not only by throwing —
+      // so awaiting it without checking makes the returned Future<void> claim a
+      // success that never happened, and the divergence this method promises to
+      // report would evaporate silently (cage-match #135 round 4, Carnot).
+      final ok = await _prefs.setString(_key(userId), payload);
+      if (!ok) throw StateError('SharedPreferences rejected the mute snapshot');
+    });
     // Keep the chain alive past a failure — one persistence error must not wedge
     // every later mute. The error is REPORTED rather than swallowed: with
     // snapshot writes the next mute repairs the divergence on its own, so this is

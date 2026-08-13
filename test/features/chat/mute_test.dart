@@ -451,6 +451,49 @@ void main() {
     expect(container.read(mutedChannelIdsProvider), contains('c2'));
   });
 
+  testWidgets('NARROW: unmuting a PERSON from the conversation control discloses '
+      'its real scope instead of doing it silently', (tester) async {
+    // A one-tap control captioned "this conversation" must not quietly make an
+    // account audible in every room (cage-match #135 round 4, Carnot + Tesla).
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
+    final rest = FakeRestApi(channels: twoChannels);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = const [
+      ChannelMember(
+          userId: 'u1', role: 'member', canPost: true, handle: 'me', displayName: 'Me'),
+      ChannelMember(
+          userId: 'u2', role: 'member', canPost: true, handle: 'alice', displayName: 'Alice'),
+    ];
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    container.read(selectedChannelIdProvider.notifier).select('dm1');
+    container
+        .read(mutesProvider.notifier)
+        .setMuted(MuteTarget.user, 'u2', muted: true);
+    await settle(tester);
+
+    await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
+    await tester.pumpAndSettle();
+
+    // The tap DISCLOSES rather than acts: the account mute is still in place...
+    expect(container.read(mutedUserIdsProvider), contains('u2'));
+    expect(find.text('This person is muted in every conversation.'), findsOneWidget);
+
+    // ...and only the explicit choice clears it.
+    await tester.tap(find.text('Unmute them'));
+    await settle(tester);
+    expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
+  });
+
   testWidgets('published mute sets are unmodifiable (no back door past the store)',
       (tester) async {
     // The provider type is `Set<String>`, which invites direct mutation — that
