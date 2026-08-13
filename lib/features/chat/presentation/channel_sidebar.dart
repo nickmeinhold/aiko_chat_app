@@ -198,6 +198,18 @@ Widget? _rowTrailing(
   required int unread,
   required bool muted,
 }) {
+  // ATTENTION FIRST. An earlier version preferred the glyph, on the stated law
+  // that a muted row can never have unread because the provider already returns
+  // 0. That law holds for CONVERSATION mute (which returns 0 for the whole row)
+  // and is FALSE for a peer mute, which filters per MESSAGE: a 1:1 DM whose peer
+  // is muted still counts anyone else who posts there — an LLM/robot sender
+  // (`userId == null`, never account-muteable), a system actor, a third id that
+  // was never in the two-person roster. The glyph then won and threw a real
+  // badge away: the row looked deliberately quiet while something had actually
+  // happened, and nothing on screen said so (cage-match #135 round 12, Tesla).
+  if (unread > 0) {
+    return UnreadBadge(key: Key('sidebar-unread-$id'), count: unread);
+  }
   if (muted) {
     // A BELL, not a speaker. This app ships 1:1 LiveKit calls, where a
     // speaker-with-slash is the universal glyph for muting call audio — a
@@ -208,9 +220,7 @@ Widget? _rowTrailing(
         size: 16,
         color: Theme.of(context).colorScheme.onSurfaceVariant);
   }
-  return unread > 0
-      ? UnreadBadge(key: Key('sidebar-unread-$id'), count: unread)
-      : null;
+  return null;
 }
 
 class ChatSidebar extends ConsumerWidget {

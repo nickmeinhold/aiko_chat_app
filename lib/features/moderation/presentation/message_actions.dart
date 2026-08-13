@@ -26,7 +26,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../chat/application/chat_providers.dart'
     show currentUserProvider, navigableChannelsProvider;
 import '../../chat/application/mute_controller.dart';
-import '../../chat/data/mute_store.dart' show MuteTarget;
 import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../chat/presentation/conversation_actions.dart'
@@ -159,7 +158,7 @@ Future<void> showMessageActions(
       // then tap Undo. A captured `WidgetRef` is dead by then, and so is a
       // captured notifier, because `mutesProvider` is `.autoDispose` and a handle
       // to it is not a keep-alive (cage-match #135 rounds 1-2).
-      container.read(mutesProvider.notifier).setMuted(MuteTarget.user, userId,
+      container.read(mutesProvider.notifier).setUserMuted(userId,
           muted: !muted, expectUserId: actingUserId);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(muted ? 'Unmuted $name' : 'Muted $name'),
@@ -167,9 +166,8 @@ Future<void> showMessageActions(
           label: 'Undo',
           // Absolute target state (the value BEFORE this action), never a
           // toggle — a double-tap restores rather than oscillates.
-          onPressed: () => container.read(mutesProvider.notifier).setMuted(
-              MuteTarget.user, userId,
-              muted: muted, expectUserId: actingUserId),
+          onPressed: () => container.read(mutesProvider.notifier).setUserMuted(
+              userId, muted: muted, expectUserId: actingUserId),
         ),
       ));
     case _Action.report:

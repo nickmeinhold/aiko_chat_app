@@ -81,14 +81,14 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
   /// inconsistent with every neighbour it hands ids to.
   void setConversationMuted(String conversationId,
           {required bool muted, required String? expectUserId}) =>
-      setMuted(MuteTarget.channel, conversationId,
+      _setMuted(MuteTarget.channel, conversationId,
           muted: muted, expectUserId: expectUserId);
 
   /// Mute/unmute an ACCOUNT — silent in every conversation. See
   /// [setConversationMuted] for why these are separate methods.
   void setUserMuted(String userId,
           {required bool muted, required String? expectUserId}) =>
-      setMuted(MuteTarget.user, userId,
+      _setMuted(MuteTarget.user, userId,
           muted: muted, expectUserId: expectUserId);
 
   /// Set [id]'s muted state under [target], in memory first (the UI's fast path)
@@ -105,7 +105,7 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
   /// FAILING CLOSED on a mismatch means a stale write is dropped rather than
   /// misattributed: a missed unmute is a badge the user can see and redo, a write
   /// into another account's preferences is invisible and wrong.
-  void setMuted(
+  void _setMuted(
     MuteTarget target,
     String id, {
     required bool muted,

@@ -385,15 +385,20 @@ class _ChannelMenuItem extends ConsumerWidget {
     return Row(
       children: [
         Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
-        if (muted) ...[
+        // Attention first, same polarity as the sidebar row: a peer mute filters
+        // per MESSAGE, so a muted-looking row can still have a real count from
+        // someone else, and the glyph must never swallow it (cage-match #135
+        // round 12, Tesla — who noted this fork was copied here awaiting the day
+        // DMs join this switcher, #2940).
+        if (unread > 0) ...[
+          const SizedBox(width: 8),
+          UnreadBadge(key: Key('unread-item-$channelId'), count: unread),
+        ] else if (muted) ...[
           const SizedBox(width: 8),
           Icon(Icons.notifications_off_outlined,
               key: Key('muted-item-$channelId'),
               size: 16,
               color: Theme.of(context).colorScheme.onSurfaceVariant),
-        ] else if (unread > 0) ...[
-          const SizedBox(width: 8),
-          UnreadBadge(key: Key('unread-item-$channelId'), count: unread),
         ],
       ],
     );

@@ -150,8 +150,7 @@ void main() {
     expect(container.read(channelUnreadCountProvider('c2')), 1);
     expect(find.byKey(const Key('sidebar-unread-c2')), findsOneWidget);
 
-    container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: true, expectUserId: null);
+    container.read(mutesProvider.notifier).setConversationMuted('c2', muted: true, expectUserId: null);
     await settle(tester);
 
     expect(container.read(channelUnreadCountProvider('c2')), 0);
@@ -159,8 +158,7 @@ void main() {
 
     // Unmuting does NOT lose the history — the count returns, it was never
     // "marked read" behind the user's back.
-    container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: false, expectUserId: null);
+    container.read(mutesProvider.notifier).setConversationMuted('c2', muted: false, expectUserId: null);
     await settle(tester);
     expect(container.read(channelUnreadCountProvider('c2')), 1);
   });
@@ -192,8 +190,7 @@ void main() {
 
     await pumpApp(tester, container);
     await signIn(tester);
-    container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: true, expectUserId: null);
+    container.read(mutesProvider.notifier).setConversationMuted('c2', muted: true, expectUserId: null);
     transport.emitConn(ConnectionState.connected);
     await settle(tester);
 
@@ -201,8 +198,7 @@ void main() {
     await cache.upsertInbound(inbound('c2', ulid('09'), 'u2', 'live'));
     await settle(tester);
 
-    container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: false, expectUserId: null);
+    container.read(mutesProvider.notifier).setConversationMuted('c2', muted: false, expectUserId: null);
     await settle(tester);
 
     // EXACTLY the live one. If muting had short-circuited before the baseline,
@@ -223,8 +219,7 @@ void main() {
     transport.emitConn(ConnectionState.connected);
     await settle(tester);
 
-    container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.user, 'u2', muted: true, expectUserId: null);
+    container.read(mutesProvider.notifier).setUserMuted('u2', muted: true, expectUserId: null);
 
     // The muted account posts in the ACTIVE channel and a non-active one; a
     // different account posts too.
@@ -326,8 +321,8 @@ void main() {
 
     final me = container.read(currentUserProvider)!.userId;
     container.read(mutesProvider.notifier)
-      ..setMuted(MuteTarget.channel, 'c2', muted: true, expectUserId: null)
-      ..setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null);
+      ..setConversationMuted('c2', muted: true, expectUserId: null)
+      ..setUserMuted('u2', muted: true, expectUserId: null);
     await settle(tester);
     expect(container.read(mutedChannelIdsProvider), contains('c2'));
     expect(container.read(mutedUserIdsProvider), contains('u2'));
@@ -381,7 +376,7 @@ void main() {
     // than looking like a conversation where nothing is happening.
     container
         .read(mutesProvider.notifier)
-        .setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null);
+        .setUserMuted('u2', muted: true, expectUserId: null);
     await settle(tester);
 
     expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
@@ -413,7 +408,7 @@ void main() {
 
     container
         .read(mutesProvider.notifier)
-        .setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null);
+        .setUserMuted('u2', muted: true, expectUserId: null);
     await settle(tester);
     expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
 
@@ -446,8 +441,7 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2',
+    container.read(mutesProvider.notifier).setConversationMuted('c2',
         muted: true, expectUserId: 'somebody-else');
     await settle(tester);
     expect(container.read(mutedChannelIdsProvider), isEmpty,
@@ -455,8 +449,7 @@ void main() {
 
     // The same call bound to the ACTUAL signed-in user does apply.
     final me = container.read(currentUserProvider)!.userId;
-    container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2',
+    container.read(mutesProvider.notifier).setConversationMuted('c2',
         muted: true, expectUserId: me);
     await settle(tester);
     expect(container.read(mutedChannelIdsProvider), contains('c2'));
@@ -489,7 +482,7 @@ void main() {
     container.read(selectedChannelIdProvider.notifier).select('dm1');
     container
         .read(mutesProvider.notifier)
-        .setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null);
+        .setUserMuted('u2', muted: true, expectUserId: null);
     await settle(tester);
 
     await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
@@ -533,8 +526,8 @@ void main() {
     await tester.pumpAndSettle();
     container.read(selectedChannelIdProvider.notifier).select('dm1');
     container.read(mutesProvider.notifier)
-      ..setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null)
-      ..setMuted(MuteTarget.channel, 'dm1', muted: true, expectUserId: null);
+      ..setUserMuted('u2', muted: true, expectUserId: null)
+      ..setConversationMuted('dm1', muted: true, expectUserId: null);
     await settle(tester);
 
     await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
@@ -568,7 +561,7 @@ void main() {
 
     // Memory already says "not muted", so this is a no-op IN MEMORY — but it must
     // still queue a snapshot, or disk keeps a mute the user does not have.
-    container.read(mutesProvider.notifier).setMuted(MuteTarget.channel, 'c2',
+    container.read(mutesProvider.notifier).setConversationMuted('c2',
         muted: false, expectUserId: null);
     await settle(tester);
 
@@ -652,6 +645,59 @@ void main() {
     await tester.tap(find.text('Undo'));
     await settle(tester);
     expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
+  });
+
+  testWidgets('a peer-muted DM STILL badges unread from someone else — the glyph '
+      'never swallows a real count', (tester) async {
+    // The false invariant: "a muted row can never have unread, so the glyph only
+    // names the quiet". True for CONVERSATION mute (the provider returns 0 for
+    // the whole row); FALSE for a peer mute, which filters per MESSAGE. Anyone
+    // else posting in that DM — here an external actor with a null userId, which
+    // can never be account-muted at all — still counts, and preferring the glyph
+    // threw that badge away: the row looked deliberately quiet while something
+    // had happened (cage-match #135 round 12, Tesla).
+    setWide(tester);
+    const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
+    final rest = FakeRestApi(channels: twoChannels);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = const [
+      ChannelMember(
+          userId: 'u1', role: 'member', canPost: true, handle: 'me', displayName: 'Me'),
+      ChannelMember(
+          userId: 'u2', role: 'member', canPost: true, handle: 'alice', displayName: 'Alice'),
+    ];
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: rest, transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    transport.emitConn(ConnectionState.connected);
+    await settle(tester);
+
+    container
+        .read(mutesProvider.notifier)
+        .setUserMuted('u2', muted: true, expectUserId: null);
+    await settle(tester);
+    expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
+
+    // A sender who is NOT the muted peer posts into that DM — an external actor
+    // (no userId), so no account mute could ever cover it.
+    transport.emitMessage(Message(
+      clientTempId: ulid('0B'),
+      id: ulid('0B'),
+      channelId: 'dm1',
+      sender: const MessageSender(kind: SenderKind.llm, label: 'assistant'),
+      body: 'from someone else',
+      createdAt: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
+      deliveryState: DeliveryState.sent,
+    ));
+    await settle(tester);
+
+    // Attention wins: the badge shows, the glyph steps aside.
+    expect(container.read(channelUnreadCountProvider('dm1')), 1);
+    expect(find.byKey(const Key('sidebar-unread-dm1')), findsOneWidget);
+    expect(find.byKey(const Key('sidebar-muted-dm1')), findsNothing);
   });
 
   testWidgets('published mute sets are unmodifiable (no back door past the store)',
