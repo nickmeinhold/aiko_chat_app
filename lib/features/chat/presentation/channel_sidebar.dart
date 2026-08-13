@@ -49,44 +49,79 @@ const _tileShape = RoundedRectangleBorder(
 /// right-click on desktop — the two gestures that mean "more options" on the
 /// platforms this app ships to, both landing on the same menu so neither is a
 /// second implementation of the first.
+///
+/// Both gestures fire on POINTER-UP (`onLongPressEnd` / `onSecondaryTapUp`),
+/// never on pointer-down. Opening a one-item menu at the press point while the
+/// finger is STILL DOWN means the item materialises under that finger and
+/// selects itself the moment it lifts — a conversation muting itself with no
+/// deliberate act (cage-match #135, Tesla HIGH). The widget test cannot see this:
+/// `WidgetTester.longPress` releases the pointer before the menu route is in the
+/// hit tree and then taps the item as a separate, polite act, so a
+/// pointer-down trigger stays green in the harness and fails on a real thumb.
+/// The menu is also nudged clear of the press point so it never opens under the
+/// finger that summoned it.
 class _MuteGesture extends ConsumerWidget {
   const _MuteGesture({required this.conversationId, required this.child});
 
   final String conversationId;
   final Widget child;
 
-  Future<void> _show(BuildContext context, WidgetRef ref, Offset at) async {
-    final muted = ref.read(mutedChannelIdsProvider).contains(conversationId);
+  /// [mutes] is captured by the CALLER, before the menu is awaited. A
+  /// `WidgetRef` is only valid while its consumer is mounted, and this menu is
+  /// open for an unbounded human-scale interval during which the row can vanish
+  /// (a DM retired by a refetch, a gateway switch tearing down the rail,
+  /// logout). A notifier reference outlives the widget, so passing it in removes
+  /// the lifetime coupling instead of guarding the window with a `mounted` check
+  /// that has to be remembered forever (#133 class; cage-match #135, Maxwell +
+  /// Tesla).
+  Future<void> _show(
+    BuildContext context,
+    Mutes mutes, {
+    required bool muted,
+    required Offset at,
+  }) async {
     final overlay =
         Overlay.of(context).context.findRenderObject()! as RenderBox;
     final picked = await showMenu<bool>(
       context: context,
-      position: RelativeRect.fromRect(at & Size.zero, Offset.zero & overlay.size),
+      position: RelativeRect.fromRect(
+          (at + const Offset(8, 8)) & Size.zero, Offset.zero & overlay.size),
       items: [
         PopupMenuItem<bool>(
           value: !muted,
           child: ListTile(
             contentPadding: EdgeInsets.zero,
-            leading: Icon(
-                muted ? Icons.volume_up_outlined : Icons.volume_off_outlined),
+            leading: Icon(muted
+                ? Icons.notifications_none
+                : Icons.notifications_off_outlined),
             title: Text(muted ? 'Unmute' : 'Mute'),
             subtitle: Text(muted ? 'Show unread again' : 'No unread badge'),
           ),
         ),
       ],
     );
+    // An absolute target state (`!muted` captured at open time), never a
+    // toggle: if the mute changed while the menu was open, this write is an
+    // idempotent no-op rather than an inversion of someone else's change.
     if (picked == null) return;
-    ref
-        .read(mutesProvider.notifier)
-        .setMuted(MuteTarget.channel, conversationId, muted: picked);
+    mutes.setMuted(MuteTarget.channel, conversationId, muted: picked);
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final mutes = ref.read(mutesProvider.notifier);
+    final muted = ref.watch(mutedChannelIdsProvider).contains(conversationId);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onLongPressStart: (d) => _show(context, ref, d.globalPosition),
-      onSecondaryTapDown: (d) => _show(context, ref, d.globalPosition),
+      onLongPressEnd: (d) =>
+          _show(context, mutes, muted: muted, at: d.globalPosition),
+      // Pointer-UP for the same reason as the long-press. NOTE for Flutter web
+      // (cage-match #135, Tesla): the browser raises its own context menu on
+      // right-click, so on web this can double up until that default is
+      // suppressed — harmless (two menus, one intent) and the app's shipping
+      // targets are macOS/iOS/Android.
+      onSecondaryTapUp: (d) =>
+          _show(context, mutes, muted: muted, at: d.globalPosition),
       child: child,
     );
   }
@@ -104,7 +139,11 @@ Widget? _rowTrailing(
   required bool muted,
 }) {
   if (muted) {
-    return Icon(Icons.volume_off_outlined,
+    // A BELL, not a speaker. This app ships 1:1 LiveKit calls, where a
+    // speaker-with-slash is the universal glyph for muting call audio — a
+    // different verb entirely from "stop badging this conversation". The
+    // notification glyph is what Slack and Discord use for exactly this.
+    return Icon(Icons.notifications_off_outlined,
         key: Key('sidebar-muted-$id'),
         size: 16,
         color: Theme.of(context).colorScheme.onSurfaceVariant);

@@ -34,13 +34,25 @@ final mutesProvider =
         Mutes.new);
 
 class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
+  /// Every set this notifier publishes is UNMODIFIABLE. `Set<String>` in the
+  /// provider signature otherwise invites a consumer to mutate the live state
+  /// directly, which would bypass both persistence and Riverpod's notification —
+  /// a silent divergence between what the UI shows and what the disk holds
+  /// (cage-match #135, Carnot). Freezing at the boundary makes that
+  /// unrepresentable rather than merely discouraged. It also keeps the published
+  /// instance STABLE while unchanged (the alternative — wrapping at read time in
+  /// the derived providers — would mint a new object per recompute and notify
+  /// listeners on every rebuild).
+  static Map<MuteTarget, Set<String>> _freeze(Map<MuteTarget, Set<String>> m) =>
+      {for (final t in MuteTarget.values) t: Set.unmodifiable(m[t] ?? const {})};
+
   @override
   Map<MuteTarget, Set<String>> build() {
     final userId = ref.read(authControllerProvider).value?.userId;
     if (userId == null) {
       return {for (final t in MuteTarget.values) t: const <String>{}};
     }
-    return ref.read(muteStoreProvider).readAll(userId);
+    return _freeze(ref.read(muteStoreProvider).readAll(userId));
   }
 
   bool isMuted(MuteTarget target, String id) => state[target]!.contains(id);
@@ -59,9 +71,9 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
     } else {
       next.remove(id);
     }
-    state = {
+    state = _freeze({
       for (final t in MuteTarget.values) t: t == target ? next : state[t]!,
-    };
+    });
     ref.read(muteStoreProvider).setMuted(userId, target, id, muted: muted);
   }
 

@@ -1,9 +1,9 @@
-/// Mute — "show me the messages, stop demanding my attention".
-///
-/// The whole point of these tests is the line between MUTE and BLOCK: a block
-/// hides content (server-enforced, mutual); a mute only silences the unread
-/// badge, and every message stays visible on screen. If a mute ever removes a
-/// message, that is the bug these lock against.
+// Mute — "show me the messages, stop demanding my attention".
+//
+// The whole point of these tests is the line between MUTE and BLOCK: a block
+// hides content (server-enforced, mutual); a mute only silences the unread
+// badge, and every message stays visible on screen. If a mute ever removes a
+// message, that is the bug these lock against.
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
 import 'package:aiko_chat_app/features/chat/data/mute_store.dart';
@@ -271,7 +271,7 @@ void main() {
     expect(container.read(mutedChannelIdsProvider), isEmpty);
   });
 
-  testWidgets('mutes are per-account and reload from disk on the next session',
+  testWidgets('BOTH mute targets reach disk, per-account, and survive a reload',
       (tester) async {
     setWide(tester);
     final container = makeContainer(
@@ -282,13 +282,46 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: true);
+    final me = container.read(currentUserProvider)!.userId;
+    container.read(mutesProvider.notifier)
+      ..setMuted(MuteTarget.channel, 'c2', muted: true)
+      ..setMuted(MuteTarget.user, 'u2', muted: true);
     await settle(tester);
     expect(container.read(mutedChannelIdsProvider), contains('c2'));
+    expect(container.read(mutedUserIdsProvider), contains('u2'));
 
-    // Another user's store is untouched by this user's mute.
+    // Actually READ IT BACK OFF DISK rather than trusting the in-memory notifier
+    // — the earlier version of this test asserted only the live provider, so its
+    // name ("reload from disk") promised a durability guarantee the body never
+    // exercised (cage-match #135, Tesla). BOTH targets, since only `channel` was
+    // covered before.
     final store = container.read(muteStoreProvider);
+    final onDisk = store.readAll(me);
+    expect(onDisk[MuteTarget.channel], contains('c2'));
+    expect(onDisk[MuteTarget.user], contains('u2'));
+
+    // Another account's store is untouched by this user's mutes.
     expect(store.readAll('someone-else')[MuteTarget.channel], isEmpty);
+    expect(store.readAll('someone-else')[MuteTarget.user], isEmpty);
+  });
+
+  testWidgets('published mute sets are unmodifiable (no back door past the store)',
+      (tester) async {
+    // The provider type is `Set<String>`, which invites direct mutation — that
+    // would update the UI while never reaching disk and never notifying
+    // Riverpod (cage-match #135, Carnot). Freezing makes it throw instead.
+    setWide(tester);
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    expect(() => container.read(mutedChannelIdsProvider).add('c2'),
+        throwsUnsupportedError);
+    expect(() => container.read(mutedUserIdsProvider).add('u2'),
+        throwsUnsupportedError);
   });
 }

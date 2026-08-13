@@ -753,6 +753,14 @@ final channelUnreadCountProvider =
   // The unread chain is autoDispose + rebuilt per session, so a read suffices.
   final myUserId = ref.read(currentUserProvider)?.userId;
   final watermark = marks[channelId];
+  // Watched UNCONDITIONALLY, above the first-sight branch below, even though
+  // neither is read on that path: a `ref.watch` reached only on some branches
+  // makes this provider's dependency set depend on its own state, so a later
+  // edit (a third mute target, a watermark that can rewind) would silently
+  // desync which providers it rebuilds for. Watch everything, then branch on
+  // the values (cage-match #135, Tesla).
+  final mutedChannels = ref.watch(mutedChannelIdsProvider);
+  final mutedSenders = ref.watch(mutedUserIdsProvider);
 
   if (watermark == null) {
     // Never observed → report 0 (NEVER flood) until history has SETTLED for this
@@ -786,9 +794,8 @@ final channelUnreadCountProvider =
   // muted channel with no watermark at all, so unmuting would flood the badge
   // with every fossil in the cache (the exact failure first-sight baselining
   // exists to prevent).
-  if (ref.watch(mutedChannelIdsProvider).contains(channelId)) return 0;
+  if (mutedChannels.contains(channelId)) return 0;
 
-  final mutedSenders = ref.watch(mutedUserIdsProvider);
   return messages.where((m) {
     final id = m.id;
     if (id == null) return false; // un-acked own send — never unread

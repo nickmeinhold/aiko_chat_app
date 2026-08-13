@@ -179,7 +179,10 @@ class _MuteConversationAction extends ConsumerWidget {
     return IconButton(
       key: const Key('appbar-mute-conversation'),
       tooltip: muted ? 'Unmute this conversation' : 'Mute this conversation',
-      icon: Icon(muted ? Icons.volume_off : Icons.volume_up_outlined),
+      // Bell, not speaker: this app ships 1:1 A/V calls, where a speaker glyph
+      // in the chrome reads as "mute the call", a different verb entirely
+      // (cage-match #135, Maxwell).
+      icon: Icon(muted ? Icons.notifications_off : Icons.notifications_none),
       onPressed: () => ref
           .read(mutesProvider.notifier)
           .setMuted(MuteTarget.channel, conversation.id, muted: !muted),
@@ -298,10 +301,22 @@ class _ChannelMenuItem extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final unread = isActive ? 0 : ref.watch(channelUnreadCountProvider(channelId));
+    // A muted row must say WHY it is quiet here too. `channelUnreadCountProvider`
+    // reports 0 for a muted channel, so without this the dropdown renders muted
+    // and idle identically — two unread surfaces drawing different conclusions
+    // from the same mute state, which is exactly the drift the sidebar glyph was
+    // added to prevent (cage-match #135, Carnot HIGH + Tesla).
+    final muted = ref.watch(mutedChannelIdsProvider).contains(channelId);
     return Row(
       children: [
         Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
-        if (unread > 0) ...[
+        if (muted) ...[
+          const SizedBox(width: 8),
+          Icon(Icons.notifications_off_outlined,
+              key: Key('muted-item-$channelId'),
+              size: 16,
+              color: Theme.of(context).colorScheme.onSurfaceVariant),
+        ] else if (unread > 0) ...[
           const SizedBox(width: 8),
           UnreadBadge(key: Key('unread-item-$channelId'), count: unread),
         ],

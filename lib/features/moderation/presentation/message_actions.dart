@@ -86,7 +86,10 @@ Future<void> showMessageActions(
           // one-sided — nothing is sent anywhere — so unlike Block it needs no
           // confirmation step.
           ListTile(
-            leading: Icon(muted ? Icons.volume_up_outlined : Icons.volume_off_outlined),
+            // Bell, not speaker — a speaker-with-slash means call audio in an
+            // app that ships 1:1 A/V (cage-match #135, Maxwell).
+            leading: Icon(
+                muted ? Icons.notifications_none : Icons.notifications_off_outlined),
             title: Text(muted ? 'Unmute $name' : 'Mute $name'),
             subtitle: Text(muted
                 ? 'Their messages will notify you again'
@@ -118,16 +121,22 @@ Future<void> showMessageActions(
     case _Action.call:
       await startCall(context, ref, userId, name);
     case _Action.mute:
-      ref
-          .read(mutesProvider.notifier)
-          .setMuted(MuteTarget.user, userId, muted: !muted);
+      // Capture the notifier, NOT the ref. The SnackBar is owned by the
+      // ScaffoldMessenger ABOVE the chat surface, so it outlives this message
+      // tile — mute, navigate to Settings or sign out, then tap Undo, and a
+      // captured `WidgetRef` belongs to a disposed consumer (cage-match #135,
+      // Tesla). A notifier reference stays valid, so the undo either applies or
+      // is a harmless no-op against a rebuilt provider.
+      final mutes = ref.read(mutesProvider.notifier);
+      mutes.setMuted(MuteTarget.user, userId, muted: !muted);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(muted ? 'Unmuted $name' : "Muted $name"),
+        content: Text(muted ? 'Unmuted $name' : 'Muted $name'),
         action: SnackBarAction(
           label: 'Undo',
-          onPressed: () => ref
-              .read(mutesProvider.notifier)
-              .setMuted(MuteTarget.user, userId, muted: muted),
+          // Absolute target state (the value BEFORE this action), never a
+          // toggle — a double-tap restores rather than oscillates.
+          onPressed: () =>
+              mutes.setMuted(MuteTarget.user, userId, muted: muted),
         ),
       ));
     case _Action.report:
