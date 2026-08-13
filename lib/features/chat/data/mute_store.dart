@@ -22,6 +22,7 @@ library;
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// The two things a user can mute. Kept as an enum (not two stores) because the
@@ -75,36 +76,44 @@ class MuteStore {
     }
   }
 
-  /// Serializes durable writes so a read-modify-write of the per-user JSON blob
-  /// never interleaves with another. Chained (not awaited by callers): the
-  /// in-memory notifier is the UI's fast path, disk catches up in order.
+  /// Serializes durable writes so two snapshots can never land out of order.
+  /// Chained (not awaited by callers): the in-memory notifier is the UI's fast
+  /// path, disk catches up behind it.
   Future<void> _writes = Future<void>.value();
 
-  /// Add or remove [id] from [userId]'s [target] set. Unlike a read watermark
-  /// this is NOT monotonic — mute and unmute are equally legitimate in both
-  /// directions — so ordering, not compare-and-set, is what has to hold: the
-  /// chain guarantees the last call wins on disk, never a torn intermediate.
-  Future<void> setMuted(
-    String userId,
-    MuteTarget target,
-    String id, {
-    required bool muted,
-  }) {
-    if (id.isEmpty) return Future<void>.value();
-    final result = _writes.then((_) async {
-      final all = readAll(userId);
-      final set = all[target]!;
-      if (muted ? !set.add(id) : !set.remove(id)) return; // already in that state
-      await _prefs.setString(
-        _key(userId),
-        jsonEncode({
-          for (final t in MuteTarget.values) t.jsonKey: all[t]!.toList(),
-        }),
-      );
+  /// Persist [mutes] as the COMPLETE mute state for [userId] — a snapshot dump,
+  /// deliberately NOT a read-modify-write of the stored blob.
+  ///
+  /// An RMW would make disk a second historian that can overrule memory: with
+  /// mute A written and its `setString` failing, a later mute B would re-read a
+  /// disk that never saw A and persist a world in which A does not exist. The
+  /// session keeps showing both (the notifier committed them), and A silently
+  /// evaporates at next login — a badge back from the dead, reachable from a
+  /// SINGLE persistence error plus any later mute (cage-match #135, Tesla).
+  ///
+  /// Writing the caller's full map removes that coupling rather than guarding
+  /// it: there is exactly one historian (the notifier's in-memory state), disk
+  /// is its dump, and a failed write SELF-HEALS on the next one because that
+  /// next write carries the whole truth rather than a delta onto a stale base.
+  Future<void> replaceAll(String userId, Map<MuteTarget, Set<String>> mutes) {
+    final payload = jsonEncode({
+      for (final t in MuteTarget.values)
+        t.jsonKey: (mutes[t] ?? const <String>{})
+            .where((id) => id.isNotEmpty)
+            .toList(),
     });
-    // Keep the chain alive past a failed write — one persistence error must not
-    // wedge every subsequent mute.
-    _writes = result.catchError((_) {});
+    final Future<void> result =
+        _writes.then((_) => _prefs.setString(_key(userId), payload));
+    // Keep the chain alive past a failure — one persistence error must not wedge
+    // every later mute. The error is REPORTED rather than swallowed: with
+    // snapshot writes the next mute repairs the divergence on its own, so this is
+    // a transient-divergence signal, not a corruption alarm — but a silent
+    // `catchError((_) {})` would hide the only evidence it ever happened
+    // (cage-match #135, Tesla).
+    _writes = result.catchError((Object e, StackTrace _) {
+      debugPrint('[mute] persist failed (memory ahead of disk until the next '
+          'mute rewrites the snapshot): $e');
+    });
     return result;
   }
 }

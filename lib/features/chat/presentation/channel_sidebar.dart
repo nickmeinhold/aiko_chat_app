@@ -61,22 +61,35 @@ const _tileShape = RoundedRectangleBorder(
 /// The menu is also nudged clear of the press point so it never opens under the
 /// finger that summoned it.
 class _MuteGesture extends ConsumerWidget {
-  const _MuteGesture({required this.conversationId, required this.child});
+  const _MuteGesture({
+    super.key,
+    required this.conversationId,
+    required this.child,
+  });
 
   final String conversationId;
   final Widget child;
 
-  /// [mutes] is captured by the CALLER, before the menu is awaited. A
-  /// `WidgetRef` is only valid while its consumer is mounted, and this menu is
-  /// open for an unbounded human-scale interval during which the row can vanish
-  /// (a DM retired by a refetch, a gateway switch tearing down the rail,
-  /// logout). A notifier reference outlives the widget, so passing it in removes
-  /// the lifetime coupling instead of guarding the window with a `mounted` check
-  /// that has to be remembered forever (#133 class; cage-match #135, Maxwell +
-  /// Tesla).
+  /// [container] is captured by the CALLER, before the menu is awaited, and the
+  /// notifier is re-read from it AFTER — never captured across the gap.
+  ///
+  /// A `WidgetRef` is only valid while its consumer is mounted, and this menu
+  /// stays open for an unbounded human-scale interval during which the row can
+  /// vanish (a DM retired by a refetch, a gateway switch tearing down the rail,
+  /// logout). Holding the NOTIFIER instead is no better and was the first fix's
+  /// mistake: `mutesProvider` is `.autoDispose`, so a notifier handle is not a
+  /// keep-alive — once the last unread watcher leaves the tree it is disposed,
+  /// and its very first statement reads `ref`, which now throws (cage-match
+  /// #135 round 2, Carnot HIGH + Tesla).
+  ///
+  /// The `ProviderContainer` is app-scoped and outlives every widget here, and
+  /// re-reading an autoDispose provider through it simply rebuilds it (rehydrating
+  /// from the store) before applying the change. So the write lands whether or not
+  /// the chat surface is still alive — the lifetime question stops existing rather
+  /// than being guarded.
   Future<void> _show(
     BuildContext context,
-    Mutes mutes, {
+    ProviderContainer container, {
     required bool muted,
     required Offset at,
   }) async {
@@ -104,24 +117,26 @@ class _MuteGesture extends ConsumerWidget {
     // toggle: if the mute changed while the menu was open, this write is an
     // idempotent no-op rather than an inversion of someone else's change.
     if (picked == null) return;
-    mutes.setMuted(MuteTarget.channel, conversationId, muted: picked);
+    container
+        .read(mutesProvider.notifier)
+        .setMuted(MuteTarget.channel, conversationId, muted: picked);
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final mutes = ref.read(mutesProvider.notifier);
+    final container = ProviderScope.containerOf(context, listen: false);
     final muted = ref.watch(mutedChannelIdsProvider).contains(conversationId);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onLongPressEnd: (d) =>
-          _show(context, mutes, muted: muted, at: d.globalPosition),
+          _show(context, container, muted: muted, at: d.globalPosition),
       // Pointer-UP for the same reason as the long-press. NOTE for Flutter web
       // (cage-match #135, Tesla): the browser raises its own context menu on
       // right-click, so on web this can double up until that default is
       // suppressed — harmless (two menus, one intent) and the app's shipping
       // targets are macOS/iOS/Android.
       onSecondaryTapUp: (d) =>
-          _show(context, mutes, muted: muted, at: d.globalPosition),
+          _show(context, container, muted: muted, at: d.globalPosition),
       child: child,
     );
   }
@@ -132,6 +147,14 @@ class _MuteGesture extends ConsumerWidget {
 /// than as *nothing happening*. The badge is never shown for a muted row because
 /// [channelUnreadCountProvider] already reports 0 there; this only makes the
 /// reason legible.
+/// Whether a DM's single peer is an account-muted user. Unresolved roster → false
+/// (the row simply shows its unread as usual); an unknown peer must never be
+/// guessed into a mute.
+bool _peerIsMuted(WidgetRef ref, Map<String, String>? roster, String? myId) {
+  final peer = dmPeerId(roster, myId);
+  return peer != null && ref.watch(mutedUserIdsProvider).contains(peer);
+}
+
 Widget? _rowTrailing(
   BuildContext context, {
   required String id,
@@ -249,6 +272,13 @@ class _SidebarChannelTile extends ConsumerWidget {
     final unread =
         selected ? 0 : ref.watch(channelUnreadCountProvider(channel.id));
     return _MuteGesture(
+      // KEYED BY CONVERSATION. The key used to live only on the child ListTile,
+      // leaving this gesture wrapper matched by SLOT — so a reorder (a DM seed, a
+      // channel-list refetch) could update the element in place and hand the
+      // recognizer a new child while the in-flight gesture still carried the OLD
+      // conversation id. Identity as position, which is precisely how a mute
+      // lands on the wrong row (cage-match #135 round 2, Tesla).
+      key: Key('mute-gesture-${channel.id}'),
       conversationId: channel.id,
       child: ListTile(
         key: Key('sidebar-channel-${channel.id}'),
@@ -299,6 +329,7 @@ class _SidebarDmTile extends ConsumerWidget {
     final roster = ref.watch(channelRosterProvider(dm.id)).value;
     final unread = selected ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
     return _MuteGesture(
+      key: Key('mute-gesture-${dm.id}'), // see _SidebarChannelTile — slot vs identity
       conversationId: dm.id,
       child: ListTile(
         key: Key('sidebar-dm-${dm.id}'),
@@ -312,7 +343,15 @@ class _SidebarDmTile extends ConsumerWidget {
           context,
           id: dm.id,
           unread: unread,
-          muted: ref.watch(mutedChannelIdsProvider).contains(dm.id),
+          // A DM has exactly one other party, so muting that ACCOUNT silences
+          // this row just as completely as muting the conversation — but only
+          // the conversation mute used to draw a glyph, leaving a peer-muted DM
+          // indistinguishable from an idle one. That is the precise lie the
+          // glyph exists to prevent, and it does not arise for a group channel
+          // (which can still badge from other senders). Cage-match #135 round 2,
+          // Tesla.
+          muted: ref.watch(mutedChannelIdsProvider).contains(dm.id) ||
+              _peerIsMuted(ref, roster, myId),
         ),
         onTap: selected
             ? null

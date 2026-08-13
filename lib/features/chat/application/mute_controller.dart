@@ -43,8 +43,20 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
   /// instance STABLE while unchanged (the alternative — wrapping at read time in
   /// the derived providers — would mint a new object per recompute and notify
   /// listeners on every rebuild).
+  /// Freezes the MAP as well as the sets. Freezing only the sets left the outer
+  /// map writable, so `container.read(mutesProvider)[MuteTarget.channel] = {…}`
+  /// still bypassed persistence and notification — a half-frozen boundary is a
+  /// leak wearing a lock (cage-match #135, Carnot).
+  /// Type arguments are EXPLICIT on both constructors. `Set.unmodifiable(...)`
+  /// without one infers `UnmodifiableSetView<dynamic>`, which then fails the
+  /// `Set<String>` cast the moment `Map.unmodifiable` re-types the entries — at
+  /// RUNTIME, inside a provider build, surfacing as "provider is in error state"
+  /// rather than a compile error.
   static Map<MuteTarget, Set<String>> _freeze(Map<MuteTarget, Set<String>> m) =>
-      {for (final t in MuteTarget.values) t: Set.unmodifiable(m[t] ?? const {})};
+      Map<MuteTarget, Set<String>>.unmodifiable({
+        for (final t in MuteTarget.values)
+          t: Set<String>.unmodifiable(m[t] ?? const <String>{})
+      });
 
   @override
   Map<MuteTarget, Set<String>> build() {
@@ -74,7 +86,10 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
     state = _freeze({
       for (final t in MuteTarget.values) t: t == target ? next : state[t]!,
     });
-    ref.read(muteStoreProvider).setMuted(userId, target, id, muted: muted);
+    // Persist the WHOLE new state, never a delta: the notifier is the single
+    // historian and disk is its dump, so a failed write is repaired by the next
+    // one instead of compounding (see [MuteStore.replaceAll]).
+    ref.read(muteStoreProvider).replaceAll(userId, state);
   }
 
   void toggle(MuteTarget target, String id) =>

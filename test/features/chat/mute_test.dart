@@ -6,11 +6,14 @@
 // message, that is the bug these lock against.
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
+import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/mute_store.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart'
     show ConnectionState;
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
+import 'package:aiko_chat_app/features/chat/domain/channel_member.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -68,12 +71,18 @@ void main() {
 
   // ── The store: per-user, injective, order-preserving ────────────────────────
 
+  Map<MuteTarget, Set<String>> snapshot({
+    Set<String> channels = const {},
+    Set<String> users = const {},
+  }) =>
+      {MuteTarget.channel: channels, MuteTarget.user: users};
+
   group('MuteStore', () {
     test('keyspace is injective across ids containing "_"', () async {
       final store = MuteStore(testPrefs);
       // Under a flat `<userId>_<targetId>` key these would collide.
-      await store.setMuted('a', MuteTarget.channel, 'b_c', muted: true);
-      await store.setMuted('a_b', MuteTarget.channel, 'c', muted: true);
+      await store.replaceAll('a', snapshot(channels: {'b_c'}));
+      await store.replaceAll('a_b', snapshot(channels: {'c'}));
 
       expect(store.readAll('a')[MuteTarget.channel], {'b_c'});
       expect(store.readAll('a_b')[MuteTarget.channel], {'c'});
@@ -83,7 +92,7 @@ void main() {
       final store = MuteStore(testPrefs);
       // The SAME id string muted as a channel must not read back as a muted user
       // — opaque server ids share one alphabet, so the target has to disambiguate.
-      await store.setMuted('u1', MuteTarget.channel, 'x', muted: true);
+      await store.replaceAll('u1', snapshot(channels: {'x'}));
 
       expect(store.readAll('u1')[MuteTarget.channel], {'x'});
       expect(store.readAll('u1')[MuteTarget.user], isEmpty);
@@ -92,13 +101,30 @@ void main() {
     test('unmute persists as an absence, and a corrupt payload reads empty',
         () async {
       final store = MuteStore(testPrefs);
-      await store.setMuted('u1', MuteTarget.user, 'noisy', muted: true);
-      await store.setMuted('u1', MuteTarget.user, 'noisy', muted: false);
+      await store.replaceAll('u1', snapshot(users: {'noisy'}));
+      await store.replaceAll('u1', snapshot());
       expect(store.readAll('u1')[MuteTarget.user], isEmpty);
 
       await testPrefs.setString('aiko_muted_u2', 'not json at all');
       expect(store.readAll('u2')[MuteTarget.user], isEmpty);
       expect(store.readAll('u2')[MuteTarget.channel], isEmpty);
+    });
+
+    test('a write persists the FULL snapshot, so a failed write self-heals',
+        () async {
+      // The regression this locks: a read-modify-write would rebuild the payload
+      // from DISK, so if mute A never landed, a later mute B would persist a
+      // world in which A does not exist — A silently evaporating at next login
+      // even though the session showed it. Writing the caller's whole map means
+      // the next write always carries the complete truth.
+      final store = MuteStore(testPrefs);
+      // Simulate "A never reached disk": memory holds A + B, disk holds nothing.
+      expect(store.readAll('u1')[MuteTarget.channel], isEmpty);
+      await store.replaceAll('u1', snapshot(channels: {'A', 'B'}));
+
+      final onDisk = store.readAll('u1');
+      expect(onDisk[MuteTarget.channel], {'A', 'B'},
+          reason: 'the later write must carry A, not just the delta B');
     });
   });
 
@@ -143,9 +169,23 @@ void main() {
     // baselining, leaving no watermark — so unmuting later would count every
     // fossil in the cache as unread.
     setWide(tester);
+    // PLANT REAL HISTORY BELOW THE FENCE, before the channel is ever observed.
+    // An earlier version of this test emitted a single LIVE message and called it
+    // a flood — which would have passed even if baselining were skipped entirely,
+    // because with no fossils present "count everything" and "count what arrived
+    // since" give the same answer (cage-match #135 round 2, Tesla).
+    final cache = DriftCache(NativeDatabase.memory());
+    addTearDown(cache.close);
+    await cache.upsertInbound(inbound('c2', ulid('01'), 'u2', 'fossil-1'));
+    await cache.upsertInbound(inbound('c2', ulid('03'), 'u2', 'fossil-2'));
+    await cache.upsertInbound(inbound('c2', ulid('05'), 'u2', 'fossil-3'));
+    await cache.advanceHistoryContiguous('c2', ulid('05'));
+
     final transport = FakeChatTransport();
     final container = makeContainer(
-        rest: FakeRestApi(channels: twoChannels), transport: transport);
+        rest: FakeRestApi(channels: twoChannels),
+        transport: transport,
+        cache: cache);
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -155,16 +195,16 @@ void main() {
     transport.emitConn(ConnectionState.connected);
     await settle(tester);
 
-    // History that predates first sight, arriving while muted.
-    transport.emitMessage(inbound('c2', ulid('0A'), 'u2', 'fossil'));
+    // One genuinely NEW message, above the fence.
+    await cache.upsertInbound(inbound('c2', ulid('09'), 'u2', 'live'));
     await settle(tester);
 
     container.read(mutesProvider.notifier).setMuted(
         MuteTarget.channel, 'c2', muted: false);
     await settle(tester);
 
-    // The channel WAS baselined while muted, so the message that arrived after
-    // the fence counts (1) — and nothing older than the fence leaks in.
+    // EXACTLY the live one. If muting had short-circuited before the baseline,
+    // c2 would have no watermark and all four (3 fossils + 1 live) would count.
     expect(container.read(channelUnreadCountProvider('c2')), 1);
   });
 
@@ -303,6 +343,37 @@ void main() {
     // Another account's store is untouched by this user's mutes.
     expect(store.readAll('someone-else')[MuteTarget.channel], isEmpty);
     expect(store.readAll('someone-else')[MuteTarget.user], isEmpty);
+  });
+
+  testWidgets('a DM whose PEER is account-muted shows the muted glyph, not idle',
+      (tester) async {
+    setWide(tester);
+    const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
+    final rest = FakeRestApi(channels: twoChannels);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = const [
+      ChannelMember(
+          userId: 'u1', role: 'member', canPost: true, handle: 'me', displayName: 'Me'),
+      ChannelMember(
+          userId: 'u2', role: 'member', canPost: true, handle: 'alice', displayName: 'Alice'),
+    ];
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('sidebar-muted-dm1')), findsNothing);
+
+    // Mute the PERSON, not the conversation. A 1:1 DM has exactly one other
+    // party, so this silences the row completely — and it must SAY so rather
+    // than looking like a conversation where nothing is happening.
+    container
+        .read(mutesProvider.notifier)
+        .setMuted(MuteTarget.user, 'u2', muted: true);
+    await settle(tester);
+
+    expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
   });
 
   testWidgets('published mute sets are unmodifiable (no back door past the store)',

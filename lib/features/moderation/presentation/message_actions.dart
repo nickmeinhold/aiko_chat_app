@@ -4,13 +4,20 @@
 /// sender.userId != null`) — you cannot block/report yourself or an external
 /// actor (LLM/robot have no account to action).
 ///
-/// Two halves, deliberately: the CONVERSATION actions (Message, Call) are
-/// chat-owned and live in `chat/presentation/conversation_actions.dart`; this
-/// file owns only the MODERATION actions (UGC — Apple 1.2 / Google UGC, #7):
-/// Report (reason picker) and Block (confirm), both calling
-/// [BlockedUsersController]. Errors surface as a SnackBar; block additionally
-/// hides the user's messages instantly via the client-side filter in
-/// `messagesProvider`.
+/// Deliberately layered by OWNER, not by menu position: the CONVERSATION actions
+/// (Message, Call) are chat-owned and live in
+/// `chat/presentation/conversation_actions.dart`; the MODERATION actions (UGC —
+/// Apple 1.2 / Google UGC, #7) are this file's — Report (reason picker) and Block
+/// (confirm), both calling [BlockedUsersController]. Errors surface as a SnackBar;
+/// block additionally hides the user's messages instantly via the client-side
+/// filter in `messagesProvider`.
+///
+/// Mute is a THIRD owner appearing in the same sheet: chat-owned attention state
+/// ([Mutes]), not moderation — nothing is sent anywhere and nothing is hidden. It
+/// is presented here because the sheet is where a user decides what to do about a
+/// person, and offering the mild reversible option above Report/Block is what
+/// keeps "too noisy" from having to escalate into a moderation act (#2913 tracks
+/// splitting the non-moderation actions out of this file).
 library;
 
 import 'package:flutter/material.dart';
@@ -121,22 +128,27 @@ Future<void> showMessageActions(
     case _Action.call:
       await startCall(context, ref, userId, name);
     case _Action.mute:
-      // Capture the notifier, NOT the ref. The SnackBar is owned by the
-      // ScaffoldMessenger ABOVE the chat surface, so it outlives this message
-      // tile — mute, navigate to Settings or sign out, then tap Undo, and a
-      // captured `WidgetRef` belongs to a disposed consumer (cage-match #135,
-      // Tesla). A notifier reference stays valid, so the undo either applies or
-      // is a harmless no-op against a rebuilt provider.
-      final mutes = ref.read(mutesProvider.notifier);
-      mutes.setMuted(MuteTarget.user, userId, muted: !muted);
+      // Capture the CONTAINER, not the ref and not the notifier. The SnackBar
+      // belongs to the ScaffoldMessenger ABOVE the chat surface, so it outlives
+      // this message tile: mute, navigate to Settings or sign out, then tap Undo.
+      // A captured `WidgetRef` is dead by then — and so is a captured notifier,
+      // because `mutesProvider` is `.autoDispose` and a handle to it is not a
+      // keep-alive (cage-match #135 rounds 1-2, Tesla + Carnot). The container is
+      // app-scoped; re-reading through it rebuilds the provider from the store if
+      // it was disposed, so Undo lands either way.
+      final container = ProviderScope.containerOf(context, listen: false);
+      container
+          .read(mutesProvider.notifier)
+          .setMuted(MuteTarget.user, userId, muted: !muted);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(muted ? 'Unmuted $name' : 'Muted $name'),
         action: SnackBarAction(
           label: 'Undo',
           // Absolute target state (the value BEFORE this action), never a
           // toggle — a double-tap restores rather than oscillates.
-          onPressed: () =>
-              mutes.setMuted(MuteTarget.user, userId, muted: muted),
+          onPressed: () => container
+              .read(mutesProvider.notifier)
+              .setMuted(MuteTarget.user, userId, muted: muted),
         ),
       ));
     case _Action.report:
