@@ -124,8 +124,15 @@ void main() {
       expect(store.readAll('u1')[MuteTarget.channel], isEmpty);
       await store.replaceAll('u1', snapshot(channels: {'A', 'B'}));
 
-      final onDisk = store.readAll('u1');
-      expect(onDisk[MuteTarget.channel], {'A', 'B'},
+      // Assert against the RAW PAYLOAD, not `store.readAll` — which prefers the
+      // store's own in-process snapshot, so this case would stay green even with
+      // the platform write deleted entirely. Round 9 taught the reload test to
+      // read the ether directly and left this sibling kneeling at the historian
+      // it exists to audit (cage-match #135 round 14, Tesla).
+      final raw = testPrefs.getString('aiko_muted_u1');
+      expect(raw, isNotNull, reason: 'nothing reached SharedPreferences');
+      expect((jsonDecode(raw!) as Map<String, dynamic>)['channels'],
+          containsAll(<String>['A', 'B']),
           reason: 'the later write must carry A, not just the delta B');
     });
   });

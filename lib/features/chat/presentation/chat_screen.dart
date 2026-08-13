@@ -230,6 +230,10 @@ class _MuteConversationAction extends ConsumerWidget {
           // user's key.
           final container = ProviderScope.containerOf(context, listen: false);
           final actingUserId = container.read(currentUserProvider)?.userId;
+          // See message_actions.dart: a null principal here is "could not
+          // determine", not "no gap", and passing it across the SnackBar's
+          // lifetime would disable the guard rather than fail closed.
+          if (actingUserId == null) return;
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             // Say what the button DOES, not the narrower thing it sounds like:
             // unmuting clears every cause of this row's silence, which includes

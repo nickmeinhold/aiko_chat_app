@@ -151,6 +151,13 @@ Future<void> showMessageActions(
     case _Action.call:
       await startCall(context, ref, userId, name);
     case _Action.mute:
+      // No principal to bind → do not act. `expectUserId: null` means "no async
+      // gap, same frame" at the synchronous call sites, so a null arriving HERE
+      // (an auth flicker at bind time) would not fail closed — it would skip the
+      // comparison entirely and let the write land under whoever is live when the
+      // session returns. `B == B` was killed in round 10; `null ⇒ any` is the
+      // same hole in a rarer costume (cage-match #135 round 14, Tesla).
+      if (actingUserId == null) return;
       // `container` and `actingUserId` were captured BEFORE the sheet (see the
       // top of this function). The container, not the ref and not the notifier:
       // the SnackBar belongs to the ScaffoldMessenger ABOVE the chat surface, so
