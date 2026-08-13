@@ -111,11 +111,13 @@ class _MuteGesture extends ConsumerWidget {
                 ? Icons.notifications_none
                 : Icons.notifications_off_outlined),
             title: Text(muted ? 'Unmute' : 'Mute'),
-            // Say WHICH silence this undoes when it is the person rather than
-            // the conversation — otherwise "Unmute" on a peer-muted DM looks
-            // like it did nothing to the conversation the user was thinking of.
+            // Say WHICH silence this undoes whenever a PERSON is one of the
+            // causes — not only when they are the sole cause. Gating on
+            // "peer and not conversation" left the both-muted case promising
+            // "show unread again" while restoring that account in every room
+            // (cage-match #135 round 5, Tesla).
             subtitle: Text(muted
-                ? (mute.byPeer && !mute.byConversation
+                ? (mute.byPeer
                     ? 'This person is muted everywhere — unmute them'
                     : 'Show unread again')
                 : 'No unread badge'),

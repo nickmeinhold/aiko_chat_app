@@ -194,11 +194,16 @@ class _MuteConversationAction extends ConsumerWidget {
     // room to, so it silently performed the bigger act (cage-match #135 round 4,
     // Carnot MEDIUM + Tesla). Here it asks first: the tap surfaces the real scope
     // and the user chooses.
-    final peerOnly = mute.byPeer && !mute.byConversation;
+    // Confess whenever a PERSON is one of the causes — not only when they are
+    // the sole cause. Gating on `byPeer && !byConversation` left the both-muted
+    // case saying "Unmute this conversation" while also restoring that account in
+    // every room (cage-match #135 round 5, Tesla). Any unmute that would clear an
+    // account mute has to say so.
+    final clearsPerson = muted && mute.byPeer;
     return IconButton(
       key: const Key('appbar-mute-conversation'),
       tooltip: muted
-          ? (peerOnly
+          ? (clearsPerson
               ? 'This person is muted everywhere'
               : 'Unmute this conversation')
           : 'Mute this conversation',
@@ -207,22 +212,34 @@ class _MuteConversationAction extends ConsumerWidget {
       // (cage-match #135, Maxwell).
       icon: Icon(muted ? Icons.notifications_off : Icons.notifications_none),
       onPressed: () {
-        final mutes = ref.read(mutesProvider.notifier);
-        if (muted && peerOnly) {
+        if (clearsPerson) {
+          // BIND BOTH BEFORE THE GAP — the container (not the autoDispose
+          // notifier) and the acting principal. This SnackBar lives on the
+          // messenger ABOVE the chat surface, so its action can be tapped after
+          // Settings, a sign-out, or a user switch. Reading the notifier or the
+          // user INSIDE the callback is the very mistake rounds 2-3 removed from
+          // the other two doors, reintroduced here when this control was added in
+          // round 4 (cage-match #135 round 5, Carnot + Tesla). Late-binding the
+          // principal is worse than useless: it compares the new user to the new
+          // user, passes, and then dumps the OLD in-memory map onto the NEW
+          // user's key.
+          final container = ProviderScope.containerOf(context, listen: false);
+          final actingUserId = container.read(currentUserProvider)?.userId;
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: const Text('This person is muted in every conversation.'),
             action: SnackBarAction(
               label: 'Unmute them',
-              onPressed: () => mute.apply(mutes,
+              onPressed: () => mute.apply(
+                  container.read(mutesProvider.notifier),
                   muted: false,
-                  expectUserId: ref.read(currentUserProvider)?.userId),
+                  expectUserId: actingUserId),
             ),
           ));
           return;
         }
         // Otherwise synchronous — no async gap, so the write lands in the same
         // frame as the tap and needs no principal binding.
-        mute.apply(mutes, muted: !muted);
+        mute.apply(ref.read(mutesProvider.notifier), muted: !muted);
       },
     );
   }

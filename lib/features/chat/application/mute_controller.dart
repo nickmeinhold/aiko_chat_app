@@ -148,7 +148,31 @@ class ConversationMute {
     required this.peerId,
     required this.byConversation,
     required this.byPeer,
-  });
+  }) : assert(!byPeer || peerId != null,
+            'byPeer without a peerId is a cause apply() cannot clear');
+
+  /// Derive from the two mute sets. PURE — the caller does the watching, which
+  /// is what keeps this in the application layer (no `WidgetRef`) and, more
+  /// importantly, keeps both watches UNCONDITIONAL at the call site.
+  ///
+  /// The earlier helper did `peerId != null && ref.watch(mutedUserIds)`, whose
+  /// short-circuit meant that while a DM roster was unresolved the widget did not
+  /// listen to account mutes at all — the same conditional-dependency trap this
+  /// feature already fixed in `channelUnreadCountProvider`, reintroduced in the
+  /// very helper written to keep every surface on one answer (cage-match #135
+  /// round 5, Tesla).
+  factory ConversationMute.from({
+    required String conversationId,
+    required String? peerId,
+    required Set<String> mutedConversations,
+    required Set<String> mutedUsers,
+  }) =>
+      ConversationMute(
+        conversationId: conversationId,
+        peerId: peerId,
+        byConversation: mutedConversations.contains(conversationId),
+        byPeer: peerId != null && mutedUsers.contains(peerId),
+      );
 
   final String conversationId;
 
@@ -187,15 +211,17 @@ class ConversationMute {
 /// Watch the mute state of a conversation, peer included. [peerId] is null for a
 /// group channel or an unresolved DM roster — an unknown peer is never guessed
 /// into a mute.
+///
+/// Both sets are watched UNCONDITIONALLY before deriving, so this widget's
+/// dependency set never becomes a function of whether a roster has resolved.
 ConversationMute watchConversationMute(
   WidgetRef ref,
   String conversationId, {
   String? peerId,
 }) =>
-    ConversationMute(
+    ConversationMute.from(
       conversationId: conversationId,
       peerId: peerId,
-      byConversation:
-          ref.watch(mutedChannelIdsProvider).contains(conversationId),
-      byPeer: peerId != null && ref.watch(mutedUserIdsProvider).contains(peerId),
+      mutedConversations: ref.watch(mutedChannelIdsProvider),
+      mutedUsers: ref.watch(mutedUserIdsProvider),
     );

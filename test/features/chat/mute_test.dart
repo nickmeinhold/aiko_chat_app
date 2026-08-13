@@ -494,6 +494,46 @@ void main() {
     expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
   });
 
+  testWidgets('the disclosure fires when BOTH causes are muted, not just peer-only',
+      (tester) async {
+    // Gating the confession on "peer AND NOT conversation" left the both-muted
+    // case saying "unmute this conversation" while also restoring that account
+    // everywhere — the silent global act the disclosure exists to prevent, hiding
+    // one flag away (cage-match #135 round 5, Tesla).
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
+    final rest = FakeRestApi(channels: twoChannels);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = const [
+      ChannelMember(
+          userId: 'u1', role: 'member', canPost: true, handle: 'me', displayName: 'Me'),
+      ChannelMember(
+          userId: 'u2', role: 'member', canPost: true, handle: 'alice', displayName: 'Alice'),
+    ];
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    container.read(selectedChannelIdProvider.notifier).select('dm1');
+    container.read(mutesProvider.notifier)
+      ..setMuted(MuteTarget.user, 'u2', muted: true)
+      ..setMuted(MuteTarget.channel, 'dm1', muted: true);
+    await settle(tester);
+
+    await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('This person is muted in every conversation.'), findsOneWidget,
+        reason: 'both causes muted must still disclose the account-wide effect');
+    expect(container.read(mutedUserIdsProvider), contains('u2'));
+  });
+
   testWidgets('published mute sets are unmodifiable (no back door past the store)',
       (tester) async {
     // The provider type is `Set<String>`, which invites direct mutation — that
