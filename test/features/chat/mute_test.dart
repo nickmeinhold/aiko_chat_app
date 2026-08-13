@@ -237,6 +237,40 @@ void main() {
     expect(find.byKey(const Key('sidebar-unread-c2')), findsOneWidget);
   });
 
+  testWidgets('NARROW: the app bar can mute the conversation being read',
+      (tester) async {
+    // Narrow has no sidebar, so without this the capability would be wide-only —
+    // mutable on the desktop, unreachable on the phone, which is where a noisy
+    // channel is actually felt.
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    final action = find.byKey(const Key('appbar-mute-conversation'));
+    expect(action, findsOneWidget);
+    expect(container.read(mutedChannelIdsProvider), isEmpty);
+
+    await tester.tap(action);
+    await settle(tester);
+    // c1 is the active conversation (nothing picked → first channel resolves).
+    expect(container.read(mutedChannelIdsProvider), contains('c1'));
+
+    // The same control unmutes — the icon carries the state, so it is never a
+    // one-way door.
+    await tester.tap(action);
+    await settle(tester);
+    expect(container.read(mutedChannelIdsProvider), isEmpty);
+  });
+
   testWidgets('mutes are per-account and reload from disk on the next session',
       (tester) async {
     setWide(tester);

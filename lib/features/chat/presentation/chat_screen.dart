@@ -9,6 +9,8 @@ import '../../../core/mark/mark_avatar.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
+import '../application/mute_controller.dart';
+import '../data/mute_store.dart' show MuteTarget;
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import '../domain/message.dart';
@@ -116,6 +118,11 @@ class ChatScreen extends ConsumerWidget {
                   ? _ChannelSwitcher(channels: channels, activeId: active.id)
                   : _ConversationTitle(active: active),
               actions: [
+                // Narrow has no sidebar, so the row long-press that mutes a
+                // conversation on wide does not exist here. Without this the
+                // capability would be wide-only — mutable on the desktop, invisible
+                // on the phone, which is where a noisy channel is actually felt.
+                if (active != null) _MuteConversationAction(conversation: active),
                 IconButton(
                   tooltip: 'Search',
                   icon: const Icon(Icons.search),
@@ -152,6 +159,30 @@ class ChatScreen extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Mute/unmute the conversation you are currently reading — the narrow-layout
+/// twin of the sidebar row's long-press menu. One toggle rather than a menu: the
+/// action is instant, reversible, and entirely private, so a confirmation step
+/// would cost more than the mistake it prevents. The icon carries the state, so
+/// a muted conversation announces itself from the bar you are already looking at.
+class _MuteConversationAction extends ConsumerWidget {
+  const _MuteConversationAction({required this.conversation});
+
+  final Channel conversation;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final muted = ref.watch(mutedChannelIdsProvider).contains(conversation.id);
+    return IconButton(
+      key: const Key('appbar-mute-conversation'),
+      tooltip: muted ? 'Unmute this conversation' : 'Mute this conversation',
+      icon: Icon(muted ? Icons.volume_off : Icons.volume_up_outlined),
+      onPressed: () => ref
+          .read(mutesProvider.notifier)
+          .setMuted(MuteTarget.channel, conversation.id, muted: !muted),
     );
   }
 }
