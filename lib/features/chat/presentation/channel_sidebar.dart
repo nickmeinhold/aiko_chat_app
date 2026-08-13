@@ -22,6 +22,8 @@ import '../../settings/application/gateway_directory_provider.dart';
 import '../../settings/data/gateway_directory_client.dart';
 import '../../settings/presentation/gateway_switch_action.dart';
 import '../application/chat_providers.dart';
+import '../application/mute_controller.dart';
+import '../data/mute_store.dart' show MuteTarget;
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import 'chat_screen.dart';
@@ -42,6 +44,75 @@ Color _selectedTileColor(ColorScheme scheme) => scheme.surfaceContainerHigh;
 const _tileShape = RoundedRectangleBorder(
   borderRadius: BorderRadius.all(Radius.circular(8)),
 );
+
+/// Wraps a sidebar row with the mute affordance: long-press on touch,
+/// right-click on desktop — the two gestures that mean "more options" on the
+/// platforms this app ships to, both landing on the same menu so neither is a
+/// second implementation of the first.
+class _MuteGesture extends ConsumerWidget {
+  const _MuteGesture({required this.conversationId, required this.child});
+
+  final String conversationId;
+  final Widget child;
+
+  Future<void> _show(BuildContext context, WidgetRef ref, Offset at) async {
+    final muted = ref.read(mutedChannelIdsProvider).contains(conversationId);
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final picked = await showMenu<bool>(
+      context: context,
+      position: RelativeRect.fromRect(at & Size.zero, Offset.zero & overlay.size),
+      items: [
+        PopupMenuItem<bool>(
+          value: !muted,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(
+                muted ? Icons.volume_up_outlined : Icons.volume_off_outlined),
+            title: Text(muted ? 'Unmute' : 'Mute'),
+            subtitle: Text(muted ? 'Show unread again' : 'No unread badge'),
+          ),
+        ),
+      ],
+    );
+    if (picked == null) return;
+    ref
+        .read(mutesProvider.notifier)
+        .setMuted(MuteTarget.channel, conversationId, muted: picked);
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPressStart: (d) => _show(context, ref, d.globalPosition),
+      onSecondaryTapDown: (d) => _show(context, ref, d.globalPosition),
+      child: child,
+    );
+  }
+}
+
+/// The trailing slot of a sidebar row: an unread badge, or — when the row is
+/// muted — a quiet mute glyph, so a silent conversation reads as *muted* rather
+/// than as *nothing happening*. The badge is never shown for a muted row because
+/// [channelUnreadCountProvider] already reports 0 there; this only makes the
+/// reason legible.
+Widget? _rowTrailing(
+  BuildContext context, {
+  required String id,
+  required int unread,
+  required bool muted,
+}) {
+  if (muted) {
+    return Icon(Icons.volume_off_outlined,
+        key: Key('sidebar-muted-$id'),
+        size: 16,
+        color: Theme.of(context).colorScheme.onSurfaceVariant);
+  }
+  return unread > 0
+      ? UnreadBadge(key: Key('sidebar-unread-$id'), count: unread)
+      : null;
+}
 
 class ChatSidebar extends ConsumerWidget {
   const ChatSidebar({super.key});
@@ -138,21 +209,27 @@ class _SidebarChannelTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final unread =
         selected ? 0 : ref.watch(channelUnreadCountProvider(channel.id));
-    return ListTile(
-      key: Key('sidebar-channel-${channel.id}'),
-      selected: selected,
-      selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
-      shape: _tileShape,
-      dense: true,
-      leading: const Icon(Icons.tag, size: 20),
-      title: Text(channel.name, overflow: TextOverflow.ellipsis),
-      trailing: unread > 0
-          ? UnreadBadge(key: Key('sidebar-unread-${channel.id}'), count: unread)
-          : null,
-      onTap: selected
-          ? null
-          : () =>
-              ref.read(selectedChannelIdProvider.notifier).select(channel.id),
+    return _MuteGesture(
+      conversationId: channel.id,
+      child: ListTile(
+        key: Key('sidebar-channel-${channel.id}'),
+        selected: selected,
+        selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
+        shape: _tileShape,
+        dense: true,
+        leading: const Icon(Icons.tag, size: 20),
+        title: Text(channel.name, overflow: TextOverflow.ellipsis),
+        trailing: _rowTrailing(
+          context,
+          id: channel.id,
+          unread: unread,
+          muted: ref.watch(mutedChannelIdsProvider).contains(channel.id),
+        ),
+        onTap: selected
+            ? null
+            : () =>
+                ref.read(selectedChannelIdProvider.notifier).select(channel.id),
+      ),
     );
   }
 }
@@ -182,20 +259,26 @@ class _SidebarDmTile extends ConsumerWidget {
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(dm.id)).value;
     final unread = selected ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
-    return ListTile(
-      key: Key('sidebar-dm-${dm.id}'),
-      selected: selected,
-      selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
-      shape: _tileShape,
-      dense: true,
-      leading: const Icon(Icons.alternate_email, size: 20),
-      title: Text(dmPeerTitle(roster, myId), overflow: TextOverflow.ellipsis),
-      trailing: unread > 0
-          ? UnreadBadge(key: Key('sidebar-unread-${dm.id}'), count: unread)
-          : null,
-      onTap: selected
-          ? null
-          : () => ref.read(selectedChannelIdProvider.notifier).select(dm.id),
+    return _MuteGesture(
+      conversationId: dm.id,
+      child: ListTile(
+        key: Key('sidebar-dm-${dm.id}'),
+        selected: selected,
+        selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
+        shape: _tileShape,
+        dense: true,
+        leading: const Icon(Icons.alternate_email, size: 20),
+        title: Text(dmPeerTitle(roster, myId), overflow: TextOverflow.ellipsis),
+        trailing: _rowTrailing(
+          context,
+          id: dm.id,
+          unread: unread,
+          muted: ref.watch(mutedChannelIdsProvider).contains(dm.id),
+        ),
+        onTap: selected
+            ? null
+            : () => ref.read(selectedChannelIdProvider.notifier).select(dm.id),
+      ),
     );
   }
 }

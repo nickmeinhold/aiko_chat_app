@@ -18,6 +18,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../chat/application/chat_providers.dart'
     show navigableChannelsProvider;
+import '../../chat/application/mute_controller.dart';
+import '../../chat/data/mute_store.dart' show MuteTarget;
 import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../chat/presentation/conversation_actions.dart'
@@ -49,6 +51,11 @@ Future<void> showMessageActions(
           ?.kind ==
       ChannelKind.dm;
 
+  // Read once, before the sheet opens: the sheet's own labels must describe the
+  // state the user is acting FROM, and a rebuild mid-sheet would flip the verb
+  // under their finger.
+  final muted = ref.read(mutedUserIdsProvider).contains(userId);
+
   final action = await showModalBottomSheet<_Action>(
     context: context,
     builder: (ctx) => SafeArea(
@@ -72,6 +79,19 @@ Future<void> showMessageActions(
             leading: const Icon(Icons.videocam_outlined),
             title: Text('Call $name'),
             onTap: () => Navigator.pop(ctx, _Action.call),
+          ),
+          // Mute sits ABOVE the moderation pair deliberately: it is the mild,
+          // reversible, private option, and offering it first means "too noisy"
+          // doesn't have to escalate to a moderation act. Muting is silent and
+          // one-sided — nothing is sent anywhere — so unlike Block it needs no
+          // confirmation step.
+          ListTile(
+            leading: Icon(muted ? Icons.volume_up_outlined : Icons.volume_off_outlined),
+            title: Text(muted ? 'Unmute $name' : 'Mute $name'),
+            subtitle: Text(muted
+                ? 'Their messages will notify you again'
+                : "You'll still see their messages — no unread badge"),
+            onTap: () => Navigator.pop(ctx, _Action.mute),
           ),
           ListTile(
             leading: const Icon(Icons.flag_outlined),
@@ -97,6 +117,19 @@ Future<void> showMessageActions(
       await startDm(context, ref, userId, name);
     case _Action.call:
       await startCall(context, ref, userId, name);
+    case _Action.mute:
+      ref
+          .read(mutesProvider.notifier)
+          .setMuted(MuteTarget.user, userId, muted: !muted);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(muted ? 'Unmuted $name' : "Muted $name"),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => ref
+              .read(mutesProvider.notifier)
+              .setMuted(MuteTarget.user, userId, muted: muted),
+        ),
+      ));
     case _Action.report:
       await _report(context, ref, message.id ?? message.clientTempId);
     case _Action.block:
@@ -104,7 +137,7 @@ Future<void> showMessageActions(
   }
 }
 
-enum _Action { message, call, report, block }
+enum _Action { message, call, mute, report, block }
 
 Future<void> _report(
   BuildContext context,
