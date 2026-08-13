@@ -62,7 +62,10 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
   Map<MuteTarget, Set<String>> build() {
     final userId = ref.read(authControllerProvider).value?.userId;
     if (userId == null) {
-      return {for (final t in MuteTarget.values) t: const <String>{}};
+      // Frozen too. An "empty" state that is quietly writable is where the next
+      // edit learns that empty means safe to mutate (cage-match #135 round 3,
+      // Carnot + Tesla) — every published state obeys the same contract.
+      return _freeze(const {});
     }
     return _freeze(ref.read(muteStoreProvider).readAll(userId));
   }
@@ -72,9 +75,26 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
   /// Set [id]'s muted state under [target], in memory first (the UI's fast path)
   /// and durably behind it. Idempotent: setting the state it already holds is a
   /// no-op, so a double-tap costs neither a rebuild nor a disk write.
-  void setMuted(MuteTarget target, String id, {required bool muted}) {
+  ///
+  /// [expectUserId] is REQUIRED of any caller writing across an async gap (a menu
+  /// that was open, an Undo on a SnackBar that outlived its screen). This method
+  /// resolves the principal from the LIVE auth state, so lengthening a handle's
+  /// lifetime — which is exactly what capturing the container did — also lets the
+  /// write jump into whoever is signed in when it finally lands. Undo tapped after
+  /// a different login on the same container would write into the NEW principal's
+  /// book (cage-match #135 round 3, Tesla). Binding the id at action time and
+  /// FAILING CLOSED on a mismatch means a stale write is dropped rather than
+  /// misattributed: a missed unmute is a badge the user can see and redo, a write
+  /// into another account's preferences is invisible and wrong.
+  void setMuted(
+    MuteTarget target,
+    String id, {
+    required bool muted,
+    String? expectUserId,
+  }) {
     final userId = ref.read(authControllerProvider).value?.userId; // non-reactive
     if (userId == null || id.isEmpty) return;
+    if (expectUserId != null && expectUserId != userId) return; // fail closed
     final current = state[target]!;
     if (current.contains(id) == muted) return;
     final next = {...current};
@@ -104,3 +124,73 @@ final mutedChannelIdsProvider = Provider.autoDispose<Set<String>>(
 /// noisy participant should not have to be muted channel by channel.
 final mutedUserIdsProvider = Provider.autoDispose<Set<String>>(
     (ref) => ref.watch(mutesProvider)[MuteTarget.user]!);
+
+/// WHY a conversation row is quiet — and therefore what a control on that row
+/// must act on.
+///
+/// A row can be silenced by two independent facts: the conversation is muted, or
+/// (in a 1:1 DM, which has exactly one other party) its peer's ACCOUNT is muted.
+/// Every surface that answers "is this muted?" has to answer it the same way, and
+/// every control that offers to undo it has to undo *whatever is actually causing
+/// the silence*. Deriving that separately per surface is how the sidebar row came
+/// to show a bell while its own menu offered "Mute" — the row saying muted and the
+/// control saying not-muted, about the same conversation (cage-match #135 round 3,
+/// Tesla). This type is the single door: read [isMuted] to render, call
+/// [ConversationMute.apply] to change it.
+class ConversationMute {
+  const ConversationMute({
+    required this.conversationId,
+    required this.peerId,
+    required this.byConversation,
+    required this.byPeer,
+  });
+
+  final String conversationId;
+
+  /// The DM's single peer, or null for a group channel / unresolved roster.
+  final String? peerId;
+
+  final bool byConversation;
+  final bool byPeer;
+
+  bool get isMuted => byConversation || byPeer;
+
+  /// Apply [muted] to whatever is causing the silence.
+  ///
+  /// Muting sets the CONVERSATION (the narrow, least surprising act — it does not
+  /// silence a person everywhere on the strength of a tap on one row). Unmuting
+  /// clears BOTH causes, because the user's intent is "make this row audible
+  /// again" and leaving the other cause in place would present a control that
+  /// visibly fails to do what it says.
+  void apply(Mutes mutes, {required bool muted, String? expectUserId}) {
+    if (muted) {
+      mutes.setMuted(MuteTarget.channel, conversationId,
+          muted: true, expectUserId: expectUserId);
+      return;
+    }
+    if (byConversation) {
+      mutes.setMuted(MuteTarget.channel, conversationId,
+          muted: false, expectUserId: expectUserId);
+    }
+    if (byPeer && peerId != null) {
+      mutes.setMuted(MuteTarget.user, peerId!,
+          muted: false, expectUserId: expectUserId);
+    }
+  }
+}
+
+/// Watch the mute state of a conversation, peer included. [peerId] is null for a
+/// group channel or an unresolved DM roster — an unknown peer is never guessed
+/// into a mute.
+ConversationMute watchConversationMute(
+  WidgetRef ref,
+  String conversationId, {
+  String? peerId,
+}) =>
+    ConversationMute(
+      conversationId: conversationId,
+      peerId: peerId,
+      byConversation:
+          ref.watch(mutedChannelIdsProvider).contains(conversationId),
+      byPeer: peerId != null && ref.watch(mutedUserIdsProvider).contains(peerId),
+    );

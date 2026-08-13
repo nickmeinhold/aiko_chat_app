@@ -24,7 +24,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../chat/application/chat_providers.dart'
-    show navigableChannelsProvider;
+    show currentUserProvider, navigableChannelsProvider;
 import '../../chat/application/mute_controller.dart';
 import '../../chat/data/mute_store.dart' show MuteTarget;
 import '../../chat/domain/channel.dart';
@@ -137,18 +137,23 @@ Future<void> showMessageActions(
       // app-scoped; re-reading through it rebuilds the provider from the store if
       // it was disposed, so Undo lands either way.
       final container = ProviderScope.containerOf(context, listen: false);
-      container
-          .read(mutesProvider.notifier)
-          .setMuted(MuteTarget.user, userId, muted: !muted);
+      // Bind the PRINCIPAL as well as the handle. The container outliving the
+      // tile is what makes Undo reachable at all — and is exactly what would let
+      // it land after a different login and write into that account's book, since
+      // `setMuted` resolves the user from live auth. Captured here, checked there,
+      // dropped on mismatch (cage-match #135 round 3, Tesla).
+      final actingUserId = container.read(currentUserProvider)?.userId;
+      container.read(mutesProvider.notifier).setMuted(MuteTarget.user, userId,
+          muted: !muted, expectUserId: actingUserId);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(muted ? 'Unmuted $name' : 'Muted $name'),
         action: SnackBarAction(
           label: 'Undo',
           // Absolute target state (the value BEFORE this action), never a
           // toggle — a double-tap restores rather than oscillates.
-          onPressed: () => container
-              .read(mutesProvider.notifier)
-              .setMuted(MuteTarget.user, userId, muted: muted),
+          onPressed: () => container.read(mutesProvider.notifier).setMuted(
+              MuteTarget.user, userId,
+              muted: muted, expectUserId: actingUserId),
         ),
       ));
     case _Action.report:

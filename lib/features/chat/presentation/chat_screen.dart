@@ -10,7 +10,6 @@ import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
 import '../application/mute_controller.dart';
-import '../data/mute_store.dart' show MuteTarget;
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import '../domain/message.dart';
@@ -175,7 +174,19 @@ class _MuteConversationAction extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final muted = ref.watch(mutedChannelIdsProvider).contains(conversation.id);
+    // Peer-aware, exactly like the sidebar row: a peer-muted DM resized onto a
+    // phone was showing "not muted" while its badge was already dead — two
+    // surfaces disagreeing about the same conversation, which is the drift this
+    // feature's own comments forbid (cage-match #135 round 3, Tesla).
+    final mute = watchConversationMute(
+      ref,
+      conversation.id,
+      peerId: conversation.kind == ChannelKind.dm
+          ? dmPeerId(ref.watch(channelRosterProvider(conversation.id)).value,
+              ref.watch(currentUserProvider)?.userId)
+          : null,
+    );
+    final muted = mute.isMuted;
     return IconButton(
       key: const Key('appbar-mute-conversation'),
       tooltip: muted ? 'Unmute this conversation' : 'Mute this conversation',
@@ -183,9 +194,10 @@ class _MuteConversationAction extends ConsumerWidget {
       // in the chrome reads as "mute the call", a different verb entirely
       // (cage-match #135, Maxwell).
       icon: Icon(muted ? Icons.notifications_off : Icons.notifications_none),
-      onPressed: () => ref
-          .read(mutesProvider.notifier)
-          .setMuted(MuteTarget.channel, conversation.id, muted: !muted),
+      // Synchronous — no async gap, so no expectUserId is needed here; the write
+      // lands in the same frame as the tap.
+      onPressed: () =>
+          mute.apply(ref.read(mutesProvider.notifier), muted: !muted),
     );
   }
 }

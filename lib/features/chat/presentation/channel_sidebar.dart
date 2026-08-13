@@ -23,7 +23,6 @@ import '../../settings/data/gateway_directory_client.dart';
 import '../../settings/presentation/gateway_switch_action.dart';
 import '../application/chat_providers.dart';
 import '../application/mute_controller.dart';
-import '../data/mute_store.dart' show MuteTarget;
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import 'chat_screen.dart';
@@ -63,11 +62,14 @@ const _tileShape = RoundedRectangleBorder(
 class _MuteGesture extends ConsumerWidget {
   const _MuteGesture({
     super.key,
-    required this.conversationId,
+    required this.mute,
     required this.child,
   });
 
-  final String conversationId;
+  /// The row's full mute state — conversation AND peer. The menu acts on
+  /// whatever is actually causing the silence, so the glyph and the control can
+  /// never disagree (see [ConversationMute]).
+  final ConversationMute mute;
   final Widget child;
 
   /// [container] is captured by the CALLER, before the menu is awaited, and the
@@ -90,9 +92,10 @@ class _MuteGesture extends ConsumerWidget {
   Future<void> _show(
     BuildContext context,
     ProviderContainer container, {
-    required bool muted,
+    required String? expectUserId,
     required Offset at,
   }) async {
+    final muted = mute.isMuted;
     final overlay =
         Overlay.of(context).context.findRenderObject()! as RenderBox;
     final picked = await showMenu<bool>(
@@ -108,7 +111,14 @@ class _MuteGesture extends ConsumerWidget {
                 ? Icons.notifications_none
                 : Icons.notifications_off_outlined),
             title: Text(muted ? 'Unmute' : 'Mute'),
-            subtitle: Text(muted ? 'Show unread again' : 'No unread badge'),
+            // Say WHICH silence this undoes when it is the person rather than
+            // the conversation — otherwise "Unmute" on a peer-muted DM looks
+            // like it did nothing to the conversation the user was thinking of.
+            subtitle: Text(muted
+                ? (mute.byPeer && !mute.byConversation
+                    ? 'This person is muted everywhere — unmute them'
+                    : 'Show unread again')
+                : 'No unread badge'),
           ),
         ),
       ],
@@ -117,26 +127,28 @@ class _MuteGesture extends ConsumerWidget {
     // toggle: if the mute changed while the menu was open, this write is an
     // idempotent no-op rather than an inversion of someone else's change.
     if (picked == null) return;
-    container
-        .read(mutesProvider.notifier)
-        .setMuted(MuteTarget.channel, conversationId, muted: picked);
+    mute.apply(container.read(mutesProvider.notifier),
+        muted: picked, expectUserId: expectUserId);
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final container = ProviderScope.containerOf(context, listen: false);
-    final muted = ref.watch(mutedChannelIdsProvider).contains(conversationId);
+    // Bound HERE, before the menu can be opened, so a pick that lands after a
+    // logout/user-switch is dropped rather than written into another account
+    // (cage-match #135 round 3, Tesla).
+    final expectUserId = ref.watch(currentUserProvider)?.userId;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onLongPressEnd: (d) =>
-          _show(context, container, muted: muted, at: d.globalPosition),
+      onLongPressEnd: (d) => _show(context, container,
+          expectUserId: expectUserId, at: d.globalPosition),
       // Pointer-UP for the same reason as the long-press. NOTE for Flutter web
       // (cage-match #135, Tesla): the browser raises its own context menu on
       // right-click, so on web this can double up until that default is
       // suppressed — harmless (two menus, one intent) and the app's shipping
       // targets are macOS/iOS/Android.
-      onSecondaryTapUp: (d) =>
-          _show(context, container, muted: muted, at: d.globalPosition),
+      onSecondaryTapUp: (d) => _show(context, container,
+          expectUserId: expectUserId, at: d.globalPosition),
       child: child,
     );
   }
@@ -147,14 +159,6 @@ class _MuteGesture extends ConsumerWidget {
 /// than as *nothing happening*. The badge is never shown for a muted row because
 /// [channelUnreadCountProvider] already reports 0 there; this only makes the
 /// reason legible.
-/// Whether a DM's single peer is an account-muted user. Unresolved roster → false
-/// (the row simply shows its unread as usual); an unknown peer must never be
-/// guessed into a mute.
-bool _peerIsMuted(WidgetRef ref, Map<String, String>? roster, String? myId) {
-  final peer = dmPeerId(roster, myId);
-  return peer != null && ref.watch(mutedUserIdsProvider).contains(peer);
-}
-
 Widget? _rowTrailing(
   BuildContext context, {
   required String id,
@@ -271,6 +275,8 @@ class _SidebarChannelTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final unread =
         selected ? 0 : ref.watch(channelUnreadCountProvider(channel.id));
+    // No peer: a group channel is silenced only by its own mute.
+    final mute = watchConversationMute(ref, channel.id);
     return _MuteGesture(
       // KEYED BY CONVERSATION. The key used to live only on the child ListTile,
       // leaving this gesture wrapper matched by SLOT — so a reorder (a DM seed, a
@@ -279,7 +285,7 @@ class _SidebarChannelTile extends ConsumerWidget {
       // conversation id. Identity as position, which is precisely how a mute
       // lands on the wrong row (cage-match #135 round 2, Tesla).
       key: Key('mute-gesture-${channel.id}'),
-      conversationId: channel.id,
+      mute: mute,
       child: ListTile(
         key: Key('sidebar-channel-${channel.id}'),
         selected: selected,
@@ -292,7 +298,7 @@ class _SidebarChannelTile extends ConsumerWidget {
           context,
           id: channel.id,
           unread: unread,
-          muted: ref.watch(mutedChannelIdsProvider).contains(channel.id),
+          muted: mute.isMuted,
         ),
         onTap: selected
             ? null
@@ -328,9 +334,14 @@ class _SidebarDmTile extends ConsumerWidget {
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(dm.id)).value;
     final unread = selected ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
+    // A DM has exactly one other party, so muting that ACCOUNT silences this row
+    // as completely as muting the conversation — the row must say so, and its
+    // menu must be able to undo THAT rather than offering a mute the user
+    // already has (see [ConversationMute]).
+    final mute = watchConversationMute(ref, dm.id, peerId: dmPeerId(roster, myId));
     return _MuteGesture(
       key: Key('mute-gesture-${dm.id}'), // see _SidebarChannelTile — slot vs identity
-      conversationId: dm.id,
+      mute: mute,
       child: ListTile(
         key: Key('sidebar-dm-${dm.id}'),
         selected: selected,
@@ -343,15 +354,7 @@ class _SidebarDmTile extends ConsumerWidget {
           context,
           id: dm.id,
           unread: unread,
-          // A DM has exactly one other party, so muting that ACCOUNT silences
-          // this row just as completely as muting the conversation — but only
-          // the conversation mute used to draw a glyph, leaving a peer-muted DM
-          // indistinguishable from an idle one. That is the precise lie the
-          // glyph exists to prevent, and it does not arise for a group channel
-          // (which can still badge from other senders). Cage-match #135 round 2,
-          // Tesla.
-          muted: ref.watch(mutedChannelIdsProvider).contains(dm.id) ||
-              _peerIsMuted(ref, roster, myId),
+          muted: mute.isMuted,
         ),
         onTap: selected
             ? null

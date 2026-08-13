@@ -376,6 +376,81 @@ void main() {
     expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
   });
 
+  testWidgets('a peer-muted DM offers UNMUTE, and unmuting clears the real cause',
+      (tester) async {
+    // The row's glyph is (conversation OR peer), but the menu used to toggle the
+    // conversation only — so a peer-muted DM showed the bell AND offered "Mute",
+    // stacking a second mute that did nothing visible, while "unmute" left the
+    // bell ringing. Row and control disagreeing about the same conversation
+    // (cage-match #135 round 3, Tesla).
+    setWide(tester);
+    const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
+    final rest = FakeRestApi(channels: twoChannels);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = const [
+      ChannelMember(
+          userId: 'u1', role: 'member', canPost: true, handle: 'me', displayName: 'Me'),
+      ChannelMember(
+          userId: 'u2', role: 'member', canPost: true, handle: 'alice', displayName: 'Alice'),
+    ];
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    container
+        .read(mutesProvider.notifier)
+        .setMuted(MuteTarget.user, 'u2', muted: true);
+    await settle(tester);
+    expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
+
+    // The menu must offer to UNDO the silence, not to add to it.
+    await tester.longPress(find.byKey(const Key('sidebar-dm-dm1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Mute'), findsNothing);
+    await tester.tap(find.text('Unmute'));
+    await settle(tester);
+
+    // ...and it cleared the ACCOUNT mute — the actual cause — so the row is
+    // audible again rather than still bearing a glyph it cannot shed.
+    expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
+    expect(find.byKey(const Key('sidebar-muted-dm1')), findsNothing);
+  });
+
+  testWidgets('a write bound to one account is DROPPED if the session changed',
+      (tester) async {
+    // Undo lives on a SnackBar owned above the chat surface, so it can be tapped
+    // after a logout/user switch. `setMuted` resolves the principal from LIVE
+    // auth, so without a binding that late write lands in whoever is signed in
+    // now (cage-match #135 round 3, Tesla). Fail closed: a dropped unmute is a
+    // badge the user can see; a write into another account is invisible.
+    setWide(tester);
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    container.read(mutesProvider.notifier).setMuted(
+        MuteTarget.channel, 'c2',
+        muted: true, expectUserId: 'somebody-else');
+    await settle(tester);
+    expect(container.read(mutedChannelIdsProvider), isEmpty,
+        reason: 'a write bound to a different principal must not apply');
+
+    // The same call bound to the ACTUAL signed-in user does apply.
+    final me = container.read(currentUserProvider)!.userId;
+    container.read(mutesProvider.notifier).setMuted(
+        MuteTarget.channel, 'c2',
+        muted: true, expectUserId: me);
+    await settle(tester);
+    expect(container.read(mutedChannelIdsProvider), contains('c2'));
+  });
+
   testWidgets('published mute sets are unmodifiable (no back door past the store)',
       (tester) async {
     // The provider type is `Set<String>`, which invites direct mutation — that

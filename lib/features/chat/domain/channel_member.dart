@@ -70,20 +70,6 @@ String senderDisplayName(
 ///   no "me" to exclude, every member reads as a peer and the row could be titled
 ///   with the viewer's OWN handle (cage-match Tesla).
 /// * only-me in the roster → a self-DM ("Notes to self").
-/// The PEER's user id in a DM [roster], or null when there isn't exactly one
-/// identifiable peer (roster absent/loading, no "me" to exclude, or a self-DM).
-///
-/// Same exclusion rule as [dmPeerTitle] and deliberately beside it, so the row's
-/// title and any peer-derived state (a mute glyph) can never disagree about WHO
-/// the other party is. Null is the honest answer, never a guessed member: with
-/// no `myId` every member reads as a peer, which is how a viewer ends up
-/// treating themselves as the other side of their own conversation.
-String? dmPeerId(Map<String, String>? roster, String? myId) {
-  if (roster == null || roster.isEmpty || myId == null) return null;
-  final peers = roster.keys.where((id) => id != myId).toList();
-  return peers.length == 1 ? peers.first : null;
-}
-
 String dmPeerTitle(Map<String, String>? roster, String? myId) {
   if (roster == null || roster.isEmpty || myId == null) return 'Direct message';
   // Three DISTINCT cases (cage-match #132 Carnot — a blank peer handle must NOT
@@ -95,4 +81,18 @@ String dmPeerTitle(Map<String, String>? roster, String? myId) {
   final named =
       peers.where((e) => e.value.isNotEmpty).map((e) => e.value).firstOrNull;
   return named ?? 'Direct message';
+}
+
+/// The PEER's user id in a DM [roster], or null when there is not exactly one
+/// identifiable peer (roster absent/loading, no "me" to exclude, or a self-DM).
+///
+/// Deliberately beside [dmPeerTitle] and sharing its exclusion rule, so a DM
+/// row's title and any peer-derived state (its mute glyph) can never disagree
+/// about WHO the other party is. Null is the honest answer, never a guessed
+/// member: with no `myId` every member reads as a peer, which is how a viewer
+/// ends up treated as the other side of their own conversation.
+String? dmPeerId(Map<String, String>? roster, String? myId) {
+  if (roster == null || roster.isEmpty || myId == null) return null;
+  final peers = roster.keys.where((id) => id != myId).toList();
+  return peers.length == 1 ? peers.first : null;
 }
