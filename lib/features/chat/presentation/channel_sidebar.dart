@@ -11,6 +11,7 @@
 /// verbatim.
 library;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -150,13 +151,17 @@ class _MuteGesture extends ConsumerWidget {
       behavior: HitTestBehavior.opaque,
       onLongPressEnd: (d) => _show(context, container,
           expectUserId: expectUserId, at: d.globalPosition),
-      // Pointer-UP for the same reason as the long-press. NOTE for Flutter web
-      // (cage-match #135, Tesla): the browser raises its own context menu on
-      // right-click, so on web this can double up until that default is
-      // suppressed — harmless (two menus, one intent) and the app's shipping
-      // targets are macOS/iOS/Android.
-      onSecondaryTapUp: (d) => _show(context, container,
-          expectUserId: expectUserId, at: d.globalPosition),
+      // Pointer-UP for the same reason as the long-press — and NOT WIRED ON WEB,
+      // where the browser raises its own context menu on right-click and the user
+      // would get two menus for one intent. Documenting that as a named tradeoff
+      // (as this did) is shipping a known defect with a note attached; not
+      // offering the gesture where it misbehaves is simply correct, and long-press
+      // still reaches the same menu (cage-match #135 rounds 1 + 10, Tesla then
+      // Kelvin).
+      onSecondaryTapUp: kIsWeb
+          ? null
+          : (d) => _show(context, container,
+              expectUserId: expectUserId, at: d.globalPosition),
       child: child,
     );
   }

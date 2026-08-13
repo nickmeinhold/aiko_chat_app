@@ -62,6 +62,19 @@ Future<void> showMessageActions(
   // state the user is acting FROM, and a rebuild mid-sheet would flip the verb
   // under their finger.
   final muted = ref.read(mutedUserIdsProvider).contains(userId);
+  // BOUND HERE, on the NEAR side of the sheet — beside `muted`, at the instant
+  // the user acts.
+  //
+  // Read after the await instead (as this did for seven rounds) and the
+  // fail-closed check becomes `liveAuth == liveAuth`: a principal sampled on the
+  // far side of the gap is BY DEFINITION equal to live auth, so the comparison
+  // carries zero information and always conducts. The guard rounds 3-7 built for
+  // the other two doors was, at this one — the only writer of an account mute —
+  // a rod painted copper (cage-match #135 round 10, Tesla). What was actually
+  // stopping a cross-principal write here was the `context.mounted` check below:
+  // a neighbour of the write, not a property of it.
+  final container = ProviderScope.containerOf(context, listen: false);
+  final actingUserId = container.read(currentUserProvider)?.userId;
 
   final action = await showModalBottomSheet<_Action>(
     context: context,
@@ -139,21 +152,13 @@ Future<void> showMessageActions(
     case _Action.call:
       await startCall(context, ref, userId, name);
     case _Action.mute:
-      // Capture the CONTAINER, not the ref and not the notifier. The SnackBar
-      // belongs to the ScaffoldMessenger ABOVE the chat surface, so it outlives
-      // this message tile: mute, navigate to Settings or sign out, then tap Undo.
-      // A captured `WidgetRef` is dead by then — and so is a captured notifier,
-      // because `mutesProvider` is `.autoDispose` and a handle to it is not a
-      // keep-alive (cage-match #135 rounds 1-2, Tesla + Carnot). The container is
-      // app-scoped; re-reading through it rebuilds the provider from the store if
-      // it was disposed, so Undo lands either way.
-      final container = ProviderScope.containerOf(context, listen: false);
-      // Bind the PRINCIPAL as well as the handle. The container outliving the
-      // tile is what makes Undo reachable at all — and is exactly what would let
-      // it land after a different login and write into that account's book, since
-      // `setMuted` resolves the user from live auth. Captured here, checked there,
-      // dropped on mismatch (cage-match #135 round 3, Tesla).
-      final actingUserId = container.read(currentUserProvider)?.userId;
+      // `container` and `actingUserId` were captured BEFORE the sheet (see the
+      // top of this function). The container, not the ref and not the notifier:
+      // the SnackBar belongs to the ScaffoldMessenger ABOVE the chat surface, so
+      // it outlives this message tile — mute, navigate to Settings or sign out,
+      // then tap Undo. A captured `WidgetRef` is dead by then, and so is a
+      // captured notifier, because `mutesProvider` is `.autoDispose` and a handle
+      // to it is not a keep-alive (cage-match #135 rounds 1-2).
       container.read(mutesProvider.notifier).setMuted(MuteTarget.user, userId,
           muted: !muted, expectUserId: actingUserId);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
