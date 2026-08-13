@@ -149,7 +149,7 @@ void main() {
     expect(find.byKey(const Key('sidebar-unread-c2')), findsOneWidget);
 
     container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: true);
+        MuteTarget.channel, 'c2', muted: true, expectUserId: null);
     await settle(tester);
 
     expect(container.read(channelUnreadCountProvider('c2')), 0);
@@ -158,7 +158,7 @@ void main() {
     // Unmuting does NOT lose the history — the count returns, it was never
     // "marked read" behind the user's back.
     container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: false);
+        MuteTarget.channel, 'c2', muted: false, expectUserId: null);
     await settle(tester);
     expect(container.read(channelUnreadCountProvider('c2')), 1);
   });
@@ -191,7 +191,7 @@ void main() {
     await pumpApp(tester, container);
     await signIn(tester);
     container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: true);
+        MuteTarget.channel, 'c2', muted: true, expectUserId: null);
     transport.emitConn(ConnectionState.connected);
     await settle(tester);
 
@@ -200,7 +200,7 @@ void main() {
     await settle(tester);
 
     container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.channel, 'c2', muted: false);
+        MuteTarget.channel, 'c2', muted: false, expectUserId: null);
     await settle(tester);
 
     // EXACTLY the live one. If muting had short-circuited before the baseline,
@@ -222,7 +222,7 @@ void main() {
     await settle(tester);
 
     container.read(mutesProvider.notifier).setMuted(
-        MuteTarget.user, 'u2', muted: true);
+        MuteTarget.user, 'u2', muted: true, expectUserId: null);
 
     // The muted account posts in the ACTIVE channel and a non-active one; a
     // different account posts too.
@@ -324,8 +324,8 @@ void main() {
 
     final me = container.read(currentUserProvider)!.userId;
     container.read(mutesProvider.notifier)
-      ..setMuted(MuteTarget.channel, 'c2', muted: true)
-      ..setMuted(MuteTarget.user, 'u2', muted: true);
+      ..setMuted(MuteTarget.channel, 'c2', muted: true, expectUserId: null)
+      ..setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null);
     await settle(tester);
     expect(container.read(mutedChannelIdsProvider), contains('c2'));
     expect(container.read(mutedUserIdsProvider), contains('u2'));
@@ -370,7 +370,7 @@ void main() {
     // than looking like a conversation where nothing is happening.
     container
         .read(mutesProvider.notifier)
-        .setMuted(MuteTarget.user, 'u2', muted: true);
+        .setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null);
     await settle(tester);
 
     expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
@@ -402,7 +402,7 @@ void main() {
 
     container
         .read(mutesProvider.notifier)
-        .setMuted(MuteTarget.user, 'u2', muted: true);
+        .setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null);
     await settle(tester);
     expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
 
@@ -478,7 +478,7 @@ void main() {
     container.read(selectedChannelIdProvider.notifier).select('dm1');
     container
         .read(mutesProvider.notifier)
-        .setMuted(MuteTarget.user, 'u2', muted: true);
+        .setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null);
     await settle(tester);
 
     await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
@@ -522,8 +522,8 @@ void main() {
     await tester.pumpAndSettle();
     container.read(selectedChannelIdProvider.notifier).select('dm1');
     container.read(mutesProvider.notifier)
-      ..setMuted(MuteTarget.user, 'u2', muted: true)
-      ..setMuted(MuteTarget.channel, 'dm1', muted: true);
+      ..setMuted(MuteTarget.user, 'u2', muted: true, expectUserId: null)
+      ..setMuted(MuteTarget.channel, 'dm1', muted: true, expectUserId: null);
     await settle(tester);
 
     await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
@@ -532,6 +532,37 @@ void main() {
     expect(find.textContaining('This person is muted in every conversation'), findsOneWidget,
         reason: 'both causes muted must still disclose the account-wide effect');
     expect(container.read(mutedUserIdsProvider), contains('u2'));
+  });
+
+  testWidgets('a redundant set still persists, so an undo cannot be overwritten '
+      'by a write it raced', (tester) async {
+    // Carnot's round-7 HIGH: a bare early-return on "already in that state" let
+    // an in-flight snapshot land AFTER an undo that wrote nothing, leaving disk
+    // muted for a user who explicitly unmuted. Persisting the current state even
+    // on a no-op means the last write always reflects what the user can see.
+    setWide(tester);
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    final me = container.read(currentUserProvider)!.userId;
+    final store = container.read(muteStoreProvider);
+    // Disk disagrees with memory (the shape a lost/slow write leaves behind).
+    await store.replaceAll(me, snapshot(channels: {'c2'}));
+    expect(store.readAll(me)[MuteTarget.channel], contains('c2'));
+
+    // Memory already says "not muted", so this is a no-op IN MEMORY — but it must
+    // still queue a snapshot, or disk keeps a mute the user does not have.
+    container.read(mutesProvider.notifier).setMuted(MuteTarget.channel, 'c2',
+        muted: false, expectUserId: null);
+    await settle(tester);
+
+    expect(store.readAll(me)[MuteTarget.channel], isEmpty,
+        reason: 'the no-op path must still converge disk onto current state');
   });
 
   testWidgets('published mute sets are unmodifiable (no back door past the store)',

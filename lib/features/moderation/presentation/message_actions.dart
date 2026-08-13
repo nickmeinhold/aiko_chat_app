@@ -98,12 +98,20 @@ Future<void> showMessageActions(
             leading: Icon(
                 muted ? Icons.notifications_none : Icons.notifications_off_outlined),
             title: Text(muted ? 'Unmute $name' : 'Mute $name'),
-            // Present tense only for what actually happens today. There are no
-            // notifications yet, so promising them is a prophecy in the
-            // indicative (cage-match #135 round 6, Tesla).
+            // Say EVERYWHERE. This is the only door that writes a
+            // `MuteTarget.user`, and it is the global act — a long-press in
+            // #general quiets that person in every room. The conversation
+            // controls were made to confess when they touch an account mute; the
+            // account door itself was still speaking in the local present
+            // (cage-match #135 round 7, Tesla).
+            //
+            // Present tense only for what actually happens today: there are no
+            // notifications yet, so promising them would be prophecy in the
+            // indicative (round 6, Tesla).
             subtitle: Text(muted
-                ? "You'll see unread badges from them again"
-                : "You'll still see their messages — no unread badge"),
+                ? "You'll see unread badges from them again, everywhere"
+                : "No unread badge from them in any conversation — you'll still "
+                    'see their messages'),
             onTap: () => Navigator.pop(ctx, _Action.mute),
           ),
           ListTile(

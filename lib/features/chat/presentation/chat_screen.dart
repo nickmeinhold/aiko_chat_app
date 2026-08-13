@@ -245,8 +245,10 @@ class _MuteConversationAction extends ConsumerWidget {
           return;
         }
         // Otherwise synchronous — no async gap, so the write lands in the same
-        // frame as the tap and needs no principal binding.
-        mute.apply(ref.read(mutesProvider.notifier), muted: !muted);
+        // frame as the tap. `null` is the explicit "nothing to bind" answer, not
+        // an omission (the parameter is required precisely so this is a decision).
+        mute.apply(ref.read(mutesProvider.notifier),
+            muted: !muted, expectUserId: null);
       },
     );
   }
@@ -368,7 +370,13 @@ class _ChannelMenuItem extends ConsumerWidget {
     // and idle identically — two unread surfaces drawing different conclusions
     // from the same mute state, which is exactly the drift the sidebar glyph was
     // added to prevent (cage-match #135, Carnot HIGH + Tesla).
-    final muted = ref.watch(mutedChannelIdsProvider).contains(channelId);
+    //
+    // Through the SAME door as every other surface, not a second derivation of
+    // its own. The item list is channels-only today, so `mutedChannelIdsProvider`
+    // would give the identical answer — by accident of topology, not by law. The
+    // day DMs join this switcher (#2940) a peer-muted DM would render idle in the
+    // one menu that never learned about peers (cage-match #135 round 7, Tesla).
+    final muted = watchConversationMute(ref, channelId).isMuted;
     return Row(
       children: [
         Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),

@@ -71,8 +71,15 @@ class MuteStore {
             _ => <String>{},
           },
       };
-    } on FormatException {
-      return empty; // corrupt JSON — the next write rewrites it clean
+    } catch (_) {
+      // CATCH EVERYTHING, not just FormatException. Failing open on corrupt JSON
+      // is a deliberate choice (a lost mute is a badge the user can see and redo);
+      // letting any OTHER exception class escape would put `Mutes.build` into an
+      // error state, and every unread surface indexes `state[MuteTarget.channel]!`
+      // — so the sidebar goes down with it. Failing open on one decode path and
+      // closed on the next is not a policy, it is an oversight (cage-match #135
+      // round 7, Tesla).
+      return empty;
     }
   }
 

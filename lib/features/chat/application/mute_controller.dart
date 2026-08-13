@@ -90,13 +90,36 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
     MuteTarget target,
     String id, {
     required bool muted,
-    String? expectUserId,
+    // REQUIRED, though nullable: `toggle()` was deleted for being a footgun a
+    // comment could not disarm, and this was the same shape — a rule stated in
+    // prose that the next caller (awaiting a sheet, a menu, a SnackBar) can
+    // silently skip. Making it required forces every call site to answer the
+    // question; passing null is the explicit "no gap, same frame" answer
+    // (cage-match #135 round 7, Tesla — "a comment is not a type").
+    required String? expectUserId,
   }) {
     final userId = ref.read(authControllerProvider).value?.userId; // non-reactive
     if (userId == null || id.isEmpty) return;
     if (expectUserId != null && expectUserId != userId) return; // fail closed
     final current = state[target]!;
-    if (current.contains(id) == muted) return;
+    if (current.contains(id) == muted) {
+      // ALREADY in the requested state in memory — but still queue a snapshot.
+      //
+      // Returning outright let an undo be overwritten by a write it raced
+      // (cage-match #135 round 7, Carnot HIGH): mute (snapshot A=muted queued
+      // behind a slow platform write), navigate away so the autoDispose notifier
+      // dies, tap Undo — the rebuilt notifier hydrates from a disk that A has not
+      // reached yet, so "unmute" reads as already-unmuted, wrote nothing, and A
+      // then landed. Disk says muted after the user explicitly undid it, with no
+      // corrective write ever queued.
+      //
+      // Persisting the CURRENT state on a no-op closes it by construction: writes
+      // are full snapshots applied in order, so this one lands after A and leaves
+      // disk agreeing with the state the user can see. The cost is one redundant
+      // write on a redundant tap.
+      ref.read(muteStoreProvider).replaceAll(userId, state);
+      return;
+    }
     final next = {...current};
     if (muted) {
       next.add(id);
@@ -207,7 +230,8 @@ class ConversationMute {
   /// for an id that is not muted, so clearing both costs nothing and cannot
   /// under-clear (cage-match #135 round 6, Tesla — the half-frozen-boundary
   /// lesson, in the time domain).
-  void apply(Mutes mutes, {required bool muted, String? expectUserId}) {
+  void apply(Mutes mutes,
+      {required bool muted, required String? expectUserId}) {
     if (muted) {
       mutes.setMuted(MuteTarget.channel, conversationId,
           muted: true, expectUserId: expectUserId);
