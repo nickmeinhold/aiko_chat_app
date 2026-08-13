@@ -86,11 +86,14 @@ String dmPeerTitle(Map<String, String>? roster, String? myId) {
 /// The PEER's user id in a DM [roster], or null when there is not exactly one
 /// identifiable peer (roster absent/loading, no "me" to exclude, or a self-DM).
 ///
-/// Deliberately beside [dmPeerTitle] and sharing its exclusion rule, so a DM
-/// row's title and any peer-derived state (its mute glyph) can never disagree
-/// about WHO the other party is. Null is the honest answer, never a guessed
-/// member: with no `myId` every member reads as a peer, which is how a viewer
-/// ends up treated as the other side of their own conversation.
+/// Shares [dmPeerTitle]'s exclusion rule (drop `myId`, never guess with no
+/// `myId` — that is how a viewer ends up treated as the other side of their own
+/// conversation) but is deliberately STRICTER on the multi-peer case: a title
+/// picks the first named member, while this returns null unless there is exactly
+/// one. Naming a group-shaped DM after one of its members is a cosmetic
+/// imprecision; ACTING on one of them — muting or unmuting the wrong person —
+/// is not (cage-match #135 round 6, Tesla, who correctly noted the two can
+/// differ once a roster is not a perfect pair).
 String? dmPeerId(Map<String, String>? roster, String? myId) {
   if (roster == null || roster.isEmpty || myId == null) return null;
   final peers = roster.keys.where((id) => id != myId).toList();

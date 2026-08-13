@@ -102,11 +102,11 @@ class MuteStore {
             .where((id) => id.isNotEmpty)
             .toList(),
     });
-    final Future<void> result = _writes.then((_) async {
+    final Future<void> attempt = _writes.then((_) async {
       // `setString` reports failure by RETURNING false, not only by throwing —
-      // so awaiting it without checking makes the returned Future<void> claim a
-      // success that never happened, and the divergence this method promises to
-      // report would evaporate silently (cage-match #135 round 4, Carnot).
+      // so awaiting it without checking makes the result claim a success that
+      // never happened, and the divergence this method promises to report would
+      // evaporate silently (cage-match #135 round 4, Carnot).
       final ok = await _prefs.setString(_key(userId), payload);
       if (!ok) throw StateError('SharedPreferences rejected the mute snapshot');
     });
@@ -116,10 +116,17 @@ class MuteStore {
     // a transient-divergence signal, not a corruption alarm — but a silent
     // `catchError((_) {})` would hide the only evidence it ever happened
     // (cage-match #135, Tesla).
-    _writes = result.catchError((Object e, StackTrace _) {
+    final Future<void> reported = attempt.catchError((Object e, StackTrace _) {
       debugPrint('[mute] persist failed (memory ahead of disk until the next '
           'mute rewrites the snapshot): $e');
     });
-    return result;
+    _writes = reported;
+    // Return the REPORTED future, not the raw attempt. The only caller
+    // fire-and-forgets this, so handing back a future that can still throw meant
+    // the failure was logged AND rethrown into the zone as an unhandled async
+    // error — running a high-voltage lead into a void and calling the spark a log
+    // line (cage-match #135 round 6, Tesla). Every path now completes normally;
+    // the log is the single report.
+    return reported;
   }
 }

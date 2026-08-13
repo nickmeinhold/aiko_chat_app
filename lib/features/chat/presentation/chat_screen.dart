@@ -226,9 +226,16 @@ class _MuteConversationAction extends ConsumerWidget {
           final container = ProviderScope.containerOf(context, listen: false);
           final actingUserId = container.read(currentUserProvider)?.userId;
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: const Text('This person is muted in every conversation.'),
+            // Say what the button DOES, not the narrower thing it sounds like:
+            // unmuting clears every cause of this row's silence, which includes
+            // the account mute that applies in every conversation (cage-match
+            // #135 round 6, Carnot — the UI admitted one state change and
+            // performed two).
+            content: const Text(
+                'This person is muted in every conversation. Unmuting affects '
+                'all of them.'),
             action: SnackBarAction(
-              label: 'Unmute them',
+              label: 'Unmute',
               onPressed: () => mute.apply(
                   container.read(mutesProvider.notifier),
                   muted: false,

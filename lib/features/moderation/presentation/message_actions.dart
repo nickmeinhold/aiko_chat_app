@@ -98,8 +98,11 @@ Future<void> showMessageActions(
             leading: Icon(
                 muted ? Icons.notifications_none : Icons.notifications_off_outlined),
             title: Text(muted ? 'Unmute $name' : 'Mute $name'),
+            // Present tense only for what actually happens today. There are no
+            // notifications yet, so promising them is a prophecy in the
+            // indicative (cage-match #135 round 6, Tesla).
             subtitle: Text(muted
-                ? 'Their messages will notify you again'
+                ? "You'll see unread badges from them again"
                 : "You'll still see their messages — no unread badge"),
             onTap: () => Navigator.pop(ctx, _Action.mute),
           ),

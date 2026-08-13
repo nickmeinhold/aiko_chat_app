@@ -103,8 +103,15 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
     } else {
       next.remove(id);
     }
-    state = _freeze({
-      for (final t in MuteTarget.values) t: t == target ? next : state[t]!,
+    // Freeze ONLY the set that changed and keep the other's existing reference.
+    // `_freeze`-ing the whole map minted a new `Set.unmodifiable` for both
+    // targets on every write, so a user-mute handed channel listeners a
+    // different instance and rebuilt them for a fact that had not changed — the
+    // code betraying the stability the comment on [_freeze] claims (cage-match
+    // #135 round 6, Tesla).
+    state = Map<MuteTarget, Set<String>>.unmodifiable({
+      for (final t in MuteTarget.values)
+        t: t == target ? Set<String>.unmodifiable(next) : state[t]!,
     });
     // Persist the WHOLE new state, never a delta: the notifier is the single
     // historian and disk is its dump, so a failed write is repaired by the next
@@ -188,21 +195,29 @@ class ConversationMute {
   ///
   /// Muting sets the CONVERSATION (the narrow, least surprising act — it does not
   /// silence a person everywhere on the strength of a tap on one row). Unmuting
-  /// clears BOTH causes, because the user's intent is "make this row audible
-  /// again" and leaving the other cause in place would present a control that
-  /// visibly fails to do what it says.
+  /// clears BOTH possible causes, because the user's intent is "make this row
+  /// audible again" and leaving one in place presents a control that visibly
+  /// fails to do what it says.
+  ///
+  /// Unmute clears BY ID, unconditionally — it does NOT consult [byConversation]
+  /// / [byPeer]. Those flags are a snapshot from when this object was built, and
+  /// a menu can hang in the overlay for a human age: mute the peer from a message
+  /// sheet while the row's menu is open, and a flag-driven unmute would clear only
+  /// the cause it knew about and leave the row silent. `setMuted` is idempotent
+  /// for an id that is not muted, so clearing both costs nothing and cannot
+  /// under-clear (cage-match #135 round 6, Tesla — the half-frozen-boundary
+  /// lesson, in the time domain).
   void apply(Mutes mutes, {required bool muted, String? expectUserId}) {
     if (muted) {
       mutes.setMuted(MuteTarget.channel, conversationId,
           muted: true, expectUserId: expectUserId);
       return;
     }
-    if (byConversation) {
-      mutes.setMuted(MuteTarget.channel, conversationId,
-          muted: false, expectUserId: expectUserId);
-    }
-    if (byPeer && peerId != null) {
-      mutes.setMuted(MuteTarget.user, peerId!,
+    mutes.setMuted(MuteTarget.channel, conversationId,
+        muted: false, expectUserId: expectUserId);
+    final peer = peerId;
+    if (peer != null) {
+      mutes.setMuted(MuteTarget.user, peer,
           muted: false, expectUserId: expectUserId);
     }
   }

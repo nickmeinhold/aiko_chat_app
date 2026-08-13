@@ -486,10 +486,10 @@ void main() {
 
     // The tap DISCLOSES rather than acts: the account mute is still in place...
     expect(container.read(mutedUserIdsProvider), contains('u2'));
-    expect(find.text('This person is muted in every conversation.'), findsOneWidget);
+    expect(find.textContaining('This person is muted in every conversation'), findsOneWidget);
 
     // ...and only the explicit choice clears it.
-    await tester.tap(find.text('Unmute them'));
+    await tester.tap(find.text('Unmute').last);
     await settle(tester);
     expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
   });
@@ -529,7 +529,7 @@ void main() {
     await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
     await tester.pumpAndSettle();
 
-    expect(find.text('This person is muted in every conversation.'), findsOneWidget,
+    expect(find.textContaining('This person is muted in every conversation'), findsOneWidget,
         reason: 'both causes muted must still disclose the account-wide effect');
     expect(container.read(mutedUserIdsProvider), contains('u2'));
   });
