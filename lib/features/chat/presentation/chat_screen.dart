@@ -63,15 +63,14 @@ class ChatScreen extends ConsumerWidget {
     final navigable = ref.watch(navigableChannelsProvider);
     final active = resolveActive(navigable, selectedId);
 
-    // The switcher's two sections PARTITION the same list the resolver resolves
-    // over — so every id that can be active has exactly one item, which is what
-    // `DropdownButton`'s value contract requires. Uniqueness comes from
-    // [navigableChannelsProvider]; deriving either section from another source
-    // breaks the contract in one direction or the other (cage-match #136).
-    final rooms =
-        navigable.where((c) => c.kind != ChannelKind.dm).toList(growable: false);
-    final dms =
-        navigable.where((c) => c.kind == ChannelKind.dm).toList(growable: false);
+    // The switcher's sections come from the SAME provider that composes
+    // `navigable`, already partitioned — so every id that can be active has
+    // exactly one item, which is what `DropdownButton`'s value contract requires.
+    // Re-deriving the split here (from `kind`, or from another provider) is what
+    // breaks that contract in one direction or the other (cage-match #136).
+    final sections = ref.watch(conversationSectionsProvider);
+    final rooms = sections.rooms;
+    final dms = sections.dms;
 
     // If the picked conversation leaves the list (removed / renamed-away on a
     // refetch), clear the pick so the Notifier and the UI agree. Without this the

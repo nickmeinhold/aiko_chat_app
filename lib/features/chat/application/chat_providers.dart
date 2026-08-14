@@ -398,36 +398,52 @@ final visibleDmsProvider = Provider.autoDispose<List<Channel>>((ref) {
   return _withSeeds(dms, seeds);
 });
 
-/// Channels then DMs, each conversation exactly ONCE.
+/// Every navigable conversation, split into the two sections the UI draws, each
+/// conversation appearing exactly ONCE across both.
 ///
-/// The dedupe is here rather than in each consumer because every consumer needs
-/// the same answer and one of them (the narrow app-bar switcher) turns a repeat
-/// into a crash: `DropdownButton` asserts that exactly one item matches its
-/// `value`. Deduping in that widget alone would have left `resolveActive`, the
-/// sidebar and the switcher each deciding for themselves what "the conversation
-/// list" is — the two-readers-one-fact drift `visibleDmsProvider` exists to
-/// prevent, reintroduced one layer up (cage-match #136, Kelvin).
+/// The split is by SOURCE, not by `kind`. Which endpoint listed a conversation
+/// is the island's own answer to "is this a DM" — it serves DMs only through
+/// `GET /v1/dm` and excludes them from `GET /v1/channels` — so re-deriving the
+/// sections from `Channel.kind` downstream asks a question we already hold the
+/// answer to, and gets a different one whenever a decode default, a new island
+/// variant or a group-shaped row carries an unexpected kind. That row would then
+/// render as a ROOM: its (empty) DM name, its mute read with no peer, and no
+/// "Direct messages" header above it (cage-match #136, Tesla).
 ///
-/// A repeat is a contract violation, not an expected state: the island serves
-/// DMs ONLY through `GET /v1/dm` and excludes them from `GET /v1/channels`. When
-/// it happens anyway the DM entry wins, because that endpoint is the authority
-/// on what a DM is — otherwise the channel copy's `kind` would route a DM to a
-/// room row, which renders its (empty) `name` and reads its mute without a peer
-/// (cage-match #136, Tesla).
-List<Channel> _dedupeConversations(List<Channel> channels, List<Channel> dms) {
+/// Deduping here rather than in each consumer matters because every consumer
+/// needs the same answer and one of them turns a repeat into a crash: the narrow
+/// app-bar switcher feeds these ids to `DropdownButton`, which asserts that
+/// exactly one item matches its `value`. Deduping in that one widget left
+/// `resolveActive`, the sidebar and the switcher each deciding for themselves
+/// what "the conversation list" is — the two-readers-one-fact drift
+/// [visibleDmsProvider] exists to prevent, one layer up (cage-match #136,
+/// Kelvin). A repeat is a contract violation rather than an expected state; when
+/// it happens the DM entry wins, for the same reason the split is by source.
+typedef ConversationSections = ({List<Channel> rooms, List<Channel> dms});
+
+final conversationSectionsProvider =
+    Provider.autoDispose<ConversationSections>((ref) {
+  final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
+  final dms = ref.watch(visibleDmsProvider);
   final dmIds = {for (final d in dms) d.id};
   final seen = <String>{};
-  return [
-    for (final c in channels)
-      if (!dmIds.contains(c.id) && seen.add(c.id)) c,
-    for (final d in dms)
-      if (seen.add(d.id)) d,
-  ];
-}
+  return (
+    rooms: [
+      for (final c in channels)
+        if (!dmIds.contains(c.id) && seen.add(c.id)) c,
+    ],
+    dms: [
+      for (final d in dms)
+        if (seen.add(d.id)) d,
+    ],
+  );
+});
 
+/// The two sections flattened — rooms then DMs. The resolver's view; the UI reads
+/// [conversationSectionsProvider] so its rows and this list cannot disagree.
 final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
-  final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
-  return _dedupeConversations(channels, ref.watch(visibleDmsProvider));
+  final sections = ref.watch(conversationSectionsProvider);
+  return [...sections.rooms, ...sections.dms];
 });
 
 /// The reconcile engine, fully wired and connected. Construction requires the

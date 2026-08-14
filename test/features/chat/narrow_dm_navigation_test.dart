@@ -225,6 +225,39 @@ void main() {
     });
   }
 
+  for (final wrongKind
+      in ChannelKind.values.where((k) => k != ChannelKind.dm)) {
+    testWidgets(
+        'a DM stays in the DM section even when its own kind says otherwise '
+        '(kind: ${wrongKind.name})', (tester) async {
+      setNarrow(tester);
+      // Sectioning is by SOURCE — which endpoint listed it — not by `Channel.kind`.
+      // GET /v1/dm IS the island's answer to "is this a DM", so a row arriving
+      // there with an unexpected kind (a decode default, a new island variant, a
+      // group-shaped row) must still be a DM here. Splitting on `kind` instead
+      // would paint it as a room: empty name, mute read with no peer, and no
+      // "Direct messages" header above it (cage-match #136, Tesla).
+      final rest = FakeRestApi(channels: channels);
+      rest.dms = [Channel(id: 'dm1', name: '', kind: wrongKind)];
+      rest.membersByChannel['dm1'] = roster;
+      final container = makeContainer(rest: rest, transport: FakeChatTransport());
+      addTearDown(container.dispose);
+
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
+
+      final sections = container.read(conversationSectionsProvider);
+      expect(sections.dms.map((c) => c.id), ['dm1']);
+      expect(sections.rooms.map((c) => c.id), ['c1', 'c2']);
+
+      // ...and it renders as a DM row: peer-titled, under the header.
+      await openMenu(tester);
+      expect(find.text('Direct messages'), findsOneWidget);
+      expect(find.text('alice'), findsWidgets);
+    });
+  }
+
   testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation',
       (tester) async {
     setNarrow(tester);
@@ -293,7 +326,7 @@ void main() {
     // retaining the snapshot — a test that skips the branch it exists to exercise.
     expect(find.text('alice'), findsWidgets,
         reason: 'the open overlay should still be offering the retired DM');
-    await tester.tap(find.text('alice').last, warnIfMissed: false);
+    await tester.tap(find.text('alice').last);
     await tester.pumpAndSettle();
     expect(container.read(selectedChannelIdProvider), healed);
     expect(tester.takeException(), isNull);

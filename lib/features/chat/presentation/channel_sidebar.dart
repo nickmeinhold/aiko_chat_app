@@ -1,7 +1,10 @@
 /// The wide-layout left rail (Slack/Element style): a server switcher at the
 /// top, the channel list in the middle, and a settings/sign-out footer at the
-/// bottom. Shown ONLY on wide screens ([ChatScreen] forks on width); the narrow
-/// phone layout keeps its app-bar dropdown, unchanged.
+/// bottom. Shown ONLY on wide screens ([ChatScreen] forks on width); narrow gets
+/// the app-bar dropdown, which lists the SAME two sections this rail draws — it
+/// is a phone's entire navigation surface, not a channels-only fallback (#2798
+/// task #12; the sentence that used to sit here said "unchanged", and treating
+/// that as law is how a DM ended up with no row and no leave-path on a phone).
 ///
 /// A custom widget (NOT `NavigationRail`) because channels are text names +
 /// unread badges, not icons. Channel selection routes through the EXACT same
@@ -237,23 +240,22 @@ class ChatSidebar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    // Both sections partition the SAME list the resolver resolves over. This
-    // build used to read `channelsProvider` + `visibleDmsProvider` for its rows
-    // while resolving `active` from `navigableChannelsProvider` — two routes to
-    // one fact, in one method. The narrow switcher's version of that bug was a
-    // crash; here it is quieter (a conversation the island listed through both
-    // endpoints would paint twice) which is exactly why it would have survived
-    // (cage-match #136, Tesla).
-    // Still watched for the loading/error CHROME below — its VALUE no longer
-    // feeds the rows.
+    // Rows and resolver read ONE provider. This build used to take its rows from
+    // `channelsProvider` + `visibleDmsProvider` while resolving `active` from
+    // `navigableChannelsProvider` — two routes to one fact, in a single method.
+    // The narrow switcher's version of that was a crash; here it is quieter (a
+    // conversation the island listed through both endpoints paints twice), which
+    // is exactly why it would have survived (cage-match #136, Tesla).
+    //
+    // channelsProvider is still watched, but only for the loading/error CHROME
+    // below — its value no longer feeds a single row.
     final channelsAsync = ref.watch(channelsProvider);
-    final navigable = ref.watch(navigableChannelsProvider);
-    final channels =
-        navigable.where((c) => c.kind != ChannelKind.dm).toList(growable: false);
-    final dms =
-        navigable.where((c) => c.kind == ChannelKind.dm).toList(growable: false);
+    final sections = ref.watch(conversationSectionsProvider);
+    final channels = sections.rooms;
+    final dms = sections.dms;
     final selectedId = ref.watch(selectedChannelIdProvider);
-    final active = ChatScreen.resolveActive(navigable, selectedId);
+    final active =
+        ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);
 
     // Tinted a step off the pane's surface so the rail reads as chrome, not
     // content.
