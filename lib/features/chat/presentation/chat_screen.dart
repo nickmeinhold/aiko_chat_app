@@ -71,6 +71,11 @@ class ChatScreen extends ConsumerWidget {
     final sections = ref.watch(conversationSectionsProvider);
     final rooms = sections.rooms;
     final dms = sections.dms;
+    // "Both lists have settled" — the ONE readiness predicate for every surface
+    // that names a conversation. [chatRepositoryProvider] awaits both, so its
+    // having a value is exactly that condition, and the pane gates on the same
+    // thing. See the AppBar title below for what half a gate cost.
+    final ready = ref.watch(chatRepositoryProvider).hasValue;
 
     // If the picked conversation leaves the list (removed / renamed-away on a
     // refetch), clear the pick so the Notifier and the UI agree. Without this the
@@ -130,16 +135,29 @@ class ChatScreen extends ConsumerWidget {
               // matching item asserts (cage-match #106). The item list now covers
               // every id that can be active, so the crash is unreachable rather
               // than dodged — and the gate WAS the trap.
-              title: navigable.length > 1 && active != null
-                  ? _ConversationSwitcher(
-                      rooms: rooms, dms: dms, activeId: active.id)
-                  : _ConversationTitle(active: active),
+              // The bar rides the SAME settled predicate as the pane. Gating only
+              // the pane closed the floor and left the doorbell wired to the wrong
+              // house: with one DM in and the channel list still in flight,
+              // `navigable.length == 1` titled the bar "Alice" and lit her mute
+              // button over a spinner. One tap conversation-muted a thread the
+              // user had never entered — and then the channels landed, the
+              // implicit default moved to the first room, and the mute stayed
+              // behind on a conversation they never picked (cage-match #136,
+              // Tesla). A conversation control must not exist before the
+              // conversation it names is settled.
+              title: !ready
+                  ? const Text('Chat')
+                  : navigable.length > 1 && active != null
+                      ? _ConversationSwitcher(
+                          rooms: rooms, dms: dms, activeId: active.id)
+                      : _ConversationTitle(active: active),
               actions: [
                 // Narrow has no sidebar, so the row long-press that mutes a
                 // conversation on wide does not exist here. Without this the
                 // capability would be wide-only — mutable on the desktop, invisible
                 // on the phone, which is where a noisy channel is actually felt.
-                if (active != null) _MuteConversationAction(conversation: active),
+                if (ready && active != null)
+                  _MuteConversationAction(conversation: active),
                 IconButton(
                   tooltip: 'Search',
                   icon: const Icon(Icons.search),

@@ -345,6 +345,12 @@ void main() {
     expect(container.read(chatRepositoryProvider), isA<AsyncLoading<ChatRepository>>());
     expect(find.byType(TextField), findsNothing);
     expect(find.byKey(const Key('composer-send')), findsNothing);
+    // The BAR is on the same circuit as the pane. Gating only the pane left the
+    // app bar titled with the DM and its mute button live over a spinner, so one
+    // tap muted a conversation the user had never entered and the default was
+    // about to leave (cage-match #136, Tesla).
+    expect(find.text('alice'), findsNothing);
+    expect(find.byKey(const Key('appbar-mute-conversation')), findsNothing);
 
     channelGate.complete();
     await tester.runAsync(
