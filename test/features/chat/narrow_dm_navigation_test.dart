@@ -278,6 +278,51 @@ void main() {
     expect(tester.takeException(), isNull);
     // The pick self-heals to a real conversation rather than dangling.
     expect(container.read(selectedChannelIdProvider), isNot('dm1'));
+
+    // ...and TAPPING the ghost row must not resurrect it. The overlay is still
+    // offering `alice` from the snapshot it took when the menu opened, and
+    // `onChanged` runs against the LIVE widget. Writing that dead id back would
+    // leave the display healed (resolveActive falls back) while the Notifier
+    // stays poisoned — and `ref.listen` would not fire again to clean it, so the
+    // user gets yanked into that conversation the moment it is re-minted. Not
+    // asserting the tap was the gap: hearing the two currents without throwing
+    // the switch (cage-match #136, Tesla).
+    final healed = container.read(selectedChannelIdProvider);
+    // Assert the ghost is REALLY still on screen before tapping it. Guarding the
+    // tap behind an `if` would let this pass vacuously the day the overlay stops
+    // retaining the snapshot — a test that skips the branch it exists to exercise.
+    expect(find.text('alice'), findsWidgets,
+        reason: 'the open overlay should still be offering the retired DM');
+    await tester.tap(find.text('alice').last, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(container.read(selectedChannelIdProvider), healed);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('collapsed, non-active rows are NOT in the tree (so a phone pays '
+      'no per-DM roster fetch until the menu opens)', (tester) async {
+    setNarrow(tester);
+    final container =
+        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // This PR's description originally claimed the opposite — that DropdownButton
+    // mounts every item in an IndexedStack, so a collapsed switcher would fetch a
+    // roster per DM in the background. All three cage-match reviewers repeated the
+    // claim back, which is one instrument's error counted four times rather than
+    // corroboration. A throwaway probe refuted it; committing the probe is what
+    // stops the folklore reforming the next time someone "remembers" IndexedStack
+    // (cage-match #136, Tesla).
+    expect(find.text('alice'), findsNothing); // the DM (not active)
+    expect(find.text('random'), findsNothing); // the other channel (not active)
+    expect(find.text('general'), findsOneWidget); // only the ACTIVE row renders
+
+    await openMenu(tester);
+    expect(find.text('alice'), findsWidgets); // opening the menu is what mounts them
   });
 
   testWidgets('the ACTIVE row carries no mute glyph — the app-bar bell already '

@@ -400,9 +400,22 @@ class _ConversationSwitcher extends ConsumerWidget {
                   ),
               ],
               onChanged: (id) {
-                if (id != null) {
-                  ref.read(selectedChannelIdProvider.notifier).select(id);
+                if (id == null) return;
+                // FAIL CLOSED on an id the list no longer holds. The overlay
+                // route snapshots its items when the menu OPENS and keeps
+                // offering them; if a conversation retires while the menu is up,
+                // tapping its leftover row would write a dead id into the
+                // selection. Display would look fine — `resolveActive` falls back
+                // — but the Notifier stays poisoned, and `ref.listen`'s self-heal
+                // never fires because the list did not change again. When that id
+                // came back the user would be yanked into a conversation they
+                // never re-picked: the exact #106 snap-back this file already
+                // guards, re-entered through the overlay (cage-match #136, Tesla).
+                if (!rooms.any((c) => c.id == id) &&
+                    !dms.any((c) => c.id == id)) {
+                  return;
                 }
+                ref.read(selectedChannelIdProvider.notifier).select(id);
               },
             ),
           ),

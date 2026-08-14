@@ -237,12 +237,23 @@ class ChatSidebar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
+    // Both sections partition the SAME list the resolver resolves over. This
+    // build used to read `channelsProvider` + `visibleDmsProvider` for its rows
+    // while resolving `active` from `navigableChannelsProvider` — two routes to
+    // one fact, in one method. The narrow switcher's version of that bug was a
+    // crash; here it is quieter (a conversation the island listed through both
+    // endpoints would paint twice) which is exactly why it would have survived
+    // (cage-match #136, Tesla).
+    // Still watched for the loading/error CHROME below — its VALUE no longer
+    // feeds the rows.
     final channelsAsync = ref.watch(channelsProvider);
-    final channels = channelsAsync.value ?? const <Channel>[];
-    final dms = ref.watch(visibleDmsProvider);
+    final navigable = ref.watch(navigableChannelsProvider);
+    final channels =
+        navigable.where((c) => c.kind != ChannelKind.dm).toList(growable: false);
+    final dms =
+        navigable.where((c) => c.kind == ChannelKind.dm).toList(growable: false);
     final selectedId = ref.watch(selectedChannelIdProvider);
-    final active =
-        ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);
+    final active = ChatScreen.resolveActive(navigable, selectedId);
 
     // Tinted a step off the pane's surface so the rail reads as chrome, not
     // content.
