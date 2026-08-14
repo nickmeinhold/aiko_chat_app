@@ -54,7 +54,7 @@ void main() {
     await signIn(tester);
 
     await tester.enterText(find.byType(TextField).first, 'hello world');
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.byKey(const Key('composer-send')));
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
@@ -161,7 +161,7 @@ void main() {
 
     // User A sends a message into the (in-memory) cache.
     await tester.enterText(find.byType(TextField).first, 'secret-from-A');
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.byKey(const Key('composer-send')));
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
@@ -204,7 +204,7 @@ void main() {
 
     // A send lands in 'general'.
     await tester.enterText(find.byType(TextField).first, 'in-general');
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.byKey(const Key('composer-send')));
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
@@ -223,7 +223,7 @@ void main() {
 
     // A send now targets 'random' (channelId threaded from the active channel).
     await tester.enterText(find.byType(TextField).first, 'in-random');
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.byKey(const Key('composer-send')));
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
@@ -375,7 +375,7 @@ void main() {
     // (600px) test viewport, so the list actually has somewhere to scroll.
     for (var i = 0; i < 20; i++) {
       await tester.enterText(find.byType(TextField).first, 'msg-$i');
-      await tester.tap(find.byIcon(Icons.send));
+      await tester.tap(find.byKey(const Key('composer-send')));
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pumpAndSettle();
@@ -406,7 +406,7 @@ void main() {
 
     for (var i = 0; i < 20; i++) {
       await tester.enterText(find.byType(TextField).first, 'old-$i');
-      await tester.tap(find.byIcon(Icons.send));
+      await tester.tap(find.byKey(const Key('composer-send')));
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pumpAndSettle();
@@ -422,7 +422,7 @@ void main() {
 
     // A new message arrives while the user is reading history.
     await tester.enterText(find.byType(TextField).first, 'fresh');
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.byKey(const Key('composer-send')));
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)));
     await tester.pumpAndSettle();

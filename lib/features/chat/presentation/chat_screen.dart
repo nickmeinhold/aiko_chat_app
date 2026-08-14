@@ -56,9 +56,10 @@ class ChatScreen extends ConsumerWidget {
     final channels = channelsAsync.value ?? const <Channel>[];
     // Resolve the active conversation over channels ∪ DMs so a selected DM stays
     // active (a DM id is never in channelsProvider — DMs are a separate source,
-    // #2798). The narrow app-bar switcher below still lists `channels` only; the
-    // wide sidebar is the DM entry point.
-    final active = resolveActive(ref.watch(navigableChannelsProvider), selectedId);
+    // #2798). The narrow app-bar switcher below lists the SAME combined list, so
+    // "what can be active" and "what can be picked" are one set, not two.
+    final navigable = ref.watch(navigableChannelsProvider);
+    final active = resolveActive(navigable, selectedId);
 
     // If the picked conversation leaves the list (removed / renamed-away on a
     // refetch), clear the pick so the Notifier and the UI agree. Without this the
@@ -106,15 +107,25 @@ class ChatScreen extends ConsumerWidget {
       appBar: isWide
           ? null
           : AppBar(
-              // Gate the channel switcher to a NON-DM active channel: its
-              // DropdownButton uses activeId as `value`, and a DM id is never in
-              // the channels-only item list → Flutter asserts. A DM (selected on
-              // wide, then resized to narrow) renders a title instead of the
-              // switcher (cage-match Carnot+Tesla — this crashed at the fork).
-              title: channels.length > 1 &&
-                      active != null &&
-                      active.kind != ChannelKind.dm
-                  ? _ChannelSwitcher(channels: channels, activeId: active.id)
+              // The switcher now lists channels ∪ DMs, which is what makes a DM
+              // REACHABLE on a phone at all: the narrow layout has no sidebar, so
+              // before this the dropdown's channels-only item list was the whole
+              // navigation surface and a DM had no row in it — openDm could put you
+              // in a conversation you could never get back to, or leave (#2798,
+              // task #12). Listing the same set the resolver resolves over also
+              // retires the old DM gate: that gate existed because a DM id in
+              // `DropdownButton.value` with no matching item is a Flutter assertion
+              // (cage-match #106, Carnot+Tesla — it crashed at the fork). The fix
+              // for the crash is now the item list containing every id that can be
+              // active, rather than a gate hiding the ones that can't.
+              title: navigable.length > 1 && active != null
+                  ? _ConversationSwitcher(
+                      channels: channels,
+                      dms: navigable
+                          .where((c) => c.kind == ChannelKind.dm)
+                          .toList(),
+                      activeId: active.id,
+                    )
                   : _ConversationTitle(active: active),
               actions: [
                 // Narrow has no sidebar, so the row long-press that mutes a
@@ -264,11 +275,12 @@ class _MuteConversationAction extends ConsumerWidget {
 }
 
 /// The narrow-layout AppBar title for whatever conversation is active when the
-/// channel switcher is NOT shown (≤1 channel, or a DM is active). A channel shows
-/// its name; a DM shows the peer's handle (roster-resolved, like the sidebar row),
-/// since a DM has no name. This exists so a DM id never reaches [_ChannelSwitcher]'s
-/// DropdownButton `value` (no matching item → assertion) — narrow DM *entry* stays
-/// deferred (#2798 Inc 1); this only titles an already-active DM sanely.
+/// switcher is NOT shown — i.e. when there is nothing to switch BETWEEN (≤1
+/// navigable conversation, or none at all). A channel shows its name; a DM shows
+/// the peer's handle (roster-resolved, like the sidebar row), since a DM has no
+/// name. Its DM arm is no longer a fallback for an unreachable id — with DMs in
+/// the switcher this is only the one-conversation case, where a dropdown of one
+/// would be chrome.
 class _ConversationTitle extends ConsumerWidget {
   const _ConversationTitle({required this.active});
 
@@ -285,25 +297,42 @@ class _ConversationTitle extends ConsumerWidget {
   }
 }
 
-/// The app-bar channel picker, shown only when more than one channel exists.
-/// Renders the active channel's name with a dropdown of the rest; picking one
-/// writes [selectedChannelIdProvider], which re-points the message surface. Menu
-/// items decode from the same [channelsProvider] list the repo subscribed to, so
-/// every listed channel is already synced and switching is instant.
-class _ChannelSwitcher extends ConsumerWidget {
-  const _ChannelSwitcher({required this.channels, required this.activeId});
+/// The app-bar conversation picker — the narrow layout's ENTIRE navigation
+/// surface, and therefore the phone's equivalent of [ChatSidebar]. Shown when more
+/// than one conversation exists. Renders the active one with a dropdown of the
+/// rest; picking one writes [selectedChannelIdProvider], which re-points the
+/// message surface.
+///
+/// Lists channels AND DMs, in that order, under a section header — the same two
+/// sections the wide sidebar draws, collapsed into one menu because a phone app
+/// bar has room for exactly one control. Both sources are already in the repo's
+/// subscription set (channels from [channelsProvider], DMs merged in
+/// [chatRepositoryProvider]), so every listed row is synced and switching stays a
+/// pure display change with no fetch.
+class _ConversationSwitcher extends ConsumerWidget {
+  const _ConversationSwitcher({
+    required this.channels,
+    required this.dms,
+    required this.activeId,
+  });
 
   final List<Channel> channels;
+  final List<Channel> dms;
   final String activeId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Aggregate unread across every NON-active channel, so the collapsed app-bar
-    // switcher carries an at-a-glance "there's unread elsewhere" dot even before
-    // the user opens the menu (the closed DropdownButton only shows the active
-    // channel's own item, which is always badge-free). Opening the menu then
-    // reveals which channel and how many via the per-item counts below.
-    final otherUnread = channels
+    // Aggregate unread across every NON-active conversation, so the collapsed
+    // app-bar switcher carries an at-a-glance "there's unread elsewhere" dot even
+    // before the user opens the menu (the closed DropdownButton only shows the
+    // active conversation's own item, which is always badge-free). Opening the
+    // menu then reveals which one and how many via the per-item counts below.
+    //
+    // DMs are counted here too. They have to be: on narrow this dot is the ONLY
+    // signal that a DM is waiting, since there is no sidebar row to badge — an
+    // aggregate that quietly excluded them would make a message from a person
+    // less visible than one from a room.
+    final otherUnread = [...channels, ...dms]
         .where((c) => c.id != activeId)
         .fold<int>(0, (sum, c) => sum + ref.watch(channelUnreadCountProvider(c.id)));
 
@@ -333,6 +362,26 @@ class _ChannelSwitcher extends ConsumerWidget {
                       name: c.name,
                       isActive: c.id == activeId,
                     ),
+                  ),
+                // Section header, not a destination: `enabled: false` keeps it
+                // out of the selectable set, and a null value keeps it out of
+                // DropdownButton's "exactly one item matches `value`" assertion.
+                // Only drawn when there is a boundary to mark — a DM-only or
+                // channel-only account gets no lone header over nothing.
+                if (dms.isNotEmpty && channels.isNotEmpty)
+                  DropdownMenuItem<String>(
+                    enabled: false,
+                    child: Text(
+                      'Direct messages',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ),
+                for (final d in dms)
+                  DropdownMenuItem<String>(
+                    value: d.id,
+                    child: _DmMenuItem(dm: d, isActive: d.id == activeId),
                   ),
               ],
               onChanged: (id) {
@@ -381,26 +430,86 @@ class _ChannelMenuItem extends ConsumerWidget {
     // added to prevent (cage-match #135, Carnot HIGH + Tesla).
     //
     // Through the SAME door as every other surface, not a second derivation of
-    // its own. The item list is channels-only today, so `mutedChannelIdsProvider`
-    // would give the identical answer — by accident of topology, not by law. The
-    // day DMs join this switcher (#2940) a peer-muted DM would render idle in the
-    // one menu that never learned about peers (cage-match #135 round 7, Tesla).
+    // its own — no peer here because a CHANNEL has none; the DM half of this menu
+    // passes one (see [_DmMenuItem]). That day has now arrived: this comment used
+    // to say `mutedChannelIdsProvider` would answer identically "by accident of
+    // topology, not by law", and the law is what held once DMs joined the list.
     final muted = watchConversationMute(ref, channelId).isMuted;
+    return _MenuItemRow(
+        conversationId: channelId, name: name, unread: unread, muted: muted);
+  }
+}
+
+/// One DM row of the conversation dropdown. Same row shape as a channel's, but
+/// both of its facts are resolved differently, which is why it is a separate
+/// widget rather than a flag on [_ChannelMenuItem]:
+///
+///  * the LABEL is the peer, not a server `name` — a DM has none (identity=key,
+///    ADR-0004: a DM's title IS the other person), so it comes from the roster
+///    via [dmPeerTitle], exactly as [ChatSidebar]'s DM tile resolves it;
+///  * the MUTE is peer-aware — a 1:1 DM is silenced by two independent causes,
+///    this conversation being muted or its PERSON being muted account-wide, and
+///    only the peer-aware call sees the second. Passing `hasPeer: true` is what
+///    the [_ChannelMenuItem] comment was holding this seat open for: without it
+///    a peer-muted DM would render idle in the one menu that never learned about
+///    peers (cage-match #135 round 7, Tesla).
+class _DmMenuItem extends ConsumerWidget {
+  const _DmMenuItem({required this.dm, required this.isActive});
+
+  final Channel dm;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final myId = ref.watch(currentUserProvider)?.userId;
+    final roster = ref.watch(channelRosterProvider(dm.id)).value;
+    final unread = isActive ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
+    final muted = watchConversationMute(ref, dm.id,
+            peerId: dmPeerId(roster, myId), hasPeer: true)
+        .isMuted;
+    return _MenuItemRow(
+      conversationId: dm.id,
+      name: dmPeerTitle(roster, myId),
+      unread: unread,
+      muted: muted,
+    );
+  }
+}
+
+/// The shared row body for both kinds of dropdown item: label, then ONE trailing
+/// marker. Shared on purpose — the unread-vs-muted fork below is a decision the
+/// mute cage-match landed twice already, and a channel row and a DM row drawing
+/// it from two copies is precisely the two-readers-one-fact drift this file's
+/// providers were restructured to remove.
+class _MenuItemRow extends StatelessWidget {
+  const _MenuItemRow({
+    required this.conversationId,
+    required this.name,
+    required this.unread,
+    required this.muted,
+  });
+
+  final String conversationId;
+  final String name;
+  final int unread;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) {
     return Row(
       children: [
         Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
         // Attention first, same polarity as the sidebar row: a peer mute filters
         // per MESSAGE, so a muted-looking row can still have a real count from
         // someone else, and the glyph must never swallow it (cage-match #135
-        // round 12, Tesla — who noted this fork was copied here awaiting the day
-        // DMs join this switcher, #2940).
+        // round 12, Tesla).
         if (unread > 0) ...[
           const SizedBox(width: 8),
-          UnreadBadge(key: Key('unread-item-$channelId'), count: unread),
+          UnreadBadge(key: Key('unread-item-$conversationId'), count: unread),
         ] else if (muted) ...[
           const SizedBox(width: 8),
           Icon(Icons.notifications_off_outlined,
-              key: Key('muted-item-$channelId'),
+              key: Key('muted-item-$conversationId'),
               size: 16,
               color: Theme.of(context).colorScheme.onSurfaceVariant),
         ],
@@ -977,9 +1086,19 @@ class _ComposerState extends ConsumerState<Composer> {
             // isn't a discoverable send affordance.
             if (_showSendButton) ...[
               const SizedBox(width: 8),
-              IconButton.filled(
+              // Glyph only — no fill, no border. The composer's own outlined field
+              // already draws the one box in this row; a filled/bordered button
+              // beside it made two competing containers. Outline paper plane in
+              // onSurfaceVariant (the maritime dim ink), so it reads as an
+              // affordance without shouting over the message you just typed.
+              IconButton(
+                // Keyed so the tests target the CONTROL, not its glyph — finding
+                // it by `Icons.send` is what made a pure restyle a 9-test edit.
+                key: const Key('composer-send'),
                 onPressed: _send,
-                icon: const Icon(Icons.send),
+                tooltip: 'Send',
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                icon: const Icon(Icons.send_outlined),
               ),
             ],
           ],
