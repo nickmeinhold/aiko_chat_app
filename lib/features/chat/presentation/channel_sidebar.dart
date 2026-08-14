@@ -11,6 +11,7 @@
 /// verbatim.
 library;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -22,6 +23,7 @@ import '../../settings/application/gateway_directory_provider.dart';
 import '../../settings/data/gateway_directory_client.dart';
 import '../../settings/presentation/gateway_switch_action.dart';
 import '../application/chat_providers.dart';
+import '../application/mute_controller.dart';
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import 'chat_screen.dart';
@@ -42,6 +44,192 @@ Color _selectedTileColor(ColorScheme scheme) => scheme.surfaceContainerHigh;
 const _tileShape = RoundedRectangleBorder(
   borderRadius: BorderRadius.all(Radius.circular(8)),
 );
+
+/// Wraps a sidebar row with the mute affordance: long-press on touch,
+/// right-click on desktop — the two gestures that mean "more options" on the
+/// platforms this app ships to, both landing on the same menu so neither is a
+/// second implementation of the first.
+///
+/// Both gestures fire on POINTER-UP (`onLongPressEnd` / `onSecondaryTapUp`),
+/// never on pointer-down. Opening a one-item menu at the press point while the
+/// finger is STILL DOWN means the item materialises under that finger and
+/// selects itself the moment it lifts — a conversation muting itself with no
+/// deliberate act (cage-match #135, Tesla HIGH). The widget test cannot see this:
+/// `WidgetTester.longPress` releases the pointer before the menu route is in the
+/// hit tree and then taps the item as a separate, polite act, so a
+/// pointer-down trigger stays green in the harness and fails on a real thumb.
+/// The menu is also nudged clear of the press point so it never opens under the
+/// finger that summoned it.
+class _MuteGesture extends ConsumerWidget {
+  const _MuteGesture({
+    super.key,
+    required this.mute,
+    required this.child,
+  });
+
+  /// The row's full mute state — conversation AND peer. The menu acts on
+  /// whatever is actually causing the silence, so the glyph and the control can
+  /// never disagree (see [ConversationMute]).
+  final ConversationMute mute;
+  final Widget child;
+
+  /// [container] is captured by the CALLER, before the menu is awaited, and the
+  /// notifier is re-read from it AFTER — never captured across the gap.
+  ///
+  /// A `WidgetRef` is only valid while its consumer is mounted, and this menu
+  /// stays open for an unbounded human-scale interval during which the row can
+  /// vanish (a DM retired by a refetch, a gateway switch tearing down the rail,
+  /// logout). Holding the NOTIFIER instead is no better and was the first fix's
+  /// mistake: `mutesProvider` is `.autoDispose`, so a notifier handle is not a
+  /// keep-alive — once the last unread watcher leaves the tree it is disposed,
+  /// and its very first statement reads `ref`, which now throws (cage-match
+  /// #135 round 2, Carnot HIGH + Tesla).
+  ///
+  /// The `ProviderContainer` is app-scoped and outlives every widget here, and
+  /// re-reading an autoDispose provider through it simply rebuilds it (rehydrating
+  /// from the store) before applying the change. So the write lands whether or not
+  /// the chat surface is still alive — the lifetime question stops existing rather
+  /// than being guarded.
+  Future<void> _show(
+    BuildContext context,
+    ProviderContainer container, {
+    required String? expectUserId,
+    required Offset at,
+  }) async {
+    final muted = mute.isMuted;
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    // TRANSFORM, don't assume. `at` is a GLOBAL position and the container rect
+    // below is the overlay's own space; those coincide only while the overlay's
+    // origin is the view's, which is true of a full-screen phone overlay and not
+    // guaranteed on desktop or an embedded view — and the harness would never
+    // show the difference (cage-match #135 round 13, Tesla). The +8 nudge keeps
+    // the menu clear of the finger that summoned it; it is not a coordinate
+    // conversion, so do the conversion too.
+    final local = overlay.globalToLocal(at) + const Offset(8, 8);
+    final picked = await showMenu<bool>(
+      context: context,
+      position:
+          RelativeRect.fromRect(local & Size.zero, Offset.zero & overlay.size),
+      items: [
+        PopupMenuItem<bool>(
+          value: !muted,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(muted
+                ? Icons.notifications_none
+                : Icons.notifications_off_outlined),
+            title: Text(muted ? 'Unmute' : 'Mute'),
+            // Say WHICH silence this undoes whenever a PERSON is one of the
+            // causes — not only when they are the sole cause. Gating on
+            // "peer and not conversation" left the both-muted case promising
+            // "show unread again" while restoring that account in every room
+            // (cage-match #135 round 5, Tesla).
+            // Three states, because the honest sentence differs in each: we can
+            // see a person is the cause; we know the conversation alone is; or we
+            // cannot speak for the peer at all and must not promise the row goes
+            // audible (cage-match #135 rounds 5-9).
+            // Both verbs scope themselves. Round 9 taught the MUTE side about
+            // `indeterminate` and left the UNMUTE side promising "show unread
+            // again" — which clears only the conversation, so an unnameable peer
+            // mute keeps the row at zero while the glyph disappears with
+            // `byConversation`, closing the undo door on a row that is still
+            // quiet (cage-match #135 round 11, Tesla).
+            subtitle: Text(muted
+                ? (mute.byPeer
+                    ? 'This person is muted everywhere — unmute them'
+                    : mute.indeterminate
+                        ? 'Unmute this conversation'
+                        : 'Show unread again')
+                : mute.indeterminate
+                    ? 'No unread badge from this conversation'
+                    : 'No unread badge'),
+          ),
+        ),
+      ],
+    );
+    // An absolute target state (`!muted` captured at open time), never a
+    // toggle: if the mute changed while the menu was open, this write is an
+    // idempotent no-op rather than an inversion of someone else's change.
+    if (picked == null) return;
+    mute.apply(container.read(mutesProvider.notifier),
+        muted: picked, expectUserId: expectUserId);
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final container = ProviderScope.containerOf(context, listen: false);
+    // Bound HERE, before the menu can be opened, so a pick that lands after a
+    // logout/user-switch is dropped rather than written into another account
+    // (cage-match #135 round 3, Tesla).
+    final expectUserId = ref.watch(currentUserProvider)?.userId;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPressEnd: (d) => _show(context, container,
+          expectUserId: expectUserId, at: d.globalPosition),
+      // Pointer-UP for the same reason as the long-press — and NOT WIRED ON WEB,
+      // where the browser raises its own context menu on right-click and the user
+      // would get two menus for one intent. Documenting that as a named tradeoff
+      // (as this did) is shipping a known defect with a note attached; not
+      // offering the gesture where it misbehaves is simply correct, and long-press
+      // still reaches the same menu (cage-match #135 rounds 1 + 10, Tesla then
+      // Kelvin).
+      onSecondaryTapUp: kIsWeb
+          ? null
+          : (d) => _show(context, container,
+              expectUserId: expectUserId, at: d.globalPosition),
+      child: child,
+    );
+  }
+}
+
+/// The trailing slot of a sidebar row: an unread badge, or — when the row is
+/// muted — a quiet mute glyph, so a silent conversation reads as *muted* rather
+/// than as *nothing happening*. The badge is never shown for a muted row because
+/// [channelUnreadCountProvider] already reports 0 there; this only makes the
+/// reason legible.
+///
+/// SCOPE OF THAT CLAIM, stated rather than implied (cage-match #135 round 11,
+/// Carnot + Tesla). A zero badge has THREE possible causes and the glyph speaks
+/// for two: this conversation is muted, or (in a 1:1 DM) its named peer is. The
+/// third — every unread sender in a GROUP channel happens to be account-muted —
+/// deliberately shows nothing, because that channel is NOT muted: other members
+/// still badge it, and a bell there would offer to unmute a conversation that was
+/// never muted, which is the inverse of the lie this glyph exists to prevent.
+/// The honest fix for that case is an inventory of who you have silenced (task
+/// #29), not a glyph on a room. Same for a DM whose peer cannot be named
+/// (`indeterminate`): unknown is not muted, and we do not draw a claim we cannot
+/// support.
+Widget? _rowTrailing(
+  BuildContext context, {
+  required String id,
+  required int unread,
+  required bool muted,
+}) {
+  // ATTENTION FIRST. An earlier version preferred the glyph, on the stated law
+  // that a muted row can never have unread because the provider already returns
+  // 0. That law holds for CONVERSATION mute (which returns 0 for the whole row)
+  // and is FALSE for a peer mute, which filters per MESSAGE: a 1:1 DM whose peer
+  // is muted still counts anyone else who posts there — an LLM/robot sender
+  // (`userId == null`, never account-muteable), a system actor, a third id that
+  // was never in the two-person roster. The glyph then won and threw a real
+  // badge away: the row looked deliberately quiet while something had actually
+  // happened, and nothing on screen said so (cage-match #135 round 12, Tesla).
+  if (unread > 0) {
+    return UnreadBadge(key: Key('sidebar-unread-$id'), count: unread);
+  }
+  if (muted) {
+    // A BELL, not a speaker. This app ships 1:1 LiveKit calls, where a
+    // speaker-with-slash is the universal glyph for muting call audio — a
+    // different verb entirely from "stop badging this conversation". The
+    // notification glyph is what Slack and Discord use for exactly this.
+    return Icon(Icons.notifications_off_outlined,
+        key: Key('sidebar-muted-$id'),
+        size: 16,
+        color: Theme.of(context).colorScheme.onSurfaceVariant);
+  }
+  return null;
+}
 
 class ChatSidebar extends ConsumerWidget {
   const ChatSidebar({super.key});
@@ -138,21 +326,36 @@ class _SidebarChannelTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final unread =
         selected ? 0 : ref.watch(channelUnreadCountProvider(channel.id));
-    return ListTile(
-      key: Key('sidebar-channel-${channel.id}'),
-      selected: selected,
-      selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
-      shape: _tileShape,
-      dense: true,
-      leading: const Icon(Icons.tag, size: 20),
-      title: Text(channel.name, overflow: TextOverflow.ellipsis),
-      trailing: unread > 0
-          ? UnreadBadge(key: Key('sidebar-unread-${channel.id}'), count: unread)
-          : null,
-      onTap: selected
-          ? null
-          : () =>
-              ref.read(selectedChannelIdProvider.notifier).select(channel.id),
+    // No peer: a group channel is silenced only by its own mute.
+    final mute = watchConversationMute(ref, channel.id);
+    return _MuteGesture(
+      // KEYED BY CONVERSATION. The key used to live only on the child ListTile,
+      // leaving this gesture wrapper matched by SLOT — so a reorder (a DM seed, a
+      // channel-list refetch) could update the element in place and hand the
+      // recognizer a new child while the in-flight gesture still carried the OLD
+      // conversation id. Identity as position, which is precisely how a mute
+      // lands on the wrong row (cage-match #135 round 2, Tesla).
+      key: Key('mute-gesture-${channel.id}'),
+      mute: mute,
+      child: ListTile(
+        key: Key('sidebar-channel-${channel.id}'),
+        selected: selected,
+        selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
+        shape: _tileShape,
+        dense: true,
+        leading: const Icon(Icons.tag, size: 20),
+        title: Text(channel.name, overflow: TextOverflow.ellipsis),
+        trailing: _rowTrailing(
+          context,
+          id: channel.id,
+          unread: unread,
+          muted: mute.isMuted,
+        ),
+        onTap: selected
+            ? null
+            : () =>
+                ref.read(selectedChannelIdProvider.notifier).select(channel.id),
+      ),
     );
   }
 }
@@ -182,20 +385,33 @@ class _SidebarDmTile extends ConsumerWidget {
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(dm.id)).value;
     final unread = selected ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
-    return ListTile(
-      key: Key('sidebar-dm-${dm.id}'),
-      selected: selected,
-      selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
-      shape: _tileShape,
-      dense: true,
-      leading: const Icon(Icons.alternate_email, size: 20),
-      title: Text(dmPeerTitle(roster, myId), overflow: TextOverflow.ellipsis),
-      trailing: unread > 0
-          ? UnreadBadge(key: Key('sidebar-unread-${dm.id}'), count: unread)
-          : null,
-      onTap: selected
-          ? null
-          : () => ref.read(selectedChannelIdProvider.notifier).select(dm.id),
+    // A DM has exactly one other party, so muting that ACCOUNT silences this row
+    // as completely as muting the conversation — the row must say so, and its
+    // menu must be able to undo THAT rather than offering a mute the user
+    // already has (see [ConversationMute]).
+    final mute = watchConversationMute(ref, dm.id,
+        peerId: dmPeerId(roster, myId), hasPeer: true);
+    return _MuteGesture(
+      key: Key('mute-gesture-${dm.id}'), // see _SidebarChannelTile — slot vs identity
+      mute: mute,
+      child: ListTile(
+        key: Key('sidebar-dm-${dm.id}'),
+        selected: selected,
+        selectedTileColor: _selectedTileColor(Theme.of(context).colorScheme),
+        shape: _tileShape,
+        dense: true,
+        leading: const Icon(Icons.alternate_email, size: 20),
+        title: Text(dmPeerTitle(roster, myId), overflow: TextOverflow.ellipsis),
+        trailing: _rowTrailing(
+          context,
+          id: dm.id,
+          unread: unread,
+          muted: mute.isMuted,
+        ),
+        onTap: selected
+            ? null
+            : () => ref.read(selectedChannelIdProvider.notifier).select(dm.id),
+      ),
     );
   }
 }

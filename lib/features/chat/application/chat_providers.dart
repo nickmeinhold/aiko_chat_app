@@ -22,6 +22,7 @@ import '../data/transport/chat_transport.dart' show ConnectionState;
 import '../data/logging_chat_telemetry.dart';
 import '../domain/channel.dart';
 import '../domain/message.dart';
+import 'mute_controller.dart';
 
 final _uuid = Uuid();
 
@@ -735,6 +736,13 @@ final _historyFenceProvider =
 /// visible) — but via [_unreadMessagesProvider], a stream DISTINCT from
 /// [messagesProvider], so the switcher and the message list never share one
 /// StreamProvider family entry.
+///
+/// MUTE lands HERE, in the one provider every unread surface already reads
+/// (sidebar rows, DM rows, the narrow app-bar aggregate), rather than at each
+/// call site — a badge that appears on one surface and not another would be the
+/// same fact derived two ways. A mute suppresses only this COUNT: the messages
+/// themselves stay in [messagesProvider] and on screen, which is the whole
+/// difference between muting and blocking.
 final channelUnreadCountProvider =
     Provider.autoDispose.family<int, String>((ref, channelId) {
   final messages =
@@ -745,6 +753,14 @@ final channelUnreadCountProvider =
   // The unread chain is autoDispose + rebuilt per session, so a read suffices.
   final myUserId = ref.read(currentUserProvider)?.userId;
   final watermark = marks[channelId];
+  // Watched UNCONDITIONALLY, above the first-sight branch below, even though
+  // neither is read on that path: a `ref.watch` reached only on some branches
+  // makes this provider's dependency set depend on its own state, so a later
+  // edit (a third mute target, a watermark that can rewind) would silently
+  // desync which providers it rebuilds for. Watch everything, then branch on
+  // the values (cage-match #135, Tesla).
+  final mutedChannels = ref.watch(mutedChannelIdsProvider);
+  final mutedSenders = ref.watch(mutedUserIdsProvider);
 
   if (watermark == null) {
     // Never observed → report 0 (NEVER flood) until history has SETTLED for this
@@ -773,10 +789,21 @@ final channelUnreadCountProvider =
     return 0;
   }
 
+  // A muted conversation reports 0 — but only AFTER the baseline block above has
+  // had its chance to run. Skipping straight past it would leave a never-observed
+  // muted channel with no watermark at all, so unmuting would flood the badge
+  // with every fossil in the cache (the exact failure first-sight baselining
+  // exists to prevent).
+  if (mutedChannels.contains(channelId)) return 0;
+
   return messages.where((m) {
     final id = m.id;
     if (id == null) return false; // un-acked own send — never unread
-    if (m.sender.userId == myUserId) return false; // my own message
+    final senderId = m.sender.userId;
+    if (senderId == myUserId) return false; // my own message
+    // A muted ACCOUNT is quiet everywhere, so this is filtered per-message rather
+    // than per-channel. Their messages still render — only the badge goes quiet.
+    if (senderId != null && mutedSenders.contains(senderId)) return false;
     return id.compareTo(watermark) > 0;
   }).length;
 });

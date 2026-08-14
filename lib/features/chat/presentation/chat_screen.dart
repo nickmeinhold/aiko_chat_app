@@ -9,6 +9,7 @@ import '../../../core/mark/mark_avatar.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
+import '../application/mute_controller.dart';
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import '../domain/message.dart';
@@ -116,6 +117,11 @@ class ChatScreen extends ConsumerWidget {
                   ? _ChannelSwitcher(channels: channels, activeId: active.id)
                   : _ConversationTitle(active: active),
               actions: [
+                // Narrow has no sidebar, so the row long-press that mutes a
+                // conversation on wide does not exist here. Without this the
+                // capability would be wide-only — mutable on the desktop, invisible
+                // on the phone, which is where a noisy channel is actually felt.
+                if (active != null) _MuteConversationAction(conversation: active),
                 IconButton(
                   tooltip: 'Search',
                   icon: const Icon(Icons.search),
@@ -152,6 +158,107 @@ class ChatScreen extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Mute/unmute the conversation you are currently reading — the narrow-layout
+/// twin of the sidebar row's long-press menu. One toggle rather than a menu: the
+/// action is instant, reversible, and entirely private, so a confirmation step
+/// would cost more than the mistake it prevents. The icon carries the state, so
+/// a muted conversation announces itself from the bar you are already looking at.
+class _MuteConversationAction extends ConsumerWidget {
+  const _MuteConversationAction({required this.conversation});
+
+  final Channel conversation;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Peer-aware, exactly like the sidebar row: a peer-muted DM resized onto a
+    // phone was showing "not muted" while its badge was already dead — two
+    // surfaces disagreeing about the same conversation, which is the drift this
+    // feature's own comments forbid (cage-match #135 round 3, Tesla).
+    final mute = watchConversationMute(
+      ref,
+      conversation.id,
+      peerId: conversation.kind == ChannelKind.dm
+          ? dmPeerId(ref.watch(channelRosterProvider(conversation.id)).value,
+              ref.watch(currentUserProvider)?.userId)
+          : null,
+      hasPeer: conversation.kind == ChannelKind.dm,
+    );
+    final muted = mute.isMuted;
+    // SCOPE DISCLOSURE. When the silence comes from the PERSON rather than this
+    // conversation, undoing it makes them audible in every room — a global
+    // preference change behind a control captioned "this conversation". The
+    // sidebar menu confesses that in its subtitle; this one-tap button had no
+    // room to, so it silently performed the bigger act (cage-match #135 round 4,
+    // Carnot MEDIUM + Tesla). Here it asks first: the tap surfaces the real scope
+    // and the user chooses.
+    // Confess whenever a PERSON is one of the causes — not only when they are
+    // the sole cause. Gating on `byPeer && !byConversation` left the both-muted
+    // case saying "Unmute this conversation" while also restoring that account in
+    // every room (cage-match #135 round 5, Tesla). Any unmute that would clear an
+    // account mute has to say so.
+    final clearsPerson = muted && mute.byPeer;
+    return IconButton(
+      key: const Key('appbar-mute-conversation'),
+      // Scoped to what we can actually speak for. With no nameable peer this is
+      // a CONVERSATION verb and says so, rather than "Mute (loading…)" — which
+      // lied in the indicative for the states that never resolve (a self-DM, a
+      // group-shaped DM, a departed member) — cage-match #135 round 9, Tesla.
+      tooltip: muted
+          ? (clearsPerson
+              ? 'This person is muted everywhere'
+              : 'Unmute this conversation')
+          : 'Mute this conversation',
+      // Bell, not speaker: this app ships 1:1 A/V calls, where a speaker glyph
+      // in the chrome reads as "mute the call", a different verb entirely
+      // (cage-match #135, Maxwell).
+      icon: Icon(muted ? Icons.notifications_off : Icons.notifications_none),
+      onPressed: () {
+        if (clearsPerson) {
+          // BIND BOTH BEFORE THE GAP — the container (not the autoDispose
+          // notifier) and the acting principal. This SnackBar lives on the
+          // messenger ABOVE the chat surface, so its action can be tapped after
+          // Settings, a sign-out, or a user switch. Reading the notifier or the
+          // user INSIDE the callback is the very mistake rounds 2-3 removed from
+          // the other two doors, reintroduced here when this control was added in
+          // round 4 (cage-match #135 round 5, Carnot + Tesla). Late-binding the
+          // principal is worse than useless: it compares the new user to the new
+          // user, passes, and then dumps the OLD in-memory map onto the NEW
+          // user's key.
+          final container = ProviderScope.containerOf(context, listen: false);
+          final actingUserId = container.read(currentUserProvider)?.userId;
+          // See message_actions.dart: a null principal here is "could not
+          // determine", not "no gap", and passing it across the SnackBar's
+          // lifetime would disable the guard rather than fail closed.
+          if (actingUserId == null) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            // Say what the button DOES, not the narrower thing it sounds like:
+            // unmuting clears every cause of this row's silence, which includes
+            // the account mute that applies in every conversation (cage-match
+            // #135 round 6, Carnot — the UI admitted one state change and
+            // performed two).
+            content: const Text(
+                'This person is muted in every conversation. Unmuting affects '
+                'all of them.'),
+            action: SnackBarAction(
+              label: 'Unmute',
+              onPressed: () => mute.apply(
+                  container.read(mutesProvider.notifier),
+                  muted: false,
+                  expectUserId: actingUserId),
+            ),
+          ));
+          return;
+        }
+        // Otherwise synchronous — no async gap, so the write lands in the same
+        // frame as the tap. `null` is the explicit "nothing to bind" answer, not
+        // an omission (the parameter is required precisely so this is a decision).
+        mute.apply(ref.read(mutesProvider.notifier),
+            muted: !muted, expectUserId: null);
+      },
     );
   }
 }
@@ -267,12 +374,35 @@ class _ChannelMenuItem extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final unread = isActive ? 0 : ref.watch(channelUnreadCountProvider(channelId));
+    // A muted row must say WHY it is quiet here too. `channelUnreadCountProvider`
+    // reports 0 for a muted channel, so without this the dropdown renders muted
+    // and idle identically — two unread surfaces drawing different conclusions
+    // from the same mute state, which is exactly the drift the sidebar glyph was
+    // added to prevent (cage-match #135, Carnot HIGH + Tesla).
+    //
+    // Through the SAME door as every other surface, not a second derivation of
+    // its own. The item list is channels-only today, so `mutedChannelIdsProvider`
+    // would give the identical answer — by accident of topology, not by law. The
+    // day DMs join this switcher (#2940) a peer-muted DM would render idle in the
+    // one menu that never learned about peers (cage-match #135 round 7, Tesla).
+    final muted = watchConversationMute(ref, channelId).isMuted;
     return Row(
       children: [
         Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
+        // Attention first, same polarity as the sidebar row: a peer mute filters
+        // per MESSAGE, so a muted-looking row can still have a real count from
+        // someone else, and the glyph must never swallow it (cage-match #135
+        // round 12, Tesla — who noted this fork was copied here awaiting the day
+        // DMs join this switcher, #2940).
         if (unread > 0) ...[
           const SizedBox(width: 8),
           UnreadBadge(key: Key('unread-item-$channelId'), count: unread),
+        ] else if (muted) ...[
+          const SizedBox(width: 8),
+          Icon(Icons.notifications_off_outlined,
+              key: Key('muted-item-$channelId'),
+              size: 16,
+              color: Theme.of(context).colorScheme.onSurfaceVariant),
         ],
       ],
     );
