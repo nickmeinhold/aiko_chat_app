@@ -277,6 +277,34 @@ void main() {
     });
   }
 
+  testWidgets('a channel-list failure does not blank the DM rows on WIDE — both '
+      'widths answer the same', (tester) async {
+    // dmsProvider fails soft and keeps its DMs, so a channels fetch that failed
+    // must not take them down with it. The rail's loading/error chrome belonged
+    // to channelsProvider alone while the list it covered was BOTH sources, so a
+    // channel error blanked the DMs behind "Could not load channels" — while the
+    // phone switcher, reading the same sections, listed them at that same instant.
+    // One conversation, two widths, two answers (cage-match #136, Tesla).
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final rest = restWithDm()..listChannelsThrows = StateError('boom');
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id),
+        ['dm1']);
+    expect(find.textContaining('Could not load channels'), findsNothing);
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
+    expect(find.text('alice'), findsWidgets);
+  });
+
   testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation',
       (tester) async {
     setNarrow(tester);

@@ -270,50 +270,26 @@ class ChatSidebar extends ConsumerWidget {
               const _ServerSwitcher(),
               const Divider(height: 1),
               Expanded(
-                child: channelsAsync.when(
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (e, _) => Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text('Could not load channels.\n$e'),
-                  ),
-                  data: (_) {
-                    // Empty only when BOTH sources are empty — a user with no
-                    // channels but open DMs still sees their DM section (#2798).
-                    if (channels.isEmpty && dms.isEmpty) {
-                      return const Center(child: Text('No channels yet.'));
-                    }
-                    // Channels and DMs share ONE scrollable list (the DM section
-                    // sits below the channel list, per the design anchor) so a long
-                    // combined list scrolls as a unit rather than overflowing a
-                    // fixed slot.
-                    return ListView(
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 4, horizontal: kSidebarTileInset),
-                      children: [
-                        for (final c in channels)
-                          _SidebarChannelTile(
-                            channel: c,
-                            selected: c.id == active?.id,
-                          ),
-                        if (dms.isNotEmpty) ...[
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
-                            child: Text(
-                              'Direct messages',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .labelSmall
-                                  ?.copyWith(color: scheme.onSurfaceVariant),
-                            ),
-                          ),
-                          for (final d in dms)
-                            _SidebarDmTile(dm: d, selected: d.id == active?.id),
-                        ],
-                      ],
-                    );
-                  },
-                ),
+                // CONTENT FIRST, chrome only when there is nothing to show. The
+                // loading/error states belong to `channelsProvider` alone, but the
+                // list they were covering is now both sources — so a channel fetch
+                // that failed or was still in flight blanked the DM rows behind
+                // "Could not load channels", even though `dmsProvider` fails soft
+                // and had them. The phone switcher, reading the same sections,
+                // listed those DMs at the same instant: one conversation, two
+                // widths, two answers — this PR's own bug rotated 90 degrees
+                // (cage-match #136, Tesla).
+                child: switch ((channels.isEmpty && dms.isEmpty, channelsAsync)) {
+                  (false, _) => _conversationList(context, ref,
+                      channels: channels, dms: dms, active: active),
+                  (true, AsyncLoading()) =>
+                    const Center(child: CircularProgressIndicator()),
+                  (true, AsyncError(:final error)) => Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text('Could not load channels.\n$error'),
+                    ),
+                  (true, _) => const Center(child: Text('No conversations yet.')),
+                },
               ),
               const Divider(height: 1),
               const _SidebarFooter(),
@@ -321,6 +297,41 @@ class ChatSidebar extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// Channels and DMs in ONE scrollable list (the DM section sits below the
+  /// channel list, per the design anchor) so a long combined list scrolls as a
+  /// unit rather than overflowing a fixed slot.
+  Widget _conversationList(
+    BuildContext context,
+    WidgetRef ref, {
+    required List<Channel> channels,
+    required List<Channel> dms,
+    required Channel? active,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListView(
+      padding: const EdgeInsets.symmetric(
+          vertical: 4, horizontal: kSidebarTileInset),
+      children: [
+        for (final c in channels)
+          _SidebarChannelTile(channel: c, selected: c.id == active?.id),
+        if (dms.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
+            child: Text(
+              'Direct messages',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          for (final d in dms)
+            _SidebarDmTile(dm: d, selected: d.id == active?.id),
+        ],
+      ],
     );
   }
 }

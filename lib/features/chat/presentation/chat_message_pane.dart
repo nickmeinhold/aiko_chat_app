@@ -28,8 +28,7 @@ class ChatMessagePane extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final channelsAsync = ref.watch(channelsProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
-    // Active over channels ∪ DMs so a selected DM renders (#2798); the channel
-    // load/error gating below still keys off channelsProvider.
+    // Active over channels ∪ DMs so a selected DM renders (#2798).
     final active =
         ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);
 
@@ -37,15 +36,23 @@ class ChatMessagePane extends ConsumerWidget {
       children: [
         const NetworkStatusBanner(),
         Expanded(
-          child: channelsAsync.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, _) =>
-                Center(child: Text('Could not load channels.\n$e')),
-            data: (_) {
-              if (active == null) {
-                return const Center(child: Text('No channels yet.'));
-              }
-              return Column(
+          // CONTENT FIRST, chrome only when there is nothing to show. The
+          // loading/error states belong to `channelsProvider` alone, but `active`
+          // resolves over channels ∪ DMs — so a channel fetch that failed painted
+          // "Could not load channels" over a DM the user could still see listed
+          // and select. The one conversation still reachable during the outage was
+          // the one you could not read. Same bug as the sidebar's, swept here
+          // (cage-match #136, Tesla).
+          child: active == null
+              ? channelsAsync.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (e, _) =>
+                      Center(child: Text('Could not load channels.\n$e')),
+                  data: (_) =>
+                      const Center(child: Text('No conversations yet.')),
+                )
+              : Column(
                 children: [
                   // No channel header in the wide layout (the sidebar already
                   // names + switches channels) nor the narrow layout (its AppBar
@@ -70,9 +77,7 @@ class ChatMessagePane extends ConsumerWidget {
                     channelId: active.id,
                   ),
                 ],
-              );
-            },
-          ),
+              ),
         ),
       ],
     );
