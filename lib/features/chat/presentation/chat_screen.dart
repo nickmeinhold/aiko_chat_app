@@ -24,11 +24,18 @@ const double kWideLayoutBreakpoint = 720;
 /// The fixed width of the wide-layout channel rail.
 const double kSidebarWidth = 268;
 
-/// The chat surface: a channel switcher + logout in the app bar, a thin
-/// connection banner, the message list, and the composer. The default channel is
-/// the first one the gateway returns; when more than one channel exists the title
-/// becomes a dropdown to switch among them (the app already fetches the full list
-/// via [channelsProvider]).
+/// The chat surface: a conversation switcher + logout in the app bar, a thin
+/// connection banner, the message list, and the composer. The default is the
+/// first conversation the gateway returns; when more than one NAVIGABLE
+/// CONVERSATION exists — channels ∪ DMs, [navigableChannelsProvider] — the title
+/// becomes a dropdown to switch among them.
+///
+/// "Navigable conversation", not "channel", throughout, and the distinction is a
+/// bug rather than pedantry: this doc used to say "when more than one CHANNEL
+/// exists … via [channelsProvider]", and the island excludes DMs from
+/// `GET /v1/channels` by design, so the sentence quietly described a phone on
+/// which a DM could be entered and never reached again (#2798 task #12). A
+/// tidy-up that trusts a stale comment rewrites the bug (cage-match #136, Tesla).
 ///
 /// Switching is a pure DISPLAY change — the repository subscribes to EVERY
 /// channel at construction and syncs each one's history on connect
@@ -51,15 +58,44 @@ class ChatScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final channelsAsync = ref.watch(channelsProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
-    final channels = channelsAsync.value ?? const <Channel>[];
     // Resolve the active conversation over channels ∪ DMs so a selected DM stays
     // active (a DM id is never in channelsProvider — DMs are a separate source,
     // #2798). The narrow app-bar switcher below lists the SAME combined list, so
     // "what can be active" and "what can be picked" are one set, not two.
     final navigable = ref.watch(navigableChannelsProvider);
     final active = resolveActive(navigable, selectedId);
+
+    // The switcher's two sections are a PARTITION of the SAME list the resolver
+    // resolves over, deduped by id. Load-bearing, not tidiness: `DropdownButton`
+    // asserts that EXACTLY ONE item matches `value`, and `value` is the active id
+    // — which `resolveActive` drew from this very list. Both halves of "exactly
+    // one" have to be established, and each used to fail a different way:
+    //
+    //  * ZERO matches — the first cut of this fix took rooms from `channels` and
+    //    DMs from `navigable`, two routes to overlapping sets. Anything navigable
+    //    but absent from `channelsProvider` could be active with no item to match
+    //    it, and a phone's ONLY navigation control asserts (cage-match #136,
+    //    Tesla HIGH + Maxwell; Carnot reached it from the type side — the old
+    //    signature could not prove `channels` held non-DMs only).
+    //  * TWO matches — partitioning alone does NOT fix this, which is the part
+    //    that is easy to declare victory on and be wrong about.
+    //    `navigableChannelsProvider` is `[...channels, ...visibleDms]` with no
+    //    dedupe, so if the island ever lists one conversation through BOTH
+    //    `GET /v1/channels` and `GET /v1/dm` (a `kind: dm` row leaking into the
+    //    channel list, a seed racing a rename), the id appears twice in ONE list
+    //    and the partition faithfully carries the duplicate through.
+    //
+    // So: dedupe first, partition second. `resolveActive` already takes the FIRST
+    // match, so first-occurrence-wins is the rule that agrees with it — the row
+    // you can pick is the row the resolver would hand back.
+    final seenIds = <String>{};
+    final unique =
+        navigable.where((c) => seenIds.add(c.id)).toList(growable: false);
+    final rooms =
+        unique.where((c) => c.kind != ChannelKind.dm).toList(growable: false);
+    final dms =
+        unique.where((c) => c.kind == ChannelKind.dm).toList(growable: false);
 
     // If the picked conversation leaves the list (removed / renamed-away on a
     // refetch), clear the pick so the Notifier and the UI agree. Without this the
@@ -102,8 +138,9 @@ class ChatScreen extends ConsumerWidget {
       // Wide: NO app bar — the sidebar owns the chrome (server switcher, channels,
       // settings/logout) and the message pane carries its own slim channel header
       // (the redundant full-width bar sat below the native macOS title bar). Narrow:
-      // the CURRENT app bar — the dropdown switcher when >1 channel, plus the
-      // settings + sign-out actions — unchanged.
+      // the app bar — the dropdown switcher when there is more than one NAVIGABLE
+      // CONVERSATION (channels ∪ DMs, never channels alone), plus the mute,
+      // search, settings and sign-out actions.
       appBar: isWide
           ? null
           : AppBar(
@@ -120,12 +157,7 @@ class ChatScreen extends ConsumerWidget {
               // active, rather than a gate hiding the ones that can't.
               title: navigable.length > 1 && active != null
                   ? _ConversationSwitcher(
-                      channels: channels,
-                      dms: navigable
-                          .where((c) => c.kind == ChannelKind.dm)
-                          .toList(),
-                      activeId: active.id,
-                    )
+                      rooms: rooms, dms: dms, activeId: active.id)
                   : _ConversationTitle(active: active),
               actions: [
                 // Narrow has no sidebar, so the row long-press that mutes a
@@ -303,20 +335,24 @@ class _ConversationTitle extends ConsumerWidget {
 /// rest; picking one writes [selectedChannelIdProvider], which re-points the
 /// message surface.
 ///
-/// Lists channels AND DMs, in that order, under a section header — the same two
+/// Lists rooms AND DMs, in that order, under a section header — the same two
 /// sections the wide sidebar draws, collapsed into one menu because a phone app
-/// bar has room for exactly one control. Both sources are already in the repo's
+/// bar has room for exactly one control. Both are already in the repo's
 /// subscription set (channels from [channelsProvider], DMs merged in
 /// [chatRepositoryProvider]), so every listed row is synced and switching stays a
 /// pure display change with no fetch.
+///
+/// [rooms] and [dms] MUST be a partition of the caller's navigable set — see the
+/// derivation in [ChatScreen.build] for why the `DropdownButton` contract makes
+/// that a correctness requirement rather than a convention.
 class _ConversationSwitcher extends ConsumerWidget {
   const _ConversationSwitcher({
-    required this.channels,
+    required this.rooms,
     required this.dms,
     required this.activeId,
   });
 
-  final List<Channel> channels;
+  final List<Channel> rooms;
   final List<Channel> dms;
   final String activeId;
 
@@ -332,7 +368,7 @@ class _ConversationSwitcher extends ConsumerWidget {
     // signal that a DM is waiting, since there is no sidebar row to badge — an
     // aggregate that quietly excluded them would make a message from a person
     // less visible than one from a room.
-    final otherUnread = [...channels, ...dms]
+    final otherUnread = [...rooms, ...dms]
         .where((c) => c.id != activeId)
         .fold<int>(0, (sum, c) => sum + ref.watch(channelUnreadCountProvider(c.id)));
 
@@ -354,7 +390,7 @@ class _ConversationSwitcher extends ConsumerWidget {
               // surface background — so the inherited onSurface text reads
               // correctly in both the collapsed bar and the open menu.
               items: [
-                for (final c in channels)
+                for (final c in rooms)
                   DropdownMenuItem<String>(
                     value: c.id,
                     child: _ChannelMenuItem(
@@ -367,15 +403,27 @@ class _ConversationSwitcher extends ConsumerWidget {
                 // out of the selectable set, and a null value keeps it out of
                 // DropdownButton's "exactly one item matches `value`" assertion.
                 // Only drawn when there is a boundary to mark — a DM-only or
-                // channel-only account gets no lone header over nothing.
-                if (dms.isNotEmpty && channels.isNotEmpty)
+                // room-only account gets no lone header over nothing.
+                //
+                // `Semantics(header: true)` because sighted users read the break
+                // from typography and a screen reader cannot: a disabled menu
+                // item still announces as an ITEM, so TalkBack/VoiceOver would
+                // offer a dead destination in the only navigation control a phone
+                // has. Marking it a header announces its actual job — the label
+                // over the rows that follow (cage-match #136, Tesla; Carnot named
+                // the same thing as a menu-item semantic overload).
+                if (dms.isNotEmpty && rooms.isNotEmpty)
                   DropdownMenuItem<String>(
                     enabled: false,
-                    child: Text(
-                      'Direct messages',
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        'Direct messages',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color:
+                                  Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                      ),
                     ),
                   ),
                 for (final d in dms)
@@ -436,7 +484,11 @@ class _ChannelMenuItem extends ConsumerWidget {
     // topology, not by law", and the law is what held once DMs joined the list.
     final muted = watchConversationMute(ref, channelId).isMuted;
     return _MenuItemRow(
-        conversationId: channelId, name: name, unread: unread, muted: muted);
+        conversationId: channelId,
+        name: name,
+        unread: unread,
+        muted: muted,
+        isActive: isActive);
   }
 }
 
@@ -472,6 +524,7 @@ class _DmMenuItem extends ConsumerWidget {
       name: dmPeerTitle(roster, myId),
       unread: unread,
       muted: muted,
+      isActive: isActive,
     );
   }
 }
@@ -487,15 +540,27 @@ class _MenuItemRow extends StatelessWidget {
     required this.name,
     required this.unread,
     required this.muted,
+    required this.isActive,
   });
 
   final String conversationId;
   final String name;
   final int unread;
   final bool muted;
+  final bool isActive;
 
   @override
   Widget build(BuildContext context) {
+    // The ACTIVE row carries no marker of either kind. Unread is already zero (you
+    // are reading it), and the mute glyph would be a second bell: the collapsed
+    // DropdownButton renders the active item INSIDE the app bar, inches from
+    // _MuteConversationAction, which states that same mute and is the control that
+    // changes it. Two glyphs for one fact, one of them a decoy that opens a menu —
+    // and this PR is what puts a phone user inside a DM as a first-class path, so
+    // the decoy now sits on the main route (cage-match #136, Maxwell + Tesla).
+    if (isActive) {
+      return Text(name, overflow: TextOverflow.ellipsis);
+    }
     return Row(
       children: [
         Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),

@@ -34,11 +34,16 @@ void main() {
     await initializeTestEnvironment();
   });
 
-  // Shared prefs are suite-wide; clear read marks so unread baselines start clean.
+  // Shared prefs are suite-wide, so state written by one test is visible to the
+  // next. Clear read marks (unread baselines) AND mutes — a mute leaking forward
+  // is silent rather than loud: `channelUnreadCountProvider` reports 0 for a muted
+  // conversation, so a stale mute makes an unread assertion fail as "no badge"
+  // with nothing pointing at the previous test. Found exactly that way.
   setUp(() async {
     for (final k in testPrefs
         .getKeys()
-        .where((k) => k.startsWith('aiko_channel_lastread_'))
+        .where((k) =>
+            k.startsWith('aiko_channel_lastread_') || k.startsWith('aiko_muted_'))
         .toList()) {
       await testPrefs.remove(k);
     }
@@ -116,7 +121,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await openMenu(tester);
-    await tester.tap(find.text('alice').last);
+    await tester.tap(find.text('alice'));
     await tester.pumpAndSettle();
 
     // Through the SAME mutator as a channel, and not cleared by the self-heal.
@@ -143,7 +148,7 @@ void main() {
     expect(find.byType(DropdownButton<String>), findsOneWidget);
 
     await openMenu(tester);
-    await tester.tap(find.text('random').last);
+    await tester.tap(find.text('random'));
     await tester.pumpAndSettle();
 
     expect(container.read(selectedChannelIdProvider), 'c2');
@@ -170,6 +175,73 @@ void main() {
       expect(find.byType(DropdownButton<String>), findsOneWidget,
           reason: 'active=${c.id}');
     }
+  });
+
+  testWidgets('a conversation listed by BOTH sources yields ONE item, not a '
+      'duplicate-value assertion', (tester) async {
+    setNarrow(tester);
+    // The degenerate case the partition alone does NOT cover: the island lists
+    // the same conversation through GET /v1/channels AND GET /v1/dm (a kind:dm
+    // row leaking into the channel list, a seed racing a rename), so
+    // navigableChannelsProvider — a bare [...channels, ...dms] with no dedupe —
+    // carries the id twice. Two items with the same `value` trips DropdownButton's
+    // exactly-one-match assertion just as surely as zero items do, and it happens
+    // in the app bar that is a phone's whole navigation surface.
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'dm1', name: '', kind: ChannelKind.dm), // the leak
+    ]);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = roster;
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // The provider really does hand us the duplicate — assert the premise, so this
+    // test fails loudly if navigableChannelsProvider ever starts deduping itself
+    // (at which point this guard has moved, not vanished).
+    expect(
+      container.read(navigableChannelsProvider).where((c) => c.id == 'dm1').length,
+      2,
+      reason: 'premise: navigable carries the duplicate id',
+    );
+
+    // No assertion, switcher up, and selecting the doubled id resolves cleanly.
+    expect(tester.takeException(), isNull);
+    expect(find.byType(DropdownButton<String>), findsOneWidget);
+    container.read(selectedChannelIdProvider.notifier).select('dm1');
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(container.read(selectedChannelIdProvider), 'dm1');
+  });
+
+  testWidgets('the ACTIVE row carries no mute glyph — the app-bar bell already '
+      'states it', (tester) async {
+    setNarrow(tester);
+    final container =
+        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    container.read(selectedChannelIdProvider.notifier).select('dm1');
+    container
+        .read(mutesProvider.notifier)
+        .setConversationMuted('dm1', muted: true, expectUserId: null);
+    await tester.pumpAndSettle();
+
+    // The collapsed DropdownButton renders the ACTIVE item inside the app bar,
+    // inches from _MuteConversationAction — which shows the same mute AND is the
+    // control that changes it. Two glyphs for one fact, one of them a decoy that
+    // merely opens a menu.
+    expect(find.byKey(const Key('muted-item-dm1')), findsNothing);
+    expect(find.byKey(const Key('appbar-mute-conversation')), findsOneWidget);
+    expect(find.byIcon(Icons.notifications_off), findsOneWidget);
   });
 
   testWidgets('the section header is NOT selectable', (tester) async {
