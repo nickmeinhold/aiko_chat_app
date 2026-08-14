@@ -15,8 +15,11 @@
 // ACTIVE has an item (the DropdownButton `value` assertion, which the old gate
 // was papering over), the aggregate unread dot counts DMs, and a peer-muted DM
 // renders muted in this menu too — the menu is the only mute surface on a phone.
+import 'dart:async';
+
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart'
     show ConnectionState;
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
@@ -25,6 +28,7 @@ import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart'
     show UnreadBadge;
 import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart';
@@ -303,6 +307,91 @@ void main() {
     expect(find.textContaining('Could not load channels'), findsNothing);
     expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
     expect(find.text('alice'), findsWidgets);
+  });
+
+  testWidgets('DMs arriving BEFORE channels never paint a conversation the '
+      'default is about to move off', (tester) async {
+    setNarrow(tester);
+    // The first-arrival snap. With no pick yet, `resolveActive` returns the first
+    // navigable conversation, and the sections list rooms FIRST — so while
+    // GET /v1/channels is still in flight the only candidate is a DM. Render it
+    // and the user gets Alice's thread with a LIVE composer; when the channels
+    // land, the (still null) default moves to the first room, the keyed Composer
+    // is disposed with the draft inside it, and anything already sent went to
+    // Alice. The pane gates on the REPOSITORY, which awaits both lists, so this
+    // window cannot paint at all (cage-match #136, Tesla HIGH).
+    final rest = restWithDm();
+    final channelGate = Completer<void>();
+    rest.listChannelsGate = channelGate;
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    // NOT pumpAndSettle here: the pane is showing a CircularProgressIndicator,
+    // whose animation never settles — which is itself the assertion. Drive fixed
+    // frames instead.
+    await tester.tap(find.text('Already have a passkey? Sign in'));
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    // DMs are in; channels are not. The repo — which awaits BOTH — is still
+    // loading, so nothing conversational may be on screen: no composer to type
+    // into, no message list to send from.
+    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id),
+        ['dm1']);
+    expect(container.read(chatRepositoryProvider), isA<AsyncLoading<ChatRepository>>());
+    expect(find.byType(TextField), findsNothing);
+    expect(find.byKey(const Key('composer-send')), findsNothing);
+
+    channelGate.complete();
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+
+    // Now both are in, the default resolves ONCE, and it is stable.
+    expect(find.byType(TextField), findsOneWidget);
+    expect(container.read(navigableChannelsProvider).first.id, 'c1');
+  });
+
+  testWidgets('a channel failure AFTER a pick never silently moves the user into '
+      'a DM', (tester) async {
+    setNarrow(tester);
+    // The other direction, raised as: a hard channel error empties rooms, the
+    // self-heal returns early on `!hasValue`, and `resolveActive` falls through
+    // to the first DM — so the user reads and sends in a conversation they never
+    // picked (cage-match #136, Tesla HIGH).
+    //
+    // HONEST SCOPE — this locks the behaviour but does NOT red-prove that
+    // mechanism, because the mechanism does not reproduce on a REFRESH: Riverpod
+    // carries the previous data forward across an error, so `.value` survives and
+    // rooms never collapse. Reverting the pane's gate leaves this test green.
+    // The reachable variant is a COLD error with a pick already restored, and the
+    // repo gate covers that by construction — `chatRepositoryProvider` awaits the
+    // channels future, so a hard failure puts the pane in error rather than in
+    // somebody's DM. Kept as the regression guard for both.
+    final rest = restWithDm();
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    container.read(selectedChannelIdProvider.notifier).select('c1');
+    await tester.pumpAndSettle();
+
+    rest.listChannelsThrows = StateError('boom');
+    container.invalidate(channelsProvider);
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+
+    // The pick is untouched, and the user is NOT silently reading the DM.
+    expect(container.read(selectedChannelIdProvider), 'c1');
+    expect(find.text('alice'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation',
