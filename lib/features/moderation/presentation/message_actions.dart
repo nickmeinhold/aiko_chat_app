@@ -24,9 +24,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../chat/application/chat_providers.dart'
-    show currentUserProvider, navigableChannelsProvider;
+    show currentUserProvider, dmConversationIdsProvider;
 import '../../chat/application/mute_controller.dart';
-import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../chat/presentation/conversation_actions.dart'
     show startCall, startDm;
@@ -46,16 +45,13 @@ Future<void> showMessageActions(
 
   // "Message" is the entry point INTO a DM, so it is meaningless once you are
   // standing in one — `openDm` is idempotent and would resolve to the very
-  // channel you are reading. Hide it there rather than offer a no-op. Unknown
-  // channel (not yet in the navigable set) → treat as NOT a DM, so the entry
-  // point fails OPEN: an extra idempotent open costs nothing, a missing one
-  // strands the user (which is the bug this whole slice exists to fix).
-  final inDm = ref
-          .read(navigableChannelsProvider)
-          .where((c) => c.id == message.channelId)
-          .firstOrNull
-          ?.kind ==
-      ChannelKind.dm;
+  // channel you are reading. Hide it there rather than offer a no-op.
+  //
+  // DM-ness by SOURCE, through the one door (#136): an id absent from the set
+  // reads as "not a DM", so an unknown channel fails OPEN — an extra idempotent
+  // open costs nothing, a missing one strands the user, which is the bug this
+  // whole slice exists to fix.
+  final inDm = ref.read(dmConversationIdsProvider).contains(message.channelId);
 
   // Read once, before the sheet opens: the sheet's own labels must describe the
   // state the user is acting FROM, and a rebuild mid-sheet would flip the verb

@@ -255,6 +255,25 @@ void main() {
       await openMenu(tester);
       expect(find.text('Direct messages'), findsOneWidget);
       expect(find.text('alice'), findsWidgets);
+      await tester.tap(find.text('alice'));
+      await tester.pumpAndSettle();
+
+      // Once ACTIVE it must stay a DM on every surface. These three used to ask
+      // `channel.kind` individually, so a mis-kinded DM was peer-titled in the
+      // dropdown and then lost both its title and its peer-aware mute the moment
+      // you entered it (cage-match #136, Tesla + Carnot).
+      expect(find.text('alice'), findsWidgets); // title, not the empty DM name
+      container
+          .read(mutesProvider.notifier)
+          .setUserMuted('u2', muted: true, expectUserId: null);
+      await tester.pumpAndSettle();
+      // Peer-aware: only a peer-aware read sees an ACCOUNT mute on this row.
+      expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('appbar-mute-conversation')))
+            .tooltip,
+        'This person is muted everywhere',
+      );
     });
   }
 

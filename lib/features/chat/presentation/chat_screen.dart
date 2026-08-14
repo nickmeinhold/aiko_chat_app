@@ -196,14 +196,17 @@ class _MuteConversationAction extends ConsumerWidget {
     // phone was showing "not muted" while its badge was already dead — two
     // surfaces disagreeing about the same conversation, which is the drift this
     // feature's own comments forbid (cage-match #135 round 3, Tesla).
+    // DM-ness by SOURCE, through the one door — not `conversation.kind`, which is
+    // the re-derivation conversationSectionsProvider exists to remove (#136).
+    final isDm = ref.watch(dmConversationIdsProvider).contains(conversation.id);
     final mute = watchConversationMute(
       ref,
       conversation.id,
-      peerId: conversation.kind == ChannelKind.dm
+      peerId: isDm
           ? dmPeerId(ref.watch(channelRosterProvider(conversation.id)).value,
               ref.watch(currentUserProvider)?.userId)
           : null,
-      hasPeer: conversation.kind == ChannelKind.dm,
+      hasPeer: isDm,
     );
     final muted = mute.isMuted;
     // SCOPE DISCLOSURE. When the silence comes from the PERSON rather than this
@@ -297,7 +300,9 @@ class _ConversationTitle extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final a = active;
     if (a == null) return const Text('Chat');
-    if (a.kind != ChannelKind.dm) return Text(a.name);
+    // By SOURCE, through the one door (#136) — a DM whose `kind` says otherwise
+    // would otherwise render `a.name`, which for a DM is the empty string.
+    if (!ref.watch(dmConversationIdsProvider).contains(a.id)) return Text(a.name);
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(a.id)).value;
     return Text(dmPeerTitle(roster, myId));

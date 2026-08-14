@@ -446,6 +446,24 @@ final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
   return [...sections.rooms, ...sections.dms];
 });
 
+/// The ONE answer to "is this conversation a DM", for every surface that needs to
+/// branch on it — the peer-aware mute read, the conversation title, the "Message"
+/// entry point.
+///
+/// Those all used to ask `channel.kind == ChannelKind.dm` individually, which is
+/// the same re-derivation [conversationSectionsProvider] removed from the row
+/// lists, still live on three other call sites: a row from `GET /v1/dm` carrying
+/// an unexpected kind sat in the DM section and was peer-titled in the dropdown,
+/// then lost its title and its peer-aware mute the moment it became active
+/// (cage-match #136, Tesla + Carnot, converging independently).
+///
+/// An id ABSENT here reads as "not a DM", which is the right fail direction for
+/// all three: a conversation not yet in the navigable set gets room treatment
+/// (a name, a conversation-scoped mute) rather than a peer lookup that cannot
+/// resolve.
+final dmConversationIdsProvider = Provider.autoDispose<Set<String>>((ref) =>
+    {for (final d in ref.watch(conversationSectionsProvider).dms) d.id});
+
 /// The reconcile engine, fully wired and connected. Construction requires the
 /// authenticated [AppUser] (for optimistic "me" rendering) and the fixed
 /// subscription set (from [channelsProvider]); it then wires streams once and
