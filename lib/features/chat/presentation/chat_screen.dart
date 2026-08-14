@@ -30,12 +30,9 @@ const double kSidebarWidth = 268;
 /// CONVERSATION exists — channels ∪ DMs, [navigableChannelsProvider] — the title
 /// becomes a dropdown to switch among them.
 ///
-/// "Navigable conversation", not "channel", throughout, and the distinction is a
-/// bug rather than pedantry: this doc used to say "when more than one CHANNEL
-/// exists … via [channelsProvider]", and the island excludes DMs from
-/// `GET /v1/channels` by design, so the sentence quietly described a phone on
-/// which a DM could be entered and never reached again (#2798 task #12). A
-/// tidy-up that trusts a stale comment rewrites the bug (cage-match #136, Tesla).
+/// "Navigable conversation", never "channel": the island excludes DMs from
+/// `GET /v1/channels`, so anything scoped to [channelsProvider] here silently
+/// strands DMs on a phone (#2798 task #12).
 ///
 /// Switching is a pure DISPLAY change — the repository subscribes to EVERY
 /// channel at construction and syncs each one's history on connect
@@ -66,36 +63,15 @@ class ChatScreen extends ConsumerWidget {
     final navigable = ref.watch(navigableChannelsProvider);
     final active = resolveActive(navigable, selectedId);
 
-    // The switcher's two sections are a PARTITION of the SAME list the resolver
-    // resolves over, deduped by id. Load-bearing, not tidiness: `DropdownButton`
-    // asserts that EXACTLY ONE item matches `value`, and `value` is the active id
-    // — which `resolveActive` drew from this very list. Both halves of "exactly
-    // one" have to be established, and each used to fail a different way:
-    //
-    //  * ZERO matches — the first cut of this fix took rooms from `channels` and
-    //    DMs from `navigable`, two routes to overlapping sets. Anything navigable
-    //    but absent from `channelsProvider` could be active with no item to match
-    //    it, and a phone's ONLY navigation control asserts (cage-match #136,
-    //    Tesla HIGH + Maxwell; Carnot reached it from the type side — the old
-    //    signature could not prove `channels` held non-DMs only).
-    //  * TWO matches — partitioning alone does NOT fix this, which is the part
-    //    that is easy to declare victory on and be wrong about.
-    //    `navigableChannelsProvider` is `[...channels, ...visibleDms]` with no
-    //    dedupe, so if the island ever lists one conversation through BOTH
-    //    `GET /v1/channels` and `GET /v1/dm` (a `kind: dm` row leaking into the
-    //    channel list, a seed racing a rename), the id appears twice in ONE list
-    //    and the partition faithfully carries the duplicate through.
-    //
-    // So: dedupe first, partition second. `resolveActive` already takes the FIRST
-    // match, so first-occurrence-wins is the rule that agrees with it — the row
-    // you can pick is the row the resolver would hand back.
-    final seenIds = <String>{};
-    final unique =
-        navigable.where((c) => seenIds.add(c.id)).toList(growable: false);
+    // The switcher's two sections PARTITION the same list the resolver resolves
+    // over — so every id that can be active has exactly one item, which is what
+    // `DropdownButton`'s value contract requires. Uniqueness comes from
+    // [navigableChannelsProvider]; deriving either section from another source
+    // breaks the contract in one direction or the other (cage-match #136).
     final rooms =
-        unique.where((c) => c.kind != ChannelKind.dm).toList(growable: false);
+        navigable.where((c) => c.kind != ChannelKind.dm).toList(growable: false);
     final dms =
-        unique.where((c) => c.kind == ChannelKind.dm).toList(growable: false);
+        navigable.where((c) => c.kind == ChannelKind.dm).toList(growable: false);
 
     // If the picked conversation leaves the list (removed / renamed-away on a
     // refetch), clear the pick so the Notifier and the UI agree. Without this the
@@ -144,17 +120,17 @@ class ChatScreen extends ConsumerWidget {
       appBar: isWide
           ? null
           : AppBar(
-              // The switcher now lists channels ∪ DMs, which is what makes a DM
-              // REACHABLE on a phone at all: the narrow layout has no sidebar, so
-              // before this the dropdown's channels-only item list was the whole
-              // navigation surface and a DM had no row in it — openDm could put you
-              // in a conversation you could never get back to, or leave (#2798,
-              // task #12). Listing the same set the resolver resolves over also
-              // retires the old DM gate: that gate existed because a DM id in
-              // `DropdownButton.value` with no matching item is a Flutter assertion
-              // (cage-match #106, Carnot+Tesla — it crashed at the fork). The fix
-              // for the crash is now the item list containing every id that can be
-              // active, rather than a gate hiding the ones that can't.
+              // Listing channels ∪ DMs is what makes a DM REACHABLE on a phone at
+              // all: the narrow layout has no sidebar, so this dropdown is the
+              // whole navigation surface, and a channels-only item list left
+              // `openDm` able to strand you in a conversation you could neither
+              // return to nor leave (#2798, task #12).
+              //
+              // It also retires the DM gate that used to hide this switcher: that
+              // gate existed because a DM id in `DropdownButton.value` with no
+              // matching item asserts (cage-match #106). The item list now covers
+              // every id that can be active, so the crash is unreachable rather
+              // than dodged — and the gate WAS the trap.
               title: navigable.length > 1 && active != null
                   ? _ConversationSwitcher(
                       rooms: rooms, dms: dms, activeId: active.id)
@@ -338,13 +314,10 @@ class _ConversationTitle extends ConsumerWidget {
 /// Lists rooms AND DMs, in that order, under a section header — the same two
 /// sections the wide sidebar draws, collapsed into one menu because a phone app
 /// bar has room for exactly one control. Both are already in the repo's
-/// subscription set (channels from [channelsProvider], DMs merged in
-/// [chatRepositoryProvider]), so every listed row is synced and switching stays a
-/// pure display change with no fetch.
+/// subscription set, so switching stays a pure display change with no fetch.
 ///
-/// [rooms] and [dms] MUST be a partition of the caller's navigable set — see the
-/// derivation in [ChatScreen.build] for why the `DropdownButton` contract makes
-/// that a correctness requirement rather than a convention.
+/// [rooms] and [dms] MUST partition [navigableChannelsProvider]: a correctness
+/// requirement, not a convention (see [ChatScreen.build]).
 class _ConversationSwitcher extends ConsumerWidget {
   const _ConversationSwitcher({
     required this.rooms,
@@ -399,19 +372,13 @@ class _ConversationSwitcher extends ConsumerWidget {
                       isActive: c.id == activeId,
                     ),
                   ),
-                // Section header, not a destination: `enabled: false` keeps it
-                // out of the selectable set, and a null value keeps it out of
-                // DropdownButton's "exactly one item matches `value`" assertion.
-                // Only drawn when there is a boundary to mark — a DM-only or
-                // room-only account gets no lone header over nothing.
-                //
-                // `Semantics(header: true)` because sighted users read the break
-                // from typography and a screen reader cannot: a disabled menu
-                // item still announces as an ITEM, so TalkBack/VoiceOver would
-                // offer a dead destination in the only navigation control a phone
-                // has. Marking it a header announces its actual job — the label
-                // over the rows that follow (cage-match #136, Tesla; Carnot named
-                // the same thing as a menu-item semantic overload).
+                // Section header, not a destination: `enabled: false` keeps it out
+                // of the selectable set and a null value keeps it out of the
+                // one-item-matches-`value` assertion. `Semantics(header: true)`
+                // because a disabled menu item still ANNOUNCES as an item, which
+                // would offer a screen reader a dead destination in the only
+                // navigation control a phone has (cage-match #136, Tesla).
+                // Drawn only when there is a boundary to mark.
                 if (dms.isNotEmpty && rooms.isNotEmpty)
                   DropdownMenuItem<String>(
                     enabled: false,
@@ -551,13 +518,10 @@ class _MenuItemRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // The ACTIVE row carries no marker of either kind. Unread is already zero (you
-    // are reading it), and the mute glyph would be a second bell: the collapsed
-    // DropdownButton renders the active item INSIDE the app bar, inches from
-    // _MuteConversationAction, which states that same mute and is the control that
-    // changes it. Two glyphs for one fact, one of them a decoy that opens a menu —
-    // and this PR is what puts a phone user inside a DM as a first-class path, so
-    // the decoy now sits on the main route (cage-match #136, Maxwell + Tesla).
+    // The ACTIVE row carries no marker. The collapsed DropdownButton renders it
+    // inside the app bar, inches from _MuteConversationAction — which states the
+    // same mute AND is the control that changes it, so a glyph here is a second
+    // bell that only opens a menu (cage-match #136).
     if (isActive) {
       return Text(name, overflow: TextOverflow.ellipsis);
     }

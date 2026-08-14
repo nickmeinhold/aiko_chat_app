@@ -177,19 +177,63 @@ void main() {
     }
   });
 
-  testWidgets('a conversation listed by BOTH sources yields ONE item, not a '
-      'duplicate-value assertion', (tester) async {
+  // A conversation listed by BOTH island endpoints. The island serves DMs only
+  // through GET /v1/dm and excludes them from GET /v1/channels, so this is a
+  // contract violation — but it lands in the app bar that IS a phone's whole
+  // navigation surface, where a repeat is not a cosmetic duplicate row: two items
+  // sharing a `value` trips DropdownButton's exactly-one-match assertion just as
+  // surely as zero items do. Deduped once in navigableChannelsProvider, so every
+  // consumer gets the same answer (cage-match #136, Kelvin).
+  FakeRestApi restWithLeak(ChannelKind leakedKind) {
+    final rest = FakeRestApi(channels: [
+      const Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'dm1', name: '', kind: leakedKind),
+    ]);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = roster;
+    return rest;
+  }
+
+  for (final leakedKind in ChannelKind.values) {
+    testWidgets(
+        'a conversation listed by BOTH sources appears ONCE, whatever kind the '
+        'channel list claims (leak kind: ${leakedKind.name})', (tester) async {
+      setNarrow(tester);
+      final container =
+          makeContainer(rest: restWithLeak(leakedKind), transport: FakeChatTransport());
+      addTearDown(container.dispose);
+
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
+
+      // Deduped, and the DM entry WINS: GET /v1/dm is the authority on what a DM
+      // is. Letting the channel copy's kind survive would route a DM to a room
+      // row, which paints its (empty) `name` and reads its mute with no peer —
+      // the exact seat _DmMenuItem exists to fill (cage-match #136, Tesla).
+      final navigable = container.read(navigableChannelsProvider);
+      expect(navigable.where((c) => c.id == 'dm1').length, 1);
+      expect(navigable.firstWhere((c) => c.id == 'dm1').kind, ChannelKind.dm);
+
+      // No assertion, switcher up, and selecting the doubled id resolves cleanly.
+      expect(tester.takeException(), isNull);
+      expect(find.byType(DropdownButton<String>), findsOneWidget);
+      container.read(selectedChannelIdProvider.notifier).select('dm1');
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(container.read(selectedChannelIdProvider), 'dm1');
+    });
+  }
+
+  testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation',
+      (tester) async {
     setNarrow(tester);
-    // The degenerate case the partition alone does NOT cover: the island lists
-    // the same conversation through GET /v1/channels AND GET /v1/dm (a kind:dm
-    // row leaking into the channel list, a seed racing a rename), so
-    // navigableChannelsProvider — a bare [...channels, ...dms] with no dedupe —
-    // carries the id twice. Two items with the same `value` trips DropdownButton's
-    // exactly-one-match assertion just as surely as zero items do, and it happens
-    // in the app bar that is a phone's whole navigation surface.
+    // The switcher's EXISTENCE gate has to read the same deduped list its ITEMS
+    // do. When it read the raw [...channels, ...dms], one conversation listed
+    // twice counted as two and drew a switcher over a single item — the chrome
+    // this layout explicitly refuses (cage-match #136, Tesla + Carnot).
     final rest = FakeRestApi(channels: const [
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-      Channel(id: 'dm1', name: '', kind: ChannelKind.dm), // the leak
+      Channel(id: 'dm1', name: '', kind: ChannelKind.dm),
     ]);
     rest.dms = [dm];
     rest.membersByChannel['dm1'] = roster;
@@ -200,22 +244,40 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    // The provider really does hand us the duplicate — assert the premise, so this
-    // test fails loudly if navigableChannelsProvider ever starts deduping itself
-    // (at which point this guard has moved, not vanished).
-    expect(
-      container.read(navigableChannelsProvider).where((c) => c.id == 'dm1').length,
-      2,
-      reason: 'premise: navigable carries the duplicate id',
-    );
+    expect(container.read(navigableChannelsProvider).length, 1);
+    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.text('alice'), findsOneWidget); // a plain title instead
+  });
 
-    // No assertion, switcher up, and selecting the doubled id resolves cleanly.
-    expect(tester.takeException(), isNull);
-    expect(find.byType(DropdownButton<String>), findsOneWidget);
+  testWidgets('a conversation vanishing while the menu is OPEN does not assert',
+      (tester) async {
+    setNarrow(tester);
+    final rest = restWithDm();
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
     container.read(selectedChannelIdProvider.notifier).select('dm1');
     await tester.pumpAndSettle();
+    await openMenu(tester);
+
+    // The DM disappears from under the user's thumb. `value` and `items` are two
+    // currents that must not meet out of phase: they are derived in the SAME
+    // build from the SAME list (active comes from navigable, items partition it),
+    // so the assertion is unreachable by construction — this pins that rather
+    // than leaving it narrated (cage-match #136, Tesla).
+    rest.dms = const [];
+    container.invalidate(dmsProvider);
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+
     expect(tester.takeException(), isNull);
-    expect(container.read(selectedChannelIdProvider), 'dm1');
+    // The pick self-heals to a real conversation rather than dangling.
+    expect(container.read(selectedChannelIdProvider), isNot('dm1'));
   });
 
   testWidgets('the ACTIVE row carries no mute glyph — the app-bar bell already '
