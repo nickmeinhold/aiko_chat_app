@@ -281,19 +281,26 @@ void main() {
     });
   }
 
-  testWidgets('a channel-list failure does not blank the DM rows on WIDE — both '
-      'widths answer the same', (tester) async {
-    // dmsProvider fails soft and keeps its DMs, so a channels fetch that failed
-    // must not take them down with it. The rail's loading/error chrome belonged
-    // to channelsProvider alone while the list it covered was BOTH sources, so a
-    // channel error blanked the DMs behind "Could not load channels" — while the
-    // phone switcher, reading the same sections, listed them at that same instant.
-    // One conversation, two widths, two answers (cage-match #136, Tesla).
+  testWidgets('a COLD channel-list failure tells the SAME story at both widths',
+      (tester) async {
     tester.view.physicalSize = const Size(1000, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-
+    // THE DESIGN CALL, made explicit because two cage-match rounds pulled in
+    // opposite directions and both were right (#136, Tesla r6 vs r9):
+    //   r6 — "a channel failure must not blank the DM rows"  (content-first)
+    //   r9 — "no row may claim to be selected before both lists settle"
+    //        (readiness-first)
+    // They only conflict because `channelsProvider` fails HARD while
+    // `dmsProvider` fails SOFT, so "DMs are here, channels are not" is a state
+    // that persists instead of passing. Both findings are that one asymmetry seen
+    // from two sides — task #33.
+    //
+    // Until #33 lands, readiness-first wins: the repository backs reading AND
+    // sending, so listing a DM it cannot serve is a door into a room with no
+    // floor (which Tesla filed against the content-first version in r8). Every
+    // surface now tells one story. What this costs is exactly what #33 buys back.
     final rest = restWithDm()..listChannelsThrows = StateError('boom');
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
@@ -302,11 +309,13 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
+    // The DMs are known — this is not a data loss, it is a serving decision.
     expect(container.read(conversationSectionsProvider).dms.map((c) => c.id),
         ['dm1']);
-    expect(find.textContaining('Could not load channels'), findsNothing);
-    expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
-    expect(find.text('alice'), findsWidgets);
+    // ...and no surface offers one it cannot serve: the rail says what the pane
+    // says, rather than offering a row that lands on an error.
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsNothing);
+    expect(find.textContaining('Could not load conversations'), findsWidgets);
   });
 
   testWidgets('DMs arriving BEFORE channels never paint a conversation the '
@@ -362,42 +371,48 @@ void main() {
     expect(container.read(navigableChannelsProvider).first.id, 'c1');
   });
 
-  testWidgets('a channel failure AFTER a pick never silently moves the user into '
-      'a DM', (tester) async {
-    setNarrow(tester);
-    // The other direction, raised as: a hard channel error empties rooms, the
-    // self-heal returns early on `!hasValue`, and `resolveActive` falls through
-    // to the first DM — so the user reads and sends in a conversation they never
-    // picked (cage-match #136, Tesla HIGH).
-    //
-    // HONEST SCOPE — this locks the behaviour but does NOT red-prove that
-    // mechanism, because the mechanism does not reproduce on a REFRESH: Riverpod
-    // carries the previous data forward across an error, so `.value` survives and
-    // rooms never collapse. Reverting the pane's gate leaves this test green.
-    // The reachable variant is a COLD error with a pick already restored, and the
-    // repo gate covers that by construction — `chatRepositoryProvider` awaits the
-    // channels future, so a hard failure puts the pane in error rather than in
-    // somebody's DM. Kept as the regression guard for both.
+  testWidgets('WIDE: the rail shows no conversation as SELECTED until both '
+      'lists have settled', (tester) async {
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    // First-arrival is not a phone-only vibration. With DMs in and channels still
+    // in flight, `resolveActive` on a null pick returned the DM, and the rail
+    // painted Alice's row `selected: true` — then the channels landed, the
+    // implicit default walked to the first room, and the highlight jumped. The
+    // rail now rides the same readiness predicate as the bar and the pane
+    // (cage-match #136, Tesla).
     final rest = restWithDm();
+    final channelGate = Completer<void>();
+    rest.listChannelsGate = channelGate;
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
-    container.read(selectedChannelIdProvider.notifier).select('c1');
-    await tester.pumpAndSettle();
+    await tester.tap(find.text('Already have a passkey? Sign in'));
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 20));
+    }
 
-    rest.listChannelsThrows = StateError('boom');
-    container.invalidate(channelsProvider);
+    // DMs are in, channels are not — no row may claim to be the one you are in.
+    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id),
+        ['dm1']);
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsNothing);
+
+    channelGate.complete();
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
 
-    // The pick is untouched, and the user is NOT silently reading the DM.
-    expect(container.read(selectedChannelIdProvider), 'c1');
-    expect(find.text('alice'), findsNothing);
-    expect(tester.takeException(), isNull);
+    // Settled: rows appear, and the default landed on a room and stayed there.
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
+    expect(
+      tester.widget<ListTile>(find.byKey(const Key('sidebar-dm-dm1'))).selected,
+      isFalse,
+    );
   });
 
   testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation',

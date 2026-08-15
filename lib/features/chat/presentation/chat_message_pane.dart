@@ -58,13 +58,24 @@ class ChatMessagePane extends ConsumerWidget {
       children: [
         const NetworkStatusBanner(),
         Expanded(
-          child: repoAsync.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, _) =>
-                Center(child: Text('Could not load conversations.\n$e')),
-            data: (_) => active == null
-                ? const Center(child: Text('No conversations yet.'))
-                : Column(
+          // `hasValue`, NOT `when` — the same predicate the app bar uses, because
+          // the two must not wind opposite ways. `AsyncValue.when` takes the
+          // LOADING branch on every reload (`skipLoadingOnReload` defaults false),
+          // and the repo reloads on the app's most ordinary action: opening a DM
+          // seeds it, invalidates `dmsProvider`, and the repo watches that future.
+          // So `when` flashed a spinner and DISPOSED the keyed Composer — draft
+          // gone, mid-flight send left holding a disposing repo — while the bar,
+          // reading `hasValue`, stayed live. That is the split this gate was added
+          // to close, reappearing one rising edge later (cage-match #136, Tesla).
+          //
+          // `hasValue` keeps the previous repo on screen across a reload and only
+          // yields the surface when there has never been one: cold start spins,
+          // a first-load failure explains itself, and everything after that stays
+          // put.
+          child: repoAsync.hasValue
+              ? (active == null
+                  ? const Center(child: Text('No conversations yet.'))
+                  : Column(
                     children: [
                       // No channel header in the wide layout (the sidebar already
                       // names + switches channels) nor the narrow layout (its
@@ -89,8 +100,12 @@ class ChatMessagePane extends ConsumerWidget {
                         channelId: active.id,
                       ),
                     ],
-                  ),
-          ),
+                  ))
+              : repoAsync.hasError
+                  ? Center(
+                      child: Text(
+                          'Could not load conversations.\n${repoAsync.error}'))
+                  : const Center(child: CircularProgressIndicator()),
         ),
       ],
     );

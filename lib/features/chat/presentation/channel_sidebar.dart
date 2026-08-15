@@ -247,9 +247,7 @@ class ChatSidebar extends ConsumerWidget {
     // conversation the island listed through both endpoints paints twice), which
     // is exactly why it would have survived (cage-match #136, Tesla).
     //
-    // channelsProvider is still watched, but only for the loading/error CHROME
-    // below — its value no longer feeds a single row.
-    final channelsAsync = ref.watch(channelsProvider);
+    final repoAsync = ref.watch(chatRepositoryProvider);
     final sections = ref.watch(conversationSectionsProvider);
     final channels = sections.rooms;
     final dms = sections.dms;
@@ -270,26 +268,31 @@ class ChatSidebar extends ConsumerWidget {
               const _ServerSwitcher(),
               const Divider(height: 1),
               Expanded(
-                // CONTENT FIRST, chrome only when there is nothing to show. The
-                // loading/error states belong to `channelsProvider` alone, but the
-                // list they were covering is now both sources — so a channel fetch
-                // that failed or was still in flight blanked the DM rows behind
-                // "Could not load channels", even though `dmsProvider` fails soft
-                // and had them. The phone switcher, reading the same sections,
-                // listed those DMs at the same instant: one conversation, two
-                // widths, two answers — this PR's own bug rotated 90 degrees
-                // (cage-match #136, Tesla).
-                child: switch ((channels.isEmpty && dms.isEmpty, channelsAsync)) {
-                  (false, _) => _conversationList(context, ref,
-                      channels: channels, dms: dms, active: active),
-                  (true, AsyncLoading()) =>
-                    const Center(child: CircularProgressIndicator()),
-                  (true, AsyncError(:final error)) => Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text('Could not load channels.\n$error'),
-                    ),
-                  (true, _) => const Center(child: Text('No conversations yet.')),
-                },
+                // The SAME readiness predicate as the app bar and the pane: the
+                // repository has a value. Two earlier cuts of this gate were each
+                // wrong in one direction (cage-match #136, Tesla ×3):
+                //  * `channelsAsync.when` blanked the DM rows behind "Could not
+                //    load channels" even though `dmsProvider` fails soft and had
+                //    them — while the phone switcher listed those same DMs;
+                //  * content-first-on-any-section then painted a row SELECTED
+                //    during the window where DMs have arrived and channels have
+                //    not, so the highlight jumped to the first room when they
+                //    landed — the implicit default walking under the user.
+                // `hasValue` is true only once BOTH lists have settled, and stays
+                // true through later reloads and refresh errors, so the rail shows
+                // what it can, when it can honestly claim it.
+                child: repoAsync.hasValue
+                    ? (channels.isEmpty && dms.isEmpty
+                        ? const Center(child: Text('No conversations yet.'))
+                        : _conversationList(context, ref,
+                            channels: channels, dms: dms, active: active))
+                    : repoAsync.hasError
+                        ? Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Text(
+                                'Could not load conversations.\n${repoAsync.error}'),
+                          )
+                        : const Center(child: CircularProgressIndicator()),
               ),
               const Divider(height: 1),
               const _SidebarFooter(),
