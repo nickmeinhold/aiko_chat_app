@@ -678,18 +678,23 @@ class _SealMark extends StatelessWidget {
 /// rather than emphasis and their relative luminance flips between themes
 /// (caught on-device: "can't the send button be greyed out in light mode?").
 ///
-/// Dimming one colour and then going to full accent is monotonic by
-/// construction: whatever the theme, armed always has more presence than rest.
+/// Going from a recessive rest to a full accent is monotonic by construction:
+/// whatever the theme, armed always has more presence than rest.
+///
+/// Rest is [ColorScheme.outlineVariant] — the SAME ink as [_SealMark] at rest,
+/// so the two marks bracketing the line are one dim, not two. It is genuinely
+/// faint (1.62:1 in light, 1.50:1 in maritime), and that is the point rather
+/// than an oversight: an earlier cut held it at 0.55 opacity arguing an enabled
+/// control must stay visible, which does not survive contact with what the state
+/// MEANS. The resting lamp is the state where there is nothing to send. The
+/// instant there is, it goes to full accent — so the contrast belongs on the
+/// armed state, where the control actually has to be found, and the keyboard's
+/// own return key sends regardless.
 class _SendLamp extends StatelessWidget {
   const _SendLamp({super.key, required this.armed, required this.onPressed});
 
   final bool armed;
   final VoidCallback onPressed;
-
-  /// Resting opacity. Material dims DISABLED controls to 0.38; this one is
-  /// enabled on purpose (see the call site), so it stops short of that — greyed
-  /// enough to read as "nothing to send", present enough to stay a control.
-  static const double _restOpacity = 0.55;
 
   @override
   Widget build(BuildContext context) {
@@ -701,13 +706,9 @@ class _SendLamp extends StatelessWidget {
       builder: (context, t, _) => IconButton(
         onPressed: onPressed,
         tooltip: 'Send',
-        // IconButton's default 48×48 target is kept — the glyph is small, the
-        // thumb target is not.
-        color: Color.lerp(
-          scheme.onSurfaceVariant.withValues(alpha: _restOpacity),
-          scheme.secondary,
-          t,
-        ),
+        // IconButton's default 48×48 target is kept — the glyph is faint, the
+        // thumb target is not, and it stays enabled at rest.
+        color: Color.lerp(scheme.outlineVariant, scheme.secondary, t),
         icon: const Icon(Icons.send_outlined),
       ),
     );

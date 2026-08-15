@@ -59,10 +59,10 @@ void main() {
       (tester) async {
     final scheme = await pumpComposer(tester);
 
-    // At rest both are dim, and they agree.
+    // At rest both are dim, and they agree — literally the same ink, so the two
+    // marks bracketing the line read as one resting state rather than two greys.
     expect(sealColour(tester), scheme.outlineVariant);
-    expect(lampColour(tester),
-        scheme.onSurfaceVariant.withValues(alpha: 0.55));
+    expect(lampColour(tester), scheme.outlineVariant);
 
     await tester.enterText(find.byType(TextField).first, 'hello');
     await tester.pumpAndSettle();
@@ -78,8 +78,7 @@ void main() {
     await tester.enterText(find.byType(TextField).first, '   ');
     await tester.pumpAndSettle();
     expect(sealColour(tester), scheme.outlineVariant);
-    expect(lampColour(tester),
-        scheme.onSurfaceVariant.withValues(alpha: 0.55));
+    expect(lampColour(tester), scheme.outlineVariant);
   });
 
   testWidgets('arming INCREASES the lamp\'s contrast — in every theme',
@@ -95,8 +94,7 @@ void main() {
     // theme's luminance runs.
     for (final theme in [lightTheme(), maritimeTheme()]) {
       final scheme = theme.colorScheme;
-      final rest = _over(
-          scheme.onSurfaceVariant.withValues(alpha: 0.55), scheme.surface);
+      final rest = _over(scheme.outlineVariant, scheme.surface);
       final armed = _over(scheme.secondary, scheme.surface);
 
       final restContrast = _contrast(rest, scheme.surface);
@@ -106,10 +104,15 @@ void main() {
           reason: 'armed must be MORE present than rest '
               '(rest ${restContrast.toStringAsFixed(2)}:1, '
               'armed ${armedContrast.toStringAsFixed(2)}:1)');
-      // And the resting lamp is still a legible control, not a ghost — it stays
-      // enabled and tappable, so it has to be seen.
-      expect(restContrast, greaterThan(2.5),
-          reason: 'a resting-but-ENABLED control must stay visible');
+      // The floor belongs on ARMED, not on rest. An earlier version guarded the
+      // resting state on the theory that an enabled control must always be
+      // visible — but rest is precisely the state where there is nothing to
+      // send, and the return key sends anyway. The moment there IS something,
+      // the lamp has to be findable, so that is where the bar goes: WCAG 1.4.11
+      // for a non-text UI component.
+      expect(armedContrast, greaterThanOrEqualTo(3.0),
+          reason: 'the ARMED lamp is the state that must be found '
+              '(${armedContrast.toStringAsFixed(2)}:1)');
     }
   });
 
