@@ -83,6 +83,28 @@ void main() {
       expect(admit(invite(from: me)), isNull);
     });
 
+    test('every NON-HUMAN sender — the refusal a user could not make themselves',
+        () {
+      // Bus actors are unblockable by island design (NULL sender_user_id is
+      // always visible; claude-tasks#27). Without this, @@armbot posting the
+      // sentinel in #general rings every member and no block or mute stops it.
+      // Enumerated rather than spot-checked: `!= human` must hold for the WHOLE
+      // non-human set, and a new SenderKind added later inherits the refusal.
+      for (final kind in SenderKind.values.where((k) => k != SenderKind.human)) {
+        final fromActor = Message(
+          clientTempId: 'm1',
+          id: 'm1',
+          channelId: 'general',
+          sender: MessageSender(
+              userId: 'armbot', kind: kind, label: '@@armbot'),
+          body: kCallInviteBody,
+          createdAt: now.subtract(const Duration(seconds: 1)),
+          deliveryState: DeliveryState.sent,
+        );
+        expect(admit(fromActor), isNull, reason: 'a $kind must not ring');
+      }
+    });
+
     test('a blocked sender', () {
       expect(admit(invite(), blocked: {robin}), isNull);
     });

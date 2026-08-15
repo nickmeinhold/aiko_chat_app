@@ -98,6 +98,13 @@ class CallInvite {
 /// - **not the sentinel** — an ordinary message.
 /// - **sent by me** — the caller's own send echoes back through the same inbound
 ///   path; ringing yourself is the degenerate first case, not an edge case.
+/// - **a bot sender** — bots are UNBLOCKABLE by island design (a bus actor has
+///   no account to action; `moderation_service.py`, and claude-tasks#27 is open
+///   for exactly this). Every other refusal here is something the user can
+///   choose; a bot ring is one they could not switch off, in any channel they
+///   are a member of. Refused until actor-scoped suppression exists — a
+///   REVERSIBLE call, and the one to revisit when a robot should be able to ring
+///   you back.
 /// - **blocked sender** — defence in depth. The island already filters blocked
 ///   content, so this is normally unreachable; a ring is privileged enough to
 ///   refuse locally too rather than lean on an upstream filter.
@@ -122,6 +129,7 @@ CallInvite? admitRing(
 }) {
   if (!isCallInviteBody(message.body)) return null;
   if (message.sender.userId == meUserId) return null;
+  if (message.sender.kind != SenderKind.human) return null;
   if (blockedUserIds.contains(message.sender.userId)) return null;
   if (conversationMuted) return null;
   final age = now.difference(message.createdAt);
