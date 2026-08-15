@@ -40,6 +40,27 @@ class RingController extends Notifier<CallInvite?> {
   /// the user: a repo reconnecting is not the user ignoring a call.
   CallInvite? _live;
 
+  /// Invitations already shown and finished with — answered, ignored, or
+  /// expired. Keyed on the signed [CallInvite.inviteId].
+  ///
+  /// Delivery is at-least-once (live + history dual delivery, reconnect drain),
+  /// so the SAME invitation can arrive again inside its 10s freshness window.
+  /// Suppressing only against `_live` was not enough: `stopRinging()` clears
+  /// `_live`, so a replay landing seconds after the user pressed Ignore rang all
+  /// over again (cage-match #139 R2, Carnot). "Currently ringing" and "already
+  /// dealt with" are different questions and need different memory.
+  ///
+  /// Bounded: an invitation is only ringable for [kCallInviteFreshness], so ids
+  /// older than that can never be admitted again and are dropped. This set can
+  /// therefore only hold the invitations of the last few seconds.
+  final Map<String, DateTime> _settled = {};
+
+  /// The user this ring state belongs to; see the identity guard in [build].
+  String? _identity;
+
+  void _forget(DateTime now) => _settled.removeWhere(
+      (_, at) => now.difference(at) > kCallInviteFreshness * 2);
+
   @override
   CallInvite? build() {
     // Cancel BEFORE branching on the new async value, not inside `whenData`: a
@@ -50,6 +71,19 @@ class RingController extends Notifier<CallInvite?> {
     // (cage-match #139, Carnot + Tesla — identity as a mutable key).
     _sub?.cancel();
     _sub = null;
+    // Identity guard (cage-match #139 R2, Carnot): a logout that swaps the repo
+    // WITHOUT disposing the ProviderScope would otherwise let `_live` be
+    // re-published to the next identity. Identity is not a reversible state
+    // variable — when it changes, everything the previous session was ringing
+    // about is void.
+    final me = ref.watch(currentUserProvider)?.userId;
+    if (me != _identity) {
+      _identity = me;
+      _live = null;
+      _settled.clear();
+      _expiry?.cancel();
+      _expiry = null;
+    }
     final repoAsync = ref.watch(chatRepositoryProvider);
     repoAsync.whenData((repo) {
       _sub = repo.inboundMessages.listen(_consider);
@@ -72,20 +106,24 @@ class RingController extends Notifier<CallInvite?> {
     // a block or mute applied one second before the call must be honoured.
     final me = ref.read(currentUserProvider)?.userId;
     if (me == null) return; // logged out mid-flight — nobody to ring.
+    final now = DateTime.now().toUtc();
     final invite = admitRing(
       m,
       meUserId: me,
       blockedUserIds: ref.read(blockedUserIdsProvider),
       conversationMuted: _isMuted(m),
-      now: DateTime.now().toUtc(),
+      now: now,
     );
     if (invite == null) return;
-    // At-least-once delivery means the SAME invitation can arrive twice (live +
-    // history dual-delivery, reconnect replay). Re-arming the timer on a
-    // re-delivery would silently extend the ring past `kCallRingDuration` from
-    // the last echo rather than the first (cage-match #139, Tesla). An identical
-    // invitation is therefore a no-op, not a refresh.
+    // At-least-once delivery means the SAME invitation can arrive again (live +
+    // history dual delivery, reconnect replay). Two distinct failures if this is
+    // not suppressed: re-arming the timer would extend the ring from the LAST
+    // echo rather than the first (Tesla), and a replay after the user pressed
+    // Ignore would ring again (Carnot). Both are answered by remembering the
+    // signed invite id, not by comparing against whatever is ringing now.
     if (invite == _live) return;
+    _forget(now);
+    if (_settled.containsKey(invite.inviteId)) return;
     // A DIFFERENT invite while already ringing REPLACES the first (last-wins) —
     // the most recent caller is the live one, and stacking rings has no sane UI.
     _expiry?.cancel();
@@ -106,6 +144,10 @@ class RingController extends Notifier<CallInvite?> {
   void stopRinging() {
     _expiry?.cancel();
     _expiry = null;
+    final done = _live;
+    // RECORDED as settled before clearing — otherwise the replay that arrives a
+    // second after Ignore finds no `_live` to match and rings again.
+    if (done != null) _settled[done.inviteId] = DateTime.now().toUtc();
     _live = null; // cleared too, or the next rebuild would re-publish it.
     state = null;
   }

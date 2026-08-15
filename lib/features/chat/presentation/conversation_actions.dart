@@ -101,12 +101,17 @@ Future<void> startCall(
     // was inverted in the pre-move `_call` (cage-match #133).
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
-    await _ring(ref, dm.id);
+    final rang = await _ring(ref, dm.id);
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
     // longer holds here. A mounted check does not survive a subsequent await —
     // adding the ring introduced a NEW async gap, not just another statement
     // (the #133 bug class, caught by `use_build_context_synchronously`).
     if (!context.mounted) return;
+    if (!rang) {
+      // Honest, not fatal: the room is still opening behind this.
+      messenger.showSnackBar(SnackBar(
+          content: Text("Couldn't ring $name — they may not see the call.")));
+    }
     await pushCall(context, dm.id);
     return;
   } on DmTargetNotFound {
@@ -146,10 +151,11 @@ void resetCallActionGuard() => _callActionInFlight = false;
 
 /// Ring the peer: send the signed call invitation into the DM (#2808).
 ///
-/// Deliberately **best-effort and non-blocking on failure** — the call itself is
-/// the capability, the ring is the courtesy. If the invite fails to send, the
-/// caller still lands in the room and can reach the peer another way; refusing
-/// to place the call because the doorbell broke would be the worse trade.
+/// Deliberately **non-blocking on failure** — the call itself is the capability,
+/// so a failed invite must not stop you entering the room. But it is NOT silent:
+/// a swallowed failure leaves the caller believing the peer was rung while the
+/// peer heard nothing, and the two mental models diverge with no way back
+/// (cage-match #139, Kelvin, twice). Returns false so the caller can say so.
 ///
 /// Ordering: sent BEFORE `pushCall`, so the peer's device starts ringing while
 /// we are connecting rather than after. `sendMessage` commits the optimistic row
@@ -158,12 +164,13 @@ void resetCallActionGuard() => _callActionInFlight = false;
 ///
 /// The body is [kCallInviteBody] and nothing else — room, caller and start time
 /// are already inside the signed envelope (channelId, signing key, signedAtMs).
-Future<void> _ring(WidgetRef ref, String channelId) async {
+Future<bool> _ring(WidgetRef ref, String channelId) async {
   try {
     final repo = await ref.read(chatRepositoryProvider.future);
     await repo.sendMessage(channelId, kCallInviteBody);
+    return true;
   } catch (_) {
-    // Swallowed on purpose — see the doc above. The call proceeds.
+    return false; // reported to the user by the caller; the call proceeds.
   }
 }
 

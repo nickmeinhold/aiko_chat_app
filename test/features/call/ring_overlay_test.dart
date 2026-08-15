@@ -19,6 +19,7 @@ void main() {
   setUp(resetCallLaunchGuard);
 
   final invite = CallInvite(
+    inviteId: 'inv-1',
     channelId: 'dm:aaa:bbb',
     from: const MessageSender(
         userId: 'robin-key', kind: SenderKind.human, label: 'Robin'),
@@ -106,6 +107,7 @@ void main() {
   testWidgets('an unnamed caller still renders as a person, never a blank row',
       (tester) async {
     final anon = CallInvite(
+      inviteId: 'inv-2',
       channelId: 'dm:aaa:bbb',
       from: const MessageSender(userId: 'k', kind: SenderKind.human),
       startedAt: DateTime.utc(2026, 8, 15, 13),

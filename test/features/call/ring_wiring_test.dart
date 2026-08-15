@@ -159,6 +159,29 @@ void main() {
     expect(container.read(incomingRingProvider), isNull);
   });
 
+  test('a replay AFTER Ignore does not ring again', () async {
+    // At-least-once delivery: the same signed invitation arrives twice (live +
+    // history, reconnect drain). Suppressing only against "currently ringing"
+    // was not enough — `stopRinging()` clears that, so a replay landing seconds
+    // after Ignore rang all over again (cage-match #139 R2, Carnot).
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+    final msg = await inbound();
+
+    transport.emitMessage(msg);
+    await pump();
+    expect(container.read(incomingRingProvider), isNotNull);
+
+    container.read(incomingRingProvider.notifier).stopRinging();
+    expect(container.read(incomingRingProvider), isNull);
+
+    // The SAME invitation, redelivered well inside its freshness window.
+    transport.emitMessage(msg);
+    await pump();
+    expect(container.read(incomingRingProvider), isNull,
+        reason: 'a settled invitation must never ring twice');
+  });
+
   test('stopRinging clears it', () async {
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();

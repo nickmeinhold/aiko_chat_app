@@ -59,10 +59,22 @@ bool isCallInviteBody(String body) => body == kCallInviteBody;
 /// An admitted, ringable invitation — the room to join and who is calling.
 class CallInvite {
   const CallInvite({
+    required this.inviteId,
     required this.channelId,
     required this.from,
     required this.startedAt,
   });
+
+  /// Stable identity: the signed, content-bound `clientMsgId` from the origin
+  /// envelope. Two deliveries of ONE invitation share it; two genuine
+  /// invitations never do.
+  ///
+  /// Identity used to be structural (caller + channel + timestamp), which made
+  /// "have I already seen this?" unanswerable across a dismissal — press Ignore,
+  /// and the same invite replayed through live+history dual delivery within the
+  /// freshness window rang all over again (cage-match #139 R2, Carnot). A thing
+  /// you must remember having dismissed needs a name, not a shape.
+  final String inviteId;
 
   /// The LiveKit room to join. The room IS the channel id (#2726).
   final String channelId;
@@ -73,18 +85,16 @@ class CallInvite {
   /// When the caller started the call (the message's server timestamp).
   final DateTime startedAt;
 
+  /// Equality is IDENTITY, not shape — see [inviteId].
   @override
   bool operator ==(Object other) =>
-      other is CallInvite &&
-      other.channelId == channelId &&
-      other.from.userId == from.userId &&
-      other.startedAt == startedAt;
+      other is CallInvite && other.inviteId == inviteId;
 
   @override
-  int get hashCode => Object.hash(channelId, from.userId, startedAt);
+  int get hashCode => inviteId.hashCode;
 
   @override
-  String toString() => 'CallInvite($channelId, from=${from.userId})';
+  String toString() => 'CallInvite($inviteId, $channelId, from=${from.userId})';
 }
 
 /// **The single door every ring passes through.** Returns the invitation if
@@ -169,6 +179,7 @@ CallInvite? admitRing(
   // `!isNegative` is the guard; `> freshness` alone would admit it.
   if (age.isNegative || age > kCallInviteFreshness) return null;
   return CallInvite(
+    inviteId: origin.clientMsgId,
     channelId: message.channelId,
     from: message.sender,
     startedAt: signedAt,
