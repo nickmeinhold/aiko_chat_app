@@ -50,11 +50,13 @@ void main() {
     Message m, {
     Set<String> blocked = const {},
     bool muted = false,
+    bool isDm = true,
   }) =>
       admitRing(m,
           meUserId: me,
           blockedUserIds: blocked,
           conversationMuted: muted,
+          isDm: isDm,
           now: now);
 
   group('the pinned sentinel', () {
@@ -124,10 +126,18 @@ void main() {
       // The sentinel is deliberately human-readable so old clients degrade
       // gracefully — which means any human can TYPE it. Refusing bots unplugged
       // only one horn of that megaphone (cage-match #139, Tesla).
-      expect(admit(invite(channelId: 'general')), isNull);
-      expect(admit(invite(channelId: 'DM:aaa:bbb')), isNull, // case-sensitive
-          reason: 'the island CHECK constraint is case-sensitive');
-      expect(admit(invite(channelId: 'dm:aaa:bbb')), isNotNull);
+      expect(admit(invite(), isDm: false), isNull);
+      expect(admit(invite(), isDm: true), isNotNull);
+    });
+
+    test('DM-ness is NOT re-derived from the channel id', () {
+      // LIVE-VERIFIED against the real island: `POST /v1/dm` returns
+      // channel_id `01M02Y4QS94QRRQ3658BZAB0PG` — a bare ULID. The `dm:` prefix
+      // lives on `channels.aiko_channel`, a column the app never receives. An
+      // earlier gate tested `channelId.startsWith('dm:')` and would therefore
+      // have refused EVERY real DM. A realistic ULID channel id must admit.
+      expect(admit(invite(channelId: '01M02Y4QS94QRRQ3658BZAB0PG')), isNotNull,
+          reason: 'a real DM channel id is a ULID, not a dm:-prefixed string');
     });
 
     test('a stale SIGNED time, even with a fresh server timestamp', () {

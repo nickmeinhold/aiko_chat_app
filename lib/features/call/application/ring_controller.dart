@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../chat/application/chat_providers.dart';
 import '../../chat/application/mute_controller.dart';
+import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../moderation/application/moderation_controller.dart';
 import '../domain/call_invite.dart';
@@ -57,6 +58,10 @@ class RingController extends Notifier<CallInvite?> {
 
   /// The user this ring state belongs to; see the identity guard in [build].
   String? _identity;
+
+  /// Channel ids the island reported as DMs (`GET /v1/dm`). Refreshed on every
+  /// build from the watched provider — see [build].
+  Set<String> _dmIds = const {};
 
   void _forget(DateTime now) => _settled.removeWhere(
       (_, at) => now.difference(at) > kCallInviteFreshness * 2);
@@ -111,6 +116,15 @@ class RingController extends Notifier<CallInvite?> {
       _expiry?.cancel();
       _expiry = null;
     }
+    // WATCHED, not read-on-demand. `dmsProvider` is autoDispose and `ref.read`
+    // creates no dependency, so the ring was silently relying on some other
+    // widget to keep it alive; if nothing did, it disposed, read back as
+    // loading, and every DM invitation failed closed with no signal. Watching it
+    // here both keeps it alive for this provider's lifetime and gives
+    // `_consider` a resolved list to read synchronously.
+    _dmIds = {
+      for (final c in ref.watch(dmsProvider).value ?? const <Channel>[]) c.id
+    };
     final repoAsync = ref.watch(chatRepositoryProvider);
     repoAsync.whenData((repo) {
       _sub = repo.inboundMessages.listen(_consider);
@@ -141,6 +155,7 @@ class RingController extends Notifier<CallInvite?> {
       meUserId: me,
       blockedUserIds: ref.read(blockedUserIdsProvider),
       conversationMuted: _isMuted(m),
+      isDm: _isDm(m),
       now: now,
     );
     if (invite == null) return;
@@ -173,6 +188,21 @@ class RingController extends Notifier<CallInvite?> {
     // function of the signed start time and nothing else.
     state = _republish();
   }
+
+  /// Is this message's channel a DM, per the app's OWN channel model?
+  ///
+  /// `dmsProvider` is the list the island returned from `GET /v1/dm`, so
+  /// membership in it means `channels.kind == 'dm'` server-side. Deliberately
+  /// NOT re-derived from the channel id — see the note on [admitRing]'s `isDm`
+  /// refusal; the id is a bare ULID and the `dm:` prefix lives on a column the
+  /// app never receives.
+  ///
+  /// Absent list → false (fail CLOSED for a ring). A message can only reach this
+  /// client if its channel is in the repository's subscription set, which is
+  /// built from these same lists, so an arriving message whose channel is
+  /// unknown here is a genuinely anomalous state, not the ordinary first-contact
+  /// case.
+  bool _isDm(Message m) => _dmIds.contains(m.channelId);
 
   /// A DM is silenced by EITHER cause — the conversation muted, or the person
   /// muted — mirroring `channelUnreadCountProvider`'s two mute targets. Both are

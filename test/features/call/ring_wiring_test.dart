@@ -4,6 +4,7 @@ import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
+import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
@@ -96,6 +97,12 @@ void main() {
       blockedUserIdsProvider.overrideWithValue(const <String>{}),
       mutedChannelIdsProvider.overrideWithValue(const <String>{}),
       mutedUserIdsProvider.overrideWithValue(const <String>{}),
+      // The ring resolves DM-ness from the app's OWN channel model, never from
+      // the id's shape — a real DM channel id is a bare ULID (live-verified),
+      // and the `dm:` prefix lives on a column the app never receives.
+      dmsProvider.overrideWith((ref) async => [
+            const Channel(id: dmId, name: 'Ring Test', kind: ChannelKind.dm),
+          ]),
     ]);
   });
 
@@ -111,10 +118,21 @@ void main() {
   Future<void> pump() =>
       Future<void>.delayed(const Duration(milliseconds: 30));
 
+  /// Warm `dmsProvider` before the ring reads it. In production the repository
+  /// itself watches it (the subscription set is built from it), so it is always
+  /// resolved by the time messages flow; here the repo is overridden, so the
+  /// harness has to stand in for that keep-alive or `_isDm` reads an unresolved
+  /// AsyncValue and fails closed.
+  Future<void> warmDms() async {
+    container.listen(dmsProvider, (_, _) {}, fireImmediately: true);
+    await container.read(dmsProvider.future);
+  }
+
   test('a fresh invite from a peer rings this device', () async {
     // Subscribe so the controller builds and wires its listener BEFORE the
     // message arrives — a ring that only works if someone was already watching
     // is not a ring.
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
 
@@ -128,6 +146,7 @@ void main() {
   });
 
   test('an ordinary message does not ring', () async {
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
 
@@ -139,6 +158,7 @@ void main() {
 
   test('my own invite echoing back does not ring me', () async {
     // The caller's own send returns down this same inbound path.
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
 
@@ -149,6 +169,7 @@ void main() {
   });
 
   test('a stale invite (history replay) does not ring', () async {
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
 
@@ -164,6 +185,7 @@ void main() {
     // history, reconnect drain). Suppressing only against "currently ringing"
     // was not enough — `stopRinging()` clears that, so a replay landing seconds
     // after Ignore rang all over again (cage-match #139 R2, Carnot).
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
     final msg = await inbound();
@@ -189,6 +211,7 @@ void main() {
     // reader could find; a history page carrying an invite AND its retraction
     // produces exactly this, since the pager applies retractions first
     // (cage-match #139 R3, Carnot).
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
     final msg = await inbound();
@@ -210,6 +233,7 @@ void main() {
     // which invalidates dmsProvider, which rebuilds chatRepositoryProvider —
     // while the ring is live. Nothing in the suite invalidated the repo mid-ring
     // until now (cage-match #139 R4, Tesla).
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
     transport.emitMessage(await inbound());
@@ -231,6 +255,7 @@ void main() {
     // (cage-match #139 R5, Carnot). An invitation already older than the ring
     // window must not ring at all — even though it is inside the 10s freshness
     // gate, admission and duration are different clocks.
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
 
@@ -244,6 +269,7 @@ void main() {
   });
 
   test('stopRinging clears it', () async {
+    await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
     transport.emitMessage(await inbound());

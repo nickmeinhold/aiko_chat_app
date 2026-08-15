@@ -140,11 +140,20 @@ class CallInvite {
 /// - **not a DM** — the sentinel is deliberately human-readable so old clients
 ///   degrade gracefully, which means any HUMAN can type it. In a community
 ///   channel that rings every member at once. Refusing the bot half only
-///   unplugged one horn of the megaphone (cage-match #139, Tesla). Keyed off the
-///   island's `dm:` channel-id prefix, which is a CHECK constraint on the
-///   gateway (`ck_channels_dm_prefix`, case-sensitive — island design 11), not a
-///   client-side convention. Channel-wide calls are a real future feature; they
-///   need their own consent model, not this door.
+///   unplugged one horn of the megaphone (cage-match #139, Tesla).
+///
+///   [isDm] is resolved by the CALLER from the app's own channel model, and is
+///   deliberately NOT re-derived from the channel id here. The first version of
+///   this gate tested `channelId.startsWith('dm:')`, citing the island's
+///   `ck_channels_dm_prefix` CHECK constraint — and that constraint is real, but
+///   it is on `channels.aiko_channel` (the BUS name), while the id the app
+///   receives is `channels.id`, a bare ULID. So the prefix never matched and the
+///   ring would have refused EVERY genuine DM in production. Six adversarial
+///   review rounds missed it because all of them, and I, reasoned from the same
+///   design doc; one live `POST /v1/dm` refuted it in a second. The real
+///   discriminator is `channels.kind == 'dm'`, which the app already models.
+///   Channel-wide calls are a real future feature; they need their own consent
+///   model, not this door.
 /// - **a bot sender** — bots are UNBLOCKABLE by island design (a bus actor has
 ///   no account to action; `moderation_service.py`, and claude-tasks#27 is open
 ///   for exactly this). Every other refusal here is something the user can
@@ -177,6 +186,7 @@ CallInvite? admitRing(
   required String meUserId,
   required Set<String> blockedUserIds,
   required bool conversationMuted,
+  required bool isDm,
   required DateTime now,
 }) {
   if (!isCallInviteBody(message.body)) return null;
@@ -188,7 +198,7 @@ CallInvite? admitRing(
   if (message.originCryptoValid != true) return null;
   final origin = message.origin;
   if (origin == null) return null; // belt-and-braces: valid implies present.
-  if (!isDmChannelId(message.channelId)) return null;
+  if (!isDm) return null;
   if (blockedUserIds.contains(message.sender.userId)) return null;
   if (conversationMuted) return null;
   final signedAt =
