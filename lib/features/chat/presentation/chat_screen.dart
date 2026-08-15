@@ -668,13 +668,28 @@ class _SealMark extends StatelessWidget {
   }
 }
 
-/// The send control as a signal lamp: dim at rest, `colorScheme.secondary` once
-/// there is a message to send.
+/// The send control as a signal lamp: greyed at rest, full accent once there is
+/// a message to send.
+///
+/// The two states are ONE ink at two emphases, not two palette roles. The first
+/// cut used `onSurfaceVariant` → `secondary`, which is dim → amber in maritime
+/// but **#49454E → #635B70 in light** — a dark charcoal becoming a *lighter*
+/// purple. The lamp went OUT when you armed it, because those tokens encode role
+/// rather than emphasis and their relative luminance flips between themes
+/// (caught on-device: "can't the send button be greyed out in light mode?").
+///
+/// Dimming one colour and then going to full accent is monotonic by
+/// construction: whatever the theme, armed always has more presence than rest.
 class _SendLamp extends StatelessWidget {
   const _SendLamp({super.key, required this.armed, required this.onPressed});
 
   final bool armed;
   final VoidCallback onPressed;
+
+  /// Resting opacity. Material dims DISABLED controls to 0.38; this one is
+  /// enabled on purpose (see the call site), so it stops short of that — greyed
+  /// enough to read as "nothing to send", present enough to stay a control.
+  static const double _restOpacity = 0.55;
 
   @override
   Widget build(BuildContext context) {
@@ -688,7 +703,11 @@ class _SendLamp extends StatelessWidget {
         tooltip: 'Send',
         // IconButton's default 48×48 target is kept — the glyph is small, the
         // thumb target is not.
-        color: Color.lerp(scheme.onSurfaceVariant, scheme.secondary, t),
+        color: Color.lerp(
+          scheme.onSurfaceVariant.withValues(alpha: _restOpacity),
+          scheme.secondary,
+          t,
+        ),
         icon: const Icon(Icons.send_outlined),
       ),
     );
