@@ -1,4 +1,3 @@
-import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
@@ -6,13 +5,16 @@ import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_repository.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
+import 'package:aiko_chat_app/features/chat/domain/message_signing.dart';
+import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/moderation/application/moderation_controller.dart';
+import 'package:aiko_chat_app/services/sovereign_key_store.dart';
 import 'package:drift/native.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import '../../support/fake_chat_transport.dart';
+import '../../support/test_helpers.dart';
 
 /// The ring WIRING (#2808) — the seam the pure `admitRing` tests cannot reach:
 /// does an invitation actually travel transport → repository → cross-channel
@@ -21,6 +23,7 @@ import '../../support/fake_chat_transport.dart';
 /// This is the "code-correct is not works" half. `call_invite_test.dart` proves
 /// the decision; this proves the plumbing that carries a message to it.
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
   const meId = 'me-key';
@@ -38,23 +41,44 @@ void main() {
   late ChatRepository repo;
   late ProviderContainer container;
 
-  Message inbound({
+  /// A REAL Ed25519-signed inbound message.
+  ///
+  /// The repository re-verifies every inbound origin at ingest and overwrites
+  /// `originCryptoValid` with its own verdict — so a hand-stubbed signature is
+  /// correctly rejected and this fixture MUST sign for real. That makes these
+  /// wiring tests a genuine end-to-end crypto path: sign → transport → verify →
+  /// persist → announce → admit → ring.
+  Future<Message> inbound({
     String from = robinId,
     String body = kCallInviteBody,
     Duration age = const Duration(seconds: 1),
-  }) =>
-      Message(
-        clientTempId: 'M1',
-        id: 'M1',
-        channelId: dmId,
-        sender: MessageSender(
-            userId: from, kind: SenderKind.human, label: 'Robin'),
-        body: body,
-        createdAt: DateTime.now().toUtc().subtract(age),
-        deliveryState: DeliveryState.sent,
-      );
+  }) async {
+    final key = await SovereignKeyStore().loadOrCreate();
+    final signedAt = DateTime.now().toUtc().subtract(age);
+    final payload = SignedPayload(
+      rawPublicKey: key.rawPublicKey,
+      channelId: dmId,
+      clientMsgId: 'M1',
+      signedAtMs: signedAt.millisecondsSinceEpoch,
+      body: body,
+      replyTo: null,
+    );
+    final sig = await sign(key, payload);
+    return Message(
+      clientTempId: 'M1',
+      id: 'M1',
+      channelId: dmId,
+      sender:
+          MessageSender(userId: from, kind: SenderKind.human, label: 'Robin'),
+      body: body,
+      createdAt: DateTime.now().toUtc(),
+      origin: OriginEnvelope.fromSignature(sig, clientMsgId: 'M1'),
+      deliveryState: DeliveryState.sent,
+    );
+  }
 
   setUp(() {
+    installSecureStorageMock(); // the sovereign key store needs a backing store
     cache = DriftCache(NativeDatabase.memory());
     transport = FakeChatTransport();
     repo = ChatRepository(
@@ -94,7 +118,7 @@ void main() {
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
 
-    transport.emitMessage(inbound());
+    transport.emitMessage(await inbound());
     await pump();
 
     final ring = container.read(incomingRingProvider);
@@ -107,7 +131,7 @@ void main() {
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
 
-    transport.emitMessage(inbound(body: 'hey are you up'));
+    transport.emitMessage(await inbound(body: 'hey are you up'));
     await pump();
 
     expect(container.read(incomingRingProvider), isNull);
@@ -118,7 +142,7 @@ void main() {
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
 
-    transport.emitMessage(inbound(from: meId));
+    transport.emitMessage(await inbound(from: meId));
     await pump();
 
     expect(container.read(incomingRingProvider), isNull);
@@ -129,7 +153,7 @@ void main() {
     await pump();
 
     transport.emitMessage(
-        inbound(age: kCallInviteFreshness + const Duration(seconds: 5)));
+        await inbound(age: kCallInviteFreshness + const Duration(seconds: 5)));
     await pump();
 
     expect(container.read(incomingRingProvider), isNull);
@@ -138,7 +162,7 @@ void main() {
   test('stopRinging clears it', () async {
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
-    transport.emitMessage(inbound());
+    transport.emitMessage(await inbound());
     await pump();
     expect(container.read(incomingRingProvider), isNotNull);
 

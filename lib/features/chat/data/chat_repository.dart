@@ -164,6 +164,23 @@ class ChatRepository {
   Stream<List<Message>> watchChannel(String channelId) =>
       _cache.watchChannel(channelId);
 
+  /// Announce a just-persisted inbound message. Called from [_persistInbound] —
+  /// the SINGLE persist door, shared by live fanout AND history sync — so both
+  /// arrival paths announce.
+  ///
+  /// This was originally wired into `_onMessage` (live only), which made the
+  /// doc below a lie and left a real hole: a socket blip of even a second
+  /// delivers the message through history instead, where it persisted in
+  /// silence and never rang (cage-match #139, Tesla). Announcing from the
+  /// persist door makes "freshness is the consumer's job" true rather than
+  /// aspirational — history messages ARE announced, and `admitRing` refuses the
+  /// stale ones on their signed timestamp.
+  void _announceInbound(Message m) {
+    // `_disposed` re-checked here because the callers await before reaching it —
+    // teardown can land mid-persist.
+    if (!_disposed && !_inboundMessages.isClosed) _inboundMessages.add(m);
+  }
+
   /// Every inbound message, across ALL channels, announced once at ingest.
   ///
   /// [watchChannel] is per-channel and cache-backed, so it answers "what is in
@@ -525,12 +542,7 @@ class ChatRepository {
       await _persistInbound(m);
     } catch (e, st) {
       _telemetry.inboundWriteFailed(e, st);
-      return; // not persisted → not announced (see [inboundMessages]).
     }
-    // Announced only AFTER a successful persist, so an announcement can never
-    // point at a conversation the message isn't in. `_disposed` is re-checked
-    // because `_persistInbound` awaits — teardown can land inside it.
-    if (!_disposed && !_inboundMessages.isClosed) _inboundMessages.add(m);
   }
 
   /// Verify an inbound message's sovereign origin (if any) ONCE at ingest, then
@@ -549,6 +561,7 @@ class ChatRepository {
     final o = m.origin;
     if (o == null) {
       await _cache.upsertInbound(m);
+      _announceInbound(m);
       return;
     }
     final valid = await verifyOrigin(o,
@@ -561,8 +574,12 @@ class ChatRepository {
     // and firing AFTER the durable write, is what makes this a per-MESSAGE
     // base-rate probe rather than a per-DELIVERY one, and stops a failed write
     // from counting a ghost (cage-match Carnot + Tesla, PR #93 R1).
-    final newlyInvalid =
-        await _cache.upsertInbound(m.copyWith(originCryptoValid: valid));
+    final verified = m.copyWith(originCryptoValid: valid);
+    final newlyInvalid = await _cache.upsertInbound(verified);
+    // Announce the VERIFIED copy, never the raw one — a consumer gating on
+    // `originCryptoValid` (the ring does) would otherwise see `null` on every
+    // message and refuse them all.
+    _announceInbound(verified);
     if (newlyInvalid) {
       _telemetry.originVerificationFailed(
         senderUserId: m.sender.userId,

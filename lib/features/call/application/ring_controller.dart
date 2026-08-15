@@ -29,21 +29,41 @@ class RingController extends Notifier<CallInvite?> {
   StreamSubscription<Message>? _sub;
   Timer? _expiry;
 
+  /// The live invitation, held OUTSIDE Riverpod state.
+  ///
+  /// `build()` runs again on every `chatRepositoryProvider` rebuild — reconnect,
+  /// subscription-set change, and (worst) `seedOpenedDm` invalidation, which a
+  /// FIRST-EVER DM invite triggers on the callee. Returning `null` there meant
+  /// the ring was destroyed mid-ring by the very case the feature exists for
+  /// (cage-match #139 — Maxwell, Carnot and Tesla independently). Keeping the
+  /// invitation in a field and re-publishing it makes a rebuild transparent to
+  /// the user: a repo reconnecting is not the user ignoring a call.
+  CallInvite? _live;
+
   @override
   CallInvite? build() {
-    // The repo is async and rebuilds (reconnect, subscription-set change). Each
-    // rebuild re-subscribes; the previous subscription is cancelled first so a
-    // rebuilt repo cannot leave two listeners racing to ring for one invite.
+    // Cancel BEFORE branching on the new async value, not inside `whenData`: a
+    // transition through loading/error would otherwise leave the OLD repo's
+    // subscription attached while this provider rebuilt — and on LOGOUT that
+    // stale stream feeds `_consider`, which reads the NEW `currentUserProvider`,
+    // so the next user could be rung for the previous session's call
+    // (cage-match #139, Carnot + Tesla — identity as a mutable key).
+    _sub?.cancel();
+    _sub = null;
     final repoAsync = ref.watch(chatRepositoryProvider);
     repoAsync.whenData((repo) {
-      _sub?.cancel();
       _sub = repo.inboundMessages.listen(_consider);
     });
     ref.onDispose(() {
       _sub?.cancel();
       _expiry?.cancel();
+      _expiry = null;
+      _live = null; // logout must not leave a ring armed for the next user.
     });
-    return null;
+    // Re-publish the live invitation across the rebuild, but only while it is
+    // still within its ring window — an expiry timer that fired during the
+    // rebuild gap must not be resurrected.
+    return _live;
   }
 
   void _consider(Message m) {
@@ -60,10 +80,17 @@ class RingController extends Notifier<CallInvite?> {
       now: DateTime.now().toUtc(),
     );
     if (invite == null) return;
-    // A second invite while already ringing REPLACES the first (last-wins) — the
-    // most recent caller is the live one, and stacking rings has no sane UI.
+    // At-least-once delivery means the SAME invitation can arrive twice (live +
+    // history dual-delivery, reconnect replay). Re-arming the timer on a
+    // re-delivery would silently extend the ring past `kCallRingDuration` from
+    // the last echo rather than the first (cage-match #139, Tesla). An identical
+    // invitation is therefore a no-op, not a refresh.
+    if (invite == _live) return;
+    // A DIFFERENT invite while already ringing REPLACES the first (last-wins) —
+    // the most recent caller is the live one, and stacking rings has no sane UI.
     _expiry?.cancel();
     _expiry = Timer(kCallRingDuration, stopRinging);
+    _live = invite;
     state = invite;
   }
 
@@ -75,10 +102,11 @@ class RingController extends Notifier<CallInvite?> {
       ref.read(mutedChannelIdsProvider).contains(m.channelId) ||
       ref.read(mutedUserIdsProvider).contains(m.sender.userId);
 
-  /// Stop ringing — answered, declined, or expired. Idempotent.
+  /// Stop ringing — answered, ignored, or expired. Idempotent.
   void stopRinging() {
     _expiry?.cancel();
     _expiry = null;
+    _live = null; // cleared too, or the next rebuild would re-publish it.
     state = null;
   }
 }

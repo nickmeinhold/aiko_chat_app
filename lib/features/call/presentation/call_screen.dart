@@ -20,11 +20,25 @@ import '../domain/call_connection_state.dart';
 /// double-fired open resolves to the same room, and this dedups the screen.)
 bool _callLaunchInFlight = false;
 
-Future<void> pushCall(BuildContext context, String channelId) async {
+Future<void> pushCall(BuildContext context, String channelId) =>
+    pushCallOn(GoRouter.of(context), channelId);
+
+/// Router-first form of [pushCall], for callers that have a [GoRouter] but no
+/// in-scope context.
+///
+/// The ring banner is one: it is mounted in `MaterialApp.router`'s `builder`,
+/// which wraps the Router's output from ABOVE — so its context sits OUTSIDE
+/// `InheritedGoRouter` and `context.push` throws `No GoRouter found in context`.
+/// That killed the feature's primary button while 701 tests stayed green,
+/// because every test stopped one layer below the tap (cage-match #139,
+/// Maxwell; pinned by `ring_overlay_test.dart`). The banner reaches the router
+/// through `routerProvider` instead. Both entry points share the ONE latch, so
+/// "is a call being launched" stays a single app-wide fact.
+Future<void> pushCallOn(GoRouter router, String channelId) async {
   if (_callLaunchInFlight) return;
   _callLaunchInFlight = true;
   try {
-    await context.push('/call/$channelId');
+    await router.push('/call/$channelId');
   } finally {
     _callLaunchInFlight = false;
   }

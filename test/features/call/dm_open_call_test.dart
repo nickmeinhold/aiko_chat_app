@@ -2,6 +2,8 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
     show resetCallLaunchGuard;
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
+import 'package:aiko_chat_app/features/chat/presentation/conversation_actions.dart'
+    show resetCallActionGuard;
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/moderation/application/moderation_controller.dart';
@@ -63,7 +65,13 @@ void main() {
     );
   }
 
-  tearDown(resetCallLaunchGuard); // the success case navigates and never pops
+  tearDown(() {
+    resetCallLaunchGuard(); // the success case navigates and never pops
+    // The call ACTION latch is held for the whole call (cage-match #139: it
+    // moved above the ring so a double-tap can't write two signed invites), so
+    // a test that navigates and never pops would leak it into the next test.
+    resetCallActionGuard();
+  });
 
   testWidgets('Call opens the DM with the sender key and pushes the call route',
       (tester) async {

@@ -9,9 +9,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/router.dart';
 import '../application/ring_controller.dart';
 import '../domain/call_invite.dart';
-import 'call_screen.dart' show pushCall;
+import 'call_screen.dart' show pushCallOn;
 
 /// Wraps [child] with the ring banner. A no-op (zero layout cost, no overlay)
 /// whenever nothing is ringing.
@@ -100,10 +101,14 @@ class _RingBanner extends ConsumerWidget {
   }
 
   void _answer(BuildContext context, WidgetRef ref) {
-    // Ring stopped FIRST, synchronously, before navigating: `pushCall` awaits
+    // Ring stopped FIRST, synchronously, before navigating: pushCall awaits
     // until the call route pops, so clearing afterwards would leave the banner
     // painted over the live call for its whole duration.
     ref.read(incomingRingProvider.notifier).stopRinging();
-    pushCall(context, invite.channelId);
+    // Router from the PROVIDER, not from context: this widget lives above the
+    // Router in `MaterialApp.router`'s builder, so `context.push` would throw
+    // `No GoRouter found in context` (cage-match #139 — the feature's primary
+    // button was dead until `ring_overlay_test.dart` pressed it).
+    pushCallOn(ref.read(routerProvider), invite.channelId);
   }
 }

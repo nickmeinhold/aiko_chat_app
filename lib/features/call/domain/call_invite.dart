@@ -98,6 +98,23 @@ class CallInvite {
 /// - **not the sentinel** — an ordinary message.
 /// - **sent by me** — the caller's own send echoes back through the same inbound
 ///   path; ringing yourself is the degenerate first case, not an edge case.
+/// - **an unverified origin** — `originCryptoValid != true`. THE refusal the
+///   whole design rests on. Everything above argues the signature covers the
+///   body; this is where that argument is cashed. Absent or invalid signature →
+///   no ring, fail CLOSED: a missed ring is recoverable (call again), a forged
+///   one impersonates a person to get you into a room. (Cage-match #139, Carnot
+///   + Tesla independently: the original `admitRing` read body/sender/time and
+///   never looked at `origin` at all — the security essay was unenforced. Two
+///   distant model families walked straight to it; the nearest family approved
+///   the diff.)
+/// - **not a DM** — the sentinel is deliberately human-readable so old clients
+///   degrade gracefully, which means any HUMAN can type it. In a community
+///   channel that rings every member at once. Refusing the bot half only
+///   unplugged one horn of the megaphone (cage-match #139, Tesla). Keyed off the
+///   island's `dm:` channel-id prefix, which is a CHECK constraint on the
+///   gateway (`ck_channels_dm_prefix`, case-sensitive — island design 11), not a
+///   client-side convention. Channel-wide calls are a real future feature; they
+///   need their own consent model, not this door.
 /// - **a bot sender** — bots are UNBLOCKABLE by island design (a bus actor has
 ///   no account to action; `moderation_service.py`, and claude-tasks#27 is open
 ///   for exactly this). Every other refusal here is something the user can
@@ -113,13 +130,18 @@ class CallInvite {
 ///   lie.
 /// - **stale** — older than [kCallInviteFreshness]; see that constant.
 ///
-/// Freshness is measured on the server-assigned [Message.createdAt] against
-/// device [now]. **Named tradeoff:** that straddles two clocks, so a device
-/// whose clock is more than ~10s behind the island will never ring, and one far
-/// ahead will ring on replayed history. Server time is the right anchor (it is
-/// the one both participants share and neither controls) and the alternative —
-/// trusting arrival order — silently rings the whole backlog on reconnect drain.
-/// A monotonic fix needs an island-supplied "now"; tracked, not faked.
+/// Freshness is measured on the **signed** [OriginEnvelope.signedAtMs], never on
+/// the server-assigned [Message.createdAt]. `createdAt` is written by the
+/// island, so keying freshness to it leaves the island able to resurrect a
+/// genuine week-old invitation by re-stamping it — a replay the "unforgeable"
+/// claim does not survive (cage-match #139, Tesla). `signedAtMs` is inside the
+/// signature we just verified, so a replay would have to forge the signature.
+///
+/// **Named tradeoff:** this straddles two clocks (the SENDER's device vs ours),
+/// so a peer whose clock is >10s off never rings us. That is the correct
+/// direction — the alternative hands the freshness decision to the party the
+/// signature exists to distrust. A monotonic fix needs a signed island "now";
+/// tracked, not faked.
 CallInvite? admitRing(
   Message message, {
   required String meUserId,
@@ -130,16 +152,31 @@ CallInvite? admitRing(
   if (!isCallInviteBody(message.body)) return null;
   if (message.sender.userId == meUserId) return null;
   if (message.sender.kind != SenderKind.human) return null;
+  // The signature check — see the doc above. `originCryptoValid` is computed
+  // ONCE at ingest by the repository; `true` is the only admitting value
+  // (`null` = unsigned/unverified, `false` = carried-but-invalid).
+  if (message.originCryptoValid != true) return null;
+  final origin = message.origin;
+  if (origin == null) return null; // belt-and-braces: valid implies present.
+  if (!isDmChannelId(message.channelId)) return null;
   if (blockedUserIds.contains(message.sender.userId)) return null;
   if (conversationMuted) return null;
-  final age = now.difference(message.createdAt);
-  // Negative age (a message stamped in the future by a skewed clock) is not
-  // fresh — it is unreadable, and admitting it would let a bad clock ring
-  // forever. `!isNegative` is the guard; `> freshness` alone would admit it.
+  final signedAt =
+      DateTime.fromMillisecondsSinceEpoch(origin.signedAtMs, isUtc: true);
+  final age = now.difference(signedAt);
+  // Negative age (signed in the future by a skewed clock) is not fresh — it is
+  // unreadable, and admitting it would let a bad clock ring forever.
+  // `!isNegative` is the guard; `> freshness` alone would admit it.
   if (age.isNegative || age > kCallInviteFreshness) return null;
   return CallInvite(
     channelId: message.channelId,
     from: message.sender,
-    startedAt: message.createdAt,
+    startedAt: signedAt,
   );
 }
+
+/// True when [channelId] is a DM, per the island's `dm:` prefix — which is a
+/// gateway CHECK constraint (`ck_channels_dm_prefix`, case-sensitive; island
+/// design 11 "Direct messages"), not a client-side naming convention, so it is
+/// safe to key a trust decision on.
+bool isDmChannelId(String channelId) => channelId.startsWith('dm:');

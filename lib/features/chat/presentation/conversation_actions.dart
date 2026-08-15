@@ -82,13 +82,19 @@ Future<void> startCall(
 ) async {
   final messenger = ScaffoldMessenger.of(context);
   if (_refuseBlocked(messenger, ref, userId, _Verb.call, name)) return;
+  // Single-flight from HERE, not from inside pushCall. The launch latch used to
+  // sit downstream of the ring, so a double-tap ran openDm twice (harmless,
+  // idempotent) and `_ring` twice — writing TWO invitations into permanent
+  // signed history for one intent, on a body this design calls a one-way door
+  // (cage-match #139, Maxwell). Guarding the navigation was guarding the wrong
+  // step; the whole action is what must be single-flight. (Task #18 asked for
+  // this latch as tidiness; the ring promoted it to correctness.)
+  if (_callActionInFlight) return;
+  _callActionInFlight = true;
   final String failure;
   try {
-    // openDm is idempotent: if a second Call slips through during this await it
-    // resolves to the SAME room, and pushCall's latch then dedups the
-    // navigation. The first tap always navigates — a double-fire costs at most
-    // one redundant idempotent open, never a second call nor a swallowed tap
-    // (cage-match #132 Tesla, latch-scope).
+    // openDm stays idempotent (same room on a re-open) — belt-and-braces under
+    // the action latch above, which is now what actually stops a second tap.
     final dm = await ref.read(restApiProvider).openDm(userId);
     // Liveness BEFORE the ref work, not just before the navigation — the seed
     // uses the widget-scoped ref and throws on a disposed widget. This ordering
@@ -109,6 +115,13 @@ Future<void> startCall(
     failure = "You're offline — can't start a call.";
   } catch (_) {
     failure = 'Could not start the call. Please try again.';
+  } finally {
+    // Released on EVERY exit — the three early returns above included, and after
+    // `pushCall` resolves (which is when the call route pops, so the latch
+    // covers the whole call exactly as the old navigation latch did). A latch
+    // without a finally is a latch that leaks on the first unmounted-context
+    // return and locks Call out for the rest of the session.
+    _callActionInFlight = false;
   }
   // Liveness on the ERROR path too. Every arm above fires after an await and the
   // messenger was captured before it, so telling a torn-down surface about a
@@ -118,6 +131,18 @@ Future<void> startCall(
   if (!context.mounted) return;
   messenger.showSnackBar(SnackBar(content: Text(failure)));
 }
+
+/// "A call action is being placed" — one app-wide fact, module-global like
+/// [pushCall]'s navigation latch, because a second tap on ANY surface (message
+/// sheet, DM header, roster) is the same intent as a second tap on this one.
+///
+/// Test-only reset lives in [resetCallActionGuard]; a widget test that never
+/// pops the call route would otherwise leak the latch into the next test.
+bool _callActionInFlight = false;
+
+/// Clear the call-action latch between widget tests. Not a production seam.
+@visibleForTesting
+void resetCallActionGuard() => _callActionInFlight = false;
 
 /// Ring the peer: send the signed call invitation into the DM (#2808).
 ///

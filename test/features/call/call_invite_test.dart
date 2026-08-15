@@ -1,4 +1,7 @@
+import 'dart:typed_data';
+
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
+import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -11,20 +14,35 @@ void main() {
   const robin = 'robin-key-opaque';
   final now = DateTime.utc(2026, 8, 15, 13, 30);
 
+  OriginEnvelope signedAt(DateTime t) => OriginEnvelope(
+        keyVersion: 1,
+        rawPublicKey: Uint8List(32),
+        clientMsgId: 'm1',
+        signedAtMs: t.millisecondsSinceEpoch,
+        sig: Uint8List(64),
+      );
+
   Message invite({
     String from = robin,
     String channelId = 'dm:aaa:bbb',
     String body = kCallInviteBody,
     Duration age = const Duration(seconds: 1),
+    bool? cryptoValid = true,
+    bool withOrigin = true,
+    SenderKind kind = SenderKind.human,
   }) =>
       Message(
         clientTempId: 'm1',
         id: 'm1',
         channelId: channelId,
-        sender: MessageSender(
-            userId: from, kind: SenderKind.human, label: 'Robin'),
+        sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
         body: body,
-        createdAt: now.subtract(age),
+        // Deliberately SKEWED away from the signed time: every freshness
+        // assertion below must be reading `origin.signedAtMs`, not this. If a
+        // regression re-keys freshness to `createdAt`, these tests fail.
+        createdAt: now.subtract(const Duration(days: 7)),
+        origin: withOrigin ? signedAt(now.subtract(age)) : null,
+        originCryptoValid: cryptoValid,
         deliveryState: DeliveryState.sent,
       );
 
@@ -83,6 +101,54 @@ void main() {
       expect(admit(invite(from: me)), isNull);
     });
 
+    test('an UNSIGNED message — the refusal the whole design rests on', () {
+      // Cage-match #139 (Carnot + Tesla, independently): the original admitRing
+      // read body/sender/time and never looked at `origin` at all, so the entire
+      // "the signature covers the body, therefore unforgeable" argument was
+      // unenforced. An island — or anything that can write a member-visible body
+      // — could forge the highest-privilege act in the app.
+      expect(admit(invite(withOrigin: false, cryptoValid: null)), isNull);
+    });
+
+    test('a message whose signature FAILED verification', () {
+      expect(admit(invite(cryptoValid: false)), isNull);
+    });
+
+    test('a message not yet verified (null verdict) — fail CLOSED', () {
+      // A missed ring is recoverable; a forged one impersonates a person to get
+      // you into a room. `true` is the only admitting value.
+      expect(admit(invite(cryptoValid: null)), isNull);
+    });
+
+    test('a NON-DM channel — one human must not ring a whole community', () {
+      // The sentinel is deliberately human-readable so old clients degrade
+      // gracefully — which means any human can TYPE it. Refusing bots unplugged
+      // only one horn of that megaphone (cage-match #139, Tesla).
+      expect(admit(invite(channelId: 'general')), isNull);
+      expect(admit(invite(channelId: 'DM:aaa:bbb')), isNull, // case-sensitive
+          reason: 'the island CHECK constraint is case-sensitive');
+      expect(admit(invite(channelId: 'dm:aaa:bbb')), isNotNull);
+    });
+
+    test('a stale SIGNED time, even with a fresh server timestamp', () {
+      // The island writes createdAt, so keying freshness to it would let the
+      // island resurrect a genuine week-old invitation by re-stamping it
+      // (cage-match #139, Tesla). signedAtMs is inside the signature.
+      final resurrected = Message(
+        clientTempId: 'm1',
+        id: 'm1',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(
+            userId: robin, kind: SenderKind.human, label: 'Robin'),
+        body: kCallInviteBody,
+        createdAt: now, // island says "just now"
+        origin: signedAt(now.subtract(const Duration(days: 7))), // truth
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(admit(resurrected), isNull);
+    });
+
     test('every NON-HUMAN sender — the refusal a user could not make themselves',
         () {
       // Bus actors are unblockable by island design (NULL sender_user_id is
@@ -91,17 +157,8 @@ void main() {
       // Enumerated rather than spot-checked: `!= human` must hold for the WHOLE
       // non-human set, and a new SenderKind added later inherits the refusal.
       for (final kind in SenderKind.values.where((k) => k != SenderKind.human)) {
-        final fromActor = Message(
-          clientTempId: 'm1',
-          id: 'm1',
-          channelId: 'general',
-          sender: MessageSender(
-              userId: 'armbot', kind: kind, label: '@@armbot'),
-          body: kCallInviteBody,
-          createdAt: now.subtract(const Duration(seconds: 1)),
-          deliveryState: DeliveryState.sent,
-        );
-        expect(admit(fromActor), isNull, reason: 'a $kind must not ring');
+        expect(admit(invite(kind: kind)), isNull,
+            reason: 'a $kind must not ring');
       }
     });
 
