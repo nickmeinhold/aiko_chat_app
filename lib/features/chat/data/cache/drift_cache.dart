@@ -822,6 +822,16 @@ class DriftCache extends GeneratedDatabase {
   /// cursor, and serverUlid dedup all assume it), so both sides are the same case
   /// by contract. See [applyRetraction] for why this path does NOT do a bespoke
   /// release-time case-normalization.
+  /// Public read of Door A's dead-id store: is [ulid] retracted?
+  ///
+  /// Added for the inbound ANNOUNCEMENT gate (cage-match #139 R3, Carnot).
+  /// `upsertInbound` suppresses a retracted message and writes no row, but its
+  /// `bool` return means "newly invalid origin", not "wrote" — so the repository
+  /// could not tell a suppressed write from a successful one and announced a
+  /// message that is not in the conversation. Rather than reshape a mutator with
+  /// ~57 call sites at the cost of a wide ripple, the repository asks.
+  Future<bool> isRetracted(String ulid) => _isRetracted(ulid);
+
   Future<bool> _isRetracted(String ulid) async {
     final rows = await customSelect(
       'SELECT 1 FROM ${_R.table} WHERE ${_R.targetMsgId} = ?',

@@ -182,6 +182,29 @@ void main() {
         reason: 'a settled invitation must never ring twice');
   });
 
+  test('a RETRACTED invite is never announced, so it never rings', () async {
+    // `upsertInbound` suppresses a retracted message via Door A and writes no
+    // row, but returns `false` meaning "not newly invalid" — indistinguishable
+    // from a successful write. Announcing anyway rang for a taken-down invite no
+    // reader could find; a history page carrying an invite AND its retraction
+    // produces exactly this, since the pager applies retractions first
+    // (cage-match #139 R3, Carnot).
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+    final msg = await inbound();
+
+    // Retraction FIRST — presence-independent dead id, the ordering the pager
+    // actually produces.
+    transport.emitRetraction(dmId, 'RETR1', msg.id!);
+    await pump();
+
+    transport.emitMessage(msg);
+    await pump();
+
+    expect(container.read(incomingRingProvider), isNull,
+        reason: 'a retracted invitation must never ring');
+  });
+
   test('stopRinging clears it', () async {
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
