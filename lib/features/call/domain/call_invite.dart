@@ -21,6 +21,24 @@
 ///    account cannot ring you, for free. A new frame would have to re-earn every
 ///    one of those.
 ///
+/// **The exact scope of "unforgeable", stated honestly** (cage-match #139 R4,
+/// Carnot). A verified origin proves that *the holder of `origin.rawPublicKey`*
+/// authored THIS body, for THIS channel, at THIS signed instant. It does NOT
+/// prove that the key belongs to the account named in `message.sender` —
+/// `sender` is server-supplied metadata and is not covered by the signature. So
+/// an island could present a genuinely-signed invitation under a rewritten
+/// sender label, which would mis-attribute the caller and slip the block check.
+///
+/// That gap is APP-WIDE and pre-existing, not introduced here: it is the same
+/// reason no affirmative "verified sender" tick has shipped (see
+/// `Message.originCryptoValid` — "no affirmative UI ships until a trust root
+/// binds key→account"). The ring inherits the app's trust root; it does not
+/// weaken it, and it does not get to claim more than it. Tracked separately.
+///
+/// What the signature DOES buy here, and what the `kind` alternative would not:
+/// the sentinel itself, the channel, and the start time are all inside the
+/// signature, so a call cannot be conjured by flipping an unsigned field.
+///
 /// Cost, named rather than hidden: the invitation is a real row in permanent
 /// signed history, so [kCallInviteBody] is a ONE-WAY DOOR — changing it is a v2
 /// with a compatibility branch, never an edit. Pinned by a golden test.
