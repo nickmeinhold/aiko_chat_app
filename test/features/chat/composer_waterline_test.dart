@@ -7,11 +7,24 @@
 //   rest    — hairline waterline, dim seal, dim lamp
 //   focused — the waterline ignites in `colorScheme.primary`
 //   armed   — seal AND lamp light together (one fact, two readings)
+import 'package:aiko_chat_app/app/theme/maritime_theme.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart';
+
+/// Composite [fg] (which may be translucent) over an opaque [bg].
+Color _over(Color fg, Color bg) => Color.alphaBlend(fg, bg);
+
+/// WCAG relative-luminance contrast ratio between two OPAQUE colours.
+double _contrast(Color a, Color b) {
+  final la = a.computeLuminance();
+  final lb = b.computeLuminance();
+  final hi = la > lb ? la : lb;
+  final lo = la > lb ? lb : la;
+  return (hi + 0.05) / (lo + 0.05);
+}
 
 void main() {
   setUpAll(() async {
@@ -48,7 +61,8 @@ void main() {
 
     // At rest both are dim, and they agree.
     expect(sealColour(tester), scheme.outlineVariant);
-    expect(lampColour(tester), scheme.onSurfaceVariant);
+    expect(lampColour(tester),
+        scheme.onSurfaceVariant.withValues(alpha: 0.55));
 
     await tester.enterText(find.byType(TextField).first, 'hello');
     await tester.pumpAndSettle();
@@ -64,7 +78,39 @@ void main() {
     await tester.enterText(find.byType(TextField).first, '   ');
     await tester.pumpAndSettle();
     expect(sealColour(tester), scheme.outlineVariant);
-    expect(lampColour(tester), scheme.onSurfaceVariant);
+    expect(lampColour(tester),
+        scheme.onSurfaceVariant.withValues(alpha: 0.55));
+  });
+
+  testWidgets('arming INCREASES the lamp\'s contrast — in every theme',
+      (tester) async {
+    // The invariant, stated so it cannot silently invert again. The first cut
+    // read `onSurfaceVariant` → `secondary`, which is dim → amber in maritime
+    // but dark-charcoal → LIGHTER-purple in the light theme: the lamp went out
+    // when armed. Asserting exact colours would not have caught that, because
+    // both were "the right token" — what was wrong was the RELATIONSHIP.
+    //
+    // So: composite each state over the surface it is drawn on and require the
+    // armed state to stand out more. True regardless of which way round the
+    // theme's luminance runs.
+    for (final theme in [lightTheme(), maritimeTheme()]) {
+      final scheme = theme.colorScheme;
+      final rest = _over(
+          scheme.onSurfaceVariant.withValues(alpha: 0.55), scheme.surface);
+      final armed = _over(scheme.secondary, scheme.surface);
+
+      final restContrast = _contrast(rest, scheme.surface);
+      final armedContrast = _contrast(armed, scheme.surface);
+
+      expect(armedContrast, greaterThan(restContrast),
+          reason: 'armed must be MORE present than rest '
+              '(rest ${restContrast.toStringAsFixed(2)}:1, '
+              'armed ${armedContrast.toStringAsFixed(2)}:1)');
+      // And the resting lamp is still a legible control, not a ghost — it stays
+      // enabled and tappable, so it has to be seen.
+      expect(restContrast, greaterThan(2.5),
+          reason: 'a resting-but-ENABLED control must stay visible');
+    }
   });
 
   testWidgets('the send control stays ENABLED when empty — colour is a hint, '
