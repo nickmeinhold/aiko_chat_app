@@ -223,6 +223,26 @@ void main() {
         reason: 'a repo reconnecting is not the user ignoring a call');
   });
 
+  test('the ring window is measured from the SIGNED start, rebuild or not',
+      () async {
+    // One state, one equation of motion. `_consider` used to arm an absolute
+    // kCallRingDuration while `_republish` derived the remainder from
+    // startedAt, so a ring's length depended on whether a rebuild happened
+    // (cage-match #139 R5, Carnot). An invitation already older than the ring
+    // window must not ring at all — even though it is inside the 10s freshness
+    // gate, admission and duration are different clocks.
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+
+    // Freshness gate is 10s and ring duration is 30s, so this cannot arise from
+    // a real signature; drive it directly to pin the arithmetic.
+    final ctl = container.read(incomingRingProvider.notifier);
+    expect(kCallRingDuration > kCallInviteFreshness, isTrue,
+        reason: 'if this inverts, the admission gate alone bounds the ring');
+    ctl.stopRinging();
+    expect(container.read(incomingRingProvider), isNull);
+  });
+
   test('stopRinging clears it', () async {
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();

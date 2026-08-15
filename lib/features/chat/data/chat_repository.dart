@@ -11,8 +11,6 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
-
 import '../../../services/sovereign_key_store.dart';
 import '../../auth/domain/auth_models.dart';
 import '../domain/message.dart';
@@ -177,32 +175,19 @@ class ChatRepository {
   /// persist door makes "freshness is the consumer's job" true rather than
   /// aspirational — history messages ARE announced, and `admitRing` refuses the
   /// stale ones on their signed timestamp.
-  Future<void> _announceInbound(Message m) async {
-    // `_disposed` re-checked here because the callers await before reaching it —
-    // teardown can land mid-persist.
-    if (_disposed || _inboundMessages.isClosed) return;
-    // A RETRACTED message is not in the conversation: `upsertInbound` suppresses
-    // it via Door A and writes no row, but returns `false` meaning "not newly
-    // invalid", which is indistinguishable from a successful write. Announcing
-    // it anyway rang the ring for a taken-down invite that no reader could find
-    // — the exact case a history page carrying an invite AND its retraction
-    // produces, since the pager applies retractions first (cage-match #139 R3,
-    // Carnot).
+  void _announceInbound(Message m) {
+    // Called ONLY when the cache reports `inserted` — a first-time insert of
+    // this server ULID. A dead-id suppression writes nothing and an update is a
+    // re-echo of a message already announced, so neither reaches here, and the
+    // "announced once at ingest" contract below is literally true rather than
+    // aspirational.
     //
-    // RESIDUAL, named: history retractions run in the pager OUTSIDE the inbound
-    // FIFO, so a retraction can still land between the write and this read. The
-    // window is narrow and one-sided (we may announce something retracted a
-    // moment later, never the reverse); closing it fully needs the ring to react
-    // to retractions directly — claude-tasks#3163.
-    final id = m.id;
-    if (id != null && await isCacheRetracted(id)) return;
-    if (_disposed || _inboundMessages.isClosed) return; // re-check after await
+    // The predicate is computed INSIDE the cache transaction, which is what
+    // dissolved the earlier post-write retraction read and its one-sided race
+    // (cage-match #139 R3→R5, Carnot). No second door, no window.
+    if (_disposed || _inboundMessages.isClosed) return;
     _inboundMessages.add(m);
   }
-
-  /// Indirection so the retraction read is visible at this layer and mockable.
-  @visibleForTesting
-  Future<bool> isCacheRetracted(String ulid) => _cache.isRetracted(ulid);
 
   /// Every inbound message, across ALL channels, announced once at ingest.
   ///
@@ -583,8 +568,8 @@ class ChatRepository {
   Future<void> _persistInbound(Message m) async {
     final o = m.origin;
     if (o == null) {
-      await _cache.upsertInbound(m);
-      await _announceInbound(m);
+      final r = await _cache.upsertInbound(m);
+      if (r.inserted) _announceInbound(m);
       return;
     }
     final valid = await verifyOrigin(o,
@@ -598,11 +583,12 @@ class ChatRepository {
     // base-rate probe rather than a per-DELIVERY one, and stops a failed write
     // from counting a ghost (cage-match Carnot + Tesla, PR #93 R1).
     final verified = m.copyWith(originCryptoValid: valid);
-    final newlyInvalid = await _cache.upsertInbound(verified);
+    final result = await _cache.upsertInbound(verified);
+    final newlyInvalid = result.newlyInvalid;
     // Announce the VERIFIED copy, never the raw one — a consumer gating on
     // `originCryptoValid` (the ring does) would otherwise see `null` on every
     // message and refuse them all.
-    await _announceInbound(verified);
+    if (result.inserted) _announceInbound(verified);
     if (newlyInvalid) {
       _telemetry.originVerificationFailed(
         senderUserId: m.sender.userId,

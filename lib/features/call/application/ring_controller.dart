@@ -72,7 +72,8 @@ class RingController extends Notifier<CallInvite?> {
   CallInvite? _republish() {
     final live = _live;
     if (live == null) return null;
-    final left = kCallRingDuration - DateTime.now().toUtc().difference(live.startedAt);
+    final left =
+        kCallRingDuration - DateTime.now().toUtc().difference(live.startedAt);
     if (left <= Duration.zero) {
       _settle(live);
       return null;
@@ -162,9 +163,15 @@ class RingController extends Notifier<CallInvite?> {
     final displaced = _live;
     if (displaced != null) _settle(displaced);
     _expiry?.cancel();
-    _expiry = Timer(kCallRingDuration, stopRinging);
+    _expiry = null;
     _live = invite;
-    state = invite;
+    // ONE equation of motion. Arming an absolute `kCallRingDuration` here while
+    // `_republish` derived the remaining time from `startedAt` meant a ring's
+    // length depended on whether a rebuild happened to occur: an invite signed
+    // 9s ago rang 30s without a rebuild, ~21s with one (cage-match #139 R5,
+    // Carnot). Both paths now go through `_republish`, so the deadline is a
+    // function of the signed start time and nothing else.
+    state = _republish();
   }
 
   /// A DM is silenced by EITHER cause — the conversation muted, or the person
