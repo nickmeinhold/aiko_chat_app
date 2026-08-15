@@ -415,6 +415,50 @@ void main() {
     );
   });
 
+  testWidgets('opening the switcher fetches nothing — the DM peer is already '
+      'known', (tester) async {
+    setNarrow(tester);
+    // Written while chasing a reported "the drop-down kind of flickers as it
+    // appears", on the theory that the DM row mounts at menu-open, starts its
+    // GET /members then, and shows `dmPeerTitle`'s neutral placeholder until it
+    // lands. THAT THEORY WAS WRONG, and this test is what disproved it: the
+    // roster is already resolved before the menu opens, because the aggregate
+    // unread dot reads `channelUnreadCountProvider` for every non-active
+    // conversation — including DMs — from the collapsed switcher, which warms the
+    // peer-aware mute path and the roster with it. (The real cause was Flutter's
+    // DropdownButton staggering its items' fade-in; see task #32.)
+    //
+    // Kept, because the property is worth holding on its own: no GET /members on
+    // the interaction path, so a DM row can never render its placeholder title.
+    // A first cut asserted `listMembersCalls > 0` before opening, which passed
+    // for the wrong reason — that counter also ticks for the ACTIVE channel.
+    final rest = restWithDm();
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // The discriminating observable is WHEN the roster is fetched, so measure the
+    // fetch count across the open. (A first cut asserted `listMembersCalls > 0`
+    // before opening and passed against the unfixed code — that counter also
+    // ticks for the ACTIVE channel's roster, which the message pane resolves for
+    // sender names. It measured something real and irrelevant.)
+    final beforeOpen = rest.listMembersCalls;
+
+    await openMenu(tester);
+
+    // Opening the switcher fetched NOTHING: the DM's peer was already known, so
+    // the row is peer-titled on the frame it appears instead of relabelling from
+    // the placeholder a round-trip later.
+    expect(rest.listMembersCalls, beforeOpen,
+        reason: 'opening the switcher must not put a GET /members on the '
+            'interaction path');
+    expect(find.text('alice'), findsWidgets);
+    expect(find.text('Direct message'), findsNothing);
+  });
+
   testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation',
       (tester) async {
     setNarrow(tester);

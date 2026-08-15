@@ -189,9 +189,16 @@ class FakeRestApi implements ChatRestApi {
   final Map<String, List<ChannelMember>> membersByChannel = {};
   int listMembersCalls = 0;
 
+  /// If set, `listMembers()` awaits this before returning — lets a test hold a
+  /// roster unresolved and observe what a DM row renders in the meantime (a DM
+  /// has no name of its own, so an unresolved roster is a visible placeholder).
+  Completer<void>? listMembersGate;
+
   @override
   Future<List<ChannelMember>> listMembers(String channelId) async {
     listMembersCalls++;
+    final gate = listMembersGate;
+    if (gate != null) await gate.future;
     return membersByChannel[channelId] ?? const [];
   }
 
