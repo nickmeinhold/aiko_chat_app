@@ -1,7 +1,10 @@
 /// The wide-layout left rail (Slack/Element style): a server switcher at the
 /// top, the channel list in the middle, and a settings/sign-out footer at the
-/// bottom. Shown ONLY on wide screens ([ChatScreen] forks on width); the narrow
-/// phone layout keeps its app-bar dropdown, unchanged.
+/// bottom. Shown ONLY on wide screens ([ChatScreen] forks on width); narrow gets
+/// the app-bar dropdown, which lists the SAME two sections this rail draws — it
+/// is a phone's entire navigation surface, not a channels-only fallback (#2798
+/// task #12; the sentence that used to sit here said "unchanged", and treating
+/// that as law is how a DM ended up with no row and no leave-path on a phone).
 ///
 /// A custom widget (NOT `NavigationRail`) because channels are text names +
 /// unread badges, not icons. Channel selection routes through the EXACT same
@@ -237,9 +240,17 @@ class ChatSidebar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    final channelsAsync = ref.watch(channelsProvider);
-    final channels = channelsAsync.value ?? const <Channel>[];
-    final dms = ref.watch(visibleDmsProvider);
+    // Rows and resolver read ONE provider. This build used to take its rows from
+    // `channelsProvider` + `visibleDmsProvider` while resolving `active` from
+    // `navigableChannelsProvider` — two routes to one fact, in a single method.
+    // The narrow switcher's version of that was a crash; here it is quieter (a
+    // conversation the island listed through both endpoints paints twice), which
+    // is exactly why it would have survived (cage-match #136, Tesla).
+    //
+    final repoAsync = ref.watch(chatRepositoryProvider);
+    final sections = ref.watch(conversationSectionsProvider);
+    final channels = sections.rooms;
+    final dms = sections.dms;
     final selectedId = ref.watch(selectedChannelIdProvider);
     final active =
         ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);
@@ -257,50 +268,31 @@ class ChatSidebar extends ConsumerWidget {
               const _ServerSwitcher(),
               const Divider(height: 1),
               Expanded(
-                child: channelsAsync.when(
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (e, _) => Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text('Could not load channels.\n$e'),
-                  ),
-                  data: (_) {
-                    // Empty only when BOTH sources are empty — a user with no
-                    // channels but open DMs still sees their DM section (#2798).
-                    if (channels.isEmpty && dms.isEmpty) {
-                      return const Center(child: Text('No channels yet.'));
-                    }
-                    // Channels and DMs share ONE scrollable list (the DM section
-                    // sits below the channel list, per the design anchor) so a long
-                    // combined list scrolls as a unit rather than overflowing a
-                    // fixed slot.
-                    return ListView(
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 4, horizontal: kSidebarTileInset),
-                      children: [
-                        for (final c in channels)
-                          _SidebarChannelTile(
-                            channel: c,
-                            selected: c.id == active?.id,
-                          ),
-                        if (dms.isNotEmpty) ...[
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
+                // The SAME readiness predicate as the app bar and the pane: the
+                // repository has a value. Two earlier cuts of this gate were each
+                // wrong in one direction (cage-match #136, Tesla ×3):
+                //  * `channelsAsync.when` blanked the DM rows behind "Could not
+                //    load channels" even though `dmsProvider` fails soft and had
+                //    them — while the phone switcher listed those same DMs;
+                //  * content-first-on-any-section then painted a row SELECTED
+                //    during the window where DMs have arrived and channels have
+                //    not, so the highlight jumped to the first room when they
+                //    landed — the implicit default walking under the user.
+                // `hasValue` is true only once BOTH lists have settled, and stays
+                // true through later reloads and refresh errors, so the rail shows
+                // what it can, when it can honestly claim it.
+                child: repoAsync.hasValue
+                    ? (channels.isEmpty && dms.isEmpty
+                        ? const Center(child: Text('No conversations yet.'))
+                        : _conversationList(context, ref,
+                            channels: channels, dms: dms, active: active))
+                    : repoAsync.hasError
+                        ? Padding(
+                            padding: const EdgeInsets.all(16),
                             child: Text(
-                              'Direct messages',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .labelSmall
-                                  ?.copyWith(color: scheme.onSurfaceVariant),
-                            ),
-                          ),
-                          for (final d in dms)
-                            _SidebarDmTile(dm: d, selected: d.id == active?.id),
-                        ],
-                      ],
-                    );
-                  },
-                ),
+                                'Could not load conversations.\n${repoAsync.error}'),
+                          )
+                        : const Center(child: CircularProgressIndicator()),
               ),
               const Divider(height: 1),
               const _SidebarFooter(),
@@ -308,6 +300,41 @@ class ChatSidebar extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// Channels and DMs in ONE scrollable list (the DM section sits below the
+  /// channel list, per the design anchor) so a long combined list scrolls as a
+  /// unit rather than overflowing a fixed slot.
+  Widget _conversationList(
+    BuildContext context,
+    WidgetRef ref, {
+    required List<Channel> channels,
+    required List<Channel> dms,
+    required Channel? active,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListView(
+      padding: const EdgeInsets.symmetric(
+          vertical: 4, horizontal: kSidebarTileInset),
+      children: [
+        for (final c in channels)
+          _SidebarChannelTile(channel: c, selected: c.id == active?.id),
+        if (dms.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
+            child: Text(
+              'Direct messages',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          for (final d in dms)
+            _SidebarDmTile(dm: d, selected: d.id == active?.id),
+        ],
+      ],
     );
   }
 }

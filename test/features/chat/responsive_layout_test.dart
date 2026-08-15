@@ -139,7 +139,7 @@ void main() {
 
     // A message lands in the default channel c1.
     await tester.enterText(find.byType(TextField).first, 'in-general');
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.byKey(const Key('composer-send')));
     await settle(tester);
     expect(find.text('in-general'), findsOneWidget);
     expect(find.byKey(const ValueKey('c1')), findsOneWidget); // MessageList key
@@ -200,7 +200,7 @@ void main() {
     // Overflow the viewport so the list has somewhere to scroll.
     for (var i = 0; i < 25; i++) {
       await tester.enterText(find.byType(TextField).first, 'msg-$i');
-      await tester.tap(find.byIcon(Icons.send));
+      await tester.tap(find.byKey(const Key('composer-send')));
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 15)));
       await tester.pumpAndSettle();

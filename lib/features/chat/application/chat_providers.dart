@@ -398,10 +398,71 @@ final visibleDmsProvider = Provider.autoDispose<List<Channel>>((ref) {
   return _withSeeds(dms, seeds);
 });
 
-final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
+/// Every navigable conversation, split into the two sections the UI draws, each
+/// conversation appearing exactly ONCE across both.
+///
+/// The split is by SOURCE, not by `kind`. Which endpoint listed a conversation
+/// is the island's own answer to "is this a DM" — it serves DMs only through
+/// `GET /v1/dm` and excludes them from `GET /v1/channels` — so re-deriving the
+/// sections from `Channel.kind` downstream asks a question we already hold the
+/// answer to, and gets a different one whenever a decode default, a new island
+/// variant or a group-shaped row carries an unexpected kind. That row would then
+/// render as a ROOM: its (empty) DM name, its mute read with no peer, and no
+/// "Direct messages" header above it (cage-match #136, Tesla).
+///
+/// Deduping here rather than in each consumer matters because every consumer
+/// needs the same answer and one of them turns a repeat into a crash: the narrow
+/// app-bar switcher feeds these ids to `DropdownButton`, which asserts that
+/// exactly one item matches its `value`. Deduping in that one widget left
+/// `resolveActive`, the sidebar and the switcher each deciding for themselves
+/// what "the conversation list" is — the two-readers-one-fact drift
+/// [visibleDmsProvider] exists to prevent, one layer up (cage-match #136,
+/// Kelvin). A repeat is a contract violation rather than an expected state; when
+/// it happens the DM entry wins, for the same reason the split is by source.
+typedef ConversationSections = ({List<Channel> rooms, List<Channel> dms});
+
+final conversationSectionsProvider =
+    Provider.autoDispose<ConversationSections>((ref) {
   final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
-  return [...channels, ...ref.watch(visibleDmsProvider)];
+  final dms = ref.watch(visibleDmsProvider);
+  final dmIds = {for (final d in dms) d.id};
+  final seen = <String>{};
+  return (
+    rooms: [
+      for (final c in channels)
+        if (!dmIds.contains(c.id) && seen.add(c.id)) c,
+    ],
+    dms: [
+      for (final d in dms)
+        if (seen.add(d.id)) d,
+    ],
+  );
 });
+
+/// The two sections flattened — rooms then DMs. The resolver's view; the UI reads
+/// [conversationSectionsProvider] so its rows and this list cannot disagree.
+final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
+  final sections = ref.watch(conversationSectionsProvider);
+  return [...sections.rooms, ...sections.dms];
+});
+
+/// The ONE answer to "is this conversation a DM", for every surface that needs to
+/// branch on it — the peer-aware mute read, the conversation title, the "Message"
+/// entry point.
+///
+/// Those all used to ask `channel.kind == ChannelKind.dm` individually, which is
+/// the same re-derivation [conversationSectionsProvider] removed from the row
+/// lists, still live on three other call sites: a row from `GET /v1/dm` carrying
+/// an unexpected kind sat in the DM section and was peer-titled in the dropdown,
+/// then lost its title and its peer-aware mute the moment it became active
+/// (cage-match #136, Tesla + Carnot, converging independently).
+///
+/// An id ABSENT here reads as "not a DM", which is the right fail direction for
+/// all three: a conversation not yet in the navigable set gets room treatment
+/// (a name, a conversation-scoped mute) rather than a peer lookup that cannot
+/// resolve.
+final dmConversationIdsProvider = Provider.autoDispose<Set<String>>((ref) =>
+    {for (final d in ref.watch(conversationSectionsProvider).dms) d.id});
 
 /// The reconcile engine, fully wired and connected. Construction requires the
 /// authenticated [AppUser] (for optimistic "me" rendering) and the fixed

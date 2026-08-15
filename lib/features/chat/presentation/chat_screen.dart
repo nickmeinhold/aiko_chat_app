@@ -24,11 +24,15 @@ const double kWideLayoutBreakpoint = 720;
 /// The fixed width of the wide-layout channel rail.
 const double kSidebarWidth = 268;
 
-/// The chat surface: a channel switcher + logout in the app bar, a thin
-/// connection banner, the message list, and the composer. The default channel is
-/// the first one the gateway returns; when more than one channel exists the title
-/// becomes a dropdown to switch among them (the app already fetches the full list
-/// via [channelsProvider]).
+/// The chat surface: a conversation switcher + logout in the app bar, a thin
+/// connection banner, the message list, and the composer. The default is the
+/// first conversation the gateway returns; when more than one NAVIGABLE
+/// CONVERSATION exists — channels ∪ DMs, [navigableChannelsProvider] — the title
+/// becomes a dropdown to switch among them.
+///
+/// "Navigable conversation", never "channel": the island excludes DMs from
+/// `GET /v1/channels`, so anything scoped to [channelsProvider] here silently
+/// strands DMs on a phone (#2798 task #12).
 ///
 /// Switching is a pure DISPLAY change — the repository subscribes to EVERY
 /// channel at construction and syncs each one's history on connect
@@ -51,14 +55,27 @@ class ChatScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final channelsAsync = ref.watch(channelsProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
-    final channels = channelsAsync.value ?? const <Channel>[];
     // Resolve the active conversation over channels ∪ DMs so a selected DM stays
     // active (a DM id is never in channelsProvider — DMs are a separate source,
-    // #2798). The narrow app-bar switcher below still lists `channels` only; the
-    // wide sidebar is the DM entry point.
-    final active = resolveActive(ref.watch(navigableChannelsProvider), selectedId);
+    // #2798). The narrow app-bar switcher below lists the SAME combined list, so
+    // "what can be active" and "what can be picked" are one set, not two.
+    final navigable = ref.watch(navigableChannelsProvider);
+    final active = resolveActive(navigable, selectedId);
+
+    // The switcher's sections come from the SAME provider that composes
+    // `navigable`, already partitioned — so every id that can be active has
+    // exactly one item, which is what `DropdownButton`'s value contract requires.
+    // Re-deriving the split here (from `kind`, or from another provider) is what
+    // breaks that contract in one direction or the other (cage-match #136).
+    final sections = ref.watch(conversationSectionsProvider);
+    final rooms = sections.rooms;
+    final dms = sections.dms;
+    // "Both lists have settled" — the ONE readiness predicate for every surface
+    // that names a conversation. [chatRepositoryProvider] awaits both, so its
+    // having a value is exactly that condition, and the pane gates on the same
+    // thing. See the AppBar title below for what half a gate cost.
+    final ready = ref.watch(chatRepositoryProvider).hasValue;
 
     // If the picked conversation leaves the list (removed / renamed-away on a
     // refetch), clear the pick so the Notifier and the UI agree. Without this the
@@ -101,27 +118,46 @@ class ChatScreen extends ConsumerWidget {
       // Wide: NO app bar — the sidebar owns the chrome (server switcher, channels,
       // settings/logout) and the message pane carries its own slim channel header
       // (the redundant full-width bar sat below the native macOS title bar). Narrow:
-      // the CURRENT app bar — the dropdown switcher when >1 channel, plus the
-      // settings + sign-out actions — unchanged.
+      // the app bar — the dropdown switcher when there is more than one NAVIGABLE
+      // CONVERSATION (channels ∪ DMs, never channels alone), plus the mute,
+      // search, settings and sign-out actions.
       appBar: isWide
           ? null
           : AppBar(
-              // Gate the channel switcher to a NON-DM active channel: its
-              // DropdownButton uses activeId as `value`, and a DM id is never in
-              // the channels-only item list → Flutter asserts. A DM (selected on
-              // wide, then resized to narrow) renders a title instead of the
-              // switcher (cage-match Carnot+Tesla — this crashed at the fork).
-              title: channels.length > 1 &&
-                      active != null &&
-                      active.kind != ChannelKind.dm
-                  ? _ChannelSwitcher(channels: channels, activeId: active.id)
-                  : _ConversationTitle(active: active),
+              // Listing channels ∪ DMs is what makes a DM REACHABLE on a phone at
+              // all: the narrow layout has no sidebar, so this dropdown is the
+              // whole navigation surface, and a channels-only item list left
+              // `openDm` able to strand you in a conversation you could neither
+              // return to nor leave (#2798, task #12).
+              //
+              // It also retires the DM gate that used to hide this switcher: that
+              // gate existed because a DM id in `DropdownButton.value` with no
+              // matching item asserts (cage-match #106). The item list now covers
+              // every id that can be active, so the crash is unreachable rather
+              // than dodged — and the gate WAS the trap.
+              // The bar rides the SAME settled predicate as the pane. Gating only
+              // the pane closed the floor and left the doorbell wired to the wrong
+              // house: with one DM in and the channel list still in flight,
+              // `navigable.length == 1` titled the bar "Alice" and lit her mute
+              // button over a spinner. One tap conversation-muted a thread the
+              // user had never entered — and then the channels landed, the
+              // implicit default moved to the first room, and the mute stayed
+              // behind on a conversation they never picked (cage-match #136,
+              // Tesla). A conversation control must not exist before the
+              // conversation it names is settled.
+              title: !ready
+                  ? const Text('Chat')
+                  : navigable.length > 1 && active != null
+                      ? _ConversationSwitcher(
+                          rooms: rooms, dms: dms, activeId: active.id)
+                      : _ConversationTitle(active: active),
               actions: [
                 // Narrow has no sidebar, so the row long-press that mutes a
                 // conversation on wide does not exist here. Without this the
                 // capability would be wide-only — mutable on the desktop, invisible
                 // on the phone, which is where a noisy channel is actually felt.
-                if (active != null) _MuteConversationAction(conversation: active),
+                if (ready && active != null)
+                  _MuteConversationAction(conversation: active),
                 IconButton(
                   tooltip: 'Search',
                   icon: const Icon(Icons.search),
@@ -178,14 +214,17 @@ class _MuteConversationAction extends ConsumerWidget {
     // phone was showing "not muted" while its badge was already dead — two
     // surfaces disagreeing about the same conversation, which is the drift this
     // feature's own comments forbid (cage-match #135 round 3, Tesla).
+    // DM-ness by SOURCE, through the one door — not `conversation.kind`, which is
+    // the re-derivation conversationSectionsProvider exists to remove (#136).
+    final isDm = ref.watch(dmConversationIdsProvider).contains(conversation.id);
     final mute = watchConversationMute(
       ref,
       conversation.id,
-      peerId: conversation.kind == ChannelKind.dm
+      peerId: isDm
           ? dmPeerId(ref.watch(channelRosterProvider(conversation.id)).value,
               ref.watch(currentUserProvider)?.userId)
           : null,
-      hasPeer: conversation.kind == ChannelKind.dm,
+      hasPeer: isDm,
     );
     final muted = mute.isMuted;
     // SCOPE DISCLOSURE. When the silence comes from the PERSON rather than this
@@ -264,11 +303,12 @@ class _MuteConversationAction extends ConsumerWidget {
 }
 
 /// The narrow-layout AppBar title for whatever conversation is active when the
-/// channel switcher is NOT shown (≤1 channel, or a DM is active). A channel shows
-/// its name; a DM shows the peer's handle (roster-resolved, like the sidebar row),
-/// since a DM has no name. This exists so a DM id never reaches [_ChannelSwitcher]'s
-/// DropdownButton `value` (no matching item → assertion) — narrow DM *entry* stays
-/// deferred (#2798 Inc 1); this only titles an already-active DM sanely.
+/// switcher is NOT shown — i.e. when there is nothing to switch BETWEEN (≤1
+/// navigable conversation, or none at all). A channel shows its name; a DM shows
+/// the peer's handle (roster-resolved, like the sidebar row), since a DM has no
+/// name. Its DM arm is no longer a fallback for an unreachable id — with DMs in
+/// the switcher this is only the one-conversation case, where a dropdown of one
+/// would be chrome.
 class _ConversationTitle extends ConsumerWidget {
   const _ConversationTitle({required this.active});
 
@@ -278,32 +318,52 @@ class _ConversationTitle extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final a = active;
     if (a == null) return const Text('Chat');
-    if (a.kind != ChannelKind.dm) return Text(a.name);
+    // By SOURCE, through the one door (#136) — a DM whose `kind` says otherwise
+    // would otherwise render `a.name`, which for a DM is the empty string.
+    if (!ref.watch(dmConversationIdsProvider).contains(a.id)) return Text(a.name);
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(a.id)).value;
     return Text(dmPeerTitle(roster, myId));
   }
 }
 
-/// The app-bar channel picker, shown only when more than one channel exists.
-/// Renders the active channel's name with a dropdown of the rest; picking one
-/// writes [selectedChannelIdProvider], which re-points the message surface. Menu
-/// items decode from the same [channelsProvider] list the repo subscribed to, so
-/// every listed channel is already synced and switching is instant.
-class _ChannelSwitcher extends ConsumerWidget {
-  const _ChannelSwitcher({required this.channels, required this.activeId});
+/// The app-bar conversation picker — the narrow layout's ENTIRE navigation
+/// surface, and therefore the phone's equivalent of [ChatSidebar]. Shown when more
+/// than one conversation exists. Renders the active one with a dropdown of the
+/// rest; picking one writes [selectedChannelIdProvider], which re-points the
+/// message surface.
+///
+/// Lists rooms AND DMs, in that order, under a section header — the same two
+/// sections the wide sidebar draws, collapsed into one menu because a phone app
+/// bar has room for exactly one control. Both are already in the repo's
+/// subscription set, so switching stays a pure display change with no fetch.
+///
+/// [rooms] and [dms] MUST partition [navigableChannelsProvider]: a correctness
+/// requirement, not a convention (see [ChatScreen.build]).
+class _ConversationSwitcher extends ConsumerWidget {
+  const _ConversationSwitcher({
+    required this.rooms,
+    required this.dms,
+    required this.activeId,
+  });
 
-  final List<Channel> channels;
+  final List<Channel> rooms;
+  final List<Channel> dms;
   final String activeId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Aggregate unread across every NON-active channel, so the collapsed app-bar
-    // switcher carries an at-a-glance "there's unread elsewhere" dot even before
-    // the user opens the menu (the closed DropdownButton only shows the active
-    // channel's own item, which is always badge-free). Opening the menu then
-    // reveals which channel and how many via the per-item counts below.
-    final otherUnread = channels
+    // Aggregate unread across every NON-active conversation, so the collapsed
+    // app-bar switcher carries an at-a-glance "there's unread elsewhere" dot even
+    // before the user opens the menu (the closed DropdownButton only shows the
+    // active conversation's own item, which is always badge-free). Opening the
+    // menu then reveals which one and how many via the per-item counts below.
+    //
+    // DMs are counted here too. They have to be: on narrow this dot is the ONLY
+    // signal that a DM is waiting, since there is no sidebar row to badge — an
+    // aggregate that quietly excluded them would make a message from a person
+    // less visible than one from a room.
+    final otherUnread = [...rooms, ...dms]
         .where((c) => c.id != activeId)
         .fold<int>(0, (sum, c) => sum + ref.watch(channelUnreadCountProvider(c.id)));
 
@@ -325,7 +385,7 @@ class _ChannelSwitcher extends ConsumerWidget {
               // surface background — so the inherited onSurface text reads
               // correctly in both the collapsed bar and the open menu.
               items: [
-                for (final c in channels)
+                for (final c in rooms)
                   DropdownMenuItem<String>(
                     value: c.id,
                     child: _ChannelMenuItem(
@@ -334,11 +394,50 @@ class _ChannelSwitcher extends ConsumerWidget {
                       isActive: c.id == activeId,
                     ),
                   ),
+                // Section header, not a destination: `enabled: false` keeps it out
+                // of the selectable set and a null value keeps it out of the
+                // one-item-matches-`value` assertion. `Semantics(header: true)`
+                // because a disabled menu item still ANNOUNCES as an item, which
+                // would offer a screen reader a dead destination in the only
+                // navigation control a phone has (cage-match #136, Tesla).
+                // Drawn only when there is a boundary to mark.
+                if (dms.isNotEmpty && rooms.isNotEmpty)
+                  DropdownMenuItem<String>(
+                    enabled: false,
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        'Direct messages',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color:
+                                  Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                      ),
+                    ),
+                  ),
+                for (final d in dms)
+                  DropdownMenuItem<String>(
+                    value: d.id,
+                    child: _DmMenuItem(dm: d, isActive: d.id == activeId),
+                  ),
               ],
               onChanged: (id) {
-                if (id != null) {
-                  ref.read(selectedChannelIdProvider.notifier).select(id);
+                if (id == null) return;
+                // FAIL CLOSED on an id the list no longer holds. The overlay
+                // route snapshots its items when the menu OPENS and keeps
+                // offering them; if a conversation retires while the menu is up,
+                // tapping its leftover row would write a dead id into the
+                // selection. Display would look fine — `resolveActive` falls back
+                // — but the Notifier stays poisoned, and `ref.listen`'s self-heal
+                // never fires because the list did not change again. When that id
+                // came back the user would be yanked into a conversation they
+                // never re-picked: the exact #106 snap-back this file already
+                // guards, re-entered through the overlay (cage-match #136, Tesla).
+                if (!rooms.any((c) => c.id == id) &&
+                    !dms.any((c) => c.id == id)) {
+                  return;
                 }
+                ref.read(selectedChannelIdProvider.notifier).select(id);
               },
             ),
           ),
@@ -381,30 +480,217 @@ class _ChannelMenuItem extends ConsumerWidget {
     // added to prevent (cage-match #135, Carnot HIGH + Tesla).
     //
     // Through the SAME door as every other surface, not a second derivation of
-    // its own. The item list is channels-only today, so `mutedChannelIdsProvider`
-    // would give the identical answer — by accident of topology, not by law. The
-    // day DMs join this switcher (#2940) a peer-muted DM would render idle in the
-    // one menu that never learned about peers (cage-match #135 round 7, Tesla).
+    // its own — no peer here because a CHANNEL has none; the DM half of this menu
+    // passes one (see [_DmMenuItem]). That day has now arrived: this comment used
+    // to say `mutedChannelIdsProvider` would answer identically "by accident of
+    // topology, not by law", and the law is what held once DMs joined the list.
     final muted = watchConversationMute(ref, channelId).isMuted;
+    return _MenuItemRow(
+        conversationId: channelId,
+        name: name,
+        unread: unread,
+        muted: muted,
+        isActive: isActive);
+  }
+}
+
+/// One DM row of the conversation dropdown. Same row shape as a channel's, but
+/// both of its facts are resolved differently, which is why it is a separate
+/// widget rather than a flag on [_ChannelMenuItem]:
+///
+///  * the LABEL is the peer, not a server `name` — a DM has none (identity=key,
+///    ADR-0004: a DM's title IS the other person), so it comes from the roster
+///    via [dmPeerTitle], exactly as [ChatSidebar]'s DM tile resolves it;
+///  * the MUTE is peer-aware — a 1:1 DM is silenced by two independent causes,
+///    this conversation being muted or its PERSON being muted account-wide, and
+///    only the peer-aware call sees the second. Passing `hasPeer: true` is what
+///    the [_ChannelMenuItem] comment was holding this seat open for: without it
+///    a peer-muted DM would render idle in the one menu that never learned about
+///    peers (cage-match #135 round 7, Tesla).
+class _DmMenuItem extends ConsumerWidget {
+  const _DmMenuItem({required this.dm, required this.isActive});
+
+  final Channel dm;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final myId = ref.watch(currentUserProvider)?.userId;
+    final roster = ref.watch(channelRosterProvider(dm.id)).value;
+    final unread = isActive ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
+    final muted = watchConversationMute(ref, dm.id,
+            peerId: dmPeerId(roster, myId), hasPeer: true)
+        .isMuted;
+    return _MenuItemRow(
+      conversationId: dm.id,
+      name: dmPeerTitle(roster, myId),
+      unread: unread,
+      muted: muted,
+      isActive: isActive,
+    );
+  }
+}
+
+/// The shared row body for both kinds of dropdown item: label, then ONE trailing
+/// marker. Shared on purpose — the unread-vs-muted fork below is a decision the
+/// mute cage-match landed twice already, and a channel row and a DM row drawing
+/// it from two copies is precisely the two-readers-one-fact drift this file's
+/// providers were restructured to remove.
+class _MenuItemRow extends StatelessWidget {
+  const _MenuItemRow({
+    required this.conversationId,
+    required this.name,
+    required this.unread,
+    required this.muted,
+    required this.isActive,
+  });
+
+  final String conversationId;
+  final String name;
+  final int unread;
+  final bool muted;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    // The ACTIVE row carries no marker. The collapsed DropdownButton renders it
+    // inside the app bar, inches from _MuteConversationAction — which states the
+    // same mute AND is the control that changes it, so a glyph here is a second
+    // bell that only opens a menu (cage-match #136).
+    if (isActive) {
+      return Text(name, overflow: TextOverflow.ellipsis);
+    }
     return Row(
       children: [
         Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
         // Attention first, same polarity as the sidebar row: a peer mute filters
         // per MESSAGE, so a muted-looking row can still have a real count from
         // someone else, and the glyph must never swallow it (cage-match #135
-        // round 12, Tesla — who noted this fork was copied here awaiting the day
-        // DMs join this switcher, #2940).
+        // round 12, Tesla).
         if (unread > 0) ...[
           const SizedBox(width: 8),
-          UnreadBadge(key: Key('unread-item-$channelId'), count: unread),
+          UnreadBadge(key: Key('unread-item-$conversationId'), count: unread),
         ] else if (muted) ...[
           const SizedBox(width: 8),
           Icon(Icons.notifications_off_outlined,
-              key: Key('muted-item-$channelId'),
+              key: Key('muted-item-$conversationId'),
               size: 16,
               color: Theme.of(context).colorScheme.onSurfaceVariant),
         ],
       ],
+    );
+  }
+}
+
+/// How long the composer's state changes take. Short enough to feel like a
+/// response to the keystroke, long enough to read as a light coming on rather
+/// than a repaint.
+const Duration _kComposerFade = Duration(milliseconds: 220);
+
+/// Honour the platform's reduce-motion setting: the composer's affordances are
+/// carried by COLOUR and PRESENCE, so collapsing their duration to zero loses
+/// nothing but the movement (which is exactly what the setting asks for).
+Duration _fadeFor(BuildContext context) =>
+    MediaQuery.disableAnimationsOf(context) ? Duration.zero : _kComposerFade;
+
+/// The hairline under the composer, which ignites in `colorScheme.primary` from
+/// the left when the field takes focus.
+///
+/// This is the composer's entire container. The base rule is always drawn (so
+/// there is a visible "you can type here" edge at rest — a borderless field with
+/// no rule would be a blank patch of ground), and the lit rule grows over it.
+class _Waterline extends StatelessWidget {
+  const _Waterline({required this.lit});
+
+  final bool lit;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 1.5,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(color: scheme.outlineVariant),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AnimatedFractionallySizedBox(
+              duration: _fadeFor(context),
+              curve: Curves.easeOutCubic,
+              widthFactor: lit ? 1.0 : 0.0,
+              alignment: Alignment.centerLeft,
+              child: ColoredBox(color: scheme.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The signing seal beside the composer: the mark this app already uses for a
+/// verified signature, dim until there is something to sign.
+///
+/// Deliberately DECORATIVE to assistive tech ([ExcludeSemantics]). Signing is
+/// automatic and not a choice the user makes here, so announcing a state change
+/// on every first-and-last keystroke would be noise; the fact that messages are
+/// signed is stated where it can be read at leisure (Settings → Carried Record).
+class _SealMark extends StatelessWidget {
+  const _SealMark({required this.armed});
+
+  final bool armed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ExcludeSemantics(
+      child: Padding(
+        // Sits on the text baseline rather than the field's full height, so it
+        // reads as part of the line you are writing, not a button beside it.
+        padding: const EdgeInsets.only(bottom: 9),
+        child: TweenAnimationBuilder<double>(
+          duration: _fadeFor(context),
+          curve: Curves.easeOut,
+          tween: Tween(begin: 0, end: armed ? 1 : 0),
+          builder: (context, t, _) => Icon(
+            Icons.verified_outlined,
+            size: 18,
+            color: Color.lerp(
+              scheme.outlineVariant,
+              scheme.primary,
+              t,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The send control as a signal lamp: dim at rest, `colorScheme.secondary` once
+/// there is a message to send.
+class _SendLamp extends StatelessWidget {
+  const _SendLamp({super.key, required this.armed, required this.onPressed});
+
+  final bool armed;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return TweenAnimationBuilder<double>(
+      duration: _fadeFor(context),
+      curve: Curves.easeOut,
+      tween: Tween(begin: 0, end: armed ? 1 : 0),
+      builder: (context, t, _) => IconButton(
+        onPressed: onPressed,
+        tooltip: 'Send',
+        // IconButton's default 48×48 target is kept — the glyph is small, the
+        // thumb target is not.
+        color: Color.lerp(scheme.onSurfaceVariant, scheme.secondary, t),
+        icon: const Icon(Icons.send_outlined),
+      ),
     );
   }
 }
@@ -797,17 +1083,34 @@ class _ComposerState extends ConsumerState<Composer> {
   List<MapEntry<String, String>> _suggestions = const [];
   int _selected = 0;
 
+  /// Is there something to send? Drives the seal and the send lamp together —
+  /// they are two readings of one fact, so they must never disagree.
+  bool _armed = false;
+
+  /// Is the composer focused? Lights the waterline.
+  bool _focused = false;
+
   @override
   void initState() {
     super.initState();
     _controller.addListener(_updateSuggestions);
+    _controller.addListener(_updateArmed);
   }
 
   @override
   void dispose() {
     _controller.removeListener(_updateSuggestions);
+    _controller.removeListener(_updateArmed);
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Own listener rather than folding into [_updateSuggestions]: both are
+  /// per-keystroke, and each guards its OWN transition so ordinary typing
+  /// rebuilds nothing. `_armed` flips at most twice per message.
+  void _updateArmed() {
+    final armed = _controller.text.trim().isNotEmpty;
+    if (armed != _armed) setState(() => _armed = armed);
   }
 
   /// The caret offset when it is a valid, collapsed cursor; else -1 (a range
@@ -906,11 +1209,23 @@ class _ComposerState extends ConsumerState<Composer> {
         children: [
           if (_suggestions.isNotEmpty) _buildSuggestions(context),
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.fromLTRB(12, 4, 8, 8),
             child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            // The seal. Every message here is signed at birth, so the mark that
+            // means "signed" elsewhere in the app belongs at the moment you
+            // write one — and it is deliberately the SAME glyph and colour the
+            // Carried Record uses for a verified signature, not a new one.
+            // (`Icons.key_outlined` was the obvious pick and is wrong: Settings
+            // already spends it on passkeys, so a key here would read "sign-in".)
+            _SealMark(armed: _armed),
+            const SizedBox(width: 10),
             Expanded(
               child: Focus(
+                onFocusChange: (has) {
+                  if (has != _focused) setState(() => _focused = has);
+                },
                 // Physical keyboard: Enter sends, Shift+Enter inserts a newline.
                 // Scoped to hardware key events, so mobile soft keyboards keep
                 // their existing newline + send-button behaviour untouched.
@@ -955,18 +1270,46 @@ class _ComposerState extends ConsumerState<Composer> {
                   }
                   return KeyEventResult.ignored;
                 },
-                child: TextField(
-                  controller: _controller,
-                  minLines: 1,
-                  maxLines: 4,
-                  textInputAction: TextInputAction.send,
-                  decoration: const InputDecoration(
-                    hintText: 'Message',
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
-                  onSubmitted: (_) => _send(),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _controller,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.send,
+                      decoration: InputDecoration(
+                        // An invitation, not a label. "Message" reads as a field
+                        // NAME on a form; the ellipsis and the verb say a
+                        // sentence goes here. Dimmer than default so it recedes
+                        // behind what you type.
+                        hintText: 'Write a message…',
+                        hintStyle: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant
+                              .withValues(alpha: 0.6),
+                        ),
+                        // NO container. This file's theme states its own law —
+                        // "no shadows — separation is by hairline" — and the
+                        // composer was the last component still wearing a box.
+                        // `isCollapsed` also strips Material's ~48px minimum
+                        // field height, so the text sits on the ground the way
+                        // the message bubbles do. The affordance moves to the
+                        // waterline below.
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        filled: false,
+                        isCollapsed: true,
+                        contentPadding:
+                            const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                      onSubmitted: (_) => _send(),
+                    ),
+                    _Waterline(lit: _focused),
+                  ],
                 ),
               ),
             ),
@@ -976,10 +1319,23 @@ class _ComposerState extends ConsumerState<Composer> {
             // reachable Enter-to-send, and the soft keyboard's action key alone
             // isn't a discoverable send affordance.
             if (_showSendButton) ...[
-              const SizedBox(width: 8),
-              IconButton.filled(
+              const SizedBox(width: 4),
+              // The lamp. Glyph only — no fill, no border — and it LIGHTS rather
+              // than appears: dim while there is nothing to send, beacon amber
+              // (`colorScheme.secondary`) once there is. A signal lamp is the
+              // right metaphor for a maritime skin, and `secondary` was a colour
+              // the palette defined and almost never spent.
+              //
+              // Always ENABLED, never disabled-on-empty: a control that vanishes
+              // from the accessibility tree between keystrokes is worse than one
+              // that no-ops, and `_send` already returns early on an empty body.
+              // So the colour is a hint about state, not a gate on the action.
+              _SendLamp(
+                // Keyed so the tests target the CONTROL, not its glyph — finding
+                // it by `Icons.send` is what made a pure restyle a 9-test edit.
+                key: const Key('composer-send'),
+                armed: _armed,
                 onPressed: _send,
-                icon: const Icon(Icons.send),
               ),
             ],
           ],

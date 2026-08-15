@@ -135,10 +135,13 @@ void main() {
     expect(ids, containsAll(<String>{'c1', 'dm1'}));
   });
 
-  testWidgets('a DM selected on wide does NOT crash the narrow AppBar switcher',
-      (tester) async {
-    // ≥2 channels so the narrow layout WOULD build the channel dropdown — the
-    // exact condition under which a DM activeId fed to DropdownButton.value asserts.
+  testWidgets('a DM selected on wide survives the resize to narrow — switcher '
+      'included, not gated away', (tester) async {
+    // ≥2 channels so the narrow layout builds the dropdown. This used to be the
+    // exact condition under which a DM activeId fed to DropdownButton.value
+    // asserted, and the fix was a gate that hid the switcher entirely. The gate
+    // is gone (#2798 task #12): the DM is now IN the item list, so `value` has its
+    // match and the user keeps a way out of the conversation.
     final rest = FakeRestApi(channels: const [
       Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
       Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
@@ -164,10 +167,11 @@ void main() {
     tester.view.physicalSize = const Size(400, 900);
     await tester.pumpAndSettle();
 
-    // No DropdownButton value/items assertion, and the DM is titled by its peer —
-    // the channel switcher is NOT fed a foreign DM id.
+    // No DropdownButton value/items assertion — because the DM is now one of the
+    // items, so the switcher stays up and the collapsed button renders the DM's
+    // own row, titled by its peer.
     expect(tester.takeException(), isNull);
-    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.byType(DropdownButton<String>), findsOneWidget);
     expect(find.text('alice'), findsOneWidget);
   });
 
