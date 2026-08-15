@@ -164,6 +164,23 @@ class ChatRepository {
   Stream<List<Message>> watchChannel(String channelId) =>
       _cache.watchChannel(channelId);
 
+  /// Every inbound message, across ALL channels, announced once at ingest.
+  ///
+  /// [watchChannel] is per-channel and cache-backed, so it answers "what is in
+  /// this conversation" — it cannot answer "something just arrived somewhere",
+  /// which is what a ring needs (#2808): a call invitation must reach you in a
+  /// DM you are not currently looking at.
+  ///
+  /// Announced **after** a successful cache write and never on failure, so a
+  /// listener can always open the conversation and find the message it was told
+  /// about. Broadcast (a ring listener is one of potentially several consumers)
+  /// and closed by [dispose].
+  ///
+  /// NOT a filter for "new" — a reconnect drain replays history through this
+  /// same path. Freshness is the consumer's job (`admitRing`).
+  Stream<Message> get inboundMessages => _inboundMessages.stream;
+  final _inboundMessages = StreamController<Message>.broadcast();
+
   /// Cross-channel grep search over cached message bodies (#8, grep tier).
   /// Delegates to the cache; retraction-safe by construction (retracted rows are
   /// hard-deleted). Blocked-sender filtering is layered by the search provider,
@@ -320,6 +337,10 @@ class ChatRepository {
   Future<void> dispose() async {
     _disposed = true;
     _runEpoch++; // cancel any in-flight choreography
+    // Closed FIRST, before the inbound drain below: a unit finishing mid-teardown
+    // must not announce into a stream whose listeners are being torn down. The
+    // `isClosed` guard in _onMessage is what makes that safe rather than throwing.
+    unawaited(_inboundMessages.close());
     _failAllAckWaiters();
     for (final s in _subs) {
       await s.cancel();
@@ -504,7 +525,12 @@ class ChatRepository {
       await _persistInbound(m);
     } catch (e, st) {
       _telemetry.inboundWriteFailed(e, st);
+      return; // not persisted → not announced (see [inboundMessages]).
     }
+    // Announced only AFTER a successful persist, so an announcement can never
+    // point at a conversation the message isn't in. `_disposed` is re-checked
+    // because `_persistInbound` awaits — teardown can land inside it.
+    if (!_disposed && !_inboundMessages.isClosed) _inboundMessages.add(m);
   }
 
   /// Verify an inbound message's sovereign origin (if any) ONCE at ingest, then

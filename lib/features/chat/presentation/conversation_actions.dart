@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
+import '../../call/domain/call_invite.dart' show kCallInviteBody;
 import '../../call/presentation/call_screen.dart' show pushCall;
 import '../../moderation/application/moderation_controller.dart';
 import '../application/chat_providers.dart';
@@ -94,6 +95,12 @@ Future<void> startCall(
     // was inverted in the pre-move `_call` (cage-match #133).
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
+    await _ring(ref, dm.id);
+    // RE-checked after the ring: `_ring` awaits, so the mounted check above no
+    // longer holds here. A mounted check does not survive a subsequent await —
+    // adding the ring introduced a NEW async gap, not just another statement
+    // (the #133 bug class, caught by `use_build_context_synchronously`).
+    if (!context.mounted) return;
     await pushCall(context, dm.id);
     return;
   } on DmTargetNotFound {
@@ -110,6 +117,29 @@ Future<void> startCall(
   // first, which left the error path as the last place the old habit survived).
   if (!context.mounted) return;
   messenger.showSnackBar(SnackBar(content: Text(failure)));
+}
+
+/// Ring the peer: send the signed call invitation into the DM (#2808).
+///
+/// Deliberately **best-effort and non-blocking on failure** — the call itself is
+/// the capability, the ring is the courtesy. If the invite fails to send, the
+/// caller still lands in the room and can reach the peer another way; refusing
+/// to place the call because the doorbell broke would be the worse trade.
+///
+/// Ordering: sent BEFORE `pushCall`, so the peer's device starts ringing while
+/// we are connecting rather than after. `sendMessage` commits the optimistic row
+/// before the wire send (invariant B-optimistic), so this returns fast and does
+/// not gate navigation on a round-trip.
+///
+/// The body is [kCallInviteBody] and nothing else — room, caller and start time
+/// are already inside the signed envelope (channelId, signing key, signedAtMs).
+Future<void> _ring(WidgetRef ref, String channelId) async {
+  try {
+    final repo = await ref.read(chatRepositoryProvider.future);
+    await repo.sendMessage(channelId, kCallInviteBody);
+  } catch (_) {
+    // Swallowed on purpose — see the doc above. The call proceeds.
+  }
 }
 
 /// The contact surfaces this file offers, as a closed set rather than a free
