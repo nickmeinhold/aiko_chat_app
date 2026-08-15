@@ -582,6 +582,119 @@ class _MenuItemRow extends StatelessWidget {
   }
 }
 
+/// How long the composer's state changes take. Short enough to feel like a
+/// response to the keystroke, long enough to read as a light coming on rather
+/// than a repaint.
+const Duration _kComposerFade = Duration(milliseconds: 220);
+
+/// Honour the platform's reduce-motion setting: the composer's affordances are
+/// carried by COLOUR and PRESENCE, so collapsing their duration to zero loses
+/// nothing but the movement (which is exactly what the setting asks for).
+Duration _fadeFor(BuildContext context) =>
+    MediaQuery.disableAnimationsOf(context) ? Duration.zero : _kComposerFade;
+
+/// The hairline under the composer, which ignites in `colorScheme.primary` from
+/// the left when the field takes focus.
+///
+/// This is the composer's entire container. The base rule is always drawn (so
+/// there is a visible "you can type here" edge at rest — a borderless field with
+/// no rule would be a blank patch of ground), and the lit rule grows over it.
+class _Waterline extends StatelessWidget {
+  const _Waterline({required this.lit});
+
+  final bool lit;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 1.5,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(color: scheme.outlineVariant),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AnimatedFractionallySizedBox(
+              duration: _fadeFor(context),
+              curve: Curves.easeOutCubic,
+              widthFactor: lit ? 1.0 : 0.0,
+              alignment: Alignment.centerLeft,
+              child: ColoredBox(color: scheme.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The signing seal beside the composer: the mark this app already uses for a
+/// verified signature, dim until there is something to sign.
+///
+/// Deliberately DECORATIVE to assistive tech ([ExcludeSemantics]). Signing is
+/// automatic and not a choice the user makes here, so announcing a state change
+/// on every first-and-last keystroke would be noise; the fact that messages are
+/// signed is stated where it can be read at leisure (Settings → Carried Record).
+class _SealMark extends StatelessWidget {
+  const _SealMark({required this.armed});
+
+  final bool armed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ExcludeSemantics(
+      child: Padding(
+        // Sits on the text baseline rather than the field's full height, so it
+        // reads as part of the line you are writing, not a button beside it.
+        padding: const EdgeInsets.only(bottom: 9),
+        child: TweenAnimationBuilder<double>(
+          duration: _fadeFor(context),
+          curve: Curves.easeOut,
+          tween: Tween(begin: 0, end: armed ? 1 : 0),
+          builder: (context, t, _) => Icon(
+            Icons.verified_outlined,
+            size: 18,
+            color: Color.lerp(
+              scheme.outlineVariant,
+              scheme.primary,
+              t,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The send control as a signal lamp: dim at rest, `colorScheme.secondary` once
+/// there is a message to send.
+class _SendLamp extends StatelessWidget {
+  const _SendLamp({super.key, required this.armed, required this.onPressed});
+
+  final bool armed;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return TweenAnimationBuilder<double>(
+      duration: _fadeFor(context),
+      curve: Curves.easeOut,
+      tween: Tween(begin: 0, end: armed ? 1 : 0),
+      builder: (context, t, _) => IconButton(
+        onPressed: onPressed,
+        tooltip: 'Send',
+        // IconButton's default 48×48 target is kept — the glyph is small, the
+        // thumb target is not.
+        color: Color.lerp(scheme.onSurfaceVariant, scheme.secondary, t),
+        icon: const Icon(Icons.send_outlined),
+      ),
+    );
+  }
+}
+
 /// A compact unread-count pill. Caps the display at `99+` so a noisy channel
 /// never widens the app bar. Uses the M3 error/​primary container colours so it
 /// reads as a notification marker in both light and dark themes.
@@ -970,17 +1083,34 @@ class _ComposerState extends ConsumerState<Composer> {
   List<MapEntry<String, String>> _suggestions = const [];
   int _selected = 0;
 
+  /// Is there something to send? Drives the seal and the send lamp together —
+  /// they are two readings of one fact, so they must never disagree.
+  bool _armed = false;
+
+  /// Is the composer focused? Lights the waterline.
+  bool _focused = false;
+
   @override
   void initState() {
     super.initState();
     _controller.addListener(_updateSuggestions);
+    _controller.addListener(_updateArmed);
   }
 
   @override
   void dispose() {
     _controller.removeListener(_updateSuggestions);
+    _controller.removeListener(_updateArmed);
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Own listener rather than folding into [_updateSuggestions]: both are
+  /// per-keystroke, and each guards its OWN transition so ordinary typing
+  /// rebuilds nothing. `_armed` flips at most twice per message.
+  void _updateArmed() {
+    final armed = _controller.text.trim().isNotEmpty;
+    if (armed != _armed) setState(() => _armed = armed);
   }
 
   /// The caret offset when it is a valid, collapsed cursor; else -1 (a range
@@ -1079,11 +1209,23 @@ class _ComposerState extends ConsumerState<Composer> {
         children: [
           if (_suggestions.isNotEmpty) _buildSuggestions(context),
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.fromLTRB(12, 4, 8, 8),
             child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            // The seal. Every message here is signed at birth, so the mark that
+            // means "signed" elsewhere in the app belongs at the moment you
+            // write one — and it is deliberately the SAME glyph and colour the
+            // Carried Record uses for a verified signature, not a new one.
+            // (`Icons.key_outlined` was the obvious pick and is wrong: Settings
+            // already spends it on passkeys, so a key here would read "sign-in".)
+            _SealMark(armed: _armed),
+            const SizedBox(width: 10),
             Expanded(
               child: Focus(
+                onFocusChange: (has) {
+                  if (has != _focused) setState(() => _focused = has);
+                },
                 // Physical keyboard: Enter sends, Shift+Enter inserts a newline.
                 // Scoped to hardware key events, so mobile soft keyboards keep
                 // their existing newline + send-button behaviour untouched.
@@ -1128,18 +1270,46 @@ class _ComposerState extends ConsumerState<Composer> {
                   }
                   return KeyEventResult.ignored;
                 },
-                child: TextField(
-                  controller: _controller,
-                  minLines: 1,
-                  maxLines: 4,
-                  textInputAction: TextInputAction.send,
-                  decoration: const InputDecoration(
-                    hintText: 'Message',
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
-                  onSubmitted: (_) => _send(),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _controller,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.send,
+                      decoration: InputDecoration(
+                        // An invitation, not a label. "Message" reads as a field
+                        // NAME on a form; the ellipsis and the verb say a
+                        // sentence goes here. Dimmer than default so it recedes
+                        // behind what you type.
+                        hintText: 'Write a message…',
+                        hintStyle: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant
+                              .withValues(alpha: 0.6),
+                        ),
+                        // NO container. This file's theme states its own law —
+                        // "no shadows — separation is by hairline" — and the
+                        // composer was the last component still wearing a box.
+                        // `isCollapsed` also strips Material's ~48px minimum
+                        // field height, so the text sits on the ground the way
+                        // the message bubbles do. The affordance moves to the
+                        // waterline below.
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        filled: false,
+                        isCollapsed: true,
+                        contentPadding:
+                            const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                      onSubmitted: (_) => _send(),
+                    ),
+                    _Waterline(lit: _focused),
+                  ],
                 ),
               ),
             ),
@@ -1149,20 +1319,23 @@ class _ComposerState extends ConsumerState<Composer> {
             // reachable Enter-to-send, and the soft keyboard's action key alone
             // isn't a discoverable send affordance.
             if (_showSendButton) ...[
-              const SizedBox(width: 8),
-              // Glyph only — no fill, no border. The composer's own outlined field
-              // already draws the one box in this row; a filled/bordered button
-              // beside it made two competing containers. Outline paper plane in
-              // onSurfaceVariant (the maritime dim ink), so it reads as an
-              // affordance without shouting over the message you just typed.
-              IconButton(
+              const SizedBox(width: 4),
+              // The lamp. Glyph only — no fill, no border — and it LIGHTS rather
+              // than appears: dim while there is nothing to send, beacon amber
+              // (`colorScheme.secondary`) once there is. A signal lamp is the
+              // right metaphor for a maritime skin, and `secondary` was a colour
+              // the palette defined and almost never spent.
+              //
+              // Always ENABLED, never disabled-on-empty: a control that vanishes
+              // from the accessibility tree between keystrokes is worse than one
+              // that no-ops, and `_send` already returns early on an empty body.
+              // So the colour is a hint about state, not a gate on the action.
+              _SendLamp(
                 // Keyed so the tests target the CONTROL, not its glyph — finding
                 // it by `Icons.send` is what made a pure restyle a 9-test edit.
                 key: const Key('composer-send'),
+                armed: _armed,
                 onPressed: _send,
-                tooltip: 'Send',
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                icon: const Icon(Icons.send_outlined),
               ),
             ],
           ],
