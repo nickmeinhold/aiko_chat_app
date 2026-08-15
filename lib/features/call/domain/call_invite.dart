@@ -82,7 +82,9 @@ class CallInvite {
   /// The caller, as carried on the signed message.
   final MessageSender from;
 
-  /// When the caller started the call (the message's server timestamp).
+  /// When the caller started the call — the SIGNED `signedAtMs`, not the
+  /// island-written server timestamp. (The two disagree, and only one of them is
+  /// inside the signature.)
   final DateTime startedAt;
 
   /// Equality is IDENTITY, not shape — see [inviteId].

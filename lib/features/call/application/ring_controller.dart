@@ -61,6 +61,32 @@ class RingController extends Notifier<CallInvite?> {
   void _forget(DateTime now) => _settled.removeWhere(
       (_, at) => now.difference(at) > kCallInviteFreshness * 2);
 
+  /// Re-publish the live invitation after a rebuild, re-arming its expiry with
+  /// the time it has LEFT.
+  ///
+  /// The deadline is DERIVED from the signed [CallInvite.startedAt], never
+  /// restarted — so any number of rebuilds inside one ring cannot extend it, and
+  /// the timer that `onDispose` just cancelled is restored without resetting.
+  /// A ring whose window already elapsed during the rebuild gap settles rather
+  /// than returning from the dead.
+  CallInvite? _republish() {
+    final live = _live;
+    if (live == null) return null;
+    final left = kCallRingDuration - DateTime.now().toUtc().difference(live.startedAt);
+    if (left <= Duration.zero) {
+      _settle(live);
+      return null;
+    }
+    _expiry ??= Timer(left, stopRinging);
+    return live;
+  }
+
+  /// Record an invitation as dealt with. See [_settled].
+  void _settle(CallInvite invite) {
+    _settled[invite.inviteId] = DateTime.now().toUtc();
+    if (_live == invite) _live = null;
+  }
+
   @override
   CallInvite? build() {
     // Cancel BEFORE branching on the new async value, not inside `whenData`: a
@@ -88,16 +114,18 @@ class RingController extends Notifier<CallInvite?> {
     repoAsync.whenData((repo) {
       _sub = repo.inboundMessages.listen(_consider);
     });
+    // `onDispose` fires on every REBUILD, not only on teardown — so clearing
+    // `_live` here killed the ring on exactly the rebuild this design exists to
+    // survive, and the round-1 commit that claimed otherwise was wrong
+    // (cage-match #139 R4, Tesla; pinned by `a live ring SURVIVES a repository
+    // rebuild`). Only the subscription and the timer are dropped here; both are
+    // re-created below, and the invitation itself outlives the rebuild.
     ref.onDispose(() {
       _sub?.cancel();
       _expiry?.cancel();
       _expiry = null;
-      _live = null; // logout must not leave a ring armed for the next user.
     });
-    // Re-publish the live invitation across the rebuild, but only while it is
-    // still within its ring window — an expiry timer that fired during the
-    // rebuild gap must not be resurrected.
-    return _live;
+    return _republish();
   }
 
   void _consider(Message m) {
@@ -126,6 +154,13 @@ class RingController extends Notifier<CallInvite?> {
     if (_settled.containsKey(invite.inviteId)) return;
     // A DIFFERENT invite while already ringing REPLACES the first (last-wins) —
     // the most recent caller is the live one, and stacking rings has no sane UI.
+    // The DISPLACED invitation is settled on the way out: replacement is a third
+    // state, neither "ringing" nor "dealt with", and leaving it unrecorded let
+    // A's at-least-once replay steal the banner back from B seconds later — so
+    // Answer would have joined A's room while the user was looking at B
+    // (cage-match #139 R4, Tesla).
+    final displaced = _live;
+    if (displaced != null) _settle(displaced);
     _expiry?.cancel();
     _expiry = Timer(kCallRingDuration, stopRinging);
     _live = invite;
@@ -147,7 +182,7 @@ class RingController extends Notifier<CallInvite?> {
     final done = _live;
     // RECORDED as settled before clearing — otherwise the replay that arrives a
     // second after Ignore finds no `_live` to match and rings again.
-    if (done != null) _settled[done.inviteId] = DateTime.now().toUtc();
+    if (done != null) _settle(done);
     _live = null; // cleared too, or the next rebuild would re-publish it.
     state = null;
   }

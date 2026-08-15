@@ -205,6 +205,24 @@ void main() {
         reason: 'a retracted invitation must never ring');
   });
 
+  test('a live ring SURVIVES a repository rebuild', () async {
+    // The case the feature exists for: a FIRST-EVER DM invite seeds the DM,
+    // which invalidates dmsProvider, which rebuilds chatRepositoryProvider —
+    // while the ring is live. Nothing in the suite invalidated the repo mid-ring
+    // until now (cage-match #139 R4, Tesla).
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+    transport.emitMessage(await inbound());
+    await pump();
+    expect(container.read(incomingRingProvider), isNotNull);
+
+    container.invalidate(chatRepositoryProvider);
+    await pump();
+
+    expect(container.read(incomingRingProvider), isNotNull,
+        reason: 'a repo reconnecting is not the user ignoring a call');
+  });
+
   test('stopRinging clears it', () async {
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
