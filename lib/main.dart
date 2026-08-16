@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
 import 'app/theme/maritime_theme.dart';
+import 'features/call/presentation/ring_overlay.dart';
 import 'features/settings/application/theme_mode_controller.dart';
 
 Future<void> main() async {
@@ -36,6 +37,10 @@ class AikoChatApp extends ConsumerWidget {
       darkTheme: maritimeTheme(),
       themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
+      // ABOVE the Navigator, so an incoming call reaches you on any route
+      // (#2808). `child` is null only before the first route builds.
+      builder: (context, child) =>
+          RingOverlay(child: child ?? const SizedBox.shrink()),
     );
   }
 }

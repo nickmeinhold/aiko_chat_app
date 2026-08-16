@@ -164,6 +164,48 @@ class ChatRepository {
   Stream<List<Message>> watchChannel(String channelId) =>
       _cache.watchChannel(channelId);
 
+  /// Announce a just-persisted inbound message. Called from [_persistInbound] —
+  /// the SINGLE persist door, shared by live fanout AND history sync — so both
+  /// arrival paths announce.
+  ///
+  /// This was originally wired into `_onMessage` (live only), which made the
+  /// doc below a lie and left a real hole: a socket blip of even a second
+  /// delivers the message through history instead, where it persisted in
+  /// silence and never rang (cage-match #139, Tesla). Announcing from the
+  /// persist door makes "freshness is the consumer's job" true rather than
+  /// aspirational — history messages ARE announced, and `admitRing` refuses the
+  /// stale ones on their signed timestamp.
+  void _announceInbound(Message m) {
+    // Called ONLY when the cache reports `inserted` — a first-time insert of
+    // this server ULID. A dead-id suppression writes nothing and an update is a
+    // re-echo of a message already announced, so neither reaches here, and the
+    // "announced once at ingest" contract below is literally true rather than
+    // aspirational.
+    //
+    // The predicate is computed INSIDE the cache transaction, which is what
+    // dissolved the earlier post-write retraction read and its one-sided race
+    // (cage-match #139 R3→R5, Carnot). No second door, no window.
+    if (_disposed || _inboundMessages.isClosed) return;
+    _inboundMessages.add(m);
+  }
+
+  /// Every inbound message, across ALL channels, announced once at ingest.
+  ///
+  /// [watchChannel] is per-channel and cache-backed, so it answers "what is in
+  /// this conversation" — it cannot answer "something just arrived somewhere",
+  /// which is what a ring needs (#2808): a call invitation must reach you in a
+  /// DM you are not currently looking at.
+  ///
+  /// Announced **after** a successful cache write and never on failure, so a
+  /// listener can always open the conversation and find the message it was told
+  /// about. Broadcast (a ring listener is one of potentially several consumers)
+  /// and closed by [dispose].
+  ///
+  /// NOT a filter for "new" — a reconnect drain replays history through this
+  /// same path. Freshness is the consumer's job (`admitRing`).
+  Stream<Message> get inboundMessages => _inboundMessages.stream;
+  final _inboundMessages = StreamController<Message>.broadcast();
+
   /// Cross-channel grep search over cached message bodies (#8, grep tier).
   /// Delegates to the cache; retraction-safe by construction (retracted rows are
   /// hard-deleted). Blocked-sender filtering is layered by the search provider,
@@ -320,6 +362,10 @@ class ChatRepository {
   Future<void> dispose() async {
     _disposed = true;
     _runEpoch++; // cancel any in-flight choreography
+    // Closed FIRST, before the inbound drain below: a unit finishing mid-teardown
+    // must not announce into a stream whose listeners are being torn down. The
+    // `isClosed` guard in _onMessage is what makes that safe rather than throwing.
+    unawaited(_inboundMessages.close());
     _failAllAckWaiters();
     for (final s in _subs) {
       await s.cancel();
@@ -522,7 +568,8 @@ class ChatRepository {
   Future<void> _persistInbound(Message m) async {
     final o = m.origin;
     if (o == null) {
-      await _cache.upsertInbound(m);
+      final r = await _cache.upsertInbound(m);
+      if (r.inserted) _announceInbound(m);
       return;
     }
     final valid = await verifyOrigin(o,
@@ -535,8 +582,13 @@ class ChatRepository {
     // and firing AFTER the durable write, is what makes this a per-MESSAGE
     // base-rate probe rather than a per-DELIVERY one, and stops a failed write
     // from counting a ghost (cage-match Carnot + Tesla, PR #93 R1).
-    final newlyInvalid =
-        await _cache.upsertInbound(m.copyWith(originCryptoValid: valid));
+    final verified = m.copyWith(originCryptoValid: valid);
+    final result = await _cache.upsertInbound(verified);
+    final newlyInvalid = result.newlyInvalid;
+    // Announce the VERIFIED copy, never the raw one — a consumer gating on
+    // `originCryptoValid` (the ring does) would otherwise see `null` on every
+    // message and refuse them all.
+    if (result.inserted) _announceInbound(verified);
     if (newlyInvalid) {
       _telemetry.originVerificationFailed(
         senderUserId: m.sender.userId,

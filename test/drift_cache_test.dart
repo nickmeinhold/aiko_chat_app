@@ -297,7 +297,9 @@ void main() {
       await cache.applyRetraction(retract('01A', '01Z')); // again
       expect(await chanRows(), isEmpty);
       // And a later re-upsert is still suppressed (dead id persisted once).
-      expect(await cache.upsertInbound(server('01A', 'chan', 'x')), isFalse);
+      expect((await cache.upsertInbound(server('01A', 'chan', 'x'))).inserted,
+          isFalse,
+          reason: 'dead id persisted once — still suppressed, nothing written');
       expect(await chanRows(), isEmpty);
     });
 
@@ -317,8 +319,11 @@ void main() {
       // a reconnect where the retraction is seen first). Recording the dead id
       // must not require the row to exist.
       await cache.applyRetraction(retract('01A', '01Z'));
-      final wrote = await cache.upsertInbound(server('01A', 'chan', 'late'));
-      expect(wrote, isFalse, reason: 'suppressed at Door A, nothing written');
+      final r = await cache.upsertInbound(server('01A', 'chan', 'late'));
+      // `inserted` is the field that actually means "nothing written" — the old
+      // bool was `newlyInvalid` and only coincidentally false here, so this
+      // assertion now tests the reason it always claimed to (cage-match #139 R5).
+      expect(r.inserted, isFalse, reason: 'suppressed at Door A, nothing written');
       expect(await chanRows(), isEmpty);
     });
 
@@ -327,8 +332,8 @@ void main() {
       await cache.upsertInbound(server('01A', 'chan', 'x'));
       await cache.applyRetraction(retract('01A', '01Z')); // deletes it
       // A buffered fanout frame or a history re-walk re-delivers 01A.
-      final wrote = await cache.upsertInbound(server('01A', 'chan', 'x'));
-      expect(wrote, isFalse);
+      final r = await cache.upsertInbound(server('01A', 'chan', 'x'));
+      expect(r.inserted, isFalse, reason: 'no resurrection, nothing written');
       expect(await chanRows(), isEmpty, reason: 'no resurrection');
     });
 

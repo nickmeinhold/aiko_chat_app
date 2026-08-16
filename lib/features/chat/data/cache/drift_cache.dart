@@ -707,7 +707,8 @@ class DriftCache extends GeneratedDatabase {
   /// history re-walk) returns `false`, so a per-message base-rate probe can fire
   /// once per message instead of once per delivery (PR #93 R1, cage-match
   /// Carnot + Tesla).
-  Future<bool> upsertInbound(Message serverMsg) async {
+  Future<({bool inserted, bool newlyInvalid})> upsertInbound(
+      Message serverMsg) async {
     final u = serverMsg.id;
     if (u == null) {
       throw ArgumentError('upsertInbound requires a server ULID (id != null)');
@@ -725,6 +726,7 @@ class DriftCache extends GeneratedDatabase {
           'origin-present with a null verdict is illegal');
     }
     var wrote = false;
+    var inserted = false;
     final newlyInvalid = await transaction(() async {
       // Door A of two-door retraction suppression (island #104). A dead id is
       // presence-independent, so a taken-down message that arrives AFTER its
@@ -801,6 +803,7 @@ class DriftCache extends GeneratedDatabase {
       } else {
         await _insert(_M.table, _cols(serverMsg, localSeq: 0));
         wrote = true;
+        inserted = true;
         // First insert: newly-invalid iff a carried origin verified false (origin
         // present ⟹ verdict non-null, guarded at method entry).
         return serverMsg.origin != null && serverMsg.originCryptoValid == false;
@@ -809,7 +812,14 @@ class DriftCache extends GeneratedDatabase {
     // A dead-id suppression (early return) writes nothing — don't signal watchers
     // for a no-op (cage-match Tesla), matching drift's write-only stream signals.
     if (wrote) notifyUpdates({const TableUpdate(_M.table)});
-    return newlyInvalid;
+    // TWO distinct facts, no longer sharing one bool (cage-match #139 R5,
+    // Carnot). `inserted` is true ONLY for a first-time insert of this server
+    // ULID — false for a dead-id suppression (nothing written) AND for an
+    // update/re-echo of a row we already had. That is exactly the predicate an
+    // ingest ANNOUNCEMENT needs, and it is computed INSIDE the transaction, so
+    // there is no post-write read and no window for a retraction to land
+    // between the write and the decision.
+    return (inserted: inserted, newlyInvalid: newlyInvalid);
   }
 
   // --- W6: retraction (moderator takedown, island #104) ----------------------
