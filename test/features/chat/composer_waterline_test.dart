@@ -176,4 +176,33 @@ void main() {
     await tester.pumpAndSettle();
     expect(factor(), 0.0);
   });
+
+  testWidgets('the lit rule occupies actual PIXELS, not just a widthFactor',
+      (tester) async {
+    // The test above asserts the widthFactor animates 0 → 1, which was true for
+    // three PRs and a cage-match while the lit rule laid out 431px wide and 0px
+    // TALL — it had never once been visible, in either theme, since it shipped.
+    //
+    // The near-miss is worth stating because it was reasoned, not careless: the
+    // widthFactor was measured *because* an on-device screenshot could not tell
+    // "not lit" from "lit but muted" back when the light theme was an
+    // undesigned `ColorScheme.fromSeed`. A workaround for a blind instrument
+    // became the thing that kept the defect alive. So this asserts the only
+    // fact that actually matters — a human can see it.
+    await pumpComposer(tester);
+
+    final box = find.descendant(
+      of: find.byType(AnimatedFractionallySizedBox),
+      matching: find.byType(ColoredBox),
+    );
+
+    await tester.tap(find.byType(TextField).first);
+    await tester.pumpAndSettle();
+
+    final size = tester.getSize(box);
+    expect(size.height, greaterThan(0.0),
+        reason: 'the lit waterline has zero height — it is laid out but never '
+            'painted (got $size)');
+    expect(size.width, greaterThan(0.0), reason: 'lit rule width (got $size)');
+  });
 }
