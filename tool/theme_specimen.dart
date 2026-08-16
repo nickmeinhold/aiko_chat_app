@@ -97,6 +97,24 @@ class _Panel extends StatelessWidget {
             ]),
             const SizedBox(height: 20),
 
+            // The composer's three states. `_Waterline` and `_SealMark` are
+            // private to chat_screen.dart, so this is a VERBATIM transcription
+            // of their build methods (same widget tree, same ColorScheme
+            // tokens, same 1.5px height) rather than the real widgets — it can
+            // drift if they change, and the behavioural contract stays locked
+            // by composer_waterline_test.dart. What it answers honestly is the
+            // question that is pure colour and geometry: does a 1.5px rule in
+            // `primary` read as IGNITED against this ground?
+            Text('THE COMPOSER — rest / focused / armed',
+                style: theme.textTheme.labelSmall),
+            const SizedBox(height: 8),
+            _ComposerState_(theme: theme, lit: false, armed: false),
+            const SizedBox(height: 14),
+            _ComposerState_(theme: theme, lit: true, armed: false),
+            const SizedBox(height: 14),
+            _ComposerState_(theme: theme, lit: true, armed: true),
+            const SizedBox(height: 20),
+
             Text('CONTROLS', style: theme.textTheme.labelSmall),
             const SizedBox(height: 6),
             Wrap(spacing: 8, runSpacing: 8, children: [
@@ -146,6 +164,78 @@ class _Panel extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// One composer state, transcribed from `chat_screen.dart`'s `Composer` /
+/// `_Waterline` / `_SealMark`. [lit] is the focus state (the rule grows in
+/// `primary` over the resting hairline); [armed] is "there is something to
+/// send" (seal → `primary`, lamp → `secondary`).
+class _ComposerState_ extends StatelessWidget {
+  const _ComposerState_({
+    required this.theme,
+    required this.lit,
+    required this.armed,
+  });
+
+  final ThemeData theme;
+  final bool lit;
+  final bool armed;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = theme.colorScheme;
+    final label = armed ? 'armed' : (lit ? 'focused' : 'rest');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          // The seal — dim until there is something to sign.
+          Icon(Icons.verified_outlined,
+              size: 20, color: armed ? s.primary : s.outlineVariant),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              armed ? 'the harbour light is out again' : 'Write a message…',
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: armed ? s.onSurface : s.onSurfaceVariant,
+              ),
+            ),
+          ),
+          // The lamp — touch layouts only in the real app, shown here so the
+          // "one fact, two readings" pairing with the seal is visible.
+          Icon(Icons.send,
+              size: 20, color: armed ? s.secondary : s.outlineVariant),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 62,
+            child: Text(label,
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(fontFamily: kMaritimeMono)),
+          ),
+        ]),
+        const SizedBox(height: 7),
+        // _Waterline, verbatim: a resting hairline with the lit rule grown over
+        // it from the left. 1.5px is the real height.
+        SizedBox(
+          height: 1.5,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ColoredBox(color: s.outlineVariant),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FractionallySizedBox(
+                  widthFactor: lit ? 1.0 : 0.0,
+                  alignment: Alignment.centerLeft,
+                  child: ColoredBox(color: s.primary),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
