@@ -228,6 +228,11 @@ class _ComposerState_ extends StatelessWidget {
                 alignment: Alignment.centerLeft,
                 child: FractionallySizedBox(
                   widthFactor: lit ? 1.0 : 0.0,
+                  // The transcription originally omitted this, exactly as the
+                  // real widget did — and rendered zero-height, exactly as the
+                  // real widget did. Reproducing the bug is the strongest
+                  // evidence the copy was faithful. Both carry the fix now.
+                  heightFactor: 1.0,
                   alignment: Alignment.centerLeft,
                   child: ColoredBox(color: s.primary),
                 ),
