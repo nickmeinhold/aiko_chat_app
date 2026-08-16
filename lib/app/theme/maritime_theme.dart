@@ -11,6 +11,17 @@ import 'package:flutter/material.dart';
 /// (AppBar, TextField, dialogs, menus) would render half-skinned; routing every
 /// value through standard `ThemeData` fields is what makes a stock widget
 /// maritime for free.
+///
+/// There are two palettes — [_night] and [_noon] — and ONE builder, [_build].
+/// That is deliberate. Light mode spent four months as a four-line
+/// `ColorScheme.fromSeed` while dark got twenty hand-authored component
+/// subthemes, and it stayed that way precisely because the two themes were
+/// independent objects: a component could be dressed in one and forgotten in the
+/// other, silently. With a single builder over a palette record, "dressed in
+/// dark but not in light" is unrepresentable. The invariants both palettes must
+/// satisfy are asserted in `test/app/theme/theme_relationships_test.dart` as
+/// RELATIONSHIPS, never fixed hexes, so they survive any future palette —
+/// including one a user authors.
 
 /// Public maritime tokens for the few ALWAYS-maritime surfaces that live outside
 /// `ThemeData` and can't read the [ColorScheme] (the immersive call screen; the
@@ -21,244 +32,320 @@ const kMaritimeSeaNight = Color(0xFF0A1720);
 const kMaritimeSignalCyan = Color(0xFF57C9D8);
 const kMaritimeBeaconAmber = Color(0xFFF0B649);
 
-/// Grounds.
-const _seaNight = kMaritimeSeaNight; // base surface — deep sea at night
-const _seaPanel = Color(0xFF0F2330); // raised panel — others' bubbles, sidebar
-const _seaPanelHigh = Color(0xFF15303F); // highest panel — menus, sheets
-const _seaPanelMine = Color(0xFF123A44); // cyan-tinted panel — my own bubbles
-const _parchment = Color(0xFFE7E0CF); // primary ink on the grounds
-const _parchmentDim = Color(0xFF93A2A3); // secondary ink — timestamps, captions
-const _hairline = Color(0xFF24384A); // panel edges + dividers (no elevation)
-
-/// Accents.
-const _signalCyan = kMaritimeSignalCyan; // primary — links, focus, my-bubble tint
-const _beaconAmber = kMaritimeBeaconAmber; // secondary — beacons, FAB, highlights
-const _signalRed = Color(0xFFE0715E); // error — a warm maritime red, not stock
-
 /// Type — the platform-native UI font (SF on Apple, Roboto on Android; set by
 /// leaving `fontFamily` unset) for text; IBM Plex Mono (the instrument voice) for
 /// ids/timestamps, applied at the call site.
 const kMaritimeMono = 'IBM Plex Mono';
 
-const _maritimeColors = ColorScheme(
+/// The irreducible set. Everything else in a [ThemeData] is derived from these
+/// by [_build] — which is what makes the pair comparable, and what a skin would
+/// eventually supply.
+class _Palette {
+  const _Palette({
+    required this.brightness,
+    required this.ground,
+    required this.panel,
+    required this.panelHigh,
+    required this.panelMine,
+    required this.ink,
+    required this.inkDim,
+    required this.hairline,
+    required this.signal,
+    required this.beacon,
+    required this.alarm,
+    required this.onAccent,
+  });
+
+  final Brightness brightness;
+
+  /// Grounds — the base surface, then panels lifted away from it.
+  final Color ground;
+  final Color panel; // others' bubbles, sidebar, cards
+  final Color panelHigh; // menus, sheets, tooltips
+  final Color panelMine; // signal-tinted — my own bubbles
+
+  /// Inks.
+  final Color ink; // body text
+  final Color inkDim; // timestamps, captions, unselected icons
+  final Color hairline; // panel edges + dividers (the ONLY separator)
+
+  /// Accents.
+  final Color signal; // primary — links, focus, the lit waterline
+  final Color beacon; // secondary — the send lamp, FAB, highlights
+  final Color alarm; // error
+  final Color onAccent; // labels drawn ON signal/beacon/alarm
+}
+
+/// Sea at night. The original maritime palette (PR #128).
+const _night = _Palette(
   brightness: Brightness.dark,
-  primary: _signalCyan,
-  onPrimary: _seaNight,
-  primaryContainer: _seaPanelMine,
-  onPrimaryContainer: _parchment,
-  secondary: _beaconAmber,
-  onSecondary: _seaNight,
-  secondaryContainer: _seaPanelHigh,
-  onSecondaryContainer: _parchment,
-  tertiary: _beaconAmber,
-  onTertiary: _seaNight,
-  error: _signalRed,
-  onError: _seaNight,
-  surface: _seaNight,
-  onSurface: _parchment,
-  surfaceContainerLowest: _seaNight,
-  surfaceContainerLow: _seaPanel,
-  surfaceContainer: _seaPanel,
-  surfaceContainerHigh: _seaPanelHigh,
-  surfaceContainerHighest: _seaPanel,
-  onSurfaceVariant: _parchmentDim,
-  outline: _hairline,
-  outlineVariant: _hairline,
-  shadow: Color(0x00000000), // no shadows — separation is by hairline
-  scrim: Color(0x99000000),
-  inverseSurface: _parchment,
-  onInverseSurface: _seaNight,
-  inversePrimary: _seaPanelMine,
+  ground: kMaritimeSeaNight,
+  panel: Color(0xFF0F2330),
+  panelHigh: Color(0xFF15303F),
+  panelMine: Color(0xFF123A44),
+  ink: Color(0xFFE7E0CF), // parchment
+  inkDim: Color(0xFF93A2A3),
+  hairline: Color(0xFF24384A),
+  signal: kMaritimeSignalCyan,
+  beacon: kMaritimeBeaconAmber,
+  alarm: Color(0xFFE0715E), // a warm maritime red, not stock
+  onAccent: kMaritimeSeaNight,
 );
 
-TextTheme _maritimeText(TextTheme base) {
+/// Sun on water — the same chart, read at noon.
+///
+/// Three decisions carry it, and none of them is an inversion of [_night]:
+///
+/// 1. THE TIDE TURNS. Night's ground (`#0A1720`) is noon's ink, and night's ink
+///    (parchment `#E7E0CF`) is noon's ground — the same two colours in opposite
+///    roles. Only the two ANCHORS trade; everything else is re-derived, because
+///    inverting every token mechanically is what produces a bleached corpse of
+///    the night palette.
+///
+/// 2. THE BEACON BECOMES THE STAMP. A beacon is a light seen in the dark; at
+///    noon nobody sees a lamp, so the role cannot survive as luminosity. In
+///    daylight authority is INK DENSITY — the harbourmaster's stamp, the printed
+///    depth sounding. So amber inverts into dark brass: the send lamp stops
+///    glowing and starts pressing. Signal cyan takes the same treatment (on
+///    paper it would read as a highlighter) and darkens to deep teal, keeping a
+///    pale cyan WASH for fills in [panelMine].
+///
+/// 3. STILL NO SHADOWS. Daylight is the one place a shadow could have earned its
+///    keep, and it is refused: the metaphor is a chart READ in daylight, not an
+///    object lit by the sun, and a chart is flat in any light. Hairline
+///    separation is also literally how nautical charts work.
+///
+/// The non-obvious constraint that falls out of (2): once the beacon stops being
+/// a light and becomes an ink, it lands in the same dark-warm register as the
+/// alarm, and the two roles collide — armed and failed should never be
+/// neighbours. [_night] never had to solve this because its beacon is BRIGHT and
+/// its alarm is mid, so lightness separated them for free. Here the gap has to
+/// be built deliberately: the brass is held above the oxblood in luminance, not
+/// merely beside it in hue. Enforced for every accent pair by
+/// `theme_relationships_test.dart`.
+const _noon = _Palette(
+  brightness: Brightness.light,
+  ground: Color(0xFFE7E0CF), // chart paper — night's ink
+  panel: Color(0xFFF2EDE1), // sailcloth, lifted off the chart
+  panelHigh: Color(0xFFFAF7EF), // bleached — menus, sheets
+  panelMine: Color(0xFFD5E7E6), // a pale signal wash — my own bubbles
+  ink: kMaritimeSeaNight, // night's ground
+  inkDim: Color(0xFF4F5D64), // lighter print, still AA at body size
+  hairline: Color(0xFFC7BCA4), // a fine warm rule
+  signal: Color(0xFF0B5F6C), // deep teal — signal as stroke, not glow
+  beacon: Color(0xFF8F6210), // brass in sun — the stamp
+  alarm: Color(0xFF8C2318), // oxblood, kept DARKER than the brass (see below)
+  onAccent: Color(0xFFFAF7EF),
+);
+
+ColorScheme _scheme(_Palette p) => ColorScheme(
+      brightness: p.brightness,
+      primary: p.signal,
+      onPrimary: p.onAccent,
+      primaryContainer: p.panelMine,
+      onPrimaryContainer: p.ink,
+      secondary: p.beacon,
+      onSecondary: p.onAccent,
+      secondaryContainer: p.panelHigh,
+      onSecondaryContainer: p.ink,
+      tertiary: p.beacon,
+      onTertiary: p.onAccent,
+      error: p.alarm,
+      onError: p.onAccent,
+      surface: p.ground,
+      onSurface: p.ink,
+      surfaceContainerLowest: p.ground,
+      surfaceContainerLow: p.panel,
+      surfaceContainer: p.panel,
+      surfaceContainerHigh: p.panelHigh,
+      surfaceContainerHighest: p.panel,
+      onSurfaceVariant: p.inkDim,
+      outline: p.hairline,
+      outlineVariant: p.hairline,
+      shadow: const Color(0x00000000), // no shadows — separation is by hairline
+      scrim: const Color(0x99000000),
+      inverseSurface: p.ink,
+      onInverseSurface: p.ground,
+      inversePrimary: p.panelMine,
+    );
+
+TextTheme _text(TextTheme base, _Palette p) {
   // Body text uses the platform default (no fontFamily set); the mono voice is
   // applied explicitly at id/timestamp call sites (chat_screen.dart).
-  final t = base.apply(
-    bodyColor: _parchment,
-    displayColor: _parchment,
-  );
+  final t = base.apply(bodyColor: p.ink, displayColor: p.ink);
   return t.copyWith(
-    labelSmall: t.labelSmall?.copyWith(color: _parchmentDim, letterSpacing: 0.2),
+    labelSmall: t.labelSmall?.copyWith(color: p.inkDim, letterSpacing: 0.2),
   );
 }
 
 /// The one hairline-bordered, zero-elevation panel shape used everywhere a
 /// Material surface would normally cast a shadow.
-const _panelBorder = RoundedRectangleBorder(
-  borderRadius: BorderRadius.all(Radius.circular(10)),
-  side: BorderSide(color: _hairline),
-);
+RoundedRectangleBorder _panelBorder(_Palette p) => RoundedRectangleBorder(
+      borderRadius: const BorderRadius.all(Radius.circular(10)),
+      side: BorderSide(color: p.hairline),
+    );
 
-ThemeData maritimeTheme() {
+ThemeData _build(_Palette p) {
+  final scheme = _scheme(p);
+  final border = _panelBorder(p);
   final base = ThemeData(
-    colorScheme: _maritimeColors,
+    colorScheme: scheme,
     useMaterial3: true,
-    brightness: Brightness.dark,
-    scaffoldBackgroundColor: _seaNight,
-    canvasColor: _seaNight,
-    dividerColor: _hairline,
+    brightness: p.brightness,
+    scaffoldBackgroundColor: p.ground,
+    canvasColor: p.ground,
+    dividerColor: p.hairline,
     shadowColor: const Color(0x00000000),
     splashFactory: InkSparkle.splashFactory,
   );
 
   return base.copyWith(
-    textTheme: _maritimeText(base.textTheme),
+    textTheme: _text(base.textTheme, p),
     // Flat chrome — separation by hairline, never elevation.
-    appBarTheme: const AppBarTheme(
-      backgroundColor: _seaNight,
-      foregroundColor: _parchment,
+    appBarTheme: AppBarTheme(
+      backgroundColor: p.ground,
+      foregroundColor: p.ink,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
       titleTextStyle: TextStyle(
-        color: _parchment,
+        color: p.ink,
         fontSize: 20,
         fontWeight: FontWeight.w600,
       ),
     ),
-    dividerTheme: const DividerThemeData(
-      color: _hairline,
+    dividerTheme: DividerThemeData(
+      color: p.hairline,
       thickness: 1,
       space: 1,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: _seaPanel,
-      hintStyle: const TextStyle(color: _parchmentDim),
+      fillColor: p.panel,
+      hintStyle: TextStyle(color: p.inkDim),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: _hairline),
+        borderSide: BorderSide(color: p.hairline),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: _signalCyan, width: 1.5),
+        borderSide: BorderSide(color: p.signal, width: 1.5),
       ),
     ),
-    cardTheme: const CardThemeData(
-      color: _seaPanel,
+    cardTheme: CardThemeData(
+      color: p.panel,
       elevation: 0,
       surfaceTintColor: Colors.transparent,
-      shape: _panelBorder,
+      shape: border,
       margin: EdgeInsets.zero,
     ),
-    dialogTheme: const DialogThemeData(
-      backgroundColor: _seaPanel,
+    dialogTheme: DialogThemeData(
+      backgroundColor: p.panel,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
-      shape: _panelBorder,
+      shape: border,
     ),
-    bottomSheetTheme: const BottomSheetThemeData(
-      backgroundColor: _seaPanel,
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: p.panel,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
     ),
-    popupMenuTheme: const PopupMenuThemeData(
-      color: _seaPanelHigh,
+    popupMenuTheme: PopupMenuThemeData(
+      color: p.panelHigh,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
-      shape: _panelBorder,
+      shape: border,
     ),
-    menuTheme: const MenuThemeData(
+    menuTheme: MenuThemeData(
       style: MenuStyle(
-        backgroundColor: WidgetStatePropertyAll(_seaPanelHigh),
-        surfaceTintColor: WidgetStatePropertyAll(Colors.transparent),
-        elevation: WidgetStatePropertyAll(0),
+        backgroundColor: WidgetStatePropertyAll(p.panelHigh),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        elevation: const WidgetStatePropertyAll(0),
       ),
     ),
-    snackBarTheme: const SnackBarThemeData(
-      backgroundColor: _seaPanelHigh,
-      contentTextStyle: TextStyle(color: _parchment),
-      actionTextColor: _signalCyan,
+    snackBarTheme: SnackBarThemeData(
+      backgroundColor: p.panelHigh,
+      contentTextStyle: TextStyle(color: p.ink),
+      actionTextColor: p.signal,
       behavior: SnackBarBehavior.floating,
     ),
-    listTileTheme: const ListTileThemeData(
-      textColor: _parchment,
-      iconColor: _parchmentDim,
-      selectedColor: _signalCyan,
-      selectedTileColor: _seaPanel,
+    listTileTheme: ListTileThemeData(
+      textColor: p.ink,
+      iconColor: p.inkDim,
+      selectedColor: p.signal,
+      selectedTileColor: p.panel,
     ),
-    drawerTheme: const DrawerThemeData(
-      backgroundColor: _seaNight,
+    drawerTheme: DrawerThemeData(
+      backgroundColor: p.ground,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
     ),
-    navigationRailTheme: const NavigationRailThemeData(
-      backgroundColor: _seaNight,
-      selectedIconTheme: IconThemeData(color: _signalCyan),
-      unselectedIconTheme: IconThemeData(color: _parchmentDim),
-      selectedLabelTextStyle: TextStyle(color: _parchment),
-      unselectedLabelTextStyle: TextStyle(color: _parchmentDim),
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: p.ground,
+      selectedIconTheme: IconThemeData(color: p.signal),
+      unselectedIconTheme: IconThemeData(color: p.inkDim),
+      selectedLabelTextStyle: TextStyle(color: p.ink),
+      unselectedLabelTextStyle: TextStyle(color: p.inkDim),
     ),
-    iconTheme: const IconThemeData(color: _parchmentDim),
+    iconTheme: IconThemeData(color: p.inkDim),
     chipTheme: ChipThemeData(
-      backgroundColor: _seaPanel,
-      side: const BorderSide(color: _hairline),
-      labelStyle: const TextStyle(color: _parchment),
+      backgroundColor: p.panel,
+      side: BorderSide(color: p.hairline),
+      labelStyle: TextStyle(color: p.ink),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     ),
     switchTheme: SwitchThemeData(
       thumbColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? _signalCyan : _parchmentDim,
+        (s) => s.contains(WidgetState.selected) ? p.signal : p.inkDim,
       ),
       trackColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? _seaPanelMine : _seaPanel,
+        (s) => s.contains(WidgetState.selected) ? p.panelMine : p.panel,
       ),
     ),
-    floatingActionButtonTheme: const FloatingActionButtonThemeData(
-      backgroundColor: _beaconAmber,
-      foregroundColor: _seaNight,
+    floatingActionButtonTheme: FloatingActionButtonThemeData(
+      backgroundColor: p.beacon,
+      foregroundColor: p.onAccent,
       elevation: 0,
       focusElevation: 0,
       hoverElevation: 0,
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
-        backgroundColor: _signalCyan,
-        foregroundColor: _seaNight,
+        backgroundColor: p.signal,
+        foregroundColor: p.onAccent,
         elevation: 0,
         textStyle: const TextStyle(fontWeight: FontWeight.w600),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: _signalCyan,
-        foregroundColor: _seaNight,
+        backgroundColor: p.signal,
+        foregroundColor: p.onAccent,
         elevation: 0,
       ),
     ),
     textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(foregroundColor: _signalCyan),
+      style: TextButton.styleFrom(foregroundColor: p.signal),
     ),
     scrollbarTheme: ScrollbarThemeData(
-      thumbColor: WidgetStatePropertyAll(_hairline),
+      thumbColor: WidgetStatePropertyAll(p.hairline),
       thickness: const WidgetStatePropertyAll(6),
     ),
-    tooltipTheme: const TooltipThemeData(
+    tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(
-        color: _seaPanelHigh,
-        borderRadius: BorderRadius.all(Radius.circular(6)),
+        color: p.panelHigh,
+        borderRadius: const BorderRadius.all(Radius.circular(6)),
       ),
-      textStyle: TextStyle(color: _parchment),
+      textStyle: TextStyle(color: p.ink),
     ),
-    progressIndicatorTheme: const ProgressIndicatorThemeData(color: _signalCyan),
+    progressIndicatorTheme: ProgressIndicatorThemeData(color: p.signal),
   );
 }
 
-/// The light theme — a clean daylight surface that echoes the app's ORIGINAL
-/// look (Material 3 seeded from deepPurple) rather than a maritime inversion, so
-/// light mode feels familiar. Only the mono "instrument voice" for ids/timestamps
-/// carries over (it's set at the call site, see chat_screen.dart), threading the
-/// two modes together without forcing the sea palette onto a light surface.
-ThemeData lightTheme() {
-  return ThemeData(
-    colorScheme: ColorScheme.fromSeed(seedColor: _originalSeed),
-    useMaterial3: true,
-  );
-}
+/// Sea at night — the maritime redesign (PR #128).
+ThemeData maritimeTheme() => _build(_night);
 
-/// The app's pre-redesign seed (Material `Colors.deepPurple`), kept as the light
-/// theme's DNA so "light mode looks a bit like the original" stays literally true.
-const _originalSeed = Color(0xFF673AB7);
+/// The same chart at noon. See [_noon] for what changes and what refuses to.
+ThemeData lightTheme() => _build(_noon);
