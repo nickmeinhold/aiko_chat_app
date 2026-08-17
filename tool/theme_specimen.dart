@@ -1,6 +1,12 @@
-// A palette bench: both shipped themes, side by side, on real pixels.
+// A palette bench: every shipped theme, side by side, on real pixels.
 //
 //   flutter run -t tool/theme_specimen.dart -d macos
+//
+// It renders EVERY preset in `kThemePresets` in the chosen brightness, so a new
+// look shows up here the moment it joins the registry — the bench cannot fall
+// behind the picker. Click the brightness toggle to swap all panels at once;
+// comparing looks and comparing brightnesses are different questions and the
+// bench answers one at a time.
 //
 // WHY THIS EXISTS. The light theme's failure mode is looking fine in code and
 // wrong on screen — contrast that computes to spec and reads as mud, a lamp that
@@ -19,24 +25,56 @@
 // own waterline/seal/lamp states (locked separately by
 // `test/features/chat/composer_waterline_test.dart`), and the immersive call
 // screen is deliberately theme-independent. Those need the real app.
-import 'package:aiko_chat_app/app/theme/maritime_theme.dart';
+import 'package:aiko_chat_app/app/theme/maritime_theme.dart' show kMaritimeMono;
+import 'package:aiko_chat_app/app/theme/theme_presets.dart';
 import 'package:flutter/material.dart';
 
 void main() => runApp(const _Bench());
 
-class _Bench extends StatelessWidget {
+class _Bench extends StatefulWidget {
   const _Bench();
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        debugShowCheckedModeBanner: false,
-        home: Row(
-          children: [
-            Expanded(child: _Panel(theme: lightTheme(), label: 'NOON')),
-            Expanded(child: _Panel(theme: maritimeTheme(), label: 'NIGHT')),
-          ],
-        ),
-      );
+  State<_Bench> createState() => _BenchState();
+}
+
+class _BenchState extends State<_Bench> {
+  var _brightness = Brightness.light;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = _brightness == Brightness.dark;
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Stack(
+        children: [
+          Row(
+            children: [
+              for (final preset in kThemePresets)
+                Expanded(
+                  child: _Panel(
+                    theme: isDark ? preset.darkTheme : preset.lightTheme,
+                    label: '${preset.label.toUpperCase()} · '
+                        '${isDark ? 'DARK' : 'LIGHT'}',
+                  ),
+                ),
+            ],
+          ),
+          Positioned(
+            right: 16,
+            bottom: 16,
+            child: FloatingActionButton.extended(
+              onPressed: () => setState(() {
+                _brightness = isDark ? Brightness.light : Brightness.dark;
+              }),
+              icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+              label: Text(isDark ? 'to light' : 'to dark'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _Panel extends StatelessWidget {
@@ -52,7 +90,10 @@ class _Panel extends StatelessWidget {
       data: theme,
       child: Scaffold(
         appBar: AppBar(
-          title: Text('# general  ·  $label'),
+          // Ellipsised: with three presets on the bench each panel is narrow
+          // enough that the title and the actions fight for the same pixels.
+          title: Text('# general  ·  $label', overflow: TextOverflow.ellipsis),
+          titleSpacing: 8,
           actions: const [
             Icon(Icons.videocam_outlined),
             SizedBox(width: 12),

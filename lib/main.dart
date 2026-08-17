@@ -4,9 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/providers.dart';
 import 'app/router.dart';
-import 'app/theme/maritime_theme.dart';
 import 'features/call/presentation/ring_overlay.dart';
 import 'features/settings/application/theme_mode_controller.dart';
+import 'features/settings/application/theme_preset_controller.dart';
 
 Future<void> main() async {
   // The picker (#4) persists the chosen gateway; SharedPreferences is async to
@@ -28,13 +28,15 @@ class AikoChatApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
+    // The chosen look supplies BOTH halves, so picking a preset never costs you
+    // OS following: themeMode still decides how bright, the preset decides which
+    // look. Both are set in Settings → Appearance and both default to
+    // system/Maritime.
+    final preset = ref.watch(themePresetProvider);
     return MaterialApp.router(
       title: 'Aiko Chat',
-      // Light echoes the original; dark is the maritime redesign. themeMode
-      // follows the OS by default (ThemeMode.system) until the user overrides it
-      // in Settings → Appearance.
-      theme: lightTheme(),
-      darkTheme: maritimeTheme(),
+      theme: preset.lightTheme,
+      darkTheme: preset.darkTheme,
       themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
       // ABOVE the Navigator, so an incoming call reaches you on any route

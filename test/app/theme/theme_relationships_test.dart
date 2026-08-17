@@ -7,17 +7,27 @@
 // the whole point: these assertions are what will make user-chosen colour SAFE,
 // so they are written against the theme, never against a specific palette.
 //
-// Adding a theme to [_shippedThemes] subjects it to every rule below. That list
-// is the registry; when a palette record + builder eventually replace the
-// hand-authored pair, these tests become the builder's property tests unchanged.
-import 'package:aiko_chat_app/app/theme/maritime_theme.dart';
+// That happened: the palette record + builder replaced the hand-authored pair,
+// and these became the builder's property tests UNCHANGED — the file below is
+// the same law, now sourced from the preset registry instead of a hand-listed
+// pair. Adding a preset to `kThemePresets` therefore subjects BOTH its palettes
+// to every rule here, automatically. A look that cannot clear the bar cannot
+// ship, and nobody has to remember to add it to a list.
+//
+// This is the enforcement half of "the palette supplies hue, the builder owns
+// relationships": the builder is what makes the guarantee POSSIBLE, and this
+// file is what makes it TRUE. Scope: colour and contrast only (claude-tasks#2715).
+import 'package:aiko_chat_app/app/theme/theme_presets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Every theme the app can render. Both are held to the same law.
+/// Every theme the app can render — every preset, in both brightnesses. All held
+/// to one law.
 final _shippedThemes = <String, ThemeData>{
-  'noon (light)': lightTheme(),
-  'night (dark)': maritimeTheme(),
+  for (final preset in kThemePresets) ...{
+    '${preset.label} · light': preset.lightTheme,
+    '${preset.label} · dark': preset.darkTheme,
+  },
 };
 
 /// Composite [fg] (which may be translucent) over an opaque [bg].
