@@ -8,10 +8,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/theme/theme_presets.dart';
 import '../../../core/widgets/reading_column.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../application/theme_mode_controller.dart';
+import '../application/theme_preset_controller.dart';
 import 'edit_profile_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -62,6 +64,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
             ),
+            const _ThemePresetPicker(),
             const _SectionHeader('Safety'),
             ListTile(
               leading: const Icon(Icons.block),
@@ -273,6 +276,198 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         return 'Sign in next time with your device biometrics or PIN.';
     }
   }
+}
+
+/// The look picker. Deliberately NOT a list of names: you are choosing an
+/// appearance, so each option renders itself — ground, panel, ink, and the three
+/// accents in their real roles. Each swatch previews the half of the preset you
+/// would actually be looking at right now (the light palette in light, the dark
+/// one in dark), so what you tap is what you get rather than a marketing chip.
+class _ThemePresetPicker extends ConsumerWidget {
+  const _ThemePresetPicker();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final selected = ref.watch(themePresetProvider);
+    final brightness = Theme.of(context).brightness;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Text('Theme'),
+        ),
+        SizedBox(
+          height: 116,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            itemCount: kThemePresets.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 12),
+            itemBuilder: (context, i) {
+              final preset = kThemePresets[i];
+              return _PresetSwatch(
+                preset: preset,
+                brightness: brightness,
+                isSelected: preset.id == selected.id,
+                onTap: () =>
+                    ref.read(themePresetProvider.notifier).set(preset),
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(
+            selected.blurb,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One look, drawn in its own colours. The mini-composition mirrors the real
+/// surface — a ground, a panel lifted off it by a hairline, two lines of ink,
+/// and the accent trio — so the differences you can see here are the
+/// differences you will feel in the app.
+class _PresetSwatch extends StatelessWidget {
+  const _PresetSwatch({
+    required this.preset,
+    required this.brightness,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final ThemePreset preset;
+  final Brightness brightness;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = brightness == Brightness.dark ? preset.dark : preset.light;
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label: '${preset.label} theme. ${preset.blurb}',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: SizedBox(
+          width: 104,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                height: 64,
+                decoration: BoxDecoration(
+                  color: p.ground,
+                  borderRadius: BorderRadius.circular(10),
+                  // The selection ring is drawn in the CURRENT theme's signal,
+                  // not the swatch's own — it belongs to the app chrome doing
+                  // the asking, not to the look being offered.
+                  border: Border.all(
+                    color: isSelected ? scheme.primary : p.hairline,
+                    width: isSelected ? 2 : 1,
+                  ),
+                ),
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // A panel with two lines of ink on it — a message.
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: p.panel,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: p.hairline),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _Rule(color: p.ink, width: 46),
+                          const SizedBox(height: 3),
+                          _Rule(color: p.inkDim, width: 30),
+                        ],
+                      ),
+                    ),
+                    const Spacer(),
+                    // The accent trio, in role order: signal, beacon, alarm.
+                    Row(
+                      children: [
+                        _Dot(color: p.signal),
+                        const SizedBox(width: 5),
+                        _Dot(color: p.beacon),
+                        const SizedBox(width: 5),
+                        _Dot(color: p.alarm),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  if (isSelected) ...[
+                    Icon(Icons.check, size: 14, color: scheme.primary),
+                    const SizedBox(width: 4),
+                  ],
+                  Flexible(
+                    child: Text(
+                      preset.label,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: isSelected
+                                ? scheme.primary
+                                : scheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Rule extends StatelessWidget {
+  const _Rule({required this.color, required this.width});
+  final Color color;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: width,
+        height: 3,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(2),
+        ),
+      );
+}
+
+class _Dot extends StatelessWidget {
+  const _Dot({required this.color});
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 9,
+        height: 9,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      );
 }
 
 class _SectionHeader extends StatelessWidget {
