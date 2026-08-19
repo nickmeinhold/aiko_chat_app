@@ -11,6 +11,8 @@
 // title IS a DropdownButton, which runs its own gesture recognizers; a
 // long-press that lost the arena to it would leave a phone with no way to mute
 // at all, and nothing else in the suite would notice.
+import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
+import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -104,5 +106,72 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Mute'), findsOneWidget);
+  });
+
+  testWidgets('long-pressing a ROW IN THE OPEN LIST opens the mute menu — the '
+      'surface people actually press', (tester) async {
+    narrow(tester);
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // Open the list the way a person does.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('random'), findsWidgets, reason: 'the list did not open');
+
+    // Long-press the row for the OTHER conversation, inside the overlay.
+    await tester.longPress(find.text('random').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Mute'), findsOneWidget,
+        reason: 'long-pressing a row in the open list must reach the mute menu '
+            '— this is the gesture that was reported broken twice');
+  });
+
+  testWidgets('and muting from that row actually mutes THAT conversation, not '
+      'the one you were reading', (tester) async {
+    narrow(tester);
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // c1 is the active conversation; long-press c2's row.
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('random').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mute'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(mutedChannelIdsProvider), contains('c2'));
+    expect(container.read(mutedChannelIdsProvider), isNot(contains('c1')),
+        reason: 'muting a row must act on THAT row, not on whatever you had '
+            'open — pressing one conversation and silencing another is the '
+            'worst possible outcome here');
+  });
+
+  testWidgets('tapping a row still SELECTS it — the long-press must not have '
+      'cost the ordinary tap', (tester) async {
+    narrow(tester);
+    final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels), transport: FakeChatTransport());
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('random').last);
+    await tester.pumpAndSettle();
+
+    expect(container.read(selectedChannelIdProvider), 'c2');
   });
 }

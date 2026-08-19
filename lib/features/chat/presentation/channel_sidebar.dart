@@ -101,7 +101,53 @@ class MuteGesture extends ConsumerWidget {
     ProviderContainer container, {
     required String? expectUserId,
     required Offset at,
-  }) async {
+  }) =>
+      showConversationMuteMenu(context, container,
+          mute: mute, expectUserId: expectUserId, at: at);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final container = ProviderScope.containerOf(context, listen: false);
+    // Bound HERE, before the menu can be opened, so a pick that lands after a
+    // logout/user-switch is dropped rather than written into another account
+    // (cage-match #135 round 3, Tesla).
+    final expectUserId = ref.watch(currentUserProvider)?.userId;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPressEnd: (d) => _show(context, container,
+          expectUserId: expectUserId, at: d.globalPosition),
+      onSecondaryTapUp: kIsWeb
+          ? null
+          : (d) => _show(context, container,
+              expectUserId: expectUserId, at: d.globalPosition),
+      child: child,
+    );
+  }
+}
+
+/// Open the conversation mute menu at global position [at].
+///
+/// PUBLIC because two very different surfaces need the same menu. The sidebar
+/// rows reach it through [MuteGesture]; the rows inside the phone's app-bar
+/// conversation dropdown CANNOT, because they live in the dropdown's own
+/// overlay route where no ancestor of ours is in the tree. They call this
+/// directly instead.
+///
+/// That distinction is the whole reason long-press appeared broken on a phone:
+/// the gesture was wrapped around the app bar's TITLE, which is not the thing
+/// anyone presses — you open the list first, and then press a row in it.
+///
+/// [container] is captured by the CALLER before the menu is awaited, and the
+/// notifier re-read from it AFTER — never held across the gap. See [MuteGesture]
+/// for why a WidgetRef and a held notifier both break here.
+Future<void> showConversationMuteMenu(
+  BuildContext context,
+  ProviderContainer container, {
+  required ConversationMute mute,
+  required String? expectUserId,
+  required Offset at,
+}) async {
+  {
     final muted = mute.isMuted;
     final overlay =
         Overlay.of(context).context.findRenderObject()! as RenderBox;
@@ -160,32 +206,6 @@ class MuteGesture extends ConsumerWidget {
     if (picked == null) return;
     mute.apply(container.read(mutesProvider.notifier),
         muted: picked, expectUserId: expectUserId);
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final container = ProviderScope.containerOf(context, listen: false);
-    // Bound HERE, before the menu can be opened, so a pick that lands after a
-    // logout/user-switch is dropped rather than written into another account
-    // (cage-match #135 round 3, Tesla).
-    final expectUserId = ref.watch(currentUserProvider)?.userId;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onLongPressEnd: (d) => _show(context, container,
-          expectUserId: expectUserId, at: d.globalPosition),
-      // Pointer-UP for the same reason as the long-press — and NOT WIRED ON WEB,
-      // where the browser raises its own context menu on right-click and the user
-      // would get two menus for one intent. Documenting that as a named tradeoff
-      // (as this did) is shipping a known defect with a note attached; not
-      // offering the gesture where it misbehaves is simply correct, and long-press
-      // still reaches the same menu (cage-match #135 rounds 1 + 10, Tesla then
-      // Kelvin).
-      onSecondaryTapUp: kIsWeb
-          ? null
-          : (d) => _show(context, container,
-              expectUserId: expectUserId, at: d.globalPosition),
-      child: child,
-    );
   }
 }
 

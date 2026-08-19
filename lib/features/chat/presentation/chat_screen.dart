@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../call/domain/call_invite.dart';
 import '../../../core/widgets/island_mark.dart';
 import '../../../app/theme/maritime_theme.dart';
 import '../../../core/mark/mark_avatar.dart';
@@ -207,6 +208,89 @@ class ChatScreen extends ConsumerWidget {
 /// action is instant, reversible, and entirely private, so a confirmation step
 /// would cost more than the mistake it prevents. The icon carries the state, so
 /// a muted conversation announces itself from the bar you are already looking at.
+/// Long-press a row IN THE OPEN CONVERSATION LIST to mute it.
+///
+/// This is the one people actually reach for, and it was the surface I missed:
+/// the gesture first went on the app bar's TITLE, which nobody presses — you
+/// open the list, then press the row you mean. Reported twice as "long press on
+/// a channel doesn't bring up a menu", and passing tests the whole time, because
+/// the tests pressed the title too.
+///
+/// These rows live inside the DropdownButton's own overlay ROUTE, so no ancestor
+/// of ours is above them in the tree and they cannot be wrapped from outside.
+/// They call [showConversationMuteMenu] directly instead.
+///
+/// The dropdown is dismissed FIRST. Showing a menu on top of an open dropdown
+/// route puts two overlays in play, and the dropdown's own barrier would eat the
+/// next tap — so the list closes, then the menu opens over the chat surface,
+/// which is also where the user's eye already is.
+class _MenuItemMuteGesture extends ConsumerWidget {
+  const _MenuItemMuteGesture({
+    required this.conversation,
+    required this.child,
+    required this.hostContext,
+  });
+
+  final Channel conversation;
+  final Widget child;
+
+  /// A context from the APP BAR, captured before the dropdown opened.
+  ///
+  /// Needed because this row's own context dies with the dropdown route we are
+  /// about to close — and the root OverlayState's context does not work either:
+  /// `Overlay.of` searches ANCESTORS, so handing it the overlay's own context
+  /// asks the overlay to find itself and throws "No Overlay widget found". The
+  /// app bar sits BELOW the overlay and OUTLIVES the dropdown, which is exactly
+  /// the two properties needed.
+  final BuildContext hostContext;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final container = ProviderScope.containerOf(context, listen: false);
+    final expectUserId = ref.watch(currentUserProvider)?.userId;
+    final isDm = ref.watch(dmConversationIdsProvider).contains(conversation.id);
+    final mute = watchConversationMute(
+      ref,
+      conversation.id,
+      peerId: isDm
+          ? dmPeerId(
+              ref.watch(channelRosterProvider(conversation.id)).value,
+              ref.watch(currentUserProvider)?.userId,
+            )
+          : null,
+      hasPeer: isDm,
+    );
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      // Pointer-UP, exactly as the sidebar rows do it: a menu opened while the
+      // finger is still down materialises UNDER that finger and selects itself
+      // on release (cage-match #135, Tesla). The harness cannot see that, so the
+      // rule is copied rather than re-derived.
+      onLongPressEnd: (d) {
+        // Close the list first, then open the menu from the APP BAR's context.
+        //
+        // The first attempt used the root OverlayState's own context, which
+        // throws "No Overlay widget found": `Overlay.of` walks ANCESTORS, so
+        // handing it the overlay asks the overlay to find itself. The row's own
+        // context is no good either — it dies with the route being popped. The
+        // app bar sits below the overlay and outlives the dropdown, which is
+        // exactly the pair of properties required.
+        Navigator.of(context).pop();
+        if (!hostContext.mounted) return;
+        showConversationMuteMenu(
+          hostContext,
+          container,
+          mute: mute,
+          expectUserId: expectUserId,
+          at: d.globalPosition,
+        );
+      },
+      child: child,
+    );
+  }
+}
+
 /// Long-press the conversation title to reach the same mute menu the sidebar
 /// rows offer.
 ///
@@ -365,10 +449,14 @@ class _ConversationSwitcher extends ConsumerWidget {
                 for (final c in rooms)
                   DropdownMenuItem<String>(
                     value: c.id,
-                    child: _ChannelMenuItem(
-                      channelId: c.id,
-                      name: c.name,
-                      isActive: c.id == activeId,
+                    child: _MenuItemMuteGesture(
+                      hostContext: context,
+                      conversation: c,
+                      child: _ChannelMenuItem(
+                        channelId: c.id,
+                        name: c.name,
+                        isActive: c.id == activeId,
+                      ),
                     ),
                   ),
                 // Section header, not a destination: `enabled: false` keeps it out
@@ -394,7 +482,11 @@ class _ConversationSwitcher extends ConsumerWidget {
                 for (final d in dms)
                   DropdownMenuItem<String>(
                     value: d.id,
-                    child: _DmMenuItem(dm: d, isActive: d.id == activeId),
+                    child: _MenuItemMuteGesture(
+                      hostContext: context,
+                      conversation: d,
+                      child: _DmMenuItem(dm: d, isActive: d.id == activeId),
+                    ),
                   ),
               ],
               onChanged: (id) {
@@ -854,6 +946,53 @@ class MessageTile extends ConsumerWidget {
       myHandle: ref.watch(currentUserProvider)?.username,
       roster: ref.watch(channelRosterProvider(channelId)).value,
     );
+
+    // A CALL INVITATION IS AN EVENT, NOT A REMARK.
+    //
+    // The wire body is `aiko:call/1 · 📞 started a call` — a signed, permanent
+    // row, worded so a client that predates the feature degrades to a readable
+    // line instead of breaking. This client never learned to render it, so it
+    // showed the machine anchor verbatim inside a normal speech bubble, with the
+    // caller's name floating on a separate line above the avatar. Nick, reading
+    // it: "the sender and 'started a call' being on separate lines with
+    // something in between is confusing."
+    //
+    // So it renders as one sentence — WHO did WHAT — centred, unbubbled, in the
+    // register of a thing that happened rather than a thing someone said. Only
+    // the RENDERING changes: [kCallInviteBody] is inside signatures already sent
+    // to a live island and is a one-way door.
+    if (isCallInviteBody(message.body)) {
+      final scheme = Theme.of(context).colorScheme;
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.phone_in_talk_outlined, size: 15, color: scheme.primary),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(
+                // "You" reads better than your own handle for your own act.
+                isMine ? 'You started a call' : '$senderName started a call',
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              _formatTime(message.createdAt),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                fontFamily: kMaritimeMono,
+                fontSize: 11,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     // Sender-action affordance: long-press ANOTHER human's message for the
     // action sheet — call them (#2758), report, or block (#7). Gated to a
