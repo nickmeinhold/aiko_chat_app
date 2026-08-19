@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../settings/application/channel_look_controller.dart';
+import '../../settings/presentation/channel_look_sheet.dart';
 import '../../../app/theme/maritime_theme.dart';
 import '../../../core/mark/mark_avatar.dart';
 import '../../auth/application/auth_controller.dart';
@@ -114,85 +116,113 @@ class ChatScreen extends ConsumerWidget {
 
     final isWide = MediaQuery.sizeOf(context).width >= kWideLayoutBreakpoint;
 
-    return Scaffold(
-      // Wide: NO app bar — the sidebar owns the chrome (server switcher, channels,
-      // settings/logout) and the message pane carries its own slim channel header
-      // (the redundant full-width bar sat below the native macOS title bar). Narrow:
-      // the app bar — the dropdown switcher when there is more than one NAVIGABLE
-      // CONVERSATION (channels ∪ DMs, never channels alone), plus the mute,
-      // search, settings and sign-out actions.
-      appBar: isWide
-          ? null
-          : AppBar(
-              // Listing channels ∪ DMs is what makes a DM REACHABLE on a phone at
-              // all: the narrow layout has no sidebar, so this dropdown is the
-              // whole navigation surface, and a channels-only item list left
-              // `openDm` able to strand you in a conversation you could neither
-              // return to nor leave (#2798, task #12).
-              //
-              // It also retires the DM gate that used to hide this switcher: that
-              // gate existed because a DM id in `DropdownButton.value` with no
-              // matching item asserts (cage-match #106). The item list now covers
-              // every id that can be active, so the crash is unreachable rather
-              // than dodged — and the gate WAS the trap.
-              // The bar rides the SAME settled predicate as the pane. Gating only
-              // the pane closed the floor and left the doorbell wired to the wrong
-              // house: with one DM in and the channel list still in flight,
-              // `navigable.length == 1` titled the bar "Alice" and lit her mute
-              // button over a spinner. One tap conversation-muted a thread the
-              // user had never entered — and then the channels landed, the
-              // implicit default moved to the first room, and the mute stayed
-              // behind on a conversation they never picked (cage-match #136,
-              // Tesla). A conversation control must not exist before the
-              // conversation it names is settled.
-              title: !ready
-                  ? const Text('Chat')
-                  : navigable.length > 1 && active != null
-                      ? _ConversationSwitcher(
-                          rooms: rooms, dms: dms, activeId: active.id)
-                      : _ConversationTitle(active: active),
-              actions: [
-                // Narrow has no sidebar, so the row long-press that mutes a
-                // conversation on wide does not exist here. Without this the
-                // capability would be wide-only — mutable on the desktop, invisible
-                // on the phone, which is where a noisy channel is actually felt.
-                if (ready && active != null)
-                  _MuteConversationAction(conversation: active),
-                IconButton(
-                  tooltip: 'Search',
-                  icon: const Icon(Icons.search),
-                  onPressed: () => context.push('/search'),
-                ),
-                IconButton(
-                  tooltip: 'Settings',
-                  icon: const Icon(Icons.settings),
-                  onPressed: () => context.push('/settings'),
-                ),
-                IconButton(
-                  tooltip: 'Sign out',
-                  icon: const Icon(Icons.logout),
-                  onPressed: () =>
-                      ref.read(authControllerProvider.notifier).logout(),
-                ),
-              ],
-            ),
-      // Option A — no state loss across the breakpoint. The body is ALWAYS a Row
-      // whose LAST child is `Expanded(ChatMessagePane(...))`. Narrow is a
-      // one-child Row; wide inserts `[sidebar, divider]` before it. Because the
-      // pane stays the LAST Row child (same type + key) across a resize, Flutter's
-      // bottom-up child matching reuses its Element + State — so the message
-      // list's scroll position and the composer's draft survive the crossing. The
-      // NetworkStatusBanner lives INSIDE the pane so it renders in both layouts.
-      body: Row(
-        children: [
-          if (isWide) ...[
-            const ChatSidebar(),
-            const VerticalDivider(width: 1),
-          ],
-          const Expanded(
-            child: ChatMessagePane(key: ValueKey('chat-message-pane')),
+    // THE CHANNEL TIER of the scope cascade (#2715). A channel may tint ONE
+    // role — the signal accent — of the reader's own palette, and only when the
+    // result still satisfies the design language; anything else is dropped
+    // inside `channelThemeProvider`. Wrapping the whole screen (rather than the
+    // message list alone) is deliberate: the accent is what marks focus, the
+    // composer's lit waterline and the app bar, so tinting only the messages
+    // would leave the room half-dressed.
+    return Theme(
+      data: ref.watch(
+        channelThemeProvider(
+          ChannelThemeRequest(
+            channelId: active?.id,
+            brightness: Theme.of(context).brightness,
           ),
-        ],
+        ),
+      ),
+      child: Scaffold(
+        // Wide: NO app bar — the sidebar owns the chrome (server switcher, channels,
+        // settings/logout) and the message pane carries its own slim channel header
+        // (the redundant full-width bar sat below the native macOS title bar). Narrow:
+        // the app bar — the dropdown switcher when there is more than one NAVIGABLE
+        // CONVERSATION (channels ∪ DMs, never channels alone), plus the mute,
+        // search, settings and sign-out actions.
+        appBar: isWide
+            ? null
+            : AppBar(
+                // Listing channels ∪ DMs is what makes a DM REACHABLE on a phone at
+                // all: the narrow layout has no sidebar, so this dropdown is the
+                // whole navigation surface, and a channels-only item list left
+                // `openDm` able to strand you in a conversation you could neither
+                // return to nor leave (#2798, task #12).
+                //
+                // It also retires the DM gate that used to hide this switcher: that
+                // gate existed because a DM id in `DropdownButton.value` with no
+                // matching item asserts (cage-match #106). The item list now covers
+                // every id that can be active, so the crash is unreachable rather
+                // than dodged — and the gate WAS the trap.
+                // The bar rides the SAME settled predicate as the pane. Gating only
+                // the pane closed the floor and left the doorbell wired to the wrong
+                // house: with one DM in and the channel list still in flight,
+                // `navigable.length == 1` titled the bar "Alice" and lit her mute
+                // button over a spinner. One tap conversation-muted a thread the
+                // user had never entered — and then the channels landed, the
+                // implicit default moved to the first room, and the mute stayed
+                // behind on a conversation they never picked (cage-match #136,
+                // Tesla). A conversation control must not exist before the
+                // conversation it names is settled.
+                title: !ready
+                    ? const Text('Chat')
+                    : navigable.length > 1 && active != null
+                    ? _ConversationSwitcher(
+                        rooms: rooms,
+                        dms: dms,
+                        activeId: active.id,
+                      )
+                    : _ConversationTitle(active: active),
+                actions: [
+                  // Narrow has no sidebar, so the row long-press that mutes a
+                  // conversation on wide does not exist here. Without this the
+                  // capability would be wide-only — mutable on the desktop, invisible
+                  // on the phone, which is where a noisy channel is actually felt.
+                  if (ready && active != null) ...[
+                    _MuteConversationAction(conversation: active),
+                    // Same gate as mute, for the same reason: a conversation
+                    // control must not exist before the conversation it names
+                    // is settled (cage-match #136).
+                    ChannelLookAction(
+                      channelId: active.id,
+                      channelLabel: active.name,
+                    ),
+                  ],
+                  IconButton(
+                    tooltip: 'Search',
+                    icon: const Icon(Icons.search),
+                    onPressed: () => context.push('/search'),
+                  ),
+                  IconButton(
+                    tooltip: 'Settings',
+                    icon: const Icon(Icons.settings),
+                    onPressed: () => context.push('/settings'),
+                  ),
+                  IconButton(
+                    tooltip: 'Sign out',
+                    icon: const Icon(Icons.logout),
+                    onPressed: () =>
+                        ref.read(authControllerProvider.notifier).logout(),
+                  ),
+                ],
+              ),
+        // Option A — no state loss across the breakpoint. The body is ALWAYS a Row
+        // whose LAST child is `Expanded(ChatMessagePane(...))`. Narrow is a
+        // one-child Row; wide inserts `[sidebar, divider]` before it. Because the
+        // pane stays the LAST Row child (same type + key) across a resize, Flutter's
+        // bottom-up child matching reuses its Element + State — so the message
+        // list's scroll position and the composer's draft survive the crossing. The
+        // NetworkStatusBanner lives INSIDE the pane so it renders in both layouts.
+        body: Row(
+          children: [
+            if (isWide) ...[
+              const ChatSidebar(),
+              const VerticalDivider(width: 1),
+            ],
+            const Expanded(
+              child: ChatMessagePane(key: ValueKey('chat-message-pane')),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -221,8 +251,10 @@ class _MuteConversationAction extends ConsumerWidget {
       ref,
       conversation.id,
       peerId: isDm
-          ? dmPeerId(ref.watch(channelRosterProvider(conversation.id)).value,
-              ref.watch(currentUserProvider)?.userId)
+          ? dmPeerId(
+              ref.watch(channelRosterProvider(conversation.id)).value,
+              ref.watch(currentUserProvider)?.userId,
+            )
           : null,
       hasPeer: isDm,
     );
@@ -248,8 +280,8 @@ class _MuteConversationAction extends ConsumerWidget {
       // group-shaped DM, a departed member) — cage-match #135 round 9, Tesla.
       tooltip: muted
           ? (clearsPerson
-              ? 'This person is muted everywhere'
-              : 'Unmute this conversation')
+                ? 'This person is muted everywhere'
+                : 'Unmute this conversation')
           : 'Mute this conversation',
       // Bell, not speaker: this app ships 1:1 A/V calls, where a speaker glyph
       // in the chrome reads as "mute the call", a different verb entirely
@@ -273,30 +305,37 @@ class _MuteConversationAction extends ConsumerWidget {
           // determine", not "no gap", and passing it across the SnackBar's
           // lifetime would disable the guard rather than fail closed.
           if (actingUserId == null) return;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            // Say what the button DOES, not the narrower thing it sounds like:
-            // unmuting clears every cause of this row's silence, which includes
-            // the account mute that applies in every conversation (cage-match
-            // #135 round 6, Carnot — the UI admitted one state change and
-            // performed two).
-            content: const Text(
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              // Say what the button DOES, not the narrower thing it sounds like:
+              // unmuting clears every cause of this row's silence, which includes
+              // the account mute that applies in every conversation (cage-match
+              // #135 round 6, Carnot — the UI admitted one state change and
+              // performed two).
+              content: const Text(
                 'This person is muted in every conversation. Unmuting affects '
-                'all of them.'),
-            action: SnackBarAction(
-              label: 'Unmute',
-              onPressed: () => mute.apply(
+                'all of them.',
+              ),
+              action: SnackBarAction(
+                label: 'Unmute',
+                onPressed: () => mute.apply(
                   container.read(mutesProvider.notifier),
                   muted: false,
-                  expectUserId: actingUserId),
+                  expectUserId: actingUserId,
+                ),
+              ),
             ),
-          ));
+          );
           return;
         }
         // Otherwise synchronous — no async gap, so the write lands in the same
         // frame as the tap. `null` is the explicit "nothing to bind" answer, not
         // an omission (the parameter is required precisely so this is a decision).
-        mute.apply(ref.read(mutesProvider.notifier),
-            muted: !muted, expectUserId: null);
+        mute.apply(
+          ref.read(mutesProvider.notifier),
+          muted: !muted,
+          expectUserId: null,
+        );
       },
     );
   }
@@ -320,7 +359,8 @@ class _ConversationTitle extends ConsumerWidget {
     if (a == null) return const Text('Chat');
     // By SOURCE, through the one door (#136) — a DM whose `kind` says otherwise
     // would otherwise render `a.name`, which for a DM is the empty string.
-    if (!ref.watch(dmConversationIdsProvider).contains(a.id)) return Text(a.name);
+    if (!ref.watch(dmConversationIdsProvider).contains(a.id))
+      return Text(a.name);
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(a.id)).value;
     return Text(dmPeerTitle(roster, myId));
@@ -365,7 +405,10 @@ class _ConversationSwitcher extends ConsumerWidget {
     // less visible than one from a room.
     final otherUnread = [...rooms, ...dms]
         .where((c) => c.id != activeId)
-        .fold<int>(0, (sum, c) => sum + ref.watch(channelUnreadCountProvider(c.id)));
+        .fold<int>(
+          0,
+          (sum, c) => sum + ref.watch(channelUnreadCountProvider(c.id)),
+        );
 
     return Row(
       children: [
@@ -409,9 +452,8 @@ class _ConversationSwitcher extends ConsumerWidget {
                       child: Text(
                         'Direct messages',
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color:
-                                  Theme.of(context).colorScheme.onSurfaceVariant,
-                            ),
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                   ),
@@ -472,7 +514,9 @@ class _ChannelMenuItem extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final unread = isActive ? 0 : ref.watch(channelUnreadCountProvider(channelId));
+    final unread = isActive
+        ? 0
+        : ref.watch(channelUnreadCountProvider(channelId));
     // A muted row must say WHY it is quiet here too. `channelUnreadCountProvider`
     // reports 0 for a muted channel, so without this the dropdown renders muted
     // and idle identically — two unread surfaces drawing different conclusions
@@ -486,11 +530,12 @@ class _ChannelMenuItem extends ConsumerWidget {
     // topology, not by law", and the law is what held once DMs joined the list.
     final muted = watchConversationMute(ref, channelId).isMuted;
     return _MenuItemRow(
-        conversationId: channelId,
-        name: name,
-        unread: unread,
-        muted: muted,
-        isActive: isActive);
+      conversationId: channelId,
+      name: name,
+      unread: unread,
+      muted: muted,
+      isActive: isActive,
+    );
   }
 }
 
@@ -518,9 +563,12 @@ class _DmMenuItem extends ConsumerWidget {
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(dm.id)).value;
     final unread = isActive ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
-    final muted = watchConversationMute(ref, dm.id,
-            peerId: dmPeerId(roster, myId), hasPeer: true)
-        .isMuted;
+    final muted = watchConversationMute(
+      ref,
+      dm.id,
+      peerId: dmPeerId(roster, myId),
+      hasPeer: true,
+    ).isMuted;
     return _MenuItemRow(
       conversationId: dm.id,
       name: dmPeerTitle(roster, myId),
@@ -572,10 +620,12 @@ class _MenuItemRow extends StatelessWidget {
           UnreadBadge(key: Key('unread-item-$conversationId'), count: unread),
         ] else if (muted) ...[
           const SizedBox(width: 8),
-          Icon(Icons.notifications_off_outlined,
-              key: Key('muted-item-$conversationId'),
-              size: 16,
-              color: Theme.of(context).colorScheme.onSurfaceVariant),
+          Icon(
+            Icons.notifications_off_outlined,
+            key: Key('muted-item-$conversationId'),
+            size: 16,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ],
       ],
     );
@@ -656,11 +706,7 @@ class _SealMark extends StatelessWidget {
           builder: (context, t, _) => Icon(
             Icons.verified_outlined,
             size: 18,
-            color: Color.lerp(
-              scheme.outlineVariant,
-              scheme.primary,
-              t,
-            ),
+            color: Color.lerp(scheme.outlineVariant, scheme.primary, t),
           ),
         ),
       ),
@@ -738,9 +784,9 @@ class UnreadBadge extends StatelessWidget {
         label,
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: scheme.onPrimary,
-              fontWeight: FontWeight.w700,
-            ),
+          color: scheme.onPrimary,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -888,7 +934,9 @@ class MessageTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    final bubbleColor = isMine ? scheme.primaryContainer : scheme.surfaceContainerHighest;
+    final bubbleColor = isMine
+        ? scheme.primaryContainer
+        : scheme.surfaceContainerHighest;
 
     // Render the sender's CURRENT handle (my own from the live user, others from
     // the channel roster), falling back to the send-time label — so a rename
@@ -909,8 +957,9 @@ class MessageTile extends ConsumerWidget {
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onLongPress:
-            canActOnSender ? () => showMessageActions(context, ref, message) : null,
+        onLongPress: canActOnSender
+            ? () => showMessageActions(context, ref, message)
+            : null,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -926,8 +975,9 @@ class MessageTile extends ConsumerWidget {
             ),
           ),
           child: Column(
-            crossAxisAlignment:
-                isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            crossAxisAlignment: isMine
+                ? CrossAxisAlignment.end
+                : CrossAxisAlignment.start,
             children: [
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -968,9 +1018,9 @@ class MessageTile extends ConsumerWidget {
                     _formatTime(message.createdAt),
                     // Ids/timestamps speak in the mono instrument voice.
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          fontFamily: kMaritimeMono,
-                          fontSize: 11,
-                        ),
+                      fontFamily: kMaritimeMono,
+                      fontSize: 11,
+                    ),
                   ),
                   if (isMine) ...[
                     const SizedBox(width: 6),
@@ -1019,9 +1069,9 @@ class _SenderBadge extends StatelessWidget {
           Text(
             _label(kind),
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: scheme.onSecondaryContainer,
-                  fontWeight: FontWeight.w600,
-                ),
+              color: scheme.onSecondaryContainer,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -1061,13 +1111,19 @@ class _DeliveryIndicator extends ConsumerWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.error_outline,
-                  size: 14, color: Theme.of(context).colorScheme.error),
+              Icon(
+                Icons.error_outline,
+                size: 14,
+                color: Theme.of(context).colorScheme.error,
+              ),
               const SizedBox(width: 2),
-              Text('Retry',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: Theme.of(context).colorScheme.error)),
+              Text(
+                'Retry',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
             ],
           ),
         );
@@ -1148,9 +1204,12 @@ class _ComposerState extends ConsumerState<Composer> {
     final next = tok == null
         ? const <MapEntry<String, String>>[]
         : filterEmojiShortcodes(tok.query);
-    final changed = next.length != _suggestions.length ||
-        [for (var i = 0; i < next.length; i++) next[i].key != _suggestions[i].key]
-            .any((d) => d);
+    final changed =
+        next.length != _suggestions.length ||
+        [
+          for (var i = 0; i < next.length; i++)
+            next[i].key != _suggestions[i].key,
+        ].any((d) => d);
     if (changed) {
       setState(() {
         _suggestions = next;
@@ -1231,134 +1290,135 @@ class _ComposerState extends ConsumerState<Composer> {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 8, 8),
             child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            // The seal. Every message here is signed at birth, so the mark that
-            // means "signed" elsewhere in the app belongs at the moment you
-            // write one — and it is deliberately the SAME glyph and colour the
-            // Carried Record uses for a verified signature, not a new one.
-            // (`Icons.key_outlined` was the obvious pick and is wrong: Settings
-            // already spends it on passkeys, so a key here would read "sign-in".)
-            _SealMark(armed: _armed),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Focus(
-                onFocusChange: (has) {
-                  if (has != _focused) setState(() => _focused = has);
-                },
-                // Physical keyboard: Enter sends, Shift+Enter inserts a newline.
-                // Scoped to hardware key events, so mobile soft keyboards keep
-                // their existing newline + send-button behaviour untouched.
-                onKeyEvent: (node, event) {
-                  if (event is! KeyDownEvent) return KeyEventResult.ignored;
-                  final key = event.logicalKey;
-                  // When the shortcode picker is open it captures the navigation
-                  // keys, so Enter/Tab commit the highlighted emoji instead of
-                  // sending the message and the arrows move the highlight.
-                  if (_suggestions.isNotEmpty) {
-                    if (key == LogicalKeyboardKey.enter &&
-                            !HardwareKeyboard.instance.isShiftPressed ||
-                        key == LogicalKeyboardKey.tab) {
-                      _acceptSuggestion(_suggestions[_selected]);
-                      return KeyEventResult.handled;
-                    }
-                    if (key == LogicalKeyboardKey.arrowDown) {
-                      _moveSelection(1);
-                      return KeyEventResult.handled;
-                    }
-                    if (key == LogicalKeyboardKey.arrowUp) {
-                      _moveSelection(-1);
-                      return KeyEventResult.handled;
-                    }
-                    if (key == LogicalKeyboardKey.escape) {
-                      _closeSuggestions();
-                      return KeyEventResult.handled;
-                    }
-                  }
-                  if (key == LogicalKeyboardKey.enter) {
-                    if (HardwareKeyboard.instance.isShiftPressed) {
-                      // Shift+Enter → newline. Flutter's DefaultTextEditingShortcuts
-                      // map only PLAIN Enter to a newline in a multiline field, and
-                      // the composer reassigns bare Enter to "send" — so Shift+Enter
-                      // has no default handler and the newline must be inserted
-                      // explicitly here (#113 follow-up; was a silent no-op before).
-                      _insertAtCursor('\n');
-                    } else {
-                      _send();
-                    }
-                    return KeyEventResult.handled;
-                  }
-                  return KeyEventResult.ignored;
-                },
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    TextField(
-                      controller: _controller,
-                      minLines: 1,
-                      maxLines: 4,
-                      textInputAction: TextInputAction.send,
-                      decoration: InputDecoration(
-                        // An invitation, not a label. "Message" reads as a field
-                        // NAME on a form; the ellipsis and the verb say a
-                        // sentence goes here. Dimmer than default so it recedes
-                        // behind what you type.
-                        hintText: 'Write a message…',
-                        hintStyle: TextStyle(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurfaceVariant
-                              .withValues(alpha: 0.6),
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // The seal. Every message here is signed at birth, so the mark that
+                // means "signed" elsewhere in the app belongs at the moment you
+                // write one — and it is deliberately the SAME glyph and colour the
+                // Carried Record uses for a verified signature, not a new one.
+                // (`Icons.key_outlined` was the obvious pick and is wrong: Settings
+                // already spends it on passkeys, so a key here would read "sign-in".)
+                _SealMark(armed: _armed),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Focus(
+                    onFocusChange: (has) {
+                      if (has != _focused) setState(() => _focused = has);
+                    },
+                    // Physical keyboard: Enter sends, Shift+Enter inserts a newline.
+                    // Scoped to hardware key events, so mobile soft keyboards keep
+                    // their existing newline + send-button behaviour untouched.
+                    onKeyEvent: (node, event) {
+                      if (event is! KeyDownEvent) return KeyEventResult.ignored;
+                      final key = event.logicalKey;
+                      // When the shortcode picker is open it captures the navigation
+                      // keys, so Enter/Tab commit the highlighted emoji instead of
+                      // sending the message and the arrows move the highlight.
+                      if (_suggestions.isNotEmpty) {
+                        if (key == LogicalKeyboardKey.enter &&
+                                !HardwareKeyboard.instance.isShiftPressed ||
+                            key == LogicalKeyboardKey.tab) {
+                          _acceptSuggestion(_suggestions[_selected]);
+                          return KeyEventResult.handled;
+                        }
+                        if (key == LogicalKeyboardKey.arrowDown) {
+                          _moveSelection(1);
+                          return KeyEventResult.handled;
+                        }
+                        if (key == LogicalKeyboardKey.arrowUp) {
+                          _moveSelection(-1);
+                          return KeyEventResult.handled;
+                        }
+                        if (key == LogicalKeyboardKey.escape) {
+                          _closeSuggestions();
+                          return KeyEventResult.handled;
+                        }
+                      }
+                      if (key == LogicalKeyboardKey.enter) {
+                        if (HardwareKeyboard.instance.isShiftPressed) {
+                          // Shift+Enter → newline. Flutter's DefaultTextEditingShortcuts
+                          // map only PLAIN Enter to a newline in a multiline field, and
+                          // the composer reassigns bare Enter to "send" — so Shift+Enter
+                          // has no default handler and the newline must be inserted
+                          // explicitly here (#113 follow-up; was a silent no-op before).
+                          _insertAtCursor('\n');
+                        } else {
+                          _send();
+                        }
+                        return KeyEventResult.handled;
+                      }
+                      return KeyEventResult.ignored;
+                    },
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          controller: _controller,
+                          minLines: 1,
+                          maxLines: 4,
+                          textInputAction: TextInputAction.send,
+                          decoration: InputDecoration(
+                            // An invitation, not a label. "Message" reads as a field
+                            // NAME on a form; the ellipsis and the verb say a
+                            // sentence goes here. Dimmer than default so it recedes
+                            // behind what you type.
+                            hintText: 'Write a message…',
+                            hintStyle: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant
+                                  .withValues(alpha: 0.6),
+                            ),
+                            // NO container. This file's theme states its own law —
+                            // "no shadows — separation is by hairline" — and the
+                            // composer was the last component still wearing a box.
+                            // `isCollapsed` also strips Material's ~48px minimum
+                            // field height, so the text sits on the ground the way
+                            // the message bubbles do. The affordance moves to the
+                            // waterline below.
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            filled: false,
+                            isCollapsed: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: 10,
+                            ),
+                          ),
+                          onSubmitted: (_) => _send(),
                         ),
-                        // NO container. This file's theme states its own law —
-                        // "no shadows — separation is by hairline" — and the
-                        // composer was the last component still wearing a box.
-                        // `isCollapsed` also strips Material's ~48px minimum
-                        // field height, so the text sits on the ground the way
-                        // the message bubbles do. The affordance moves to the
-                        // waterline below.
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        filled: false,
-                        isCollapsed: true,
-                        contentPadding:
-                            const EdgeInsets.symmetric(vertical: 10),
-                      ),
-                      onSubmitted: (_) => _send(),
+                        _Waterline(lit: _focused),
+                      ],
                     ),
-                    _Waterline(lit: _focused),
-                  ],
+                  ),
                 ),
-              ),
-            ),
-            // Keyboard-first composer: physical-keyboard platforms send on Enter
-            // (see the Focus onKeyEvent above), so the send button is redundant
-            // chrome and is dropped. Touch platforms keep it — a thumb has no
-            // reachable Enter-to-send, and the soft keyboard's action key alone
-            // isn't a discoverable send affordance.
-            if (_showSendButton) ...[
-              const SizedBox(width: 4),
-              // The lamp. Glyph only — no fill, no border — and it LIGHTS rather
-              // than appears: dim while there is nothing to send, beacon amber
-              // (`colorScheme.secondary`) once there is. A signal lamp is the
-              // right metaphor for a maritime skin, and `secondary` was a colour
-              // the palette defined and almost never spent.
-              //
-              // Always ENABLED, never disabled-on-empty: a control that vanishes
-              // from the accessibility tree between keystrokes is worse than one
-              // that no-ops, and `_send` already returns early on an empty body.
-              // So the colour is a hint about state, not a gate on the action.
-              _SendLamp(
-                // Keyed so the tests target the CONTROL, not its glyph — finding
-                // it by `Icons.send` is what made a pure restyle a 9-test edit.
-                key: const Key('composer-send'),
-                armed: _armed,
-                onPressed: _send,
-              ),
-            ],
-          ],
+                // Keyboard-first composer: physical-keyboard platforms send on Enter
+                // (see the Focus onKeyEvent above), so the send button is redundant
+                // chrome and is dropped. Touch platforms keep it — a thumb has no
+                // reachable Enter-to-send, and the soft keyboard's action key alone
+                // isn't a discoverable send affordance.
+                if (_showSendButton) ...[
+                  const SizedBox(width: 4),
+                  // The lamp. Glyph only — no fill, no border — and it LIGHTS rather
+                  // than appears: dim while there is nothing to send, beacon amber
+                  // (`colorScheme.secondary`) once there is. A signal lamp is the
+                  // right metaphor for a maritime skin, and `secondary` was a colour
+                  // the palette defined and almost never spent.
+                  //
+                  // Always ENABLED, never disabled-on-empty: a control that vanishes
+                  // from the accessibility tree between keystrokes is worse than one
+                  // that no-ops, and `_send` already returns early on an empty body.
+                  // So the colour is a hint about state, not a gate on the action.
+                  _SendLamp(
+                    // Keyed so the tests target the CONTROL, not its glyph — finding
+                    // it by `Icons.send` is what made a pure restyle a 9-test edit.
+                    key: const Key('composer-send'),
+                    armed: _armed,
+                    onPressed: _send,
+                  ),
+                ],
+              ],
             ),
           ),
         ],
@@ -1393,8 +1453,10 @@ class _ComposerState extends ConsumerState<Composer> {
               onTap: () => _acceptSuggestion(s),
               child: Container(
                 color: selected ? theme.colorScheme.primaryContainer : null,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
                     Text(s.value, style: const TextStyle(fontSize: 20)),
@@ -1406,8 +1468,9 @@ class _ComposerState extends ConsumerState<Composer> {
                       child: Text(
                         ':${s.key}:',
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(fontFamily: 'monospace'),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontFamily: 'monospace',
+                        ),
                       ),
                     ),
                   ],
