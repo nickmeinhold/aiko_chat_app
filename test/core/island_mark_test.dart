@@ -4,6 +4,8 @@
 // way every time, on every device, forever. These pin that, because the failure
 // mode is silent: a mark that quietly changed would look like a working feature
 // while destroying the only thing it was for.
+import 'dart:math' as math;
+
 import 'package:aiko_chat_app/core/widgets/island_mark.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -222,6 +224,98 @@ void main() {
     test('an empty key is not a key — fall back rather than derive from ""', () {
       expect(IslandIdentity.of('chat.example.org', islandPubkey: '').water,
           IslandIdentity.of('chat.example.org').water);
+    });
+  });
+
+  group('the SHAPES differ, not just the colours', () {
+    // "long islands, fat, they should look like islands too". The first cut
+    // varied only the coastline ripple on a fixed squash, so every island came
+    // out the same egg at different angles of dent. Elongation and tilt are what
+    // make two marks read as different PLACES.
+    //
+    // Shape lives in the painter, so these measure the PAINTED PATH rather than
+    // any declared field — the bounds of the land are the thing a reader
+    // actually sees.
+    Path landPath(String host) => IslandPainter(
+          identity: IslandIdentity.of(host),
+          rim: const Color(0xFF000000),
+        ).landPath(const Size(100, 100));
+
+    /// ELONGATION — how much longer an island is than it is wide, measured
+    /// rotation-invariantly by the principal axes of its coastline.
+    ///
+    /// TWO WEAKER METRICS FAILED HERE FIRST, and both passed the regression they
+    /// existed to catch:
+    ///   - the BOUNDING BOX: a rotated egg has a different box from an
+    ///     unrotated one, so pinning the aspect to a constant still varied it;
+    ///   - MAX/MIN RADIUS: the coastline harmonics alone swing that around, so
+    ///     a fleet of identical eggs with different dents scored as "varied".
+    ///
+    /// Second moments ignore both rotation and local bumpiness and answer the
+    /// actual question: is this island LONG. 1.0 is a disc; 2.0 is twice as long
+    /// as it is wide.
+    double elongation(String host) {
+      final metric = landPath(host).computeMetrics().first;
+      final pts = [
+        for (var i = 0; i < 240; i++)
+          metric.getTangentForOffset(metric.length * i / 240)!.position,
+      ];
+      final mx = pts.map((p) => p.dx).reduce((a, b) => a + b) / pts.length;
+      final my = pts.map((p) => p.dy).reduce((a, b) => a + b) / pts.length;
+      var sxx = 0.0, syy = 0.0, sxy = 0.0;
+      for (final p in pts) {
+        final dx = p.dx - mx;
+        final dy = p.dy - my;
+        sxx += dx * dx;
+        syy += dy * dy;
+        sxy += dx * dy;
+      }
+      sxx /= pts.length;
+      syy /= pts.length;
+      sxy /= pts.length;
+      // Eigenvalues of the 2x2 covariance matrix.
+      final tr = sxx + syy;
+      final det = sxx * syy - sxy * sxy;
+      final disc = math.sqrt(math.max(0, tr * tr / 4 - det));
+      final l1 = tr / 2 + disc;
+      final l2 = tr / 2 - disc;
+      return math.sqrt(l1 / math.max(l2, 1e-9));
+    }
+
+    test('islands come in DIFFERENT PROPORTIONS — some long, some fat', () {
+      final shapes = [
+        for (var i = 0; i < 60; i++) elongation('island$i.example.org'),
+      ];
+      final longest = shapes.reduce((a, b) => a > b ? a : b);
+      final roundest = shapes.reduce((a, b) => a < b ? a : b);
+
+      expect(roundest, lessThan(1.35),
+          reason: 'nothing is round — everything is a spit (roundest '
+              '${roundest.toStringAsFixed(2)})');
+      expect(longest, greaterThan(1.8),
+          reason: 'nothing is LONG — every island is the same egg (longest '
+              '${longest.toStringAsFixed(2)})');
+      expect(longest - roundest, greaterThan(0.6),
+          reason: 'the range of proportions is too narrow to read as different '
+              'places');
+    });
+
+    test('two islands do not paint the same coastline', () {
+      expect(elongation('chat.imagineering.cc'),
+          isNot(closeTo(elongation('enspyr.co'), 0.1)),
+          reason: 'the two real islands must differ in SHAPE as well as colour');
+    });
+
+    test('every island still FITS ITS DISC — a coastline that escapes the water '
+        'is not an island', () {
+      for (var i = 0; i < 60; i++) {
+        final b = landPath('island$i.example.org').getBounds();
+        expect(b.left, greaterThanOrEqualTo(2.0), reason: 'island$i spills left');
+        expect(b.top, greaterThanOrEqualTo(2.0), reason: 'island$i spills up');
+        expect(b.right, lessThanOrEqualTo(98.0), reason: 'island$i spills right');
+        expect(b.bottom, lessThanOrEqualTo(98.0),
+            reason: 'island$i spills down');
+      }
     });
   });
 }

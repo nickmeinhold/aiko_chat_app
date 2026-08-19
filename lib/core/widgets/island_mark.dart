@@ -170,7 +170,7 @@ class IslandMark extends StatelessWidget {
     final identity = IslandIdentity.of(baseUrl, islandPubkey: islandPubkey);
     final mark = CustomPaint(
       size: Size.square(size),
-      painter: _IslandPainter(
+      painter: IslandPainter(
         identity: identity,
         rim: Theme.of(context).colorScheme.outline,
       ),
@@ -211,8 +211,11 @@ class IslandMark extends StatelessWidget {
   }
 }
 
-class _IslandPainter extends CustomPainter {
-  _IslandPainter({required this.identity, required this.rim});
+/// Public so tests can measure the PAINTED COASTLINE rather than a declared
+/// field — the shape is generated, so its bounds are the only honest statement
+/// of what a reader sees.
+class IslandPainter extends CustomPainter {
+  IslandPainter({required this.identity, required this.rim});
 
   final IslandIdentity identity;
   final Color rim;
@@ -237,61 +240,94 @@ class _IslandPainter extends CustomPainter {
         ..color = rim,
     );
 
-    // The land: a closed blob whose radius is modulated by three harmonics with
-    // seed-derived amplitudes and phases. Three is the number that matters —
-    // one gives an egg, two gives a peanut, three gives something that reads as
-    // a coastline while staying smooth.
+    canvas.drawPath(landPath(size), _landPaint());
+  }
+
+  /// The coastline, as a path — extracted so it can be MEASURED.
+  ///
+  /// The shape is generated, so "islands come in different proportions" is
+  /// a claim about pixels that no declared field can stand in for. Handing
+  /// tests the actual path is what lets them assert on bounds instead of on
+  /// the seed arithmetic that is supposed to produce them.
+  Path landPath(Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = size.width / 2;
+    // The land. An island is not a bumpy circle — real ones are LONG or FAT,
+    // they lie at an angle, and their coastlines have a couple of decisive
+    // features rather than uniform ripple. All four of those vary here, each
+    // from its own slice of the seed, which is what makes two islands read as
+    // different PLACES rather than the same blob wearing different dents.
+    //
+    // The first cut varied only the ripple, on a fixed 0.86 squash. Every
+    // island came out the same egg. Nick: "long islands, fat, they should look
+    // like islands too."
     final s = identity.shapeSeed;
+
+    // ELONGATION, 0.45 (a long spit) to 1.0 (round). The single biggest driver
+    // of "that is a different island" at a glance.
+    final aspect = 0.45 + ((s & 0xF) / 15.0) * 0.55;
+
+    // ...and the ANGLE it lies at. Without this every long island points the
+    // same way, which reads as one island rendered badly rather than several.
+    final tilt = ((s >> 4) & 0x1F) / 32.0 * math.pi;
+
+    // Coastline. Amplitudes are deliberately uneven: one dominant feature (a
+    // bay or a headland), one medium, one fine. Equal amplitudes average out
+    // into that same uniform ripple.
     final amps = [
-      0.10 + (s & 0x7) / 40, // 0.10 – 0.27
-      0.06 + ((s >> 3) & 0x7) / 60,
-      0.04 + ((s >> 6) & 0x7) / 90,
+      0.14 + ((s >> 9) & 0x7) / 28.0, // 0.14 – 0.39, the dominant feature
+      0.05 + ((s >> 12) & 0x7) / 70.0,
+      0.03 + ((s >> 15) & 0x3) / 90.0,
     ];
+    // Which harmonic carries the dominant feature — 2 lobes reads as a bay, 3
+    // as a headland, 4 as a scatter. Varying it stops every island having the
+    // same number of "arms".
+    final lobes = 2 + ((s >> 17) & 0x3);
     final phases = [
-      ((s >> 9) & 0xF) * math.pi / 8,
-      ((s >> 13) & 0x7) * math.pi / 4,
-      ((s >> 4) & 0x7) * math.pi / 4,
+      ((s >> 19) & 0xF) * math.pi / 8,
+      ((s >> 23) & 0x7) * math.pi / 4,
+      ((s >> 26) & 0x7) * math.pi / 4,
     ];
 
     final land = Path();
-    const steps = 48;
-    final base = r * 0.62;
+    const steps = 72;
+    final base = r * 0.60;
+    final cosT = math.cos(tilt);
+    final sinT = math.sin(tilt);
     for (var i = 0; i <= steps; i++) {
       final t = i / steps * 2 * math.pi;
       final k =
           1 +
-          amps[0] * math.sin(2 * t + phases[0]) +
-          amps[1] * math.sin(3 * t + phases[1]) +
-          amps[2] * math.sin(5 * t + phases[2]);
-      final p =
-          c + Offset(math.cos(t) * base * k, math.sin(t) * base * k * 0.86);
+          amps[0] * math.sin(lobes * t + phases[0]) +
+          amps[1] * math.sin((lobes + 2) * t + phases[1]) +
+          amps[2] * math.sin(7 * t + phases[2]);
+      // Stretch along one axis, THEN rotate — squashing after the rotation
+      // would just re-round every island back towards the circle.
+      final x = math.cos(t) * base * k;
+      final y = math.sin(t) * base * k * aspect;
+      final p = c + Offset(x * cosT - y * sinT, x * sinT + y * cosT);
       i == 0 ? land.moveTo(p.dx, p.dy) : land.lineTo(p.dx, p.dy);
     }
     land.close();
+    return land;
+  }
 
-    // Land is PALE, water is dark — the way a chart actually prints, and the
-    // reason is legibility rather than authenticity. The first cut drew land as
-    // the water darkened, which at the 18px this ships at read as a hole punched
-    // in a coloured disc: every island looked like "dark blob on colour" and the
-    // silhouette did no identifying work at all. Inverting it puts the contrast
-    // where the SHAPE is, so the outline survives being small.
-    //
-    // The land keeps a trace of the water's hue rather than going white, so the
-    // medallion still reads as one colour idea and the water remains what you
-    // recognise first.
+  /// Land is PALE, water is dark — the way a chart prints, and the reason is
+  /// legibility rather than authenticity. The first cut drew land as the water
+  /// darkened, which at 18px read as a hole punched in a coloured disc: the
+  /// silhouette did no identifying work at all. It keeps a trace of the water's
+  /// hue rather than going white, so the medallion stays one colour idea.
+  Paint _landPaint() {
     final hsl = HSLColor.fromColor(identity.water);
-    canvas.drawPath(
-      land,
-      Paint()
-        ..color = hsl
-            .withLightness(0.86)
-            .withSaturation((hsl.saturation * 0.5).clamp(0.0, 1.0))
-            .toColor(),
-    );
+    return Paint()
+      ..color = hsl
+          .withLightness(0.86)
+          .withSaturation((hsl.saturation * 0.5).clamp(0.0, 1.0))
+          .toColor();
   }
 
   @override
-  bool shouldRepaint(_IslandPainter old) =>
+  bool shouldRepaint(IslandPainter old) =>
       old.identity.water != identity.water ||
       old.identity.shapeSeed != identity.shapeSeed ||
       old.rim != rim;
