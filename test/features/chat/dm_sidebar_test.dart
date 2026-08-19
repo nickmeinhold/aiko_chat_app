@@ -17,13 +17,12 @@ import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart'
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel_member.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
-import 'package:aiko_chat_app/features/chat/presentation/channel_sidebar.dart'
-    show ChatSidebar;
 import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart'
     show UnreadBadge;
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/pixels.dart';
 import '../../support/test_helpers.dart';
 
 void main() {
@@ -318,33 +317,53 @@ void main() {
     expect(container.read(channelUnreadCountProvider('dm1')), 0);
   });
 
-  testWidgets('the selected row is VISIBLY distinct from the rail behind it',
+  testWidgets('the selected row is VISIBLY distinct from the rows around it',
       (tester) async {
     // The regression this locks: the theme's selectedTileColor was the same
     // colour as the rail's own surface, so `selected: true` changed the label
     // colour but left the row indistinguishable from its background.
     setWide(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    // A SECOND channel, because a selection is only visible relative to
+    // something unselected beside it — with one row there is nothing to be
+    // distinct from.
+    final rest = FakeRestApi(channels: const [
+      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+    ]);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = roster;
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    final railColor = tester
-        .widget<Material>(find
-            .descendant(of: find.byType(ChatSidebar), matching: find.byType(Material))
-            .first)
-        .color;
-    for (final key in const [Key('sidebar-channel-c1'), Key('sidebar-dm-dm1')]) {
-      final tileContext = tester.element(find.byKey(key));
-      final selectedTileColor = tester.widget<ListTile>(find.byKey(key)).selectedTileColor ??
-          ListTileTheme.of(tileContext).selectedTileColor;
-      expect(selectedTileColor, isNotNull,
-          reason: '$key has no selected background at all');
-      expect(selectedTileColor, isNot(railColor),
-          reason: '$key selected background is invisible against the rail');
+    // MEASURED, not declared. This used to read `selectedTileColor` off the
+    // ListTile and assert it was non-null and `!=` the rail's Material colour.
+    // Both hold while the row is invisible: `!=` is satisfied by two colours
+    // one bit apart, and neither read proves the tile is selected or that
+    // anything was painted at all.
+    //
+    // Compared against ANOTHER CHANNEL ROW, which is the comparison a reader
+    // makes — "which of these am I in" is answered against the sibling rows,
+    // not against the background. The first cut of this compared the selected
+    // channel to the DM row and passed with `selectedTileColor` forced to
+    // transparent: those two live in different sidebar sections, so it was
+    // measuring section chrome and would have reported green forever.
+    final frame = await capturePainted(tester);
+    Color fillOf(String key) {
+      final r = tester.getRect(find.byKey(Key(key)));
+      return frame.at(Offset(r.left + 4, r.center.dy));
     }
+
+    expect(tester.widget<ListTile>(find.byKey(const Key('sidebar-channel-c1'))).selected,
+        isTrue,
+        reason: 'the fixture must have c1 selected for this to measure anything');
+    final mine = fillOf('sidebar-channel-c1');
+    final theirs = fillOf('sidebar-channel-c2');
+    expect(paintedContrast(mine, theirs), greaterThan(1.05),
+        reason: 'the selected channel paints $mine and its unselected sibling '
+            'paints $theirs — a reader cannot see which row they are in');
   });
 }

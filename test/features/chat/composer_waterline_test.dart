@@ -7,56 +7,18 @@
 //   rest    — hairline waterline, dim seal, dim lamp
 //   focused — the waterline ignites in `colorScheme.primary`
 //   armed   — seal AND lamp light together (one fact, two readings)
-import 'dart:ui' as ui;
-
 import 'package:aiko_chat_app/core/widgets/island_mark.dart';
 import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart';
 import 'package:aiko_chat_app/app/theme/maritime_theme.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/pixels.dart';
 import '../../support/test_helpers.dart';
 
 /// Composite [fg] (which may be translucent) over an opaque [bg].
 Color _over(Color fg, Color bg) => Color.alphaBlend(fg, bg);
-
-/// The colour actually PAINTED at [point] (logical, global coordinates).
-///
-/// Captures through the root repaint boundary rather than a widget-local one:
-/// the composer's subtree contains no RepaintBoundary, and adding one for a
-/// test would change the thing being measured.
-Future<Color> _pixelAt(WidgetTester tester, Offset point) async {
-  final view = tester.binding.renderViews.first;
-  final layer = view.debugLayer! as OffsetLayer;
-  final (image, bytes) = (await tester.runAsync(() async {
-    // `toImage` must run on the REAL event loop — under the fake-async
-    // scheduler the frame it awaits is never produced, so it hangs forever
-    // instead of failing. Same trap as `theme_render_test.dart`.
-    final img = await layer.toImage(view.paintBounds);
-    final b = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
-    return (img, b!);
-  }))!;
-  // `RenderView.paintBounds` is in PHYSICAL pixels (2400x1800 for an 800x600
-  // test view at dpr 3), so a global logical offset scales by the device pixel
-  // ratio to index the capture. Reading this as a 1:1 space silently probes a
-  // point a third of the way down the screen and reports whatever is there —
-  // which is the same defect class this test exists to close, one level up in
-  // the instrument.
-  final scale = tester.view.devicePixelRatio;
-  final x = (point.dx * scale).round();
-  final y = (point.dy * scale).round();
-  final o = (y * image.width + x) * 4;
-  final colour = Color.fromARGB(
-    bytes.getUint8(o + 3),
-    bytes.getUint8(o),
-    bytes.getUint8(o + 1),
-    bytes.getUint8(o + 2),
-  );
-  image.dispose();
-  return colour;
-}
 
 /// WCAG relative-luminance contrast ratio between two OPAQUE colours.
 double _contrast(Color a, Color b) {
@@ -243,12 +205,12 @@ void main() {
     final rule = tester.getRect(base.first);
     final probe = Offset(rule.left + 4, rule.center.dy);
 
-    expect(await _pixelAt(tester, probe), scheme.outlineVariant,
+    expect((await capturePainted(tester)).at(probe), scheme.outlineVariant,
         reason: 'at rest the base rule is the only edge');
 
     await tester.tap(find.byType(TextField).first);
     await tester.pumpAndSettle();
-    expect(await _pixelAt(tester, probe), scheme.primary,
+    expect((await capturePainted(tester)).at(probe), scheme.primary,
         reason: 'the lit rule is not on screen — it may be animating its width '
             'correctly and painting nothing, which is exactly the bug that a '
             'widthFactor assertion here could never see');
@@ -257,7 +219,7 @@ void main() {
     // which is the thing this design removed.
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pumpAndSettle();
-    expect(await _pixelAt(tester, probe), scheme.outlineVariant,
+    expect((await capturePainted(tester)).at(probe), scheme.outlineVariant,
         reason: 'the waterline stayed lit after blur');
   });
 
