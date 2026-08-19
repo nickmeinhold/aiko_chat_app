@@ -34,13 +34,12 @@ class AikoChatApp extends ConsumerWidget {
     final router = ref.watch(routerProvider);
     // The chosen look supplies BOTH halves, so picking a preset never costs you
     // OS following: themeMode still decides how bright, the preset decides which
-    // look. Both are set in Settings → Appearance and both default to
-    // system/Maritime.
-    final preset = ref.watch(themePresetProvider);
+    // look, and the chosen typeface rides along in both. All three are set in
+    // Settings → Appearance.
     return MaterialApp.router(
       title: 'Aiko Chat',
-      theme: preset.lightTheme,
-      darkTheme: preset.darkTheme,
+      theme: ref.watch(lightThemeProvider),
+      darkTheme: ref.watch(darkThemeProvider),
       themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
       // ABOVE the Navigator, so an incoming call reaches you on any route

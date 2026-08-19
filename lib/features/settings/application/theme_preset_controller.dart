@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/theme/app_fonts.dart';
 import '../../../app/theme/skin_selection.dart';
 import '../../../app/theme/theme_laws.dart';
+import '../../../app/theme/theme_builder.dart';
 import '../../../app/theme/theme_presets.dart';
 
 /// SharedPreferences key for the chosen look. A DEVICE preference, like
@@ -35,6 +37,24 @@ final themePresetProvider = Provider<ThemePreset>(
   (ref) => ref.watch(skinSelectionProvider).resolve(),
 );
 
+/// The reader's chosen body face.
+final appFontProvider =
+    Provider<AppFont>((ref) => ref.watch(skinSelectionProvider).font);
+
+/// The two ThemeData objects the app actually renders with — palette, edits and
+/// typeface composed. This is the ONLY place the three preferences meet; every
+/// consumer takes a finished theme rather than reassembling the pieces (and
+/// risking a surface that gets the colours but not the font).
+final lightThemeProvider = Provider<ThemeData>((ref) => buildTheme(
+      ref.watch(themePresetProvider).light,
+      font: ref.watch(appFontProvider),
+    ));
+
+final darkThemeProvider = Provider<ThemeData>((ref) => buildTheme(
+      ref.watch(themePresetProvider).dark,
+      font: ref.watch(appFontProvider),
+    ));
+
 class SkinSelectionController extends Notifier<SkinSelection> {
   @override
   SkinSelection build() {
@@ -63,7 +83,11 @@ class SkinSelectionController extends Notifier<SkinSelection> {
         colour: colour,
       ));
 
-  /// Back to the preset as authored.
+  /// Choose the body typeface.
+  void selectFont(AppFont font) => _write(state.withFont(font.id));
+
+  /// Back to the preset's own colours. Keeps the chosen font — it was never a
+  /// colour edit.
   void resetToPreset() => _write(state.reset);
 
   void _write(SkinSelection next) {

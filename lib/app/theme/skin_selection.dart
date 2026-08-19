@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import 'app_fonts.dart';
 import 'theme_builder.dart';
 import 'theme_laws.dart';
 import 'theme_presets.dart';
@@ -19,11 +20,17 @@ import 'theme_presets.dart';
 class SkinSelection {
   const SkinSelection({
     required this.presetId,
+    this.fontId = kDefaultFontId,
     this.lightOverrides = const {},
     this.darkOverrides = const {},
   });
 
   final String presetId;
+
+  /// The chosen BODY typeface. Orthogonal to the palette: a face is not part of
+  /// a preset, so switching preset keeps your font and vice versa. They are two
+  /// independent preferences that happen to share a settings page.
+  final String fontId;
   final Map<PaletteRole, Color> lightOverrides;
   final Map<PaletteRole, Color> darkOverrides;
 
@@ -31,6 +38,15 @@ class SkinSelection {
 
   bool get isCustomised =>
       lightOverrides.isNotEmpty || darkOverrides.isNotEmpty;
+
+  AppFont get font => fontById(fontId);
+
+  SkinSelection withFont(String id) => SkinSelection(
+        presetId: presetId,
+        fontId: id,
+        lightOverrides: lightOverrides,
+        darkOverrides: darkOverrides,
+      );
 
   SkinSelection withOverride({
     required Brightness brightness,
@@ -50,11 +66,13 @@ class SkinSelection {
     return brightness == Brightness.light
         ? SkinSelection(
             presetId: presetId,
+            fontId: fontId,
             lightOverrides: edit(lightOverrides),
             darkOverrides: darkOverrides,
           )
         : SkinSelection(
             presetId: presetId,
+            fontId: fontId,
             lightOverrides: lightOverrides,
             darkOverrides: edit(darkOverrides),
           );
@@ -63,10 +81,13 @@ class SkinSelection {
   /// Switching preset ABANDONS the overrides. They were deltas against a
   /// different set of base colours; carrying them onto a new preset would apply
   /// a tweak that made sense on parchment to a palette drawn on prussian blue.
-  SkinSelection withPreset(String id) => SkinSelection(presetId: id);
+  SkinSelection withPreset(String id) =>
+      SkinSelection(presetId: id, fontId: fontId);
 
-  /// Drop every edit, keeping the preset.
-  SkinSelection get reset => SkinSelection(presetId: presetId);
+  /// Drop every colour edit, keeping the preset AND the font — the font was
+  /// never a colour edit, so "reset colours" must not silently take it away.
+  SkinSelection get reset =>
+      SkinSelection(presetId: presetId, fontId: fontId);
 
   /// The preset as this reader actually sees it.
   ThemePreset resolve() {
@@ -123,6 +144,7 @@ class SkinSelection {
 
   Map<String, dynamic> toJson() => {
         'preset': presetId,
+        if (fontId != kDefaultFontId) 'font': fontId,
         if (lightOverrides.isNotEmpty) 'light': _encode(lightOverrides),
         if (darkOverrides.isNotEmpty) 'dark': _encode(darkOverrides),
       };
@@ -172,6 +194,7 @@ class SkinSelection {
       if (json is! Map) return none;
       return SkinSelection(
         presetId: presetById(json['preset'] as String?).id,
+        fontId: fontById(json['font'] as String?).id,
         lightOverrides: _decode(json['light']),
         darkOverrides: _decode(json['dark']),
       );

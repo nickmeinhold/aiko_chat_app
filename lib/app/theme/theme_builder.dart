@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'app_fonts.dart';
+
 /// The one door: a [ThemePalette] of twelve colours in, a fully-dressed
 /// [ThemeData] out.
 ///
@@ -99,10 +101,10 @@ ColorScheme _scheme(ThemePalette p) => ColorScheme(
       inversePrimary: p.panelMine,
     );
 
-TextTheme _text(TextTheme base, ThemePalette p) {
-  // Body text uses the platform default (no fontFamily set); the mono voice is
-  // applied explicitly at id/timestamp call sites (chat_screen.dart).
-  final t = base.apply(bodyColor: p.ink, displayColor: p.ink);
+TextTheme _text(TextTheme base, ThemePalette p, AppFont font) {
+  // The reader's chosen face first, THEN the palette's inks — applying colour
+  // before the family would have the family's own null colours overwrite it.
+  final t = font.apply(base).apply(bodyColor: p.ink, displayColor: p.ink);
   return t.copyWith(
     labelSmall: t.labelSmall?.copyWith(color: p.inkDim, letterSpacing: 0.2),
   );
@@ -117,7 +119,7 @@ RoundedRectangleBorder _panelBorder(ThemePalette p) => RoundedRectangleBorder(
 
 /// Dress the entire app from [p]. Every preset, in both brightnesses, comes
 /// through here — there is no second path to a [ThemeData] in this app.
-ThemeData buildTheme(ThemePalette p) {
+ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
   final scheme = _scheme(p);
   final border = _panelBorder(p);
   final base = ThemeData(
@@ -132,7 +134,7 @@ ThemeData buildTheme(ThemePalette p) {
   );
 
   return base.copyWith(
-    textTheme: _text(base.textTheme, p),
+    textTheme: _text(base.textTheme, p, font),
     // Flat chrome — separation by hairline, never elevation.
     appBarTheme: AppBarTheme(
       backgroundColor: p.ground,

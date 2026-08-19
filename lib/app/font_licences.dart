@@ -17,8 +17,19 @@ import 'package:flutter/services.dart' show rootBundle;
 /// `pubspec.yaml` and fails if any of them is missing from [kBundledFontLicences].
 /// Adding a font without its licence is therefore a red suite, not a discovery
 /// made by a store reviewer.
+/// Every typeface this app puts in front of a reader, bundled OR fetched.
+///
+/// Fetching a font at runtime does NOT outsource the licence: `google_fonts`
+/// touches `LicenseRegistry` nowhere in its source, so a face downloaded from
+/// Google Fonts arrives with no licence attached and the obligation stays ours.
+/// Each family's own OFL text — carrying its own copyright line, which is the
+/// part that actually varies — is bundled beside the code. Four small text
+/// files, no font binaries.
 const kBundledFontLicences = <String, String>{
   'IBM Plex Mono': 'assets/fonts/OFL.txt',
+  'Inter': 'assets/fonts/licences/inter.txt',
+  'Literata': 'assets/fonts/licences/literata.txt',
+  'Atkinson Hyperlegible': 'assets/fonts/licences/atkinsonhyperlegible.txt',
 };
 
 /// Register every bundled font's licence so it appears in the standard licences

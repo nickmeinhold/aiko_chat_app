@@ -114,6 +114,21 @@ void main() {
       PaletteRole.panel,
       PaletteRole.panelHigh,
     ]) {
+      // Committing a colour scrolls the page down to the swatch that was
+      // tapped, carrying the role strip off the top. Return the page to the TOP
+      // rather than scrolling the chip just barely into view: stopping at the
+      // first visible pixel parks it under the app bar, where it is findable but
+      // cannot receive a tap — a failure that reads as "missing widget".
+      await tester.drag(
+        find
+            .byWidgetPredicate(
+              (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+            )
+            .first,
+        const Offset(0, 3000),
+      );
+      await tester.pumpAndSettle();
+
       final chip = find.bySemanticsLabel(RegExp('^${role.label},'));
       expect(chip, findsWidgets, reason: '${role.label} chip not on screen');
       await tester.tap(chip.first);

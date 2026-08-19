@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/theme/app_fonts.dart';
 import '../../../app/theme/theme_builder.dart';
 import '../../../app/theme/theme_laws.dart';
 import '../../../core/widgets/reading_column.dart';
@@ -46,7 +47,7 @@ class _PaletteEditorScreenState extends ConsumerState<PaletteEditorScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Your colours'),
+        title: const Text('Colours & type'),
         actions: [
           if (selection.isCustomised)
             TextButton(
@@ -119,6 +120,9 @@ class _PaletteEditorScreenState extends ConsumerState<PaletteEditorScreen> {
                     colour: c,
                   ),
             ),
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+            const _FontPicker(),
             const SizedBox(height: 24),
           ],
         ),
@@ -393,6 +397,55 @@ class _Swatch extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The body typeface. Fetched on demand rather than bundled, so this list can
+/// be generous without costing every reader megabytes for a face they will
+/// never pick.
+///
+/// The default makes NO network request — "System" leaves fontFamily unset and
+/// renders in the platform's own face. That is stated in the UI rather than
+/// left as a footnote: on an app about sovereign identity, "this one talks to
+/// Google and this one doesn't" is information a reader is entitled to.
+class _FontPicker extends ConsumerWidget {
+  const _FontPicker();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final selected = ref.watch(appFontProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Text('Typeface'),
+        ),
+        for (final font in kAppFonts)
+          RadioListTile<String>(
+            value: font.id,
+            groupValue: selected.id,
+            onChanged: (_) =>
+                ref.read(skinSelectionProvider.notifier).selectFont(font),
+            title: Text(
+              font.label,
+              // Render each option IN the face it names, so the choice is
+              // legible as a choice. The system entry keeps the default face,
+              // which is exactly what it is offering.
+              style: font.apply(theme.textTheme).titleMedium,
+            ),
+            subtitle: Text(font.blurb),
+            secondary: font.isSystem
+                ? null
+                : Tooltip(
+                    message: 'Downloaded once, then cached on this device',
+                    child: Icon(Icons.cloud_download_outlined,
+                        size: 18, color: theme.colorScheme.onSurfaceVariant),
+                  ),
+          ),
+      ],
     );
   }
 }
