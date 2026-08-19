@@ -2,6 +2,7 @@ import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
 import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
+import '../../notifications/domain/device_platform.dart';
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import '../domain/gateway_capabilities.dart';
@@ -363,6 +364,27 @@ abstract interface class ChatRestApi {
   /// [SoleAdminDeletionBlocked] on a 409 (sole admin of a channel) and
   /// [Unauthorized] on a terminal auth rejection.
   Future<void> deleteAccount();
+
+  /// Register this device's push token for the current user
+  /// (`POST /v1/devices`). Idempotent: the island upserts KEYED ON THE TOKEN and
+  /// reassigns `user_id`, so re-registering is a no-op and logging in as someone
+  /// else on the same handset moves the routing rather than leaving a stale row
+  /// pointed at the previous owner.
+  ///
+  /// Throws [Unauthorized] on a terminal auth rejection. Every other failure is
+  /// the caller's to swallow: a device that cannot register is a device that
+  /// will not be woken, which is a degradation and never a reason to block
+  /// sign-in.
+  Future<void> registerDevice({
+    required DevicePlatform platform,
+    required String token,
+  });
+
+  /// Unregister [token] (`DELETE /v1/devices`), so this island stops routing
+  /// pushes to a handset the user has signed out of. Idempotent by island
+  /// contract — 204 whether or not the token was present, deliberately, since a
+  /// 404 would leak whether a given token is registered.
+  Future<void> unregisterDevice(String token);
 
   Future<List<Channel>> listChannels();
 

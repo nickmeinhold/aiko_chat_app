@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
 import 'package:aiko_chat_app/features/auth/data/passkey_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
@@ -183,6 +184,27 @@ class FakeRestApi implements ChatRestApi {
   Future<void> deleteAccount() async {
     deleteCalls++;
     if (deleteThrows != null) throw deleteThrows!;
+  }
+
+  /// Device tokens this island believes are registered, in call order. A LIST
+  /// rather than a set so a test can see a double-register, which is the shape
+  /// of the bug the island's upsert exists to absorb.
+  final List<({DevicePlatform platform, String token})> registeredDevices = [];
+  final List<String> unregisteredDevices = [];
+  Object? registerDeviceThrows;
+
+  @override
+  Future<void> registerDevice({
+    required DevicePlatform platform,
+    required String token,
+  }) async {
+    if (registerDeviceThrows != null) throw registerDeviceThrows!;
+    registeredDevices.add((platform: platform, token: token));
+  }
+
+  @override
+  Future<void> unregisterDevice(String token) async {
+    unregisteredDevices.add(token);
   }
 
   /// Roster returned by [listMembers], keyed per channel id.

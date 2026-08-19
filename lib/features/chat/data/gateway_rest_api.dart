@@ -7,6 +7,7 @@ import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
 import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
+import '../../notifications/domain/device_platform.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
@@ -419,6 +420,24 @@ class GatewayRestApi implements ChatRestApi {
       rethrow;
     }
   }
+
+  @override
+  Future<void> registerDevice({
+    required DevicePlatform platform,
+    required String token,
+  }) =>
+      _authedCall(() => _authed.post('/v1/devices', data: {
+            'platform': platform.wire,
+            'token': token,
+          }));
+
+  @override
+  Future<void> unregisterDevice(String token) =>
+      // DELETE with a body: the island reads the token from the payload rather
+      // than the path, so a device token never lands in a URL (and therefore
+      // never in an access log or a proxy trace). Dio supports this; some HTTP
+      // stacks quietly drop a DELETE body, so this is pinned by a test.
+      _authedCall(() => _authed.delete('/v1/devices', data: {'token': token}));
 
   // Wrapped in _mapNetwork so an unreachable gateway surfaces as the domain
   // NetworkUnavailable — channelsProvider falls back to the cached list on that,
