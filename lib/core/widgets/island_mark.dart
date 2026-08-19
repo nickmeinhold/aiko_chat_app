@@ -105,6 +105,7 @@ class IslandMark extends StatelessWidget {
     this.size = 18,
     this.label,
     this.onTap,
+    this.hitPadding = EdgeInsets.zero,
   });
 
   final String baseUrl;
@@ -116,6 +117,16 @@ class IslandMark extends StatelessWidget {
   /// Passed IN rather than routed from here: this widget lives in `core/` and
   /// knowing about `/settings/gateway` would tie a drawing to the router.
   final VoidCallback? onTap;
+
+  /// Padding that is INSIDE the tap target — pressable space around the mark.
+  ///
+  /// This is how an 18px glyph gets a thumb-sized target without growing on
+  /// screen: the caller hands over the padding it was ALREADY drawing around
+  /// this widget, so the mark lands in exactly the same pixels and the gutter
+  /// beside it starts accepting presses. Flutter cannot hit-test outside a
+  /// widget's own bounds, so the space has to belong to the gesture rather than
+  /// to a Padding above it — there is no way to "extend" a hit area otherwise.
+  final EdgeInsets hitPadding;
 
   /// Shown on hover/long-press. The mark is recognisable, not self-explanatory;
   /// the first time you see one you should be able to ask it what it means.
@@ -154,16 +165,13 @@ class IslandMark extends StatelessWidget {
                 //
                 // 44 is Apple's minimum touch target. The target grows; the
                 // drawing stays 18px.
+                // OPAQUE matters as much as the size. Without it the hit test
+                // defers to the CHILD — a circle inside a square box — so the
+                // corners are dead and a near-miss lands on nothing. That is
+                // what "the border is swallowing taps" felt like.
                 behavior: HitTestBehavior.opaque,
                 onTap: onTap,
-                child: SizedBox(
-                  width: 44,
-                  height: 44,
-                  // Nudged low so the glyph keeps sitting on the text baseline
-                  // it was placed against, instead of jumping up when the box
-                  // grew around it.
-                  child: Align(alignment: const Alignment(0, 0.45), child: mark),
-                ),
+                child: Padding(padding: hitPadding, child: mark),
               ),
       ),
     );

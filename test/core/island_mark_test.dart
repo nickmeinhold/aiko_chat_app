@@ -106,19 +106,39 @@ void main() {
     // seems like the border might be swallowing taps". Two causes, both fixed
     // and both pinned here — the target was ~30px, and it deferred its hit test
     // to a CIRCLE inside a square box, leaving the corners dead.
-    testWidgets('the touch target is at least 44px — Apple\'s minimum, and this '
-        'sits in the bottom-left corner where accuracy is worst', (tester) async {
+    testWidgets('hitPadding grows the TARGET without moving the MARK — the '
+        'whole point, since the caller is handing over space it was already '
+        'drawing', (tester) async {
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
-          body: Center(
-            child: IslandMark(baseUrl: 'chat.example.org', onTap: () {}),
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: IslandMark(
+              baseUrl: 'chat.example.org',
+              onTap: () {},
+              hitPadding: const EdgeInsets.only(
+                left: 12,
+                top: 20,
+                right: 10,
+                bottom: 9,
+              ),
+            ),
           ),
         ),
       ));
 
-      final size = tester.getSize(find.byType(IslandMark));
-      expect(size.width, greaterThanOrEqualTo(44));
-      expect(size.height, greaterThanOrEqualTo(44));
+      // The target spans the mark PLUS the padding handed to it.
+      final target = tester.getRect(find.byType(IslandMark));
+      expect(target.width, 12 + 18 + 10);
+      expect(target.height, 20 + 18 + 9);
+
+      // And the drawing itself is exactly where that padding puts it — not
+      // recentred, not resized. A 44x44 box (the first fix) passed the size
+      // check and MOVED the composer, which is the failure this replaced.
+      final painted = tester.getRect(find.byType(CustomPaint).last);
+      expect(painted.width, 18);
+      expect(painted.left, target.left + 12);
+      expect(painted.top, target.top + 20);
     });
 
     testWidgets('a tap in the CORNER of the target still counts — the dead '
@@ -128,15 +148,19 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
           body: Center(
-            child: IslandMark(baseUrl: 'chat.example.org', onTap: () => taps++),
+            child: IslandMark(
+              baseUrl: 'chat.example.org',
+              onTap: () => taps++,
+              hitPadding: const EdgeInsets.all(14),
+            ),
           ),
         ),
       ));
 
       final rect = tester.getRect(find.byType(IslandMark));
-      // Just inside the top-left corner: outside the drawn circle, inside the
-      // target. This is the press that used to land on nothing.
-      await tester.tapAt(rect.topLeft + const Offset(3, 3));
+      // The very corner of the padded target: far outside the drawn circle.
+      // This is the press that used to land on nothing.
+      await tester.tapAt(rect.topLeft + const Offset(2, 2));
       await tester.pumpAndSettle();
       expect(taps, 1, reason: 'a corner press missed — the hit test is still '
           'deferring to the drawing rather than the target');
@@ -149,7 +173,8 @@ void main() {
           body: Center(child: IslandMark(baseUrl: 'chat.example.org')),
         ),
       ));
-      expect(tester.getSize(find.byType(IslandMark)).width, lessThan(44));
+      expect(tester.getSize(find.byType(IslandMark)).width, 18,
+          reason: 'a decoration takes exactly the space it draws');
     });
   });
 }

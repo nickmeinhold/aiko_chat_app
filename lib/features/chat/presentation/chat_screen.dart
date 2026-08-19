@@ -1273,7 +1273,11 @@ class _ComposerState extends ConsumerState<Composer> {
         children: [
           if (_suggestions.isNotEmpty) _buildSuggestions(context),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 8, 8),
+            // Left padding is 0 because the ISLAND MARK now draws it, inside its
+            // tap target (see hitPadding below) — that is what lets a press land
+            // in the gutter right up to the screen edge. The bottom 8 stays: it
+            // spaces the whole row, including the text field.
+            padding: const EdgeInsets.fromLTRB(0, 4, 8, 8),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -1291,21 +1295,44 @@ class _ComposerState extends ConsumerState<Composer> {
                 // Static by construction — it takes no composer state at all, so it
                 // cannot flicker while you type.
                 if (widget.islandBaseUrl != null)
-                  Padding(
-                    // The mark carries its own 44px touch target now, which
-                    // includes the vertical placement — so the old bottom
-                    // padding that sat the 18px glyph on the baseline would
-                    // double-count.
-                    padding: EdgeInsets.zero,
-                    child: IslandMark(
-                      baseUrl: widget.islandBaseUrl!,
-                      // Where am I → can I go elsewhere. The picker owns the
-                      // session-teardown ceremony a gateway switch requires, so
-                      // this only has to open it.
-                      onTap: () => context.push('/settings/gateway'),
+                  IslandMark(
+                    baseUrl: widget.islandBaseUrl!,
+                    // Where am I → can I go elsewhere. The picker owns the
+                    // session-teardown ceremony a gateway switch requires, so
+                    // this only has to open it.
+                    onTap: () => context.push('/settings/gateway'),
+                    // THE MARK'S SURROUNDING SPACE IS THE TAP TARGET.
+                    //
+                    // These are not new pixels: the Row used to draw a 12px left
+                    // gutter and a 10px gap after the mark, and the mark sat 9px
+                    // off the bottom. All of that now lives INSIDE the gesture,
+                    // and the Row's own left/bottom padding drops to match — so
+                    // the glyph is in exactly the same place and the space
+                    // around it has simply started accepting presses, out to the
+                    // screen edge on the left.
+                    //
+                    // A previous attempt gave the mark a 44x44 box instead. It
+                    // was reachable and it MOVED THINGS: the box took real
+                    // layout width, so the composer shifted. Padding-inside-the
+                    // gesture is the version that costs nothing on screen.
+                    //
+                    // The 20px top is free: the Row is as tall as the text
+                    // field, and `crossAxisAlignment.end` bottom-aligns this, so
+                    // a taller-but-still-shorter-than-the-field box changes no
+                    // layout at all.
+                    hitPadding: const EdgeInsets.only(
+                      left: 12,
+                      top: 20,
+                      right: 10,
+                      bottom: 9,
                     ),
-                  ),
-                const SizedBox(width: 10),
+                  )
+                else
+                  // No island to mark (tests, and any caller that does not pass
+                  // one) — the Row's left gutter moved into the mark's tap
+                  // target, so without the mark it has to come back or the text
+                  // field sits flush against the screen edge.
+                  const SizedBox(width: 12),
                 Expanded(
                   child: Focus(
                     onFocusChange: (has) {

@@ -8,6 +8,7 @@
 //   focused — the waterline ignites in `colorScheme.primary`
 //   armed   — seal AND lamp light together (one fact, two readings)
 import 'package:aiko_chat_app/core/widgets/island_mark.dart';
+import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart';
 import 'package:aiko_chat_app/app/theme/maritime_theme.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
@@ -198,5 +199,47 @@ void main() {
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pumpAndSettle();
     expect(factor(), 0.0);
+  });
+
+  testWidgets('the island mark is REACHABLE without having moved anything',
+      (tester) async {
+    // Nick, on the phone: the mark was hard to press, then the fix (a 44x44 box)
+    // pushed the composer around — "I want the padding back the way it was, but
+    // the pressable area should allow for taps right up to the edge".
+    //
+    // Both halves are asserted here because they pull against each other: a
+    // bigger target normally costs layout. The trick is that the target's
+    // padding is space the composer was ALREADY drawing, moved inside the
+    // gesture — so these numbers are the ORIGINAL geometry, and the tap area is
+    // the thing that changed.
+    await pumpComposer(tester);
+
+    final target = tester.getRect(find.byType(IslandMark));
+    final glyph = tester.getRect(find.descendant(
+      of: find.byType(IslandMark),
+      matching: find.byType(CustomPaint),
+    ));
+    final field = tester.getRect(find.byType(TextField).first);
+
+    final composer = tester.getRect(find.byType(Composer));
+
+    // UNCHANGED, stated RELATIVELY so the numbers survive a sidebar or a
+    // different screen width: the glyph sits in a 12px gutter, is 18px, and the
+    // field starts 10px after it.
+    expect(glyph.left - composer.left, 12);
+    expect(glyph.width, 18);
+    expect(field.left - glyph.right, 10);
+    // ...and the glyph still rides its 9px above the composer's bottom padding
+    // (8), so 17 from the composer's own edge. Measured against the COMPOSER
+    // rather than the field: the field is stacked above the waterline, so its
+    // bottom is not the row's bottom.
+    expect(composer.bottom - glyph.bottom, 17);
+
+    // CHANGED: the target starts at the composer's own edge — a press in the
+    // gutter lands — and is far larger than the drawing.
+    expect(target.left, composer.left,
+        reason: 'a press in the left gutter must land on the mark');
+    expect(target.width, greaterThan(glyph.width * 2));
+    expect(target.height, greaterThan(40));
   });
 }
