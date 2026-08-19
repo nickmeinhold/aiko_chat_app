@@ -104,10 +104,18 @@ class IslandMark extends StatelessWidget {
     required this.baseUrl,
     this.size = 18,
     this.label,
+    this.onTap,
   });
 
   final String baseUrl;
   final double size;
+
+  /// Tapping the mark should take you to the island picker — the mark answers
+  /// "where am I", so the obvious next question is "can I go somewhere else".
+  ///
+  /// Passed IN rather than routed from here: this widget lives in `core/` and
+  /// knowing about `/settings/gateway` would tie a drawing to the router.
+  final VoidCallback? onTap;
 
   /// Shown on hover/long-press. The mark is recognisable, not self-explanatory;
   /// the first time you see one you should be able to ask it what it means.
@@ -123,11 +131,22 @@ class IslandMark extends StatelessWidget {
         rim: Theme.of(context).colorScheme.outline,
       ),
     );
+    final name = label ?? islandKey(baseUrl);
     return Tooltip(
-      message: label ?? islandKey(baseUrl),
+      message: onTap == null ? name : '$name — tap to change island',
       child: Semantics(
-        label: 'Island: ${label ?? islandKey(baseUrl)}',
-        child: mark,
+        label: 'Island: $name',
+        button: onTap != null,
+        child: onTap == null
+            ? mark
+            : InkResponse(
+                onTap: onTap,
+                radius: size,
+                // A 18px target is well under the 44px minimum, and this sits
+                // beside a text field people jab at — so the hit area is grown
+                // without growing the mark.
+                child: Padding(padding: const EdgeInsets.all(6), child: mark),
+              ),
       ),
     );
   }
@@ -180,11 +199,13 @@ class _IslandPainter extends CustomPainter {
     final base = r * 0.62;
     for (var i = 0; i <= steps; i++) {
       final t = i / steps * 2 * math.pi;
-      final k = 1 +
+      final k =
+          1 +
           amps[0] * math.sin(2 * t + phases[0]) +
           amps[1] * math.sin(3 * t + phases[1]) +
           amps[2] * math.sin(5 * t + phases[2]);
-      final p = c + Offset(math.cos(t) * base * k, math.sin(t) * base * k * 0.86);
+      final p =
+          c + Offset(math.cos(t) * base * k, math.sin(t) * base * k * 0.86);
       i == 0 ? land.moveTo(p.dx, p.dy) : land.lineTo(p.dx, p.dy);
     }
     land.close();

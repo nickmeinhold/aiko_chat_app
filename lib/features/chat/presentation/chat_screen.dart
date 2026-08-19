@@ -147,20 +147,27 @@ class ChatScreen extends ConsumerWidget {
               // conversation it names is settled.
               title: !ready
                   ? const Text('Chat')
-                  : navigable.length > 1 && active != null
-                  ? _ConversationSwitcher(
-                      rooms: rooms,
-                      dms: dms,
-                      activeId: active.id,
-                    )
-                  : _ConversationTitle(active: active),
+                  : active == null
+                  ? _ConversationTitle(active: active)
+                  // Long-press the title for the mute menu — the phone's
+                  // replacement for the sidebar row gesture it has no sidebar
+                  // to host.
+                  : ConversationTitleMuteGesture(
+                      conversation: active,
+                      child: navigable.length > 1
+                          ? _ConversationSwitcher(
+                              rooms: rooms,
+                              dms: dms,
+                              activeId: active.id,
+                            )
+                          : _ConversationTitle(active: active),
+                    ),
               actions: [
                 // Narrow has no sidebar, so the row long-press that mutes a
                 // conversation on wide does not exist here. Without this the
                 // capability would be wide-only — mutable on the desktop, invisible
                 // on the phone, which is where a noisy channel is actually felt.
-                if (ready && active != null)
-                  _MuteConversationAction(conversation: active),
+                // Mute moved OFF the strip: long-press the conversation title.
                 IconButton(
                   tooltip: 'Search',
                   icon: const Icon(Icons.search),
@@ -200,19 +207,29 @@ class ChatScreen extends ConsumerWidget {
 /// action is instant, reversible, and entirely private, so a confirmation step
 /// would cost more than the mistake it prevents. The icon carries the state, so
 /// a muted conversation announces itself from the bar you are already looking at.
-class _MuteConversationAction extends ConsumerWidget {
-  const _MuteConversationAction({required this.conversation});
+/// Long-press the conversation title to reach the same mute menu the sidebar
+/// rows offer.
+///
+/// This is what let mute leave the app-bar action strip. The gesture already
+/// existed for sidebar rows, but the phone has no sidebar — so the capability
+/// was wide-only and a button was added to compensate. Putting the gesture on
+/// the title makes "long-press a conversation" true on BOTH layouts and gives
+/// the crowded action strip a seat back.
+///
+/// The mute state is derived by the same peer-aware path the button used, so
+/// the two surfaces cannot disagree about the same conversation.
+class ConversationTitleMuteGesture extends ConsumerWidget {
+  const ConversationTitleMuteGesture({
+    super.key,
+    required this.conversation,
+    required this.child,
+  });
 
   final Channel conversation;
+  final Widget child;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Peer-aware, exactly like the sidebar row: a peer-muted DM resized onto a
-    // phone was showing "not muted" while its badge was already dead — two
-    // surfaces disagreeing about the same conversation, which is the drift this
-    // feature's own comments forbid (cage-match #135 round 3, Tesla).
-    // DM-ness by SOURCE, through the one door — not `conversation.kind`, which is
-    // the re-derivation conversationSectionsProvider exists to remove (#136).
     final isDm = ref.watch(dmConversationIdsProvider).contains(conversation.id);
     final mute = watchConversationMute(
       ref,
@@ -225,96 +242,46 @@ class _MuteConversationAction extends ConsumerWidget {
           : null,
       hasPeer: isDm,
     );
-    final muted = mute.isMuted;
-    // SCOPE DISCLOSURE. When the silence comes from the PERSON rather than this
-    // conversation, undoing it makes them audible in every room — a global
-    // preference change behind a control captioned "this conversation". The
-    // sidebar menu confesses that in its subtitle; this one-tap button had no
-    // room to, so it silently performed the bigger act (cage-match #135 round 4,
-    // Carnot MEDIUM + Tesla). Here it asks first: the tap surfaces the real scope
-    // and the user chooses.
-    // Confess whenever a PERSON is one of the causes — not only when they are
-    // the sole cause. Gating on `byPeer && !byConversation` left the both-muted
-    // case saying "Unmute this conversation" while also restoring that account in
-    // every room (cage-match #135 round 5, Tesla). Any unmute that would clear an
-    // account mute has to say so.
-    final clearsPerson = muted && mute.byPeer;
-    return IconButton(
-      key: const Key('appbar-mute-conversation'),
-      // Scoped to what we can actually speak for. With no nameable peer this is
-      // a CONVERSATION verb and says so, rather than "Mute (loading…)" — which
-      // lied in the indicative for the states that never resolve (a self-DM, a
-      // group-shaped DM, a departed member) — cage-match #135 round 9, Tesla.
-      tooltip: muted
-          ? (clearsPerson
-                ? 'This person is muted everywhere'
-                : 'Unmute this conversation')
-          : 'Mute this conversation',
-      // Bell, not speaker: this app ships 1:1 A/V calls, where a speaker glyph
-      // in the chrome reads as "mute the call", a different verb entirely
-      // (cage-match #135, Maxwell).
-      icon: Icon(muted ? Icons.notifications_off : Icons.notifications_none),
-      onPressed: () {
-        if (clearsPerson) {
-          // BIND BOTH BEFORE THE GAP — the container (not the autoDispose
-          // notifier) and the acting principal. This SnackBar lives on the
-          // messenger ABOVE the chat surface, so its action can be tapped after
-          // Settings, a sign-out, or a user switch. Reading the notifier or the
-          // user INSIDE the callback is the very mistake rounds 2-3 removed from
-          // the other two doors, reintroduced here when this control was added in
-          // round 4 (cage-match #135 round 5, Carnot + Tesla). Late-binding the
-          // principal is worse than useless: it compares the new user to the new
-          // user, passes, and then dumps the OLD in-memory map onto the NEW
-          // user's key.
-          final container = ProviderScope.containerOf(context, listen: false);
-          final actingUserId = container.read(currentUserProvider)?.userId;
-          // See message_actions.dart: a null principal here is "could not
-          // determine", not "no gap", and passing it across the SnackBar's
-          // lifetime would disable the guard rather than fail closed.
-          if (actingUserId == null) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              // Say what the button DOES, not the narrower thing it sounds like:
-              // unmuting clears every cause of this row's silence, which includes
-              // the account mute that applies in every conversation (cage-match
-              // #135 round 6, Carnot — the UI admitted one state change and
-              // performed two).
-              content: const Text(
-                'This person is muted in every conversation. Unmuting affects '
-                'all of them.',
-              ),
-              action: SnackBarAction(
-                label: 'Unmute',
-                onPressed: () => mute.apply(
-                  container.read(mutesProvider.notifier),
-                  muted: false,
-                  expectUserId: actingUserId,
+    return MuteGesture(
+      // A CONSTANT key, deliberately NOT keyed by conversation — the opposite of
+      // the sidebar rows, and for the opposite reason. Rows key by id because
+      // they have siblings that reorder, so slot-matching could hand a
+      // recognizer the wrong conversation. A title has exactly one slot and no
+      // siblings; keying it by id instead makes the key CHANGE whenever you
+      // switch conversation, remounting this subtree — including an open
+      // DropdownButton, whose overlay is holding the snapshot the user is
+      // currently choosing from. Same pattern, different structure, opposite
+      // correct answer.
+      key: const Key('mute-gesture-title'),
+      mute: mute,
+      // A muted conversation must still ANNOUNCE itself. The retired app-bar
+      // bell carried that state permanently; a long-press menu only says it once
+      // you have already opened the menu, so removing the button would have left
+      // a silent conversation on a phone looking exactly like a quiet one — the
+      // precise confusion the sidebar's own mute glyph exists to prevent.
+      child: mute.isMuted
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(child: child),
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.notifications_off,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
-              ),
-            ),
-          );
-          return;
-        }
-        // Otherwise synchronous — no async gap, so the write lands in the same
-        // frame as the tap. `null` is the explicit "nothing to bind" answer, not
-        // an omission (the parameter is required precisely so this is a decision).
-        mute.apply(
-          ref.read(mutesProvider.notifier),
-          muted: !muted,
-          expectUserId: null,
-        );
-      },
+              ],
+            )
+          : child,
     );
   }
 }
 
-/// The narrow-layout AppBar title for whatever conversation is active when the
-/// switcher is NOT shown — i.e. when there is nothing to switch BETWEEN (≤1
-/// navigable conversation, or none at all). A channel shows its name; a DM shows
-/// the peer's handle (roster-resolved, like the sidebar row), since a DM has no
-/// name. Its DM arm is no longer a fallback for an unreachable id — with DMs in
-/// the switcher this is only the one-conversation case, where a dropdown of one
-/// would be chrome.
+// The app-bar mute BUTTON lived here. It existed only because the long-press
+// menu had nowhere to live on a phone — no sidebar, no row to press. The title
+// carries that gesture now (see ConversationTitleMuteGesture), so the button is
+// gone and the action strip is one icon lighter.
+
 class _ConversationTitle extends ConsumerWidget {
   const _ConversationTitle({required this.active});
 
@@ -1256,7 +1223,13 @@ class _ComposerState extends ConsumerState<Composer> {
                 if (widget.islandBaseUrl != null)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 9),
-                    child: IslandMark(baseUrl: widget.islandBaseUrl!),
+                    child: IslandMark(
+                      baseUrl: widget.islandBaseUrl!,
+                      // Where am I → can I go elsewhere. The picker owns the
+                      // session-teardown ceremony a gateway switch requires, so
+                      // this only has to open it.
+                      onTap: () => context.push('/settings/gateway'),
+                    ),
                   ),
                 const SizedBox(width: 10),
                 Expanded(

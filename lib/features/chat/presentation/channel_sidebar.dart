@@ -63,8 +63,11 @@ const _tileShape = RoundedRectangleBorder(
 /// pointer-down trigger stays green in the harness and fails on a real thumb.
 /// The menu is also nudged clear of the press point so it never opens under the
 /// finger that summoned it.
-class _MuteGesture extends ConsumerWidget {
-  const _MuteGesture({
+/// PUBLIC because the phone needs it too. The narrow layout has no sidebar, so
+/// there is no row to long-press — the app bar's conversation title wraps this
+/// instead, which is what lets mute leave the action strip entirely.
+class MuteGesture extends ConsumerWidget {
+  const MuteGesture({
     super.key,
     required this.mute,
     required this.child,
@@ -355,7 +358,7 @@ class _SidebarChannelTile extends ConsumerWidget {
         selected ? 0 : ref.watch(channelUnreadCountProvider(channel.id));
     // No peer: a group channel is silenced only by its own mute.
     final mute = watchConversationMute(ref, channel.id);
-    return _MuteGesture(
+    return MuteGesture(
       // KEYED BY CONVERSATION. The key used to live only on the child ListTile,
       // leaving this gesture wrapper matched by SLOT — so a reorder (a DM seed, a
       // channel-list refetch) could update the element in place and hand the
@@ -418,7 +421,7 @@ class _SidebarDmTile extends ConsumerWidget {
     // already has (see [ConversationMute]).
     final mute = watchConversationMute(ref, dm.id,
         peerId: dmPeerId(roster, myId), hasPeer: true);
-    return _MuteGesture(
+    return MuteGesture(
       key: Key('mute-gesture-${dm.id}'), // see _SidebarChannelTile — slot vs identity
       mute: mute,
       child: ListTile(
