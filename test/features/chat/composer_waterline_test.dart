@@ -7,6 +7,7 @@
 //   rest    — hairline waterline, dim seal, dim lamp
 //   focused — the waterline ignites in `colorScheme.primary`
 //   armed   — seal AND lamp light together (one fact, two readings)
+import 'package:aiko_chat_app/core/widgets/island_mark.dart';
 import 'package:aiko_chat_app/app/theme/maritime_theme.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
@@ -45,8 +46,15 @@ void main() {
     return Theme.of(tester.element(find.byType(TextField).first)).colorScheme;
   }
 
-  Color? sealColour(WidgetTester tester) =>
-      tester.widget<Icon>(find.byIcon(Icons.verified_outlined)).color;
+  /// The island mark's painter. Comparing painters across a rebuild is how we
+  /// prove the mark did NOT change: `shouldRepaint` is the widget's own answer
+  /// to "is this different from what was there before".
+  CustomPainter islandPainter(WidgetTester tester) => tester
+      .widget<CustomPaint>(find.descendant(
+        of: find.byType(IslandMark),
+        matching: find.byType(CustomPaint),
+      ))
+      .painter!;
 
   Color? lampColour(WidgetTester tester) => tester
       .widget<IconButton>(find.descendant(
@@ -55,30 +63,45 @@ void main() {
       ))
       .color;
 
-  testWidgets('the seal and the lamp arm TOGETHER, and disarm together',
-      (tester) async {
+  testWidgets('the lamp arms and disarms with the message', (tester) async {
     final scheme = await pumpComposer(tester);
 
-    // At rest both are dim, and they agree — literally the same ink, so the two
-    // marks bracketing the line read as one resting state rather than two greys.
-    expect(sealColour(tester), scheme.outlineVariant);
+    // The seal that used to sit beside the lamp is gone — its slot carries the
+    // island mark now, which says WHERE YOU ARE rather than restating that a
+    // message will be signed. So this pins the lamp alone.
     expect(lampColour(tester), scheme.outlineVariant);
 
     await tester.enterText(find.byType(TextField).first, 'hello');
     await tester.pumpAndSettle();
-
-    // Armed: the seal takes `primary` (the app's existing "verified signature"
-    // colour) and the lamp takes `secondary` (beacon amber). Two readings of one
-    // fact — "there is a message here to sign and send".
-    expect(sealColour(tester), scheme.primary);
     expect(lampColour(tester), scheme.secondary);
 
-    // Whitespace is not a message: `_send` trims, so the lights must too, or the
-    // lamp would invite a tap that does nothing.
+    // Whitespace is not a message: `_send` trims, so the lamp must too, or it
+    // would invite a tap that does nothing.
     await tester.enterText(find.byType(TextField).first, '   ');
     await tester.pumpAndSettle();
-    expect(sealColour(tester), scheme.outlineVariant);
     expect(lampColour(tester), scheme.outlineVariant);
+  });
+
+  testWidgets('the island mark does NOT change while you type', (tester) async {
+    await pumpComposer(tester);
+
+    // The requirement this pins is Nick's, and it is the reason the seal was
+    // replaced rather than merely re-coloured: the old mark animated on the
+    // first and last keystroke, so the one thing on screen answering "where am
+    // I" flickered every time you started a sentence. An identity mark that
+    // moves when you type is not an identity mark.
+    final before = islandPainter(tester);
+
+    await tester.enterText(find.byType(TextField).first, 'hello');
+    await tester.pumpAndSettle();
+    final armed = islandPainter(tester);
+    expect(armed.shouldRepaint(before), isFalse,
+        reason: 'the island mark repainted when the composer armed');
+
+    await tester.enterText(find.byType(TextField).first, '');
+    await tester.pumpAndSettle();
+    expect(islandPainter(tester).shouldRepaint(armed), isFalse,
+        reason: 'the island mark repainted when the composer disarmed');
   });
 
   testWidgets('arming INCREASES the lamp\'s contrast — in every theme',

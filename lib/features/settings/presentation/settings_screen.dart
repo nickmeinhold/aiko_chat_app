@@ -130,6 +130,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: _addingPasskey ? null : _addPasskey,
             ),
             const _SectionHeader('Account'),
+            // Sign out lived in the chat app bar until the bar got crowded
+            // enough to be a hazard: a once-a-year action sitting one slip away
+            // from your session, next to Search. Here it is still one tap from
+            // the bar, and no longer adjacent to anything you press daily.
+            ListTile(
+              leading: const Icon(Icons.logout),
+              title: const Text('Sign out'),
+              subtitle: const Text(
+                'Your messages and keys stay on this device.',
+              ),
+              // POP FIRST, then sign out. Settings is a pushed route, and
+              // signing out from on top of it leaves you parked on a settings
+              // page belonging to a session that no longer exists — the router's
+              // logged-out redirect does not unwind a pushed stack. Returning to
+              // the root first means the sign-out happens exactly where it
+              // always did, on the route the redirect actually governs.
+              onTap: () {
+                Navigator.of(context).pop();
+                // Sign out AFTER the pop has settled. Flipping auth in the same
+                // frame as the navigation mutates a provider while the framework
+                // is mid-build ("setState() called during build"), because the
+                // route teardown and the auth listener land together. One frame
+                // later there is no build in flight and the router's logged-out
+                // redirect does its normal job.
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  ref.read(authControllerProvider.notifier).logout();
+                });
+              },
+            ),
             ListTile(
               leading: Icon(
                 Icons.delete_forever,

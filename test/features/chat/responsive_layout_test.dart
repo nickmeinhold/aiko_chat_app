@@ -85,8 +85,12 @@ void main() {
     // The phone layout keeps the app-bar dropdown when >1 channel.
     expect(find.byType(DropdownButton<String>), findsOneWidget);
     expect(find.byType(ChatMessagePane), findsOneWidget);
-    // Settings/logout stay in the app bar on narrow.
-    expect(find.byIcon(Icons.logout), findsOneWidget);
+    // Settings stays in the app bar on narrow; SIGN OUT no longer does — it
+    // moved into Settings, because a once-a-year action was holding a permanent
+    // seat next to Search in a strip you press all day.
+    expect(find.byIcon(Icons.settings), findsOneWidget);
+    expect(find.byIcon(Icons.logout), findsNothing,
+        reason: 'sign out belongs in Settings now, not the app bar');
     // Search is reachable on narrow (app-bar icon).
     expect(find.byIcon(Icons.search), findsOneWidget);
   });
