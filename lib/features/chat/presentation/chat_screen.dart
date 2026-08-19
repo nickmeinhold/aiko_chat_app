@@ -208,88 +208,11 @@ class ChatScreen extends ConsumerWidget {
 /// action is instant, reversible, and entirely private, so a confirmation step
 /// would cost more than the mistake it prevents. The icon carries the state, so
 /// a muted conversation announces itself from the bar you are already looking at.
-/// Long-press a row IN THE OPEN CONVERSATION LIST to mute it.
-///
-/// This is the one people actually reach for, and it was the surface I missed:
-/// the gesture first went on the app bar's TITLE, which nobody presses — you
-/// open the list, then press the row you mean. Reported twice as "long press on
-/// a channel doesn't bring up a menu", and passing tests the whole time, because
-/// the tests pressed the title too.
-///
-/// These rows live inside the DropdownButton's own overlay ROUTE, so no ancestor
-/// of ours is above them in the tree and they cannot be wrapped from outside.
-/// They call [showConversationMuteMenu] directly instead.
-///
-/// The dropdown is dismissed FIRST. Showing a menu on top of an open dropdown
-/// route puts two overlays in play, and the dropdown's own barrier would eat the
-/// next tap — so the list closes, then the menu opens over the chat surface,
-/// which is also where the user's eye already is.
-class _MenuItemMuteGesture extends ConsumerWidget {
-  const _MenuItemMuteGesture({
-    required this.conversation,
-    required this.child,
-    required this.hostContext,
-  });
-
-  final Channel conversation;
-  final Widget child;
-
-  /// A context from the APP BAR, captured before the dropdown opened.
-  ///
-  /// Needed because this row's own context dies with the dropdown route we are
-  /// about to close — and the root OverlayState's context does not work either:
-  /// `Overlay.of` searches ANCESTORS, so handing it the overlay's own context
-  /// asks the overlay to find itself and throws "No Overlay widget found". The
-  /// app bar sits BELOW the overlay and OUTLIVES the dropdown, which is exactly
-  /// the two properties needed.
-  final BuildContext hostContext;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final container = ProviderScope.containerOf(context, listen: false);
-    final expectUserId = ref.watch(currentUserProvider)?.userId;
-    final isDm = ref.watch(dmConversationIdsProvider).contains(conversation.id);
-    final mute = watchConversationMute(
-      ref,
-      conversation.id,
-      peerId: isDm
-          ? dmPeerId(
-              ref.watch(channelRosterProvider(conversation.id)).value,
-              ref.watch(currentUserProvider)?.userId,
-            )
-          : null,
-      hasPeer: isDm,
-    );
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      // Pointer-UP, exactly as the sidebar rows do it: a menu opened while the
-      // finger is still down materialises UNDER that finger and selects itself
-      // on release (cage-match #135, Tesla). The harness cannot see that, so the
-      // rule is copied rather than re-derived.
-      onLongPressEnd: (d) {
-        // Close the list first, then open the menu from the APP BAR's context.
-        //
-        // The first attempt used the root OverlayState's own context, which
-        // throws "No Overlay widget found": `Overlay.of` walks ANCESTORS, so
-        // handing it the overlay asks the overlay to find itself. The row's own
-        // context is no good either — it dies with the route being popped. The
-        // app bar sits below the overlay and outlives the dropdown, which is
-        // exactly the pair of properties required.
-        Navigator.of(context).pop();
-        if (!hostContext.mounted) return;
-        showConversationMuteMenu(
-          hostContext,
-          container,
-          mute: mute,
-          expectUserId: expectUserId,
-          at: d.globalPosition,
-        );
-      },
-      child: child,
-    );
-  }
-}
+// A long-press gesture on the dropdown ROWS lived here briefly. Removed at
+// Nick's call: pressing a row in an already-open menu to get a SECOND menu is a
+// menu inside a menu, and the interaction it replaced (long-press the title) is
+// both simpler and already working. The rows are for picking a conversation;
+// that is all they do.
 
 /// Long-press the conversation title to reach the same mute menu the sidebar
 /// rows offer.
@@ -430,6 +353,12 @@ class _ConversationSwitcher extends ConsumerWidget {
 
     return Row(
       children: [
+        // The caret sits to the LEFT of the name, outside the DropdownButton.
+        // Drawing it here rather than as the button's own `icon` is what makes
+        // "on the left" a one-line change instead of a rebuild of how the
+        // collapsed state is composed.
+        const Icon(Icons.arrow_drop_down),
+        const SizedBox(width: 2),
         Expanded(
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -441,7 +370,17 @@ class _ConversationSwitcher extends ConsumerWidget {
               // cage-match #106, Tesla).
               isExpanded: true,
               borderRadius: BorderRadius.circular(8),
-              icon: const Icon(Icons.arrow_drop_down),
+              // NO trailing caret — the arrow is drawn to the LEFT of this
+              // button by the Row below.
+              //
+              // The first attempt moved it with `selectedItemBuilder`, which
+              // works but changes how the collapsed state is BUILT: it hands
+              // DropdownButton a parallel list of widgets for every item. A
+              // committed probe in narrow_dm_navigation_test proves only the
+              // ACTIVE row is built when collapsed — a property a phone's data
+              // budget depends on — and routing through selectedItemBuilder put
+              // that at risk to move a caret 40 pixels. Not a trade worth making.
+              icon: const SizedBox.shrink(),
               // M3 AppBar foreground is onSurface, and the menu opens on a
               // surface background — so the inherited onSurface text reads
               // correctly in both the collapsed bar and the open menu.
@@ -449,14 +388,10 @@ class _ConversationSwitcher extends ConsumerWidget {
                 for (final c in rooms)
                   DropdownMenuItem<String>(
                     value: c.id,
-                    child: _MenuItemMuteGesture(
-                      hostContext: context,
-                      conversation: c,
-                      child: _ChannelMenuItem(
-                        channelId: c.id,
-                        name: c.name,
-                        isActive: c.id == activeId,
-                      ),
+                    child: _ChannelMenuItem(
+                      channelId: c.id,
+                      name: c.name,
+                      isActive: c.id == activeId,
                     ),
                   ),
                 // Section header, not a destination: `enabled: false` keeps it out
@@ -482,11 +417,7 @@ class _ConversationSwitcher extends ConsumerWidget {
                 for (final d in dms)
                   DropdownMenuItem<String>(
                     value: d.id,
-                    child: _MenuItemMuteGesture(
-                      hostContext: context,
-                      conversation: d,
-                      child: _DmMenuItem(dm: d, isActive: d.id == activeId),
-                    ),
+                    child: _DmMenuItem(dm: d, isActive: d.id == activeId),
                   ),
               ],
               onChanged: (id) {
