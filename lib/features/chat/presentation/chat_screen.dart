@@ -626,6 +626,13 @@ class _Waterline extends StatelessWidget {
               duration: _fadeFor(context),
               curve: Curves.easeOutCubic,
               widthFactor: lit ? 1.0 : 0.0,
+              // heightFactor is NOT optional here, though nothing complains if
+              // it is missing. `Align` loosens the Stack's tight 1.5px height;
+              // a null heightFactor passes that loose 0..1.5 constraint through
+              // unchanged; and a childless `ColoredBox` then takes
+              // `constraints.smallest` — so the lit rule laid out full-width and
+              // ZERO px tall, and had never once been visible in either theme.
+              heightFactor: 1.0,
               alignment: Alignment.centerLeft,
               child: ColoredBox(color: scheme.primary),
             ),

@@ -7,17 +7,56 @@
 //   rest    — hairline waterline, dim seal, dim lamp
 //   focused — the waterline ignites in `colorScheme.primary`
 //   armed   — seal AND lamp light together (one fact, two readings)
+import 'dart:ui' as ui;
+
 import 'package:aiko_chat_app/core/widgets/island_mark.dart';
 import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart';
 import 'package:aiko_chat_app/app/theme/maritime_theme.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart';
 
 /// Composite [fg] (which may be translucent) over an opaque [bg].
 Color _over(Color fg, Color bg) => Color.alphaBlend(fg, bg);
+
+/// The colour actually PAINTED at [point] (logical, global coordinates).
+///
+/// Captures through the root repaint boundary rather than a widget-local one:
+/// the composer's subtree contains no RepaintBoundary, and adding one for a
+/// test would change the thing being measured.
+Future<Color> _pixelAt(WidgetTester tester, Offset point) async {
+  final view = tester.binding.renderViews.first;
+  final layer = view.debugLayer! as OffsetLayer;
+  final (image, bytes) = (await tester.runAsync(() async {
+    // `toImage` must run on the REAL event loop — under the fake-async
+    // scheduler the frame it awaits is never produced, so it hangs forever
+    // instead of failing. Same trap as `theme_render_test.dart`.
+    final img = await layer.toImage(view.paintBounds);
+    final b = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+    return (img, b!);
+  }))!;
+  // `RenderView.paintBounds` is in PHYSICAL pixels (2400x1800 for an 800x600
+  // test view at dpr 3), so a global logical offset scales by the device pixel
+  // ratio to index the capture. Reading this as a 1:1 space silently probes a
+  // point a third of the way down the screen and reports whatever is there —
+  // which is the same defect class this test exists to close, one level up in
+  // the instrument.
+  final scale = tester.view.devicePixelRatio;
+  final x = (point.dx * scale).round();
+  final y = (point.dy * scale).round();
+  final o = (y * image.width + x) * 4;
+  final colour = Color.fromARGB(
+    bytes.getUint8(o + 3),
+    bytes.getUint8(o),
+    bytes.getUint8(o + 1),
+    bytes.getUint8(o + 2),
+  );
+  image.dispose();
+  return colour;
+}
 
 /// WCAG relative-luminance contrast ratio between two OPAQUE colours.
 double _contrast(Color a, Color b) {
@@ -177,28 +216,49 @@ void main() {
 
   testWidgets('the waterline ignites on focus and goes out on blur',
       (tester) async {
-    await pumpComposer(tester);
-    double factor() => tester
-        .widget<AnimatedFractionallySizedBox>(
-            find.byType(AnimatedFractionallySizedBox))
-        .widthFactor!;
+    final scheme = await pumpComposer(tester);
 
-    // The lit rule grows over the base hairline from the left. Written as a
-    // test because the on-device read was ambiguous: in LIGHT mode
-    // `colorScheme.primary` is the undesigned deepPurple, which at 1.5px reads
-    // as grey, so a screenshot could not tell "not lit" from "lit, but muted".
-    // The widthFactor can.
-    expect(factor(), 0.0);
+    // MEASURED AS PIXELS, and the history is the reason. This test used to read
+    // `widthFactor` off the AnimatedFractionallySizedBox, and said so in a
+    // comment: the on-device read was ambiguous because in light mode
+    // `colorScheme.primary` was the undesigned deepPurple, which at 1.5px reads
+    // as grey, so a screenshot could not tell "not lit" from "lit but muted".
+    //
+    // That reasoning was sound when it was written and it expired without being
+    // revisited. The lit rule then shipped at ZERO HEIGHT — invisible in both
+    // themes, through three PRs and a ten-round cage-match — while this test
+    // passed, because a widthFactor animating 0→1 is perfectly true of a box
+    // with no height. The light theme is designed now (`maritimeNoon`), which
+    // removes the blocker the hedge was built around, so the assertion moves to
+    // the layer the reader actually meets.
+    // ANCHORED ON THE BASE RULE, not on the animating box. The
+    // AnimatedFractionallySizedBox measures Rect.zero at rest — no width (as
+    // designed) and also no HEIGHT, because with only a widthFactor it passes
+    // its child a loose vertical constraint and a ColoredBox has no intrinsic
+    // size. Its rect therefore cannot say where the waterline IS. The base rule
+    // underneath is a full-width ColoredBox and can.
+    final base = find.byWidgetPredicate(
+      (w) => w is ColoredBox && w.color == scheme.outlineVariant,
+    );
+    final rule = tester.getRect(base.first);
+    final probe = Offset(rule.left + 4, rule.center.dy);
+
+    expect(await _pixelAt(tester, probe), scheme.outlineVariant,
+        reason: 'at rest the base rule is the only edge');
 
     await tester.tap(find.byType(TextField).first);
     await tester.pumpAndSettle();
-    expect(factor(), 1.0);
+    expect(await _pixelAt(tester, probe), scheme.primary,
+        reason: 'the lit rule is not on screen — it may be animating its width '
+            'correctly and painting nothing, which is exactly the bug that a '
+            'widthFactor assertion here could never see');
 
     // And it must go out — a rule that stays lit after blur is just a border,
     // which is the thing this design removed.
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pumpAndSettle();
-    expect(factor(), 0.0);
+    expect(await _pixelAt(tester, probe), scheme.outlineVariant,
+        reason: 'the waterline stayed lit after blur');
   });
 
   testWidgets('the island mark is REACHABLE without having moved anything',
