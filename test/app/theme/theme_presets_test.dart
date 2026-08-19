@@ -73,7 +73,7 @@ void main() {
     });
   });
 
-  group('ThemePresetController persists the choice', () {
+  group('SkinSelectionController persists the choice', () {
     Future<ProviderContainer> containerWith(Map<String, Object> initial) async {
       SharedPreferences.setMockInitialValues(initial);
       final prefs = await SharedPreferences.getInstance();
@@ -100,20 +100,29 @@ void main() {
       expect(c.read(themePresetProvider).id, kDefaultPresetId);
     });
 
-    test('set() applies immediately AND writes the id through', () async {
+    test('selectPreset() applies immediately AND writes the id through',
+        () async {
       final c = await containerWith({});
       final other = kThemePresets.firstWhere((p) => p.id != kDefaultPresetId);
 
-      c.read(themePresetProvider.notifier).set(other);
+      c.read(skinSelectionProvider.notifier).selectPreset(other);
 
       expect(c.read(themePresetProvider).id, other.id,
           reason: 'the in-memory state is the fast path — the app re-themes '
               'on the next frame, not after the disk write');
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString(themePresetPrefKey), other.id,
+      expect(prefs.getString(themePresetPrefKey), contains(other.id),
           reason: 'the ID is stored, never a resolved palette — so a later '
               'build can revise the colours without stranding readers on a '
               'frozen copy');
+    });
+
+    test('a bare id written by the PREVIOUS build still resolves — readers on '
+        'PR #143 have exactly this stored right now', () async {
+      final other = kThemePresets.firstWhere((p) => p.id != kDefaultPresetId);
+      final c = await containerWith({themePresetPrefKey: other.id});
+      expect(c.read(themePresetProvider).id, other.id);
+      expect(c.read(skinSelectionProvider).isCustomised, isFalse);
     });
   });
 }

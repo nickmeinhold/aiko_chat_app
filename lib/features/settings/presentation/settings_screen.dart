@@ -15,6 +15,7 @@ import '../../chat/data/chat_rest_api.dart';
 import '../application/theme_mode_controller.dart';
 import '../application/theme_preset_controller.dart';
 import 'edit_profile_screen.dart';
+import 'palette_editor_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -310,8 +311,9 @@ class _ThemePresetPicker extends ConsumerWidget {
                 preset: preset,
                 brightness: brightness,
                 isSelected: preset.id == selected.id,
-                onTap: () =>
-                    ref.read(themePresetProvider.notifier).set(preset),
+                onTap: () => ref
+                    .read(skinSelectionProvider.notifier)
+                    .selectPreset(preset),
               );
             },
           ),
@@ -323,6 +325,19 @@ class _ThemePresetPicker extends ConsumerWidget {
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.palette_outlined),
+          title: const Text('Your colours'),
+          subtitle: Text(
+            ref.watch(skinSelectionProvider).isCustomised
+                ? 'Changed from ${selected.label}.'
+                : 'Start from ${selected.label} and change what you like.',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const PaletteEditorScreen()),
           ),
         ),
       ],
