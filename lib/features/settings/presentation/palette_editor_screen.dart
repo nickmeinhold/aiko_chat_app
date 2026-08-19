@@ -6,6 +6,7 @@ import '../../../app/theme/theme_builder.dart';
 import '../../../app/theme/theme_laws.dart';
 import '../../../core/widgets/reading_column.dart';
 import '../application/theme_preset_controller.dart';
+import 'skin_share_sheet.dart';
 
 /// Author your own colours, one role at a time.
 ///
@@ -123,6 +124,8 @@ class _PaletteEditorScreenState extends ConsumerState<PaletteEditorScreen> {
             const SizedBox(height: 8),
             const Divider(height: 1),
             const _FontPicker(),
+            const Divider(height: 1),
+            const SkinShareSection(),
             const SizedBox(height: 24),
           ],
         ),
