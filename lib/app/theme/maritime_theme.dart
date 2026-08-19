@@ -69,6 +69,17 @@ const maritimeNight = ThemePalette(
 ///    object lit by the sun, and a chart is flat in any light. Hairline
 ///    separation is also literally how nautical charts work.
 ///
+/// 4. MY OWN SURFACE PRESSES, IT DOES NOT LIFT. [ThemePalette.panelMine] is the
+///    one panel that is DARKER than the ground here, while `panel` and
+///    `panelHigh` are lighter — which looks like an inconsistency and is the
+///    same rule as (2) one layer down. A lift needs headroom, and at noon the
+///    ground already sits near the top of the range: a tint pale enough to lift
+///    off parchment has no chroma left to be a tint. So my bubble does what a
+///    tint block does on real paper and presses into it. Enforced as a law —
+///    my own surface is never LESS separated from the ground than a plain panel
+///    (`theme_relationships_test.dart`); the first cut of this palette inverted
+///    it at 1.03:1, distinguishing my messages from the page by hue alone.
+///
 /// The non-obvious constraint that falls out of (2): once the beacon stops being
 /// a light and becomes an ink, it lands in the same dark-warm register as the
 /// alarm, and the two roles collide — armed and failed should never be
@@ -83,11 +94,11 @@ const maritimeNoon = ThemePalette(
   ground: Color(0xFFE7E0CF), // chart paper — night's ink
   panel: Color(0xFFF2EDE1), // sailcloth, lifted off the chart
   panelHigh: Color(0xFFFAF7EF), // bleached — menus, sheets
-  panelMine: Color(0xFFD5E7E6), // a pale signal wash — my own bubbles
+  panelMine: Color(0xFFB8D5D3), // a signal wash PRESSED into the paper
   ink: kMaritimeSeaNight, // night's ground
   inkDim: Color(0xFF4F5D64), // lighter print, still AA at body size
   hairline: Color(0xFFC7BCA4), // a fine warm rule
-  signal: Color(0xFF0B5F6C), // deep teal — signal as stroke, not glow
+  signal: Color(0xFF006170), // deep teal, at full chroma — stroke, not glow
   beacon: Color(0xFF8F6210), // brass in sun — the stamp
   alarm: Color(0xFF8C2318), // oxblood, kept DARKER than the brass (see below)
   onAccent: Color(0xFFFAF7EF),
