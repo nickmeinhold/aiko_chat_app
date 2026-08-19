@@ -125,6 +125,11 @@ flutter:
 
   assets:
     - assets/legal/eula.md
+    # SIL OFL 1.1 requires the licence travel WITH the font. Registered into
+    # Flutter's LicenseRegistry at startup (lib/app/font_licenses.dart) so it
+    # shows up in the standard licences page rather than sitting inert in the
+    # bundle.
+    - assets/fonts/OFL.txt
 
   # Maritime redesign type system (crucible docs/crucible/chatskin):
   # body/display text uses the platform-native UI font (no bundled family);

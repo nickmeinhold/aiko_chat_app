@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app/font_licences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
 import 'features/call/presentation/ring_overlay.dart';
@@ -13,6 +14,9 @@ Future<void> main() async {
   // obtain, so load it once here and inject it so `configProvider` can resolve
   // the persisted value synchronously at first build.
   WidgetsFlutterBinding.ensureInitialized();
+  // Bundled typefaces carry licence obligations that Flutter's automatic
+  // package-licence collection cannot see (it does not read `assets/`).
+  registerFontLicences();
   final prefs = await SharedPreferences.getInstance();
   runApp(
     ProviderScope(
