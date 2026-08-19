@@ -86,6 +86,15 @@ class SkinSelectionController extends Notifier<SkinSelection> {
   /// Choose the body typeface.
   void selectFont(AppFont font) => _write(state.withFont(font.id));
 
+  /// Adopt a look imported from someone else.
+  ///
+  /// Replaces preset, font and colour edits together — a shared look is one
+  /// thing, and merging it with the reader's existing edits would produce a
+  /// palette neither person chose. The import path has already validated it;
+  /// this is the only entry point that takes a whole selection, so there is
+  /// exactly one door for foreign state.
+  void applyImported(SkinSelection imported) => _write(imported);
+
   /// Back to the preset's own colours. Keeps the chosen font — it was never a
   /// colour edit.
   void resetToPreset() => _write(state.reset);
