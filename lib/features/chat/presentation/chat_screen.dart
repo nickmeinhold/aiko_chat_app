@@ -1222,7 +1222,11 @@ class _ComposerState extends ConsumerState<Composer> {
                 // cannot flicker while you type.
                 if (widget.islandBaseUrl != null)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 9),
+                    // The mark carries its own 44px touch target now, which
+                    // includes the vertical placement — so the old bottom
+                    // padding that sat the 18px glyph on the baseline would
+                    // double-count.
+                    padding: EdgeInsets.zero,
                     child: IslandMark(
                       baseUrl: widget.islandBaseUrl!,
                       // Where am I → can I go elsewhere. The picker owns the

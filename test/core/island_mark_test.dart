@@ -5,6 +5,7 @@
 // mode is silent: a mark that quietly changed would look like a working feature
 // while destroying the only thing it was for.
 import 'package:aiko_chat_app/core/widgets/island_mark.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -97,6 +98,58 @@ void main() {
       expect(colours.length, greaterThanOrEqualTo(6),
           reason: 'only ${colours.length} distinct water colours across 200 '
               'islands');
+    });
+  });
+
+  group('it is actually pressable', () {
+    // Reported from a real thumb: "the island button is quite hard to press,
+    // seems like the border might be swallowing taps". Two causes, both fixed
+    // and both pinned here — the target was ~30px, and it deferred its hit test
+    // to a CIRCLE inside a square box, leaving the corners dead.
+    testWidgets('the touch target is at least 44px — Apple\'s minimum, and this '
+        'sits in the bottom-left corner where accuracy is worst', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: IslandMark(baseUrl: 'chat.example.org', onTap: () {}),
+          ),
+        ),
+      ));
+
+      final size = tester.getSize(find.byType(IslandMark));
+      expect(size.width, greaterThanOrEqualTo(44));
+      expect(size.height, greaterThanOrEqualTo(44));
+    });
+
+    testWidgets('a tap in the CORNER of the target still counts — the dead '
+        'corners are what made it feel like the border ate the press',
+        (tester) async {
+      var taps = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: IslandMark(baseUrl: 'chat.example.org', onTap: () => taps++),
+          ),
+        ),
+      ));
+
+      final rect = tester.getRect(find.byType(IslandMark));
+      // Just inside the top-left corner: outside the drawn circle, inside the
+      // target. This is the press that used to land on nothing.
+      await tester.tapAt(rect.topLeft + const Offset(3, 3));
+      await tester.pumpAndSettle();
+      expect(taps, 1, reason: 'a corner press missed — the hit test is still '
+          'deferring to the drawing rather than the target');
+    });
+
+    testWidgets('with no onTap it stays a decoration and takes no space it '
+        'does not need', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(
+          body: Center(child: IslandMark(baseUrl: 'chat.example.org')),
+        ),
+      ));
+      expect(tester.getSize(find.byType(IslandMark)).width, lessThan(44));
     });
   });
 }

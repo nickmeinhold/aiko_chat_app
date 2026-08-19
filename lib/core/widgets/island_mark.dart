@@ -139,13 +139,31 @@ class IslandMark extends StatelessWidget {
         button: onTap != null,
         child: onTap == null
             ? mark
-            : InkResponse(
+            : GestureDetector(
+                // OPAQUE, and a full 44×44. The first cut was an InkResponse
+                // with 6px of padding — about a 30px target sitting in the
+                // bottom-left corner, where thumb accuracy is worst, and it was
+                // genuinely hard to hit.
+                //
+                // The behaviour matters as much as the size. Without
+                // `opaque`, the hit test defers to the CHILD, and the child is a
+                // circle inside a square box — so the corners were dead space
+                // and a near-miss landed on nothing. That feels exactly like
+                // "the border is swallowing taps", which is how this was
+                // reported.
+                //
+                // 44 is Apple's minimum touch target. The target grows; the
+                // drawing stays 18px.
+                behavior: HitTestBehavior.opaque,
                 onTap: onTap,
-                radius: size,
-                // A 18px target is well under the 44px minimum, and this sits
-                // beside a text field people jab at — so the hit area is grown
-                // without growing the mark.
-                child: Padding(padding: const EdgeInsets.all(6), child: mark),
+                child: SizedBox(
+                  width: 44,
+                  height: 44,
+                  // Nudged low so the glyph keeps sitting on the text baseline
+                  // it was placed against, instead of jumping up when the box
+                  // grew around it.
+                  child: Align(alignment: const Alignment(0, 0.45), child: mark),
+                ),
               ),
       ),
     );
