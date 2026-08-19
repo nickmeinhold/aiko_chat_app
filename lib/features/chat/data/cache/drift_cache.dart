@@ -154,8 +154,12 @@ abstract final class _R {
 /// `ifNotExists` mirrors drift's `Migrator.createTable` (which is a no-op when
 /// the table is already present) — used on the onUpgrade paths, where an
 /// artificially-downgraded DB may still carry a table the ladder re-creates.
-String _createTable(String table, Map<String, String> schema, String pk,
-        {bool ifNotExists = false}) =>
+String _createTable(
+  String table,
+  Map<String, String> schema,
+  String pk, {
+  bool ifNotExists = false,
+}) =>
     'CREATE TABLE ${ifNotExists ? 'IF NOT EXISTS ' : ''}$table ('
     '${schema.entries.map((e) => '${e.key} ${e.value}').join(', ')}, '
     'PRIMARY KEY ($pk))';
@@ -206,25 +210,25 @@ class MessageRow {
   final int? originCryptoValid;
 
   factory MessageRow.fromRow(QueryRow r) => MessageRow(
-        clientTempId: r.read<String>(_M.clientTempId),
-        serverUlid: r.readNullable<String>(_M.serverUlid),
-        channelId: r.read<String>(_M.channelId),
-        senderUserId: r.readNullable<String>(_M.senderUserId),
-        senderKind: r.read<String>(_M.senderKind),
-        senderLabel: r.readNullable<String>(_M.senderLabel),
-        kind: r.read<String>(_M.kind),
-        body: r.read<String>(_M.body),
-        replyToId: r.readNullable<String>(_M.replyToId),
-        createdAt: r.read<int>(_M.createdAt),
-        localSeq: r.read<int>(_M.localSeq),
-        deliveryState: r.read<String>(_M.deliveryState),
-        sig: r.readNullable<String>(_M.sig),
-        senderPubkey: r.readNullable<String>(_M.senderPubkey),
-        signedAtMs: r.readNullable<int>(_M.signedAtMs),
-        keyVersion: r.readNullable<int>(_M.keyVersion),
-        signedClientMsgId: r.readNullable<String>(_M.signedClientMsgId),
-        originCryptoValid: r.readNullable<int>(_M.originCryptoValid),
-      );
+    clientTempId: r.read<String>(_M.clientTempId),
+    serverUlid: r.readNullable<String>(_M.serverUlid),
+    channelId: r.read<String>(_M.channelId),
+    senderUserId: r.readNullable<String>(_M.senderUserId),
+    senderKind: r.read<String>(_M.senderKind),
+    senderLabel: r.readNullable<String>(_M.senderLabel),
+    kind: r.read<String>(_M.kind),
+    body: r.read<String>(_M.body),
+    replyToId: r.readNullable<String>(_M.replyToId),
+    createdAt: r.read<int>(_M.createdAt),
+    localSeq: r.read<int>(_M.localSeq),
+    deliveryState: r.read<String>(_M.deliveryState),
+    sig: r.readNullable<String>(_M.sig),
+    senderPubkey: r.readNullable<String>(_M.senderPubkey),
+    signedAtMs: r.readNullable<int>(_M.signedAtMs),
+    keyVersion: r.readNullable<int>(_M.keyVersion),
+    signedClientMsgId: r.readNullable<String>(_M.signedClientMsgId),
+    originCryptoValid: r.readNullable<int>(_M.originCryptoValid),
+  );
 }
 
 /// Component 3 — the on-device cache. Hand-authored typed layer over drift's
@@ -241,11 +245,11 @@ class DriftCache extends GeneratedDatabase {
   /// generator's schema-sync guarantee made explicit. Not a runtime API.
   static const tableSchemas =
       <String, ({Map<String, String> columns, String pk})>{
-    _M.table: (columns: _M.schema, pk: _M.clientTempId),
-    _C.table: (columns: _C.schema, pk: _C.id),
-    _S.table: (columns: _S.schema, pk: _S.channelId),
-    _R.table: (columns: _R.schema, pk: _R.targetMsgId),
-  };
+        _M.table: (columns: _M.schema, pk: _M.clientTempId),
+        _C.table: (columns: _C.schema, pk: _C.id),
+        _S.table: (columns: _S.schema, pk: _S.channelId),
+        _R.table: (columns: _R.schema, pk: _R.targetMsgId),
+      };
 
   /// No generated tables. Reads/writes go through raw SQL keyed on the `_M`/`_C`/
   /// `_S`/`_R` name constants; change tracking is by table-name string.
@@ -254,54 +258,64 @@ class DriftCache extends GeneratedDatabase {
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) async {
-          await customStatement(_createTable(_M.table, _M.schema, _M.clientTempId));
-          await customStatement(_createTable(_C.table, _C.schema, _C.id));
-          await customStatement(_createTable(_S.table, _S.schema, _S.channelId));
-          await customStatement(_createTable(_R.table, _R.schema, _R.targetMsgId));
-        },
-        onUpgrade: (m, from, to) async {
-          // v1 -> v2: the reconnect resume watermark (design 04 round 4).
-          if (from < 2) {
-            await customStatement(
-                _createTable(_S.table, _S.schema, _S.channelId, ifNotExists: true));
-          }
-          // v2 -> v3: sovereign message-signing columns (all nullable — existing
-          // rows keep NULLs). LOCAL verifiable history; not on the wire yet.
-          if (from < 3) {
-            await customStatement('ALTER TABLE ${_M.table} ADD COLUMN ${_M.sig} TEXT');
-            await customStatement(
-                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.senderPubkey} TEXT');
-            await customStatement(
-                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.signedAtMs} INTEGER');
-            await customStatement(
-                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.keyVersion} INTEGER');
-          }
-          // v3 -> v4: wire-half inbound carriage — the signed client_msg_id + the
-          // local verify verdict. Both nullable — existing rows keep NULLs.
-          if (from < 4) {
-            await customStatement(
-                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.signedClientMsgId} TEXT');
-            await customStatement(
-                'ALTER TABLE ${_M.table} ADD COLUMN ${_M.originCryptoValid} INTEGER');
-          }
-          // v4 -> v5: channel-list ordinal so the offline read preserves the
-          // authoritative server order (default 0 — self-heals on the next
-          // saveChannels, which rewrites every row's ordinal).
-          if (from < 5) {
-            await customStatement(
-                'ALTER TABLE ${_C.table} ADD COLUMN ${_C.ordinal} INTEGER NOT NULL DEFAULT 0');
-          }
-          // v5 -> v6: the retraction dead-id table (moderator takedowns, #104).
-          // A new empty table — existing rows are untouched; a takedown that
-          // predates the upgrade re-arrives on the next history catch-up and is
-          // recorded then (presence-independent), so no backfill is needed.
-          if (from < 6) {
-            await customStatement(
-                _createTable(_R.table, _R.schema, _R.targetMsgId, ifNotExists: true));
-          }
-        },
-      );
+    onCreate: (m) async {
+      await customStatement(_createTable(_M.table, _M.schema, _M.clientTempId));
+      await customStatement(_createTable(_C.table, _C.schema, _C.id));
+      await customStatement(_createTable(_S.table, _S.schema, _S.channelId));
+      await customStatement(_createTable(_R.table, _R.schema, _R.targetMsgId));
+    },
+    onUpgrade: (m, from, to) async {
+      // v1 -> v2: the reconnect resume watermark (design 04 round 4).
+      if (from < 2) {
+        await customStatement(
+          _createTable(_S.table, _S.schema, _S.channelId, ifNotExists: true),
+        );
+      }
+      // v2 -> v3: sovereign message-signing columns (all nullable — existing
+      // rows keep NULLs). LOCAL verifiable history; not on the wire yet.
+      if (from < 3) {
+        await customStatement(
+          'ALTER TABLE ${_M.table} ADD COLUMN ${_M.sig} TEXT',
+        );
+        await customStatement(
+          'ALTER TABLE ${_M.table} ADD COLUMN ${_M.senderPubkey} TEXT',
+        );
+        await customStatement(
+          'ALTER TABLE ${_M.table} ADD COLUMN ${_M.signedAtMs} INTEGER',
+        );
+        await customStatement(
+          'ALTER TABLE ${_M.table} ADD COLUMN ${_M.keyVersion} INTEGER',
+        );
+      }
+      // v3 -> v4: wire-half inbound carriage — the signed client_msg_id + the
+      // local verify verdict. Both nullable — existing rows keep NULLs.
+      if (from < 4) {
+        await customStatement(
+          'ALTER TABLE ${_M.table} ADD COLUMN ${_M.signedClientMsgId} TEXT',
+        );
+        await customStatement(
+          'ALTER TABLE ${_M.table} ADD COLUMN ${_M.originCryptoValid} INTEGER',
+        );
+      }
+      // v4 -> v5: channel-list ordinal so the offline read preserves the
+      // authoritative server order (default 0 — self-heals on the next
+      // saveChannels, which rewrites every row's ordinal).
+      if (from < 5) {
+        await customStatement(
+          'ALTER TABLE ${_C.table} ADD COLUMN ${_C.ordinal} INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      // v5 -> v6: the retraction dead-id table (moderator takedowns, #104).
+      // A new empty table — existing rows are untouched; a takedown that
+      // predates the upgrade re-arrives on the next history catch-up and is
+      // recorded then (presence-independent), so no backfill is needed.
+      if (from < 6) {
+        await customStatement(
+          _createTable(_R.table, _R.schema, _R.targetMsgId, ifNotExists: true),
+        );
+      }
+    },
+  );
 
   // --- raw-SQL helpers -------------------------------------------------------
 
@@ -314,8 +328,12 @@ class DriftCache extends GeneratedDatabase {
   /// WHERE may match nothing — an already-sent row under `serverUlid IS NULL` —
   /// can gate its `notifyUpdates` on a real mutation, the "no spurious emit on a
   /// zero-row no-op" half of the manual-notify contract PR #130 made explicit.
-  Future<int> _update(String table, Map<String, Object?> set, String where,
-      List<Object?> whereArgs) async {
+  Future<int> _update(
+    String table,
+    Map<String, Object?> set,
+    String where,
+    List<Object?> whereArgs,
+  ) async {
     if (set.isEmpty) return 0;
     final assignments = set.keys.map((c) => '$c = ?').join(', ');
     return customUpdate(
@@ -362,18 +380,21 @@ class DriftCache extends GeneratedDatabase {
         // .catchError keeps the chain from settling into a rejected state — a
         // rejected future would make every later .then a no-op and silently
         // deafen the listener while the DB keeps mutating.
-        chain = chain.then((_) async {
-          if (controller.isClosed) return;
-          try {
-            controller.add(await fetch());
-          } catch (e, st) {
-            if (!controller.isClosed) controller.addError(e, st);
-          }
-        }).catchError((_) {});
+        chain = chain
+            .then((_) async {
+              if (controller.isClosed) return;
+              try {
+                controller.add(await fetch());
+              } catch (e, st) {
+                if (!controller.isClosed) controller.addError(e, st);
+              }
+            })
+            .catchError((_) {});
       }
 
-      final sub =
-          tableUpdates(TableUpdateQuery.onTableName(table)).listen((_) => schedule());
+      final sub = tableUpdates(
+        TableUpdateQuery.onTableName(table),
+      ).listen((_) => schedule());
       controller.onCancel = sub.cancel;
       schedule(); // initial emission
     }, isBroadcast: true);
@@ -414,35 +435,38 @@ class DriftCache extends GeneratedDatabase {
       'SELECT * FROM ${_C.table} ORDER BY ${_C.ordinal} ASC, ${_C.id} ASC',
     ).get();
     return rows
-        .map((r) => Channel(
-              id: r.read<String>(_C.id),
-              name: r.read<String>(_C.name),
-              kind: ChannelKind.fromWire(r.read<String>(_C.kind)),
-              aikoChannel: r.readNullable<String>(_C.aikoChannel),
-            ))
+        .map(
+          (r) => Channel(
+            id: r.read<String>(_C.id),
+            name: r.read<String>(_C.name),
+            kind: ChannelKind.fromWire(r.read<String>(_C.kind)),
+            aikoChannel: r.readNullable<String>(_C.aikoChannel),
+          ),
+        )
         .toList();
   }
 
   // --- conversion -----------------------------------------------------------
 
   Message _toDomain(MessageRow r) => Message(
-        clientTempId: r.clientTempId,
-        id: r.serverUlid,
-        channelId: r.channelId,
-        sender: MessageSender(
-          userId: r.senderUserId,
-          kind: SenderKind.fromWire(r.senderKind),
-          label: r.senderLabel,
-        ),
-        kind: MessageKind.fromWire(r.kind),
-        body: r.body,
-        replyToId: r.replyToId,
-        createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt, isUtc: true),
-        deliveryState: DeliveryState.fromWire(r.deliveryState),
-        origin: _originFromRow(r),
-        originCryptoValid:
-            r.originCryptoValid == null ? null : r.originCryptoValid == 1,
-      );
+    clientTempId: r.clientTempId,
+    id: r.serverUlid,
+    channelId: r.channelId,
+    sender: MessageSender(
+      userId: r.senderUserId,
+      kind: SenderKind.fromWire(r.senderKind),
+      label: r.senderLabel,
+    ),
+    kind: MessageKind.fromWire(r.kind),
+    body: r.body,
+    replyToId: r.replyToId,
+    createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt, isUtc: true),
+    deliveryState: DeliveryState.fromWire(r.deliveryState),
+    origin: _originFromRow(r),
+    originCryptoValid: r.originCryptoValid == null
+        ? null
+        : r.originCryptoValid == 1,
+  );
 
   /// Rebuild the CARRIED [OriginEnvelope] from the typed signature columns (there
   /// is NO stored JSON — wire-half TEMPER T3). The signed `client_msg_id` is
@@ -466,7 +490,10 @@ class DriftCache extends GeneratedDatabase {
   /// client_msg_id). Shared by [_originFromRow] (gated, inbound) and
   /// [outboundOrigin] (ungated, our own send being emitted).
   OriginEnvelope? _originFromColumns(MessageRow r) {
-    final sig = r.sig, pub = r.senderPubkey, ts = r.signedAtMs, kv = r.keyVersion;
+    final sig = r.sig,
+        pub = r.senderPubkey,
+        ts = r.signedAtMs,
+        kv = r.keyVersion;
     if (sig == null || pub == null || ts == null || kv == null) return null;
     try {
       final rawPub = base64Decode(pub);
@@ -528,10 +555,12 @@ class DriftCache extends GeneratedDatabase {
       _M.senderPubkey: o == null ? null : base64Encode(o.rawPublicKey),
       _M.signedAtMs: o?.signedAtMs,
       _M.keyVersion: o?.keyVersion,
-      _M.signedClientMsgId:
-          (o == null || o.clientMsgId == m.clientTempId) ? null : o.clientMsgId,
-      _M.originCryptoValid:
-          m.originCryptoValid == null ? null : (m.originCryptoValid! ? 1 : 0),
+      _M.signedClientMsgId: (o == null || o.clientMsgId == m.clientTempId)
+          ? null
+          : o.clientMsgId,
+      _M.originCryptoValid: m.originCryptoValid == null
+          ? null
+          : (m.originCryptoValid! ? 1 : 0),
     };
   }
 
@@ -541,7 +570,9 @@ class DriftCache extends GeneratedDatabase {
   /// connections ever open the same file this becomes a TOCTOU — switch to a
   /// dedicated atomic counter table then (flagged in the design's §schema).
   Future<int> _nextLocalSeq() async {
-    final rows = await customSelect('SELECT MAX(${_M.localSeq}) AS m FROM ${_M.table}').get();
+    final rows = await customSelect(
+      'SELECT MAX(${_M.localSeq}) AS m FROM ${_M.table}',
+    ).get();
     return (rows.first.readNullable<int>('m') ?? 0) + 1;
   }
 
@@ -551,8 +582,10 @@ class DriftCache extends GeneratedDatabase {
   /// inside the transaction (restart-durable, never an in-memory counter).
   /// The caller supplies the clamped [Message.createdAt] and `deliveryState =
   /// sending`. MUST be committed before the wire send.
-  Future<void> insertOptimistic(Message optimistic,
-      {MessageSignature? signature}) async {
+  Future<void> insertOptimistic(
+    Message optimistic, {
+    MessageSignature? signature,
+  }) async {
     await transaction(() async {
       final seq = await _nextLocalSeq();
       final cols = _cols(optimistic, localSeq: seq);
@@ -578,7 +611,10 @@ class DriftCache extends GeneratedDatabase {
   /// and keeping `clientTempId`/`localSeq` for UI continuity. Guard: only a row
   /// still `serverUlid IS NULL` is reconciled (never regress a sent row).
   Future<AckOutcome> reconcileAck(
-      String clientTempId, String serverUlid, DateTime serverCreatedAt) async {
+    String clientTempId,
+    String serverUlid,
+    DateTime serverCreatedAt,
+  ) async {
     var wrote = false;
     final outcome = await transaction(() async {
       final rc = await _messageBy(_M.clientTempId, clientTempId);
@@ -605,7 +641,9 @@ class DriftCache extends GeneratedDatabase {
       // NULL), same transaction as the dead-id read (no TOCTOU).
       if (await _isRetracted(serverUlid)) {
         await customStatement(
-            'DELETE FROM ${_M.table} WHERE ${_M.clientTempId} = ?', [clientTempId]);
+          'DELETE FROM ${_M.table} WHERE ${_M.clientTempId} = ?',
+          [clientTempId],
+        );
         wrote = true;
         return AckOutcome.retracted;
       }
@@ -614,11 +652,16 @@ class DriftCache extends GeneratedDatabase {
 
       if (ru == null) {
         // Happy path: stamp the ULID + server time, mark sent.
-        await _update(_M.table, {
-          _M.serverUlid: serverUlid,
-          _M.createdAt: serverCreatedAt.toUtc().millisecondsSinceEpoch,
-          _M.deliveryState: DeliveryState.sent.wire,
-        }, '${_M.clientTempId} = ?', [clientTempId]);
+        await _update(
+          _M.table,
+          {
+            _M.serverUlid: serverUlid,
+            _M.createdAt: serverCreatedAt.toUtc().millisecondsSinceEpoch,
+            _M.deliveryState: DeliveryState.sent.wire,
+          },
+          '${_M.clientTempId} = ?',
+          [clientTempId],
+        );
         wrote = true;
         return AckOutcome.reconciled;
       } else {
@@ -629,7 +672,9 @@ class DriftCache extends GeneratedDatabase {
         // mid-transaction. Order is load-bearing; both statements are in one
         // txn (Invariant A), so no intermediate state is ever observed.
         await customStatement(
-            'DELETE FROM ${_M.table} WHERE ${_M.clientTempId} = ?', [ru.clientTempId]);
+          'DELETE FROM ${_M.table} WHERE ${_M.clientTempId} = ?',
+          [ru.clientTempId],
+        );
         // Collapse is a ULID-COLLISION (birth-race) path, not a mutation path: a
         // self-echo / history row (ru) landed before our ack, and the SURVIVING
         // row is our SIGNED optimistic row (rc). In the common self-echo case
@@ -637,12 +682,14 @@ class DriftCache extends GeneratedDatabase {
         // — clearing unconditionally would erase valid local history by race order
         // (cage-match Tesla R3). Clear ONLY when a signed field truly diverges;
         // otherwise preserve rc's existing signature (absent from the set).
-        final signedFieldChanged = rc.body != ru.body ||
+        final signedFieldChanged =
+            rc.body != ru.body ||
             rc.replyToId != ru.replyToId ||
             rc.channelId != ru.channelId;
         // ru carried a verified origin off the wire (its verdict is non-null only
         // via the inbound verify path) → the survivor adopts it (see below).
-        final adoptCarried = !signedFieldChanged && ru.originCryptoValid != null;
+        final adoptCarried =
+            !signedFieldChanged && ru.originCryptoValid != null;
 
         final set = <String, Object?>{
           _M.serverUlid: serverUlid,
@@ -708,7 +755,8 @@ class DriftCache extends GeneratedDatabase {
   /// once per message instead of once per delivery (PR #93 R1, cage-match
   /// Carnot + Tesla).
   Future<({bool inserted, bool newlyInvalid})> upsertInbound(
-      Message serverMsg) async {
+    Message serverMsg,
+  ) async {
     final u = serverMsg.id;
     if (u == null) {
       throw ArgumentError('upsertInbound requires a server ULID (id != null)');
@@ -721,9 +769,11 @@ class DriftCache extends GeneratedDatabase {
     // and every attempt to paper over it leaked a different bug (cage-match R2–R4).
     // Making it unrepresentable dissolves the class (consistent with the id guard).
     if (serverMsg.origin != null && serverMsg.originCryptoValid == null) {
-      throw ArgumentError('upsertInbound: a carried origin must arrive with its '
-          'ingest-time verdict (verify runs before persist in _persistInbound); '
-          'origin-present with a null verdict is illegal');
+      throw ArgumentError(
+        'upsertInbound: a carried origin must arrive with its '
+        'ingest-time verdict (verify runs before persist in _persistInbound); '
+        'origin-present with a null verdict is illegal',
+      );
     }
     var wrote = false;
     var inserted = false;
@@ -739,8 +789,9 @@ class DriftCache extends GeneratedDatabase {
       if (existing != null) {
         if (existing.channelId != serverMsg.channelId) {
           throw StateError(
-              'serverUlid $u matched a row in channel ${existing.channelId} '
-              '!= ${serverMsg.channelId} — corruption, refusing to overwrite');
+            'serverUlid $u matched a row in channel ${existing.channelId} '
+            '!= ${serverMsg.channelId} — corruption, refusing to overwrite',
+          );
         }
         // Origin coherence (wire-half T4 — the FULL law). The origin follows the
         // INCOMING body, so the axis is "does this echo carry an origin?", NOT
@@ -752,7 +803,8 @@ class DriftCache extends GeneratedDatabase {
         //   * no incoming origin + a signed field diverged → CLEAR: the old sig
         //     signed the old body we're overwriting (absent = unverified, no lie);
         //   * no incoming origin + unchanged → absent = preserve the still-valid sig.
-        final signedFieldChanged = existing.body != serverMsg.body ||
+        final signedFieldChanged =
+            existing.body != serverMsg.body ||
             existing.replyToId != serverMsg.replyToId;
         final o = serverMsg.origin;
 
@@ -779,8 +831,10 @@ class DriftCache extends GeneratedDatabase {
         originCol(_M.signedAtMs, (e) => e.signedAtMs);
         originCol(_M.keyVersion, (e) => e.keyVersion);
         // Store the signed id only when it differs from the PK (inbound).
-        originCol(_M.signedClientMsgId,
-            (e) => e.clientMsgId != existing.clientTempId ? e.clientMsgId : null);
+        originCol(
+          _M.signedClientMsgId,
+          (e) => e.clientMsgId != existing.clientTempId ? e.clientMsgId : null,
+        );
         // Origin present ⟹ verdict non-null (guarded at method entry). Store the
         // ingest-time verdict; an incoming origin REPLACES, and the verdict is
         // cleared only when no origin arrives and a signed field changed.
@@ -882,7 +936,9 @@ class DriftCache extends GeneratedDatabase {
         [r.targetMsgId, r.channelId, r.id],
       );
       await customStatement(
-          'DELETE FROM ${_M.table} WHERE ${_M.serverUlid} = ?', [r.targetMsgId]);
+        'DELETE FROM ${_M.table} WHERE ${_M.serverUlid} = ?',
+        [r.targetMsgId],
+      );
     });
     notifyUpdates({const TableUpdate(_M.table), const TableUpdate(_R.table)});
   }
@@ -893,7 +949,9 @@ class DriftCache extends GeneratedDatabase {
   /// so the prune policy has a home when/if it is needed, not because it is.
   Future<void> pruneRetractedBelow(String floorRetractionId) async {
     await customStatement(
-        'DELETE FROM ${_R.table} WHERE ${_R.retractionId} < ?', [floorRetractionId]);
+      'DELETE FROM ${_R.table} WHERE ${_R.retractionId} < ?',
+      [floorRetractionId],
+    );
   }
 
   // --- W4: error handler -----------------------------------------------------
@@ -903,17 +961,20 @@ class DriftCache extends GeneratedDatabase {
   /// regress a sent row). A null ref is a *systemic* error (rate-limit,
   /// channel-readonly) — returns the affected pending rows for B4 to act on,
   /// never a silent drop.
-  Future<List<Message>> markFailed(String? refClientMsgId,
-      {String? systemicChannelId}) async {
+  Future<List<Message>> markFailed(
+    String? refClientMsgId, {
+    String? systemicChannelId,
+  }) async {
     if (refClientMsgId != null) {
       // Gate notify on a real change: the `serverUlid IS NULL` guard means a late
       // error for an already-sent row matches zero rows — finishing the octave
       // with reconcileAck/upsertInbound/advanceHistoryContiguous (cage-match Tesla).
       final changed = await _update(
-          _M.table,
-          {_M.deliveryState: DeliveryState.failed.wire},
-          '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
-          [refClientMsgId]);
+        _M.table,
+        {_M.deliveryState: DeliveryState.failed.wire},
+        '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
+        [refClientMsgId],
+      );
       if (changed > 0) notifyUpdates({const TableUpdate(_M.table)});
       return const [];
     }
@@ -945,10 +1006,11 @@ class DriftCache extends GeneratedDatabase {
     // Same zero-row gate as markFailed: a retry of an already-sent row (serverUlid
     // no longer NULL) matches nothing and must not emit a spurious re-query.
     final changed = await _update(
-        _M.table,
-        {_M.deliveryState: DeliveryState.sending.wire},
-        '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
-        [clientTempId]);
+      _M.table,
+      {_M.deliveryState: DeliveryState.sending.wire},
+      '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
+      [clientTempId],
+    );
     if (changed > 0) notifyUpdates({const TableUpdate(_M.table)});
   }
 
@@ -1035,8 +1097,10 @@ class DriftCache extends GeneratedDatabase {
   Stream<String?> watchHistoryContiguousThrough(String channelId) {
     // Wrap in a 1-element list so the fetched value is a non-null Object (the
     // stream helper is generic over Object); unwrap on the way out.
-    return _watch(_S.table, () async => [await historyContiguousThrough(channelId)])
-        .map((wrapped) => wrapped.single);
+    return _watch(
+      _S.table,
+      () async => [await historyContiguousThrough(channelId)],
+    ).map((wrapped) => wrapped.single);
   }
 
   /// Advance the resume watermark for [channelId] to [ulid]. The **ONLY** writer

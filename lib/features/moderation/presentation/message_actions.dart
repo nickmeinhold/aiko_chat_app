@@ -104,7 +104,10 @@ Future<void> showMessageActions(
             // Bell, not speaker — a speaker-with-slash means call audio in an
             // app that ships 1:1 A/V (cage-match #135, Maxwell).
             leading: Icon(
-                muted ? Icons.notifications_none : Icons.notifications_off_outlined),
+              muted
+                  ? Icons.notifications_none
+                  : Icons.notifications_off_outlined,
+            ),
             title: Text(muted ? 'Unmute $name' : 'Mute $name'),
             // Say EVERYWHERE. This is the only door that writes a
             // `MuteTarget.user`, and it is the global act — a long-press in
@@ -116,10 +119,12 @@ Future<void> showMessageActions(
             // Present tense only for what actually happens today: there are no
             // notifications yet, so promising them would be prophecy in the
             // indicative (round 6, Tesla).
-            subtitle: Text(muted
-                ? "You'll see unread badges from them again, everywhere"
-                : "No unread badge from them in any conversation — you'll still "
-                    'see their messages'),
+            subtitle: Text(
+              muted
+                  ? "You'll see unread badges from them again, everywhere"
+                  : "No unread badge from them in any conversation — you'll still "
+                        'see their messages',
+            ),
             onTap: () => Navigator.pop(ctx, _Action.mute),
           ),
           ListTile(
@@ -161,18 +166,22 @@ Future<void> showMessageActions(
       // then tap Undo. A captured `WidgetRef` is dead by then, and so is a
       // captured notifier, because `mutesProvider` is `.autoDispose` and a handle
       // to it is not a keep-alive (cage-match #135 rounds 1-2).
-      container.read(mutesProvider.notifier).setUserMuted(userId,
-          muted: !muted, expectUserId: actingUserId);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(muted ? 'Unmuted $name' : 'Muted $name'),
-        action: SnackBarAction(
-          label: 'Undo',
-          // Absolute target state (the value BEFORE this action), never a
-          // toggle — a double-tap restores rather than oscillates.
-          onPressed: () => container.read(mutesProvider.notifier).setUserMuted(
-              userId, muted: muted, expectUserId: actingUserId),
+      container
+          .read(mutesProvider.notifier)
+          .setUserMuted(userId, muted: !muted, expectUserId: actingUserId);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(muted ? 'Unmuted $name' : 'Muted $name'),
+          action: SnackBarAction(
+            label: 'Undo',
+            // Absolute target state (the value BEFORE this action), never a
+            // toggle — a double-tap restores rather than oscillates.
+            onPressed: () => container
+                .read(mutesProvider.notifier)
+                .setUserMuted(userId, muted: muted, expectUserId: actingUserId),
+          ),
         ),
-      ));
+      );
     case _Action.report:
       await _report(context, ref, message.id ?? message.clientTempId);
     case _Action.block:

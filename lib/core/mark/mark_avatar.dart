@@ -135,8 +135,10 @@ class MarkAvatar extends StatelessWidget {
     this.seed,
     this.size = 32,
     this.radius = 8,
-  }) : assert(publicKey != null || seed != null,
-            'MarkAvatar needs a publicKey or a seed');
+  }) : assert(
+         publicKey != null || seed != null,
+         'MarkAvatar needs a publicKey or a seed',
+       );
 
   final Uint8List? publicKey;
   final String? seed;

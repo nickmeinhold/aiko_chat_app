@@ -68,10 +68,10 @@ class GatewayDirectoryClient {
   /// payload during its compat window. Anything else yields an empty list rather
   /// than throwing — a shape we don't recognise is "no directory", not a crash.
   static List<ServerEntry> _parse(dynamic data) => switch (data) {
-        List<dynamic> l => _entries(l),
-        Map<String, dynamic> m => _firstUsableEnvelope(m),
-        _ => const [],
-      };
+    List<dynamic> l => _entries(l),
+    Map<String, dynamic> m => _firstUsableEnvelope(m),
+    _ => const [],
+  };
 
   /// Parse a raw list of directory entries, dropping any malformed one (each is
   /// held to [ServerEntry.tryFromJson]'s http(s)+host bar — the directory is
@@ -113,8 +113,10 @@ class GatewayDirectoryClient {
     // lists ever DIVERGE we silently prefer the priority winner; this is the log
     // that saves a future 3am ghost-chase across federated nodes (Tesla).
     if (kDebugMode && usableKeys.length > 1) {
-      debugPrint('GatewayDirectoryClient: multiple usable directory envelope keys '
-          'present $usableKeys — preferring "${usableKeys.first}" by priority.');
+      debugPrint(
+        'GatewayDirectoryClient: multiple usable directory envelope keys '
+        'present $usableKeys — preferring "${usableKeys.first}" by priority.',
+      );
     }
     return firstUsable ?? const [];
   }

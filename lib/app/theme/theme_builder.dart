@@ -71,35 +71,35 @@ class ThemePalette {
 }
 
 ColorScheme _scheme(ThemePalette p) => ColorScheme(
-      brightness: p.brightness,
-      primary: p.signal,
-      onPrimary: p.onAccent,
-      primaryContainer: p.panelMine,
-      onPrimaryContainer: p.ink,
-      secondary: p.beacon,
-      onSecondary: p.onAccent,
-      secondaryContainer: p.panelHigh,
-      onSecondaryContainer: p.ink,
-      tertiary: p.beacon,
-      onTertiary: p.onAccent,
-      error: p.alarm,
-      onError: p.onAccent,
-      surface: p.ground,
-      onSurface: p.ink,
-      surfaceContainerLowest: p.ground,
-      surfaceContainerLow: p.panel,
-      surfaceContainer: p.panel,
-      surfaceContainerHigh: p.panelHigh,
-      surfaceContainerHighest: p.panel,
-      onSurfaceVariant: p.inkDim,
-      outline: p.hairline,
-      outlineVariant: p.hairline,
-      shadow: const Color(0x00000000), // no shadows — separation is by hairline
-      scrim: const Color(0x99000000),
-      inverseSurface: p.ink,
-      onInverseSurface: p.ground,
-      inversePrimary: p.panelMine,
-    );
+  brightness: p.brightness,
+  primary: p.signal,
+  onPrimary: p.onAccent,
+  primaryContainer: p.panelMine,
+  onPrimaryContainer: p.ink,
+  secondary: p.beacon,
+  onSecondary: p.onAccent,
+  secondaryContainer: p.panelHigh,
+  onSecondaryContainer: p.ink,
+  tertiary: p.beacon,
+  onTertiary: p.onAccent,
+  error: p.alarm,
+  onError: p.onAccent,
+  surface: p.ground,
+  onSurface: p.ink,
+  surfaceContainerLowest: p.ground,
+  surfaceContainerLow: p.panel,
+  surfaceContainer: p.panel,
+  surfaceContainerHigh: p.panelHigh,
+  surfaceContainerHighest: p.panel,
+  onSurfaceVariant: p.inkDim,
+  outline: p.hairline,
+  outlineVariant: p.hairline,
+  shadow: const Color(0x00000000), // no shadows — separation is by hairline
+  scrim: const Color(0x99000000),
+  inverseSurface: p.ink,
+  onInverseSurface: p.ground,
+  inversePrimary: p.panelMine,
+);
 
 TextTheme _text(TextTheme base, ThemePalette p, AppFont font) {
   // The reader's chosen face first, THEN the palette's inks — applying colour
@@ -113,9 +113,9 @@ TextTheme _text(TextTheme base, ThemePalette p, AppFont font) {
 /// The one hairline-bordered, zero-elevation panel shape used everywhere a
 /// Material surface would normally cast a shadow.
 RoundedRectangleBorder _panelBorder(ThemePalette p) => RoundedRectangleBorder(
-      borderRadius: const BorderRadius.all(Radius.circular(10)),
-      side: BorderSide(color: p.hairline),
-    );
+  borderRadius: const BorderRadius.all(Radius.circular(10)),
+  side: BorderSide(color: p.hairline),
+);
 
 /// Dress the entire app from [p]. Every preset, in both brightnesses, comes
 /// through here — there is no second path to a [ThemeData] in this app.
@@ -149,11 +149,7 @@ ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
         fontWeight: FontWeight.w600,
       ),
     ),
-    dividerTheme: DividerThemeData(
-      color: p.hairline,
-      thickness: 1,
-      space: 1,
-    ),
+    dividerTheme: DividerThemeData(color: p.hairline, thickness: 1, space: 1),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: p.panel,

@@ -88,8 +88,10 @@ class _ImportSheetState extends ConsumerState<_ImportSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text("Use someone's look",
-              style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            "Use someone's look",
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 10),
           TextField(
             controller: _controller,
@@ -173,9 +175,7 @@ class _Preview extends StatelessWidget {
       padding: const EdgeInsets.all(10),
       child: Row(
         children: [
-          Expanded(
-            child: Text('a message', style: theme.textTheme.bodyMedium),
-          ),
+          Expanded(child: Text('a message', style: theme.textTheme.bodyMedium)),
           Container(width: 12, height: 12, color: palette.signal),
           const SizedBox(width: 6),
           Container(width: 12, height: 12, color: palette.beacon),

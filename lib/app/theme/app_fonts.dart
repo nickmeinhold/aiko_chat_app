@@ -77,7 +77,8 @@ const kAppFonts = <AppFont>[
   AppFont(
     id: 'atkinson',
     label: 'Atkinson Hyperlegible',
-    blurb: 'Drawn by the Braille Institute to separate easily-confused '
+    blurb:
+        'Drawn by the Braille Institute to separate easily-confused '
         'letterforms. Pick this if text is ever a struggle.',
     googleFamily: 'Atkinson Hyperlegible',
   ),
@@ -87,7 +88,5 @@ const kDefaultFontId = 'system';
 
 /// Resolve a stored id, FAIL-SOFT: unknown or missing lands on the system face,
 /// which is the one choice guaranteed to render on any device with no network.
-AppFont fontById(String? id) => kAppFonts.firstWhere(
-      (f) => f.id == id,
-      orElse: () => systemFont,
-    );
+AppFont fontById(String? id) =>
+    kAppFonts.firstWhere((f) => f.id == id, orElse: () => systemFont);

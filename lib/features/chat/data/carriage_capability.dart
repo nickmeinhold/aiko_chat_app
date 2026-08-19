@@ -46,17 +46,17 @@ class CarriageCapability {
     required Future<GatewayCapabilities?> Function() fetch,
     Set<String> knownCarriageHosts = kKnownCarriageHosts,
     void Function(String message)? log,
-  })  : _fetch = fetch,
-        _log = log,
-        // Normalize BOTH sides of the match (cage-match Carnot): the input host
-        // and every allowlist entry, so a case/trailing-dot variant on either
-        // side can't silently seed false against the one island that 404s.
-        _seed = knownCarriageHosts
-            .map(_normalizeHost)
-            .contains(_normalizeHost(host)),
-        _carriesOrigin = knownCarriageHosts
-            .map(_normalizeHost)
-            .contains(_normalizeHost(host));
+  }) : _fetch = fetch,
+       _log = log,
+       // Normalize BOTH sides of the match (cage-match Carnot): the input host
+       // and every allowlist entry, so a case/trailing-dot variant on either
+       // side can't silently seed false against the one island that 404s.
+       _seed = knownCarriageHosts
+           .map(_normalizeHost)
+           .contains(_normalizeHost(host)),
+       _carriesOrigin = knownCarriageHosts
+           .map(_normalizeHost)
+           .contains(_normalizeHost(host));
 
   static String _normalizeHost(String host) {
     var h = host.trim().toLowerCase();
@@ -81,9 +81,11 @@ class CarriageCapability {
     try {
       final caps = await _fetch();
       _carriesOrigin = caps?.carriesOrigin ?? _seed;
-      _log?.call(caps != null
-          ? 'carriage=${caps.carriesOrigin} (endpoint authoritative)'
-          : 'carriage=$_seed (unknown → allowlist seed)');
+      _log?.call(
+        caps != null
+            ? 'carriage=${caps.carriesOrigin} (endpoint authoritative)'
+            : 'carriage=$_seed (unknown → allowlist seed)',
+      );
     } catch (e) {
       // Belt-and-braces: the production fetch (GatewayRestApi.getCapabilities)
       // catches all transport errors and returns null, so a transient DNS/

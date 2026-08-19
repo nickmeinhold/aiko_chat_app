@@ -77,8 +77,7 @@ class _PaletteEditorScreenState extends ConsumerState<PaletteEditorScreen> {
                   ),
                 ],
                 selected: {editing},
-                onSelectionChanged: (s) =>
-                    setState(() => _editing = s.first),
+                onSelectionChanged: (s) => setState(() => _editing = s.first),
               ),
             ),
             Padding(
@@ -96,11 +95,12 @@ class _PaletteEditorScreenState extends ConsumerState<PaletteEditorScreen> {
             _RoleStrip(
               palette: palette,
               selected: _role,
-              overridden: (editing == Brightness.light
-                      ? selection.lightOverrides
-                      : selection.darkOverrides)
-                  .keys
-                  .toSet(),
+              overridden:
+                  (editing == Brightness.light
+                          ? selection.lightOverrides
+                          : selection.darkOverrides)
+                      .keys
+                      .toSet(),
               onPick: (r) => setState(() => _role = r),
             ),
             Padding(
@@ -108,18 +108,16 @@ class _PaletteEditorScreenState extends ConsumerState<PaletteEditorScreen> {
               child: Text(
                 _role.blurb,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
             _SwatchGrid(
               palette: palette,
               role: _role,
-              onPick: (c) => ref.read(skinSelectionProvider.notifier).setRole(
-                    brightness: editing,
-                    role: _role,
-                    colour: c,
-                  ),
+              onPick: (c) => ref
+                  .read(skinSelectionProvider.notifier)
+                  .setRole(brightness: editing, role: _role, colour: c),
             ),
             const SizedBox(height: 8),
             const Divider(height: 1),
@@ -190,8 +188,10 @@ class _Preview extends StatelessWidget {
               children: [
                 FilledButton(onPressed: () {}, child: const Text('Send')),
                 const SizedBox(width: 10),
-                Text('Failed to send',
-                    style: TextStyle(color: palette.alarm, fontSize: 12)),
+                Text(
+                  'Failed to send',
+                  style: TextStyle(color: palette.alarm, fontSize: 12),
+                ),
                 const Spacer(),
                 Icon(Icons.circle, size: 12, color: palette.beacon),
               ],
@@ -233,7 +233,8 @@ class _RoleStrip extends StatelessWidget {
           return Semantics(
             button: true,
             selected: isSelected,
-            label: '${role.label}, ${role.blurb}'
+            label:
+                '${role.label}, ${role.blurb}'
                 '${overridden.contains(role) ? ', changed' : ''}',
             child: InkWell(
               onTap: () => onPick(role),
@@ -259,8 +260,11 @@ class _RoleStrip extends StatelessWidget {
                             alignment: Alignment.topRight,
                             child: Padding(
                               padding: const EdgeInsets.all(2),
-                              child: Icon(Icons.circle,
-                                  size: 6, color: scheme.primary),
+                              child: Icon(
+                                Icons.circle,
+                                size: 6,
+                                color: scheme.primary,
+                              ),
                             ),
                           )
                         : null,
@@ -269,10 +273,10 @@ class _RoleStrip extends StatelessWidget {
                   Text(
                     role.label,
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: isSelected
-                              ? scheme.primary
-                              : scheme.onSurfaceVariant,
-                        ),
+                      color: isSelected
+                          ? scheme.primary
+                          : scheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -339,9 +343,9 @@ class _SwatchGrid extends StatelessWidget {
               // is offerable only if it leaves the palette clean OUTRIGHT —
               // the base palette is always legal, so any violation at all is
               // one this swatch just introduced.
-              blockedBy: checkPalette(withRole(palette, role, c))
-                  .map((v) => v.message)
-                  .firstOrNull,
+              blockedBy: checkPalette(
+                withRole(palette, role, c),
+              ).map((v) => v.message).firstOrNull,
               onPick: () => onPick(c),
             ),
         ],
@@ -392,11 +396,14 @@ class _Swatch extends StatelessWidget {
             // can see the constraint exists and why, instead of wondering where
             // the greens went.
             child: blocked
-                ? Icon(Icons.close,
-                    size: 18, color: scheme.onSurfaceVariant.withValues(alpha: 0.8))
+                ? Icon(
+                    Icons.close,
+                    size: 18,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.8),
+                  )
                 : isCurrent
-                    ? Icon(Icons.check, size: 18, color: scheme.onPrimary)
-                    : null,
+                ? Icon(Icons.check, size: 18, color: scheme.onPrimary)
+                : null,
           ),
         ),
       ),
@@ -444,8 +451,11 @@ class _FontPicker extends ConsumerWidget {
                 ? null
                 : Tooltip(
                     message: 'Downloaded once, then cached on this device',
-                    child: Icon(Icons.cloud_download_outlined,
-                        size: 18, color: theme.colorScheme.onSurfaceVariant),
+                    child: Icon(
+                      Icons.cloud_download_outlined,
+                      size: 18,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
           ),
       ],

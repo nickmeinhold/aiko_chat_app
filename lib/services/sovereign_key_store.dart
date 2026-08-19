@@ -58,7 +58,7 @@ class SovereignKeyStore {
   Future<SovereignKey>? _inflight;
 
   SovereignKeyStore([FlutterSecureStorage? storage])
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   /// Load the persisted device key, generating + persisting one on first use.
   /// Idempotent: the same device always resolves to the same key until [clear].
@@ -103,7 +103,8 @@ class SovereignKeyStore {
   /// Wipe the device key. A subsequent [loadOrCreate] mints a fresh identity —
   /// which, pre-federation, reads as a NEW author (no recovery; named-deferred).
   Future<void> clear() async {
-    _inflight = null; // so the next loadOrCreate re-mints rather than returning cache
+    _inflight =
+        null; // so the next loadOrCreate re-mints rather than returning cache
     await _storage.delete(key: _kSeed);
   }
 }

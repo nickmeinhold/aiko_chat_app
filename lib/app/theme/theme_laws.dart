@@ -45,10 +45,7 @@ enum PaletteRole {
 /// One broken rule, aimed at the role a reader would have to change to fix it.
 @immutable
 class ThemeLawViolation {
-  const ThemeLawViolation({
-    required this.role,
-    required this.message,
-  });
+  const ThemeLawViolation({required this.role, required this.message});
 
   /// The role to highlight in the editor. A contrast failure always involves
   /// two colours; this names the one the reader most likely just changed —
@@ -77,8 +74,7 @@ double contrastRatio(Color a, Color b) {
 
 /// Contrast of [fg] against [bg], compositing first so a translucent ink is
 /// measured as it is actually SEEN rather than as it is declared.
-double seenContrast(Color fg, Color bg) =>
-    contrastRatio(_over(fg, bg), bg);
+double seenContrast(Color fg, Color bg) => contrastRatio(_over(fg, bg), bg);
 
 /// Smallest angle between two hues, in degrees (0–180).
 double hueGap(Color a, Color b) {
@@ -97,10 +93,12 @@ List<ThemeLawViolation> checkPalette(ThemePalette p) {
 
   // ---- Text has to be readable on every ground it lands on. WCAG AA body. ----
   if (seenContrast(p.ink, p.ground) < 4.5) {
-    v.add(const ThemeLawViolation(
-      role: PaletteRole.ink,
-      message: 'Body text is too close to the background to read.',
-    ));
+    v.add(
+      const ThemeLawViolation(
+        role: PaletteRole.ink,
+        message: 'Body text is too close to the background to read.',
+      ),
+    );
   }
 
   const panelRoles = {
@@ -116,19 +114,24 @@ List<ThemeLawViolation> checkPalette(ThemePalette p) {
     };
     // A panel is not exempt from the reading bar just because it is a container.
     if (seenContrast(p.ink, panel) < 4.5) {
-      v.add(ThemeLawViolation(
-        role: role,
-        message: 'Body text would be hard to read on $where.',
-      ));
+      v.add(
+        ThemeLawViolation(
+          role: role,
+          message: 'Body text would be hard to read on $where.',
+        ),
+      );
     }
   });
 
   if (seenContrast(p.inkDim, p.ground) < 4.5) {
-    v.add(const ThemeLawViolation(
-      role: PaletteRole.inkDim,
-      message: 'Timestamps and captions are too faint. They are small text, '
-          'not decoration.',
-    ));
+    v.add(
+      const ThemeLawViolation(
+        role: PaletteRole.inkDim,
+        message:
+            'Timestamps and captions are too faint. They are small text, '
+            'not decoration.',
+      ),
+    );
   }
 
   // A label drawn ON a filled accent — the Send button's own text.
@@ -144,10 +147,12 @@ List<ThemeLawViolation> checkPalette(ThemePalette p) {
       _ => p.alarm,
     };
     if (seenContrast(p.onAccent, fill) < 4.5) {
-      v.add(ThemeLawViolation(
-        role: PaletteRole.onAccent,
-        message: 'Button labels would be unreadable on $name.',
-      ));
+      v.add(
+        ThemeLawViolation(
+          role: PaletteRole.onAccent,
+          message: 'Button labels would be unreadable on $name.',
+        ),
+      );
     }
   });
 
@@ -161,11 +166,14 @@ List<ThemeLawViolation> checkPalette(ThemePalette p) {
       _ => p.alarm,
     };
     if (seenContrast(accent, p.ground) < 3.0) {
-      v.add(ThemeLawViolation(
-        role: role,
-        message: 'This colour disappears into the background — a control '
-            'painted in it would be invisible.',
-      ));
+      v.add(
+        ThemeLawViolation(
+          role: role,
+          message:
+              'This colour disappears into the background — a control '
+              'painted in it would be invisible.',
+        ),
+      );
     }
   });
 
@@ -180,53 +188,68 @@ List<ThemeLawViolation> checkPalette(ThemePalette p) {
     (PaletteRole.beacon, PaletteRole.alarm),
   ];
   Color colourOf(PaletteRole r) => switch (r) {
-        PaletteRole.signal => p.signal,
-        PaletteRole.beacon => p.beacon,
-        _ => p.alarm,
-      };
+    PaletteRole.signal => p.signal,
+    PaletteRole.beacon => p.beacon,
+    _ => p.alarm,
+  };
   for (final (a, b) in pairs) {
     final ca = colourOf(a);
     final cb = colourOf(b);
     final gap = hueGap(ca, cb);
     if (gap < 25.0) {
-      v.add(ThemeLawViolation(
-        role: b,
-        message: 'Too close to the ${a.label.toLowerCase()} — two different '
-            'meanings would look like one colour.',
-      ));
+      v.add(
+        ThemeLawViolation(
+          role: b,
+          message:
+              'Too close to the ${a.label.toLowerCase()} — two different '
+              'meanings would look like one colour.',
+        ),
+      );
     } else if (gap < 60.0 && contrastRatio(ca, cb) < 1.4) {
-      v.add(ThemeLawViolation(
-        role: b,
-        message: 'Nearly the same shade as the ${a.label.toLowerCase()}. '
-            'Make it lighter or darker so the two can be told apart without '
-            'relying on colour vision.',
-      ));
+      v.add(
+        ThemeLawViolation(
+          role: b,
+          message:
+              'Nearly the same shade as the ${a.label.toLowerCase()}. '
+              'Make it lighter or darker so the two can be told apart without '
+              'relying on colour vision.',
+        ),
+      );
     }
   }
 
   // ---- Emphasis ordering: an ARMED mark outranks a RESTING one. ----
   if (seenContrast(p.beacon, p.ground) <= seenContrast(p.hairline, p.ground)) {
-    v.add(const ThemeLawViolation(
-      role: PaletteRole.beacon,
-      message: 'The beacon is quieter than a hairline, so an armed control '
-          'would look less active than an idle one.',
-    ));
+    v.add(
+      const ThemeLawViolation(
+        role: PaletteRole.beacon,
+        message:
+            'The beacon is quieter than a hairline, so an armed control '
+            'would look less active than an idle one.',
+      ),
+    );
   }
 
   // ---- A hairline is SEEN but never shouts. ----
   final hair = seenContrast(p.hairline, p.ground);
   if (hair <= 1.15) {
-    v.add(const ThemeLawViolation(
-      role: PaletteRole.hairline,
-      message: 'This hairline is invisible, and an invisible hairline is not '
-          'separation — it is the only separator this design has.',
-    ));
+    v.add(
+      const ThemeLawViolation(
+        role: PaletteRole.hairline,
+        message:
+            'This hairline is invisible, and an invisible hairline is not '
+            'separation — it is the only separator this design has.',
+      ),
+    );
   } else if (hair >= seenContrast(p.ink, p.ground)) {
-    v.add(const ThemeLawViolation(
-      role: PaletteRole.hairline,
-      message: 'A hairline louder than the text is a border, and this design '
-          'removed borders.',
-    ));
+    v.add(
+      const ThemeLawViolation(
+        role: PaletteRole.hairline,
+        message:
+            'A hairline louder than the text is a border, and this design '
+            'removed borders.',
+      ),
+    );
   }
 
   // ---- A panel that matches the ground is not a panel. ----
@@ -237,11 +260,14 @@ List<ThemeLawViolation> checkPalette(ThemePalette p) {
   liftRoles.forEach((role, what) {
     final panel = role == PaletteRole.panel ? p.panel : p.panelHigh;
     if (contrastRatio(panel, p.ground) <= 1.03) {
-      v.add(ThemeLawViolation(
-        role: role,
-        message: '$what would vanish into the background instead of lifting '
-            'off it.',
-      ));
+      v.add(
+        ThemeLawViolation(
+          role: role,
+          message:
+              '$what would vanish into the background instead of lifting '
+              'off it.',
+        ),
+      );
     }
   });
 
@@ -268,15 +294,15 @@ ThemePalette withRole(ThemePalette p, PaletteRole role, Color c) =>
 
 /// Read one role out of a palette.
 Color roleOf(ThemePalette p, PaletteRole role) => switch (role) {
-      PaletteRole.ground => p.ground,
-      PaletteRole.panel => p.panel,
-      PaletteRole.panelHigh => p.panelHigh,
-      PaletteRole.panelMine => p.panelMine,
-      PaletteRole.ink => p.ink,
-      PaletteRole.inkDim => p.inkDim,
-      PaletteRole.hairline => p.hairline,
-      PaletteRole.signal => p.signal,
-      PaletteRole.beacon => p.beacon,
-      PaletteRole.alarm => p.alarm,
-      PaletteRole.onAccent => p.onAccent,
-    };
+  PaletteRole.ground => p.ground,
+  PaletteRole.panel => p.panel,
+  PaletteRole.panelHigh => p.panelHigh,
+  PaletteRole.panelMine => p.panelMine,
+  PaletteRole.ink => p.ink,
+  PaletteRole.inkDim => p.inkDim,
+  PaletteRole.hairline => p.hairline,
+  PaletteRole.signal => p.signal,
+  PaletteRole.beacon => p.beacon,
+  PaletteRole.alarm => p.alarm,
+  PaletteRole.onAccent => p.onAccent,
+};

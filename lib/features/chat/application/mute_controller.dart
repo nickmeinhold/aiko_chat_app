@@ -31,7 +31,8 @@ final muteStoreProvider = Provider<MuteStore>(
 /// "setState during build".
 final mutesProvider =
     NotifierProvider.autoDispose<Mutes, Map<MuteTarget, Set<String>>>(
-        Mutes.new);
+      Mutes.new,
+    );
 
 class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
   /// Every set this notifier publishes is UNMODIFIABLE. `Set<String>` in the
@@ -55,7 +56,7 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
   static Map<MuteTarget, Set<String>> _freeze(Map<MuteTarget, Set<String>> m) =>
       Map<MuteTarget, Set<String>>.unmodifiable({
         for (final t in MuteTarget.values)
-          t: Set<String>.unmodifiable(m[t] ?? const <String>{})
+          t: Set<String>.unmodifiable(m[t] ?? const <String>{}),
       });
 
   @override
@@ -79,17 +80,29 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
   /// the mispairing unrepresentable without branding ids repo-wide — every id in
   /// this codebase is a String, and branding one feature's would leave it
   /// inconsistent with every neighbour it hands ids to.
-  void setConversationMuted(String conversationId,
-          {required bool muted, required String? expectUserId}) =>
-      _setMuted(MuteTarget.channel, conversationId,
-          muted: muted, expectUserId: expectUserId);
+  void setConversationMuted(
+    String conversationId, {
+    required bool muted,
+    required String? expectUserId,
+  }) => _setMuted(
+    MuteTarget.channel,
+    conversationId,
+    muted: muted,
+    expectUserId: expectUserId,
+  );
 
   /// Mute/unmute an ACCOUNT — silent in every conversation. See
   /// [setConversationMuted] for why these are separate methods.
-  void setUserMuted(String userId,
-          {required bool muted, required String? expectUserId}) =>
-      _setMuted(MuteTarget.user, userId,
-          muted: muted, expectUserId: expectUserId);
+  void setUserMuted(
+    String userId, {
+    required bool muted,
+    required String? expectUserId,
+  }) => _setMuted(
+    MuteTarget.user,
+    userId,
+    muted: muted,
+    expectUserId: expectUserId,
+  );
 
   /// Set [id]'s muted state under [target], in memory first (the UI's fast path)
   /// and durably behind it. Idempotent: setting the state it already holds is a
@@ -117,7 +130,10 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
     // (cage-match #135 round 7, Tesla — "a comment is not a type").
     required String? expectUserId,
   }) {
-    final userId = ref.read(authControllerProvider).value?.userId; // non-reactive
+    final userId = ref
+        .read(authControllerProvider)
+        .value
+        ?.userId; // non-reactive
     if (userId == null || id.isEmpty) return;
     if (expectUserId != null && expectUserId != userId) return; // fail closed
     final current = state[target]!;
@@ -160,7 +176,6 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
     // one instead of compounding (see [MuteStore.replaceAll]).
     ref.read(muteStoreProvider).replaceAll(userId, state);
   }
-
 }
 // NOTE: a `toggle(target, id)` convenience was deleted rather than kept with a
 // guard (cage-match #135 round 4, Tesla). It had no callers, and it invited
@@ -172,12 +187,14 @@ class Mutes extends Notifier<Map<MuteTarget, Set<String>>> {
 
 /// The muted CONVERSATION ids (channels and DMs alike).
 final mutedChannelIdsProvider = Provider.autoDispose<Set<String>>(
-    (ref) => ref.watch(mutesProvider)[MuteTarget.channel]!);
+  (ref) => ref.watch(mutesProvider)[MuteTarget.channel]!,
+);
 
 /// The muted ACCOUNT ids. A muted account is silent in EVERY conversation — one
 /// noisy participant should not have to be muted channel by channel.
 final mutedUserIdsProvider = Provider.autoDispose<Set<String>>(
-    (ref) => ref.watch(mutesProvider)[MuteTarget.user]!);
+  (ref) => ref.watch(mutesProvider)[MuteTarget.user]!,
+);
 
 /// WHY a conversation row is quiet — and therefore what a control on that row
 /// must act on.
@@ -198,8 +215,10 @@ class ConversationMute {
     required this.byConversation,
     required this.byPeer,
     this.indeterminate = false,
-  }) : assert(!byPeer || peerId != null,
-            'byPeer without a peerId is a cause apply() cannot clear');
+  }) : assert(
+         !byPeer || peerId != null,
+         'byPeer without a peerId is a cause apply() cannot clear',
+       );
 
   /// Derive from the two mute sets. PURE — the caller does the watching, which
   /// is what keeps this in the application layer (no `WidgetRef`) and, more
@@ -217,14 +236,13 @@ class ConversationMute {
     required bool hasPeer,
     required Set<String> mutedConversations,
     required Set<String> mutedUsers,
-  }) =>
-      ConversationMute(
-        conversationId: conversationId,
-        peerId: peerId,
-        indeterminate: hasPeer && peerId == null,
-        byConversation: mutedConversations.contains(conversationId),
-        byPeer: peerId != null && mutedUsers.contains(peerId),
-      );
+  }) => ConversationMute(
+    conversationId: conversationId,
+    peerId: peerId,
+    indeterminate: hasPeer && peerId == null,
+    byConversation: mutedConversations.contains(conversationId),
+    byPeer: peerId != null && mutedUsers.contains(peerId),
+  );
 
   final String conversationId;
 
@@ -270,8 +288,11 @@ class ConversationMute {
   /// for an id that is not muted, so clearing both costs nothing and cannot
   /// under-clear (cage-match #135 round 6, Tesla — the half-frozen-boundary
   /// lesson, in the time domain).
-  void apply(Mutes mutes,
-      {required bool muted, required String? expectUserId}) {
+  void apply(
+    Mutes mutes, {
+    required bool muted,
+    required String? expectUserId,
+  }) {
     // NOTE: an unknown peer does NOT block this. Round 8 returned early on
     // `indeterminate`, which amputated a capability to make it safe: muting a
     // conversation writes only `MuteTarget.channel` and needs no peer, and
@@ -282,12 +303,18 @@ class ConversationMute {
     // PEER clause simply does nothing while there is no peer to name, and the
     // callers say so rather than claiming to have made the row audible.
     if (muted) {
-      mutes.setConversationMuted(conversationId,
-          muted: true, expectUserId: expectUserId);
+      mutes.setConversationMuted(
+        conversationId,
+        muted: true,
+        expectUserId: expectUserId,
+      );
       return;
     }
-    mutes.setConversationMuted(conversationId,
-        muted: false, expectUserId: expectUserId);
+    mutes.setConversationMuted(
+      conversationId,
+      muted: false,
+      expectUserId: expectUserId,
+    );
     final peer = peerId;
     if (peer != null) {
       mutes.setUserMuted(peer, muted: false, expectUserId: expectUserId);
@@ -310,11 +337,10 @@ ConversationMute watchConversationMute(
   String conversationId, {
   String? peerId,
   bool hasPeer = false,
-}) =>
-    ConversationMute.from(
-      conversationId: conversationId,
-      peerId: peerId,
-      hasPeer: hasPeer,
-      mutedConversations: ref.watch(mutedChannelIdsProvider),
-      mutedUsers: ref.watch(mutedUserIdsProvider),
-    );
+}) => ConversationMute.from(
+  conversationId: conversationId,
+  peerId: peerId,
+  hasPeer: hasPeer,
+  mutedConversations: ref.watch(mutedChannelIdsProvider),
+  mutedUsers: ref.watch(mutedUserIdsProvider),
+);

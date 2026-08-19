@@ -29,10 +29,12 @@ const String kSigningDomainTag = 'aikochat:msg:v1:EdDSA';
 /// The tuple a signature authenticates. Every field a receiver acts on lives
 /// here; omitting one would silently leave it unauthenticated.
 class SignedPayload {
-  final Uint8List rawPublicKey; // 32-byte Ed25519 key — included ⇒ key-substitution defence
+  final Uint8List
+  rawPublicKey; // 32-byte Ed25519 key — included ⇒ key-substitution defence
   final String channelId; // else a sig replays into another channel
   final String clientMsgId; // the stable, verifier-reconstructable message id
-  final int signedAtMs; // compose-time, fixed once; persisted separate from createdAt
+  final int
+  signedAtMs; // compose-time, fixed once; persisted separate from createdAt
   final String body;
   final String? replyTo;
 
@@ -71,18 +73,23 @@ Uint8List signingBytes(SignedPayload p) {
   // only meaningful over well-formed inputs, and these invariants are what a
   // future verifier will assume.
   if (p.rawPublicKey.length != 32) {
-    throw ArgumentError('sender public key must be 32 bytes (Ed25519), '
-        'got ${p.rawPublicKey.length}');
+    throw ArgumentError(
+      'sender public key must be 32 bytes (Ed25519), '
+      'got ${p.rawPublicKey.length}',
+    );
   }
   if (p.channelId.isEmpty) throw ArgumentError('channelId must not be empty');
-  if (p.clientMsgId.isEmpty) throw ArgumentError('clientMsgId must not be empty');
+  if (p.clientMsgId.isEmpty)
+    throw ArgumentError('clientMsgId must not be empty');
   if (p.signedAtMs < 0) throw ArgumentError('signedAtMs must be non-negative');
   // Absent (null) and present-empty ('') reply_to would serialize identically via
   // `?? ''`, breaking injectivity if a verifier distinguishes them. Forbid the
   // empty string so `null` is the ONLY "no reply" encoding (cage-match: Carnot).
   if (p.replyTo != null && p.replyTo!.isEmpty) {
-    throw ArgumentError('replyTo must be null or non-empty, never "" '
-        '(absent must not collide with present-empty)');
+    throw ArgumentError(
+      'replyTo must be null or non-empty, never "" '
+      '(absent must not collide with present-empty)',
+    );
   }
   final out = BytesBuilder(copy: false);
   void lengthPrefixed(List<int> field) {
@@ -114,8 +121,10 @@ Future<MessageSignature> sign(SovereignKey key, SignedPayload p) async {
   // can't verify the sig — the exact wrong-forever class this self-check exists
   // to prevent (cage-match consensus: Carnot + Tesla).
   if (!_bytesEqual(p.rawPublicKey, key.rawPublicKey)) {
-    throw ArgumentError('SignedPayload.rawPublicKey must equal the signing '
-        "key's own public key");
+    throw ArgumentError(
+      'SignedPayload.rawPublicKey must equal the signing '
+      "key's own public key",
+    );
   }
   final signature = await _ed25519.sign(signingBytes(p), keyPair: key.keyPair);
   final sig = Uint8List.fromList(signature.bytes);
@@ -123,7 +132,9 @@ Future<MessageSignature> sign(SovereignKey key, SignedPayload p) async {
   // returned (pubkey, sig) pair verifies, not merely that the keypair signed.
   final ok = await verifySignature(p.rawPublicKey, sig, p);
   if (!ok) {
-    throw StateError('sovereign self-verify failed — refusing to emit a signature');
+    throw StateError(
+      'sovereign self-verify failed — refusing to emit a signature',
+    );
   }
   return MessageSignature(
     sig: sig,

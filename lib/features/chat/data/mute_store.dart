@@ -82,7 +82,9 @@ class MuteStore {
   Map<MuteTarget, Set<String>> readAll(String userId) {
     final latest = _latest[userId];
     if (latest != null) {
-      return {for (final t in MuteTarget.values) t: {...latest[t] ?? const {}}};
+      return {
+        for (final t in MuteTarget.values) t: {...latest[t] ?? const {}},
+      };
     }
     final empty = {for (final t in MuteTarget.values) t: <String>{}};
     final raw = _prefs.getString(_key(userId));
@@ -94,9 +96,9 @@ class MuteStore {
         for (final t in MuteTarget.values)
           t: switch (decoded[t.jsonKey]) {
             final List<dynamic> ids => {
-                for (final id in ids)
-                  if (id is String && id.isNotEmpty) id,
-              },
+              for (final id in ids)
+                if (id is String && id.isNotEmpty) id,
+            },
             _ => <String>{},
           },
       };
@@ -136,7 +138,7 @@ class MuteStore {
     // arriving between now and the platform write sees what was decided rather
     // than what has landed (see [_latest]).
     _latest[userId] = {
-      for (final t in MuteTarget.values) t: {...mutes[t] ?? const <String>{}}
+      for (final t in MuteTarget.values) t: {...mutes[t] ?? const <String>{}},
     };
     final payload = jsonEncode({
       for (final t in MuteTarget.values)
@@ -159,8 +161,10 @@ class MuteStore {
     // `catchError((_) {})` would hide the only evidence it ever happened
     // (cage-match #135, Tesla).
     final Future<void> reported = attempt.catchError((Object e, StackTrace _) {
-      debugPrint('[mute] persist failed (memory ahead of disk until the next '
-          'mute rewrites the snapshot): $e');
+      debugPrint(
+        '[mute] persist failed (memory ahead of disk until the next '
+        'mute rewrites the snapshot): $e',
+      );
     });
     _writes = reported;
     // Return the REPORTED future, not the raw attempt. The only caller

@@ -48,9 +48,9 @@ class DefaultTokenProvider implements TokenProvider {
     required SecureTokenStore store,
     required Future<String> Function(String refreshToken) remoteRefresh,
     void Function()? onUnauthenticated,
-  })  : _store = store,
-        _remoteRefresh = remoteRefresh,
-        _onUnauthenticated = onUnauthenticated;
+  }) : _store = store,
+       _remoteRefresh = remoteRefresh,
+       _onUnauthenticated = onUnauthenticated;
 
   @override
   Future<String?> currentAccessToken() async {
@@ -77,7 +77,9 @@ class DefaultTokenProvider implements TokenProvider {
     try {
       final newAccess = await _remoteRefresh(refreshToken);
       final updated = AuthTokens(
-          accessToken: newAccess, refreshToken: refreshToken); // RT not rotated
+        accessToken: newAccess,
+        refreshToken: refreshToken,
+      ); // RT not rotated
       _cache = updated;
       await _store.write(updated);
       return newAccess;

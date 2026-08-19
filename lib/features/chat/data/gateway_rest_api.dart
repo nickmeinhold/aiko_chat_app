@@ -260,8 +260,9 @@ class GatewayRestApi implements ChatRestApi {
   static bool _isSuspended(DioException e) {
     if (e.response?.statusCode != 403) return false;
     final data = e.response?.data;
-    final Object? body =
-        data is String && data.isNotEmpty ? _tryJson(data) : data;
+    final Object? body = data is String && data.isNotEmpty
+        ? _tryJson(data)
+        : data;
     final detail = body is Map ? body['detail'] : null;
     return detail is String &&
         detail.toLowerCase().contains('account suspended');
@@ -338,37 +339,42 @@ class GatewayRestApi implements ChatRestApi {
   );
 
   @override
-  Future<AppUser> updateProfile({String? handle, String? displayName}) =>
-      _mapNetwork(
-        () => _authedCall(() async {
-          try {
-            final r = await _authed.patch('/v1/me', data: <String, dynamic>{
-              'handle': ?handle,
-              'display_name': ?displayName,
-            });
-            return AppUser.fromJson(_map(r.data));
-          } on DioException catch (e) {
-            // Map ONLY this endpoint's own codes here; everything else rethrows
-            // so `_authedCall` applies the AUTHED-door taxonomy (cage-match #114,
-            // Carnot+Tesla+Wu). This is a bearer endpoint, NOT a `_bare` login
-            // door: `_throwIfAuthTerminal` would wrongly baptise a transient
-            // refresh-401 AND a plain authZ-403 as terminal `Unauthorized` →
-            // spurious logout. `_authedCall` instead honours the `auth_transient`
-            // marker, maps a suspended-403 → AccountSuspended, a terminal 401 →
-            // Unauthorized, and a plain 403 → Forbidden (session stays valid).
-            final code = e.response?.statusCode;
-            if (code == 409) throw const HandleTaken();
-            if (code == 429) {
-              final body = e.response?.data;
-              final secs = (body is Map && body['retry_after'] is num)
-                  ? (body['retry_after'] as num).toInt()
-                  : 0;
-              throw HandleChangeOnCooldown(secs);
-            }
-            rethrow;
-          }
-        }),
-      );
+  Future<AppUser> updateProfile({
+    String? handle,
+    String? displayName,
+  }) => _mapNetwork(
+    () => _authedCall(() async {
+      try {
+        final r = await _authed.patch(
+          '/v1/me',
+          data: <String, dynamic>{
+            'handle': ?handle,
+            'display_name': ?displayName,
+          },
+        );
+        return AppUser.fromJson(_map(r.data));
+      } on DioException catch (e) {
+        // Map ONLY this endpoint's own codes here; everything else rethrows
+        // so `_authedCall` applies the AUTHED-door taxonomy (cage-match #114,
+        // Carnot+Tesla+Wu). This is a bearer endpoint, NOT a `_bare` login
+        // door: `_throwIfAuthTerminal` would wrongly baptise a transient
+        // refresh-401 AND a plain authZ-403 as terminal `Unauthorized` →
+        // spurious logout. `_authedCall` instead honours the `auth_transient`
+        // marker, maps a suspended-403 → AccountSuspended, a terminal 401 →
+        // Unauthorized, and a plain 403 → Forbidden (session stays valid).
+        final code = e.response?.statusCode;
+        if (code == 409) throw const HandleTaken();
+        if (code == 429) {
+          final body = e.response?.data;
+          final secs = (body is Map && body['retry_after'] is num)
+              ? (body['retry_after'] as num).toInt()
+              : 0;
+          throw HandleChangeOnCooldown(secs);
+        }
+        rethrow;
+      }
+    }),
+  );
 
   /// Translate a connection-class [DioException] (no response from the server —
   /// DNS/connect/timeout) into the domain [NetworkUnavailable]. A DioException
@@ -440,7 +446,9 @@ class GatewayRestApi implements ChatRestApi {
       final r = await _authed.get('/v1/channels/$channelId/members');
       final list = (_map(r.data)['members'] as List?) ?? const [];
       return list
-          .map((e) => ChannelMember.fromJson((e as Map).cast<String, dynamic>()))
+          .map(
+            (e) => ChannelMember.fromJson((e as Map).cast<String, dynamic>()),
+          )
           .toList();
     }),
   );
@@ -451,25 +459,23 @@ class GatewayRestApi implements ChatRestApi {
   // "no such user" never reads as a logout or a raw transport error. `POST /v1/dm`
   // is idempotent on the island, so a retry after an ambiguous failure is safe.
   @override
-  Future<Channel> openDm(String targetUserId) => _mapNetwork(
-    () async {
-      try {
-        return await _authedCall(() async {
-          final r = await _authed.post(
-            '/v1/dm',
-            data: {'target_user_id': targetUserId},
-          );
-          return Channel.fromDmJson(_map(r.data));
-        });
-      } on DioException catch (e) {
-        // _authedCall already mapped 401 → Unauthorized (terminal) / plain 403 →
-        // Forbidden and rethrew the rest. The only other documented code here is
-        // 404 = target isn't a real user (DM handoff §Endpoints).
-        if (e.response?.statusCode == 404) throw DmTargetNotFound(targetUserId);
-        rethrow;
-      }
-    },
-  );
+  Future<Channel> openDm(String targetUserId) => _mapNetwork(() async {
+    try {
+      return await _authedCall(() async {
+        final r = await _authed.post(
+          '/v1/dm',
+          data: {'target_user_id': targetUserId},
+        );
+        return Channel.fromDmJson(_map(r.data));
+      });
+    } on DioException catch (e) {
+      // _authedCall already mapped 401 → Unauthorized (terminal) / plain 403 →
+      // Forbidden and rethrew the rest. The only other documented code here is
+      // 404 = target isn't a real user (DM handoff §Endpoints).
+      if (e.response?.statusCode == 404) throw DmTargetNotFound(targetUserId);
+      rethrow;
+    }
+  });
 
   @override
   Future<List<Channel>> listDms() => _mapNetwork(
@@ -494,26 +500,25 @@ class GatewayRestApi implements ChatRestApi {
   );
 
   @override
-  Future<VideoToken> requestVideoToken(String channelId) => _mapNetwork(
-    () async {
-      try {
-        return await _authedCall(() async {
-          final r = await _authed.post('/v1/channels/$channelId/video-token');
-          return VideoToken.fromJson(_map(r.data));
-        });
-      } on DioException catch (e) {
-        // _authedCall already mapped 401/403 → Unauthorized/Forbidden and
-        // rethrew the rest. Branch the two video-specific codes here, BEFORE
-        // any generic surfacing, so a video-less deployment (503) or a
-        // non-member/private channel (404, existence-hiding) never reads as a
-        // logout or a raw transport error.
-        final code = e.response?.statusCode;
-        if (code == 503) throw const VideoNotEnabled();
-        if (code == 404) throw Forbidden('video-token:$channelId');
-        rethrow;
-      }
-    },
-  );
+  Future<VideoToken> requestVideoToken(String channelId) =>
+      _mapNetwork(() async {
+        try {
+          return await _authedCall(() async {
+            final r = await _authed.post('/v1/channels/$channelId/video-token');
+            return VideoToken.fromJson(_map(r.data));
+          });
+        } on DioException catch (e) {
+          // _authedCall already mapped 401/403 → Unauthorized/Forbidden and
+          // rethrew the rest. Branch the two video-specific codes here, BEFORE
+          // any generic surfacing, so a video-less deployment (503) or a
+          // non-member/private channel (404, existence-hiding) never reads as a
+          // logout or a raw transport error.
+          final code = e.response?.statusCode;
+          if (code == 503) throw const VideoNotEnabled();
+          if (code == 404) throw Forbidden('video-token:$channelId');
+          rethrow;
+        }
+      });
 
   @override
   Future<HistoryPage> getHistory(
@@ -556,11 +561,15 @@ class GatewayRestApi implements ChatRestApi {
           final rid = m['id'];
           final target = m['target_msg_id'];
           if (rid is String && target is String) {
-            items.add(RetractionHistoryItem(Retraction(
-              channelId: (m['channel_id'] as String?) ?? channelId,
-              id: rid,
-              targetMsgId: target,
-            )));
+            items.add(
+              RetractionHistoryItem(
+                Retraction(
+                  channelId: (m['channel_id'] as String?) ?? channelId,
+                  id: rid,
+                  targetMsgId: target,
+                ),
+              ),
+            );
           } else {
             // FAIL-CLOSED on a malformed KNOWN retraction (cage-match Tesla HIGH).
             // A retraction is a safety frame, NOT a forward-compat unknown: do NOT

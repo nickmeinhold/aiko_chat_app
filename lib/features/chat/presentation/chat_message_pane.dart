@@ -15,6 +15,7 @@
 library;
 
 import '../../../app/providers.dart';
+import '../../settings/application/island_manifest_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -107,6 +108,16 @@ class ChatMessagePane extends ConsumerWidget {
                             islandBaseUrl: ref
                                 .watch(configProvider)
                                 .httpBaseUrl,
+                            // The island's own key, when we have it — the mark is
+                            // then derived from what the island IS rather than
+                            // from the address it currently answers on. Null
+                            // until first contact; see islandPubkeyProvider for
+                            // why that settles exactly once.
+                            islandPubkey: ref.watch(
+                              islandPubkeyProvider(
+                                ref.watch(configProvider).httpBaseUrl,
+                              ),
+                            ),
                           ),
                         ],
                       ))

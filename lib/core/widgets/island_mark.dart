@@ -31,19 +31,21 @@ import 'package:flutter/material.dart';
 /// every first and last keystroke; a thing that answers "where am I" must not
 /// flicker while you type. Nothing here reacts to composer state.
 
-/// Muted on purpose. These sit beside a reader's chosen palette all day, so they
-/// are desaturated enough to be furniture rather than a second accent competing
-/// with the theme's own signal. Chart-water hues: the sea in different lights.
-const _waters = <Color>[
-  Color(0xFF4E6E7A), // slate sea
-  Color(0xFF5B7360), // shoal green
-  Color(0xFF6B6480), // dusk violet
-  Color(0xFF7A6350), // silt brown
-  Color(0xFF4F6A86), // deep blue
-  Color(0xFF7B6470), // heather
-  Color(0xFF5E7472), // lagoon
-  Color(0xFF80705A), // sandbank
-];
+/// The mark's colour is a CONTINUOUS hue derived from the island's identity, the
+/// same way [MarkAvatar] derives a person's Blockie — not a pick from a fixed
+/// palette.
+///
+/// It was a fixed palette of eight, and that shipped a real collision: the two
+/// islands Nick actually switches between, `chat.imagineering.cc` and
+/// `enspyr.co`, both landed on dusk violet. "The islands don't seem to be a
+/// different colour" was not a perception problem. With eight buckets, two
+/// islands collide one time in eight — which is not a tail case, it is a coin
+/// you flip every time someone adds a second island.
+///
+/// Still MUTED, deliberately: saturation and lightness are held in a narrow band
+/// so the mark stays furniture beside a reader's chosen palette instead of
+/// competing with the theme's own signal. Only the HUE varies, and it varies
+/// continuously.
 
 /// A stable 32-bit hash (FNV-1a). Deliberately NOT `String.hashCode`, which Dart
 /// does not guarantee to be stable across runs or platforms — an island whose
@@ -58,6 +60,9 @@ int islandHash(String s) {
 }
 
 /// The island's address, reduced to the part that identifies it.
+///
+/// A FALLBACK identity source, not the preferred one — see [IslandIdentity.of].
+/// A hostname is a rented, transferable label.
 ///
 /// Scheme, port, path and trailing slashes are stripped so that
 /// `https://chat.example.org/` and `chat.example.org` are the SAME island — a
@@ -82,11 +87,34 @@ class IslandIdentity {
   /// two islands that land on the same water still differ in outline.
   final int shapeSeed;
 
-  factory IslandIdentity.of(String baseUrl) {
-    final h = islandHash(islandKey(baseUrl));
+  /// Derive an island's mark.
+  ///
+  /// PREFER THE KEY. `GET /v1/island` returns a signed self-manifest carrying an
+  /// Ed25519 `island_pubkey`, and that — not the hostname — is what the island
+  /// actually IS. A domain is rented and transferable: rename it and the island
+  /// is the same island; let it lapse and whoever picks it up inherits the name
+  /// but cannot inherit the key. Keying the mark to the pubkey means a mark
+  /// cannot be acquired along with a domain, which is the same reasoning that
+  /// makes a person's identity their key and their handle a mutable label.
+  ///
+  /// The URL is the fallback for an island that has not been asked yet, or one
+  /// too old to answer. Stated plainly because it has a consequence: a mark
+  /// derived from the URL and later re-derived from the key is a DIFFERENT mark,
+  /// so an island settles once — on first contact — and is stable forever after
+  /// (the manifest is cached).
+  factory IslandIdentity.of(String baseUrl, {String? islandPubkey}) {
+    final source = (islandPubkey != null && islandPubkey.isNotEmpty)
+        ? islandPubkey
+        : islandKey(baseUrl);
+    final h = islandHash(source);
+
+    // Hue from the full 32-bit spread, exactly like the Blockie's `k[3]/255*360`
+    // but with more of the hash behind it. Continuous, so two islands collide
+    // only if they collide in the hash itself.
+    final hue = (h % 3600) / 10.0;
     return IslandIdentity(
-      water: _waters[h % _waters.length],
-      shapeSeed: (h >> 8) & 0xFFFF,
+      water: HSLColor.fromAHSL(1, hue, 0.30, 0.42).toColor(),
+      shapeSeed: (h >> 11) & 0xFFFF,
     );
   }
 }
@@ -106,6 +134,7 @@ class IslandMark extends StatelessWidget {
     this.label,
     this.onTap,
     this.hitPadding = EdgeInsets.zero,
+    this.islandPubkey,
   });
 
   final String baseUrl;
@@ -128,13 +157,17 @@ class IslandMark extends StatelessWidget {
   /// to a Padding above it — there is no way to "extend" a hit area otherwise.
   final EdgeInsets hitPadding;
 
+  /// The island's Ed25519 public key, when known. Preferred over [baseUrl] —
+  /// see [IslandIdentity.of].
+  final String? islandPubkey;
+
   /// Shown on hover/long-press. The mark is recognisable, not self-explanatory;
   /// the first time you see one you should be able to ask it what it means.
   final String? label;
 
   @override
   Widget build(BuildContext context) {
-    final identity = IslandIdentity.of(baseUrl);
+    final identity = IslandIdentity.of(baseUrl, islandPubkey: islandPubkey);
     final mark = CustomPaint(
       size: Size.square(size),
       painter: _IslandPainter(

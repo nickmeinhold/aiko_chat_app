@@ -1121,7 +1121,12 @@ class _DeliveryIndicator extends ConsumerWidget {
 /// The text composer. Sends through the repository's optimistic [sendMessage]
 /// (W1: the row is committed before the wire send), then clears the field.
 class Composer extends ConsumerStatefulWidget {
-  const Composer({super.key, required this.channelId, this.islandBaseUrl});
+  const Composer({
+    super.key,
+    required this.channelId,
+    this.islandBaseUrl,
+    this.islandPubkey,
+  });
 
   /// The island this composer is writing into, for the island mark.
   ///
@@ -1130,6 +1135,10 @@ class Composer extends ConsumerStatefulWidget {
   /// wired — which is most unit tests, and would make an 18px decoration a
   /// precondition for the text field working at all. Null simply means no mark.
   final String? islandBaseUrl;
+
+  /// The island's Ed25519 public key, when known — the mark's preferred
+  /// identity source. Null falls back to the base URL.
+  final String? islandPubkey;
 
   final String channelId;
 
@@ -1297,6 +1306,7 @@ class _ComposerState extends ConsumerState<Composer> {
                 if (widget.islandBaseUrl != null)
                   IslandMark(
                     baseUrl: widget.islandBaseUrl!,
+                    islandPubkey: widget.islandPubkey,
                     // Where am I → can I go elsewhere. The picker owns the
                     // session-teardown ceremony a gateway switch requires, so
                     // this only has to open it.

@@ -45,7 +45,11 @@ abstract class ChatTelemetry {
   /// resync) MUST debounce. Production should escalate (surface "history may be
   /// incomplete" / force a resync), not just log — see [LoggingChatTelemetry].
   void historySyncFault(
-      String channelId, String? cursor, String fence, int streak) {}
+    String channelId,
+    String? cursor,
+    String fence,
+    int streak,
+  ) {}
 
   /// An inbound (W3) cache write threw. Surfaced so a failed upsert is OWNED
   /// (observed) rather than leaking as an unhandled async error from the stream
@@ -136,20 +140,22 @@ class ChatRepository {
     int inboundLowWater = 64,
     SovereignKey? signingKey,
     required String Function() newTempId,
-  })  : _signingKey = signingKey,
-        assert(inboundHighWater > inboundLowWater && inboundLowWater >= 0,
-            'low-water must be below high-water (hysteresis), both non-negative'),
-        _cache = cache,
-        _transport = transport,
-        _rest = rest,
-        _me = me,
-        _subscribedChannelIds = subscribedChannelIds,
-        _telemetry = telemetry,
-        _ackTimeout = ackTimeout,
-        _disposeDrainTimeout = disposeDrainTimeout,
-        _inboundHighWater = inboundHighWater,
-        _inboundLowWater = inboundLowWater,
-        _newTempId = newTempId;
+  }) : _signingKey = signingKey,
+       assert(
+         inboundHighWater > inboundLowWater && inboundLowWater >= 0,
+         'low-water must be below high-water (hysteresis), both non-negative',
+       ),
+       _cache = cache,
+       _transport = transport,
+       _rest = rest,
+       _me = me,
+       _subscribedChannelIds = subscribedChannelIds,
+       _telemetry = telemetry,
+       _ackTimeout = ackTimeout,
+       _disposeDrainTimeout = disposeDrainTimeout,
+       _inboundHighWater = inboundHighWater,
+       _inboundLowWater = inboundLowWater,
+       _newTempId = newTempId;
 
   final List<StreamSubscription<dynamic>> _subs = [];
   bool _disposed = false;
@@ -158,7 +164,10 @@ class ChatRepository {
   /// The optimistic-render identity: the wire send carries no sender (the gateway
   /// derives it from the JWT, I5), so B4 renders the local row as "me".
   MessageSender get _meSender => MessageSender(
-      userId: _me.userId, kind: SenderKind.human, label: _me.displayName);
+    userId: _me.userId,
+    kind: SenderKind.human,
+    label: _me.displayName,
+  );
 
   /// Reactive ordered message list for a channel (delegates to the cache).
   Stream<List<Message>> watchChannel(String channelId) =>
@@ -233,7 +242,9 @@ class ChatRepository {
     // every listener (doubled ack reconciliation + reconnect choreography), so
     // a repeat call is a loud programming error, not a silent no-op.
     if (_started) {
-      throw StateError('ChatRepository.start() called twice — streams wire ONCE (B-live)');
+      throw StateError(
+        'ChatRepository.start() called twice — streams wire ONCE (B-live)',
+      );
     }
     _started = true;
     // INBOUND SERIALIZATION (PR#7 finding 2). The four inbound mutation streams
@@ -259,14 +270,18 @@ class ChatRepository {
     // backpressure valve can pause/resume exactly them — and NEVER connectionState
     // (the reconnect coordinator must keep flowing to bump the epoch even while
     // inbound is paused). They are also in _subs so dispose() cancels everything.
-    final ackSub =
-        _transport.acks.listen((a) => _enqueueInbound(() => _onAck(a))); // W2
-    final msgSub = _transport.messages
-        .listen((m) => _enqueueInbound(() => _onMessage(m))); // W3
-    final errSub = _transport.errors
-        .listen((e) => _enqueueInbound(() => _onError(e))); // W4
-    final retractSub = _transport.retractions
-        .listen((r) => _enqueueInbound(() => _onRetraction(r))); // W6
+    final ackSub = _transport.acks.listen(
+      (a) => _enqueueInbound(() => _onAck(a)),
+    ); // W2
+    final msgSub = _transport.messages.listen(
+      (m) => _enqueueInbound(() => _onMessage(m)),
+    ); // W3
+    final errSub = _transport.errors.listen(
+      (e) => _enqueueInbound(() => _onError(e)),
+    ); // W4
+    final retractSub = _transport.retractions.listen(
+      (r) => _enqueueInbound(() => _onRetraction(r)),
+    ); // W6
     _inboundSubs.addAll([ackSub, msgSub, errSub, retractSub]);
     _subs.addAll([ackSub, msgSub, errSub, retractSub]);
     _subs.add(_transport.connectionState.listen(_onConnState)); // reconnect
@@ -297,37 +312,41 @@ class ChatRepository {
   void _enqueueInbound(Future<void> Function() unit) {
     _inboundDepth++;
     _maybePauseInbound();
-    _inboundTail = _inboundTail.then((_) {
-      if (_disposed) return null; // drop queued work for a torn-down session
-      return unit();
-    }).catchError((Object e, StackTrace st) {
-      // The FIFO chain must outlive any single unit's failure, so nothing thrown
-      // here may propagate down the `then` chain (that would poison every later
-      // unit). Each escapee is instead OBSERVED, not swallowed (cage-match
-      // Carnot F3):
-      //   - AssertionError — a debug tripwire (e.g. the orphan-ack assert).
-      //     Re-surfaced as an uncaught zone error so it crashes LOUDLY in debug
-      //     (stripped in release), proving the impossible case fired.
-      //   - Any other escape is unexpected (handlers already own their runtime
-      //     errors via internal try/catch). Route it to telemetry so it is
-      //     visible. TRADEOFF: it is no longer observable via `await
-      //     _inboundTail` in dispose() (the chain stays green by design) — the
-      //     telemetry seam is the single observability point for an escaped
-      //     inbound error, in dispose() and everywhere else alike.
-      if (e is AssertionError) {
-        Zone.current.handleUncaughtError(e, st);
-      } else {
-        _telemetry.inboundWriteFailed(e, st);
-      }
-    }).whenComplete(() {
-      // Decrement AFTER the unit settles (success or observed failure), then let
-      // a drained queue release backpressure. `whenComplete` runs for both paths
-      // because `catchError` already returns normally, so the count can never
-      // leak. The next enqueued unit chains onto THIS future, so the resume
-      // decision is made on the freshest depth before more work starts.
-      _inboundDepth--;
-      _maybeResumeInbound();
-    });
+    _inboundTail = _inboundTail
+        .then((_) {
+          if (_disposed)
+            return null; // drop queued work for a torn-down session
+          return unit();
+        })
+        .catchError((Object e, StackTrace st) {
+          // The FIFO chain must outlive any single unit's failure, so nothing thrown
+          // here may propagate down the `then` chain (that would poison every later
+          // unit). Each escapee is instead OBSERVED, not swallowed (cage-match
+          // Carnot F3):
+          //   - AssertionError — a debug tripwire (e.g. the orphan-ack assert).
+          //     Re-surfaced as an uncaught zone error so it crashes LOUDLY in debug
+          //     (stripped in release), proving the impossible case fired.
+          //   - Any other escape is unexpected (handlers already own their runtime
+          //     errors via internal try/catch). Route it to telemetry so it is
+          //     visible. TRADEOFF: it is no longer observable via `await
+          //     _inboundTail` in dispose() (the chain stays green by design) — the
+          //     telemetry seam is the single observability point for an escaped
+          //     inbound error, in dispose() and everywhere else alike.
+          if (e is AssertionError) {
+            Zone.current.handleUncaughtError(e, st);
+          } else {
+            _telemetry.inboundWriteFailed(e, st);
+          }
+        })
+        .whenComplete(() {
+          // Decrement AFTER the unit settles (success or observed failure), then let
+          // a drained queue release backpressure. `whenComplete` runs for both paths
+          // because `catchError` already returns normally, so the count can never
+          // leak. The next enqueued unit chains onto THIS future, so the resume
+          // decision is made on the freshest depth before more work starts.
+          _inboundDepth--;
+          _maybeResumeInbound();
+        });
   }
 
   /// Engage backpressure: at/above the high-water mark, pause the three inbound
@@ -398,8 +417,11 @@ class ChatRepository {
   /// W1 — commit the optimistic row (derives localSeq) BEFORE the wire send, so
   /// an app kill between the two loses nothing: the row is in the outbox and
   /// re-sends on the next connect (invariant B-optimistic).
-  Future<void> sendMessage(String channelId, String body,
-      {String? replyToId}) async {
+  Future<void> sendMessage(
+    String channelId,
+    String body, {
+    String? replyToId,
+  }) async {
     // Disposed-guard (PR#7 cage-match finding 3). DECISION: silent no-op, NOT a
     // loud StateError. Unlike start() (a true double-wire programming error), a
     // post-dispose send is a benign LIFECYCLE RACE: the repo is an autoDispose
@@ -445,14 +467,17 @@ class ChatRepository {
       // Emit the sovereign `origin` on the wire (wire-half, Path A). Built from
       // the in-hand signature — never re-fetched — with the SAME clientMsgId the
       // frame carries (identical by construction). Null signature → unsigned.
-      _transport.sendMessage(OutgoingMessage(
+      _transport.sendMessage(
+        OutgoingMessage(
           clientTempId: tempId,
           channelId: channelId,
           body: body,
           replyToId: replyToId,
           origin: signature == null
               ? null
-              : OriginEnvelope.fromSignature(signature, clientMsgId: tempId)));
+              : OriginEnvelope.fromSignature(signature, clientMsgId: tempId),
+        ),
+      );
     } catch (e, st) {
       // The entry guard proves entry-time state only; dispose can begin DURING
       // the awaits above and close the cache. A teardown-race write is benign
@@ -466,7 +491,8 @@ class ChatRepository {
   /// B-noteleport). Re-sends immediately if connected; otherwise the next drain
   /// picks it up from the outbox.
   Future<void> retry(String clientTempId) async {
-    if (_disposed) return; // silent no-op (see sendMessage): benign teardown race
+    if (_disposed)
+      return; // silent no-op (see sendMessage): benign teardown race
     try {
       await _cache.retry(clientTempId);
       final row = (await _cache.outbox())
@@ -474,7 +500,8 @@ class ChatRepository {
           .firstOrNull;
       if (row != null) {
         _transport.sendMessage(
-            _toOutgoing(row, await _cache.outboundOrigin(row.clientTempId)));
+          _toOutgoing(row, await _cache.outboundOrigin(row.clientTempId)),
+        );
       }
     } catch (e, st) {
       // Teardown race (cache closing) is benign; a genuine error propagates.
@@ -498,11 +525,12 @@ class ChatRepository {
 
   OutgoingMessage _toOutgoing(Message m, OriginEnvelope? origin) =>
       OutgoingMessage(
-          clientTempId: m.clientTempId,
-          channelId: m.channelId,
-          body: m.body,
-          replyToId: m.replyToId,
-          origin: origin);
+        clientTempId: m.clientTempId,
+        channelId: m.channelId,
+        body: m.body,
+        replyToId: m.replyToId,
+        origin: origin,
+      );
 
   // --- W2 / W3 / W4: stream handlers -----------------------------------------
 
@@ -511,7 +539,10 @@ class ChatRepository {
     final AckOutcome outcome;
     try {
       outcome = await _cache.reconcileAck(
-          a.clientMsgId, a.msgId, _parseServerTime(a.createdAt));
+        a.clientMsgId,
+        a.msgId,
+        _parseServerTime(a.createdAt),
+      );
     } catch (e, st) {
       // A write already past the guard can land as the cache closes during
       // teardown — benign (the session is ending), so OWN it, don't leak it.
@@ -528,7 +559,9 @@ class ChatRepository {
         // forward delta.
         _telemetry.orphanAck(a.clientMsgId, a.msgId);
         assert(
-            false, 'orphan ack — unreachable in Phase 1; see AckOutcome.orphaned');
+          false,
+          'orphan ack — unreachable in Phase 1; see AckOutcome.orphaned',
+        );
       case AckOutcome.retracted:
         // BENIGN (island #104): this own-message was taken down before its ack
         // landed. Door B hard-deleted the optimistic row (or it was already gone)
@@ -572,8 +605,12 @@ class ChatRepository {
       if (r.inserted) _announceInbound(m);
       return;
     }
-    final valid = await verifyOrigin(o,
-        channelId: m.channelId, body: m.body, replyTo: m.replyToId);
+    final valid = await verifyOrigin(
+      o,
+      channelId: m.channelId,
+      body: m.body,
+      replyTo: m.replyToId,
+    );
     // Fire the probe ONLY when the persist actually records a newly-invalid
     // verdict. upsertInbound returns true iff this write transitioned the row's
     // stored verdict to false (a first insert, or a re-signed divergence) — NOT on
@@ -593,7 +630,8 @@ class ChatRepository {
       _telemetry.originVerificationFailed(
         senderUserId: m.sender.userId,
         channelId: m.channelId,
-        serverUlid: m.id!, // non-null for inbound (upsertInbound just asserted it)
+        serverUlid:
+            m.id!, // non-null for inbound (upsertInbound just asserted it)
         clientMsgId: o.clientMsgId,
       );
     }
@@ -637,9 +675,14 @@ class ChatRepository {
       return;
     }
     try {
-      await _cache.markFailed(null); // surface pending rows; they stay `sending`.
+      await _cache.markFailed(
+        null,
+      ); // surface pending rows; they stay `sending`.
     } catch (err, st) {
-      _telemetry.inboundWriteFailed(err, st); // benign if cache closing (teardown)
+      _telemetry.inboundWriteFailed(
+        err,
+        st,
+      ); // benign if cache closing (teardown)
     }
   }
 
@@ -712,9 +755,12 @@ class ChatRepository {
       // message carries its signature too (not just fresh sends).
       final origin = await _cache.outboundOrigin(m.clientTempId);
       _transport.sendMessage(
-          _toOutgoing(m, origin)); // gateway idempotent → safe resend
+        _toOutgoing(m, origin),
+      ); // gateway idempotent → safe resend
     }
-    await _resolveAlreadyAcked(waiting); // an ack that already landed completes now
+    await _resolveAlreadyAcked(
+      waiting,
+    ); // an ack that already landed completes now
     await _awaitAcksOrTimeout(waiting);
   }
 
@@ -728,7 +774,10 @@ class ChatRepository {
   static const int _historyGapFaultThreshold = 3;
 
   Future<void> _fetchDeltaHistory(
-      int epoch, String channelId, String fence) async {
+    int epoch,
+    String channelId,
+    String fence,
+  ) async {
     // The loop + progress guards below compare ids lexicographically; that is
     // only monotonic for canonical (UPPERCASE) ULIDs. Assert at the boundary so
     // a non-canonical fence/cursor fails LOUDLY instead of silently breaking
@@ -741,7 +790,11 @@ class ChatRepository {
       // `cursor ?? ''` — a NULL cursor must page forward-from-start; the gateway
       // treats `after=null` as the BACKWARD default (newest page), which would
       // skip older history. An empty string is below every ULID → forward path.
-      final page = await _rest.getHistory(channelId, after: cursor ?? '', limit: 50);
+      final page = await _rest.getHistory(
+        channelId,
+        after: cursor ?? '',
+        limit: 50,
+      );
       if (_aborted(epoch)) return; // TOCTOU: re-check AFTER await, BEFORE write
       if (page.items.isEmpty) {
         // An empty page while cursor < fence USED to be an invariant violation
@@ -773,8 +826,9 @@ class ChatRepository {
         // check; a clean sync resets it at loop completion. A streak that
         // survives the threshold across reconnects is no longer "expected".
         final prev = _historyGapStreaks[channelId];
-        final streak =
-            (prev != null && prev.cursor == cursor) ? prev.count + 1 : 1;
+        final streak = (prev != null && prev.cursor == cursor)
+            ? prev.count + 1
+            : 1;
         _historyGapStreaks[channelId] = (cursor: cursor, count: streak);
         if (streak >= _historyGapFaultThreshold) {
           // ESCALATE: the gap is stuck at one watermark across N reconnects, so
@@ -805,7 +859,9 @@ class ChatRepository {
       for (final item in page.items) {
         switch (item) {
           case MessageHistoryItem(:final message):
-            await _persistInbound(message); // ASC; W3 dedups + verifies + Door-A suppresses
+            await _persistInbound(
+              message,
+            ); // ASC; W3 dedups + verifies + Door-A suppresses
           case RetractionHistoryItem():
             break; // applied in pass 1 above
           case UnknownHistoryItem():
@@ -831,9 +887,11 @@ class ChatRepository {
       // don't hang.
       if (cursor != null && newCursor.compareTo(cursor) <= 0) {
         _telemetry.historyGapBeforeFence(channelId, cursor, fence);
-        assert(false,
-            'history page did not advance (cursor=$cursor newCursor=$newCursor) '
-            '— is the gateway `after` cursor exclusive?');
+        assert(
+          false,
+          'history page did not advance (cursor=$cursor newCursor=$newCursor) '
+          '— is the gateway `after` cursor exclusive?',
+        );
         return;
       }
       cursor = newCursor;
@@ -866,7 +924,8 @@ class ChatRepository {
     if (ids.isEmpty) return;
     final out = (await _cache.outbox()).map((m) => m.clientTempId).toSet();
     for (final id in ids) {
-      if (!out.contains(id)) _completeAckWaiter(id); // no longer pending → acked
+      if (!out.contains(id))
+        _completeAckWaiter(id); // no longer pending → acked
     }
   }
 

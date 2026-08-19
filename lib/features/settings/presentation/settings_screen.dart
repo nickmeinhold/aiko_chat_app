@@ -352,8 +352,8 @@ class _ThemePresetPicker extends ConsumerWidget {
           child: Text(
             selected.blurb,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
         ListTile(
@@ -466,10 +466,10 @@ class _PresetSwatch extends StatelessWidget {
                       preset.label,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            color: isSelected
-                                ? scheme.primary
-                                : scheme.onSurfaceVariant,
-                          ),
+                        color: isSelected
+                            ? scheme.primary
+                            : scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ],
@@ -489,13 +489,13 @@ class _Rule extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: width,
-        height: 3,
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(2),
-        ),
-      );
+    width: width,
+    height: 3,
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(2),
+    ),
+  );
 }
 
 class _Dot extends StatelessWidget {
@@ -504,10 +504,10 @@ class _Dot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: 9,
-        height: 9,
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-      );
+    width: 9,
+    height: 9,
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  );
 }
 
 /// One line describing the current look, so the tile says what is set rather

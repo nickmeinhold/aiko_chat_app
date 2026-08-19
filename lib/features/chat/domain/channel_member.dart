@@ -24,12 +24,12 @@ class ChannelMember {
   });
 
   factory ChannelMember.fromJson(Map<String, dynamic> j) => ChannelMember(
-        userId: j['user_id'] as String,
-        role: (j['role'] as String?) ?? '',
-        canPost: (j['can_post'] as bool?) ?? false,
-        handle: (j['handle'] as String?) ?? '',
-        displayName: (j['display_name'] as String?) ?? '',
-      );
+    userId: j['user_id'] as String,
+    role: (j['role'] as String?) ?? '',
+    canPost: (j['can_post'] as bool?) ?? false,
+    handle: (j['handle'] as String?) ?? '',
+    displayName: (j['display_name'] as String?) ?? '',
+  );
 }
 
 /// The name to show for a message's sender — the CURRENT handle for the sender's
@@ -78,8 +78,10 @@ String dmPeerTitle(Map<String, String>? roster, String? myId) {
   // neutral label, never '' and never 'Notes to self'.
   final peers = roster.entries.where((e) => e.key != myId).toList();
   if (peers.isEmpty) return 'Notes to self';
-  final named =
-      peers.where((e) => e.value.isNotEmpty).map((e) => e.value).firstOrNull;
+  final named = peers
+      .where((e) => e.value.isNotEmpty)
+      .map((e) => e.value)
+      .firstOrNull;
   return named ?? 'Direct message';
 }
 

@@ -30,23 +30,23 @@ class AppUser {
   });
 
   factory AppUser.fromJson(Map<String, dynamic> j) => AppUser(
-        userId: j['user_id'] as String,
-        username: (j['username'] as String?) ?? '',
-        displayName: (j['display_name'] as String?) ?? '',
-        aikoUsername: (j['aiko_username'] as String?) ?? '',
-        isModerator: (j['is_moderator'] as bool?) ?? false,
-      );
+    userId: j['user_id'] as String,
+    username: (j['username'] as String?) ?? '',
+    displayName: (j['display_name'] as String?) ?? '',
+    aikoUsername: (j['aiko_username'] as String?) ?? '',
+    isModerator: (j['is_moderator'] as bool?) ?? false,
+  );
 
   /// Serialize for local persistence (offline-first session restore). Keys
   /// mirror [fromJson] / the gateway UserView wire shape EXACTLY so a persisted
   /// user round-trips through [AppUser.fromJson] unchanged.
   Map<String, dynamic> toJson() => {
-        'user_id': userId,
-        'username': username,
-        'display_name': displayName,
-        'aiko_username': aikoUsername,
-        'is_moderator': isModerator,
-      };
+    'user_id': userId,
+    'username': username,
+    'display_name': displayName,
+    'aiko_username': aikoUsername,
+    'is_moderator': isModerator,
+  };
 
   @override
   bool operator ==(Object other) =>
@@ -72,9 +72,9 @@ class AuthTokens {
 
   /// From a register/login response (carries both tokens).
   factory AuthTokens.fromJson(Map<String, dynamic> j) => AuthTokens(
-        accessToken: j['access_token'] as String,
-        refreshToken: j['refresh_token'] as String,
-      );
+    accessToken: j['access_token'] as String,
+    refreshToken: j['refresh_token'] as String,
+  );
 
   /// Apply a `/auth/refresh` response — only the access token changes; the
   /// existing refresh token is preserved (the gateway does not rotate it).
@@ -99,7 +99,7 @@ class AuthSession {
   const AuthSession({required this.user, required this.tokens});
 
   factory AuthSession.fromJson(Map<String, dynamic> j) => AuthSession(
-        user: AppUser.fromJson((j['user'] as Map).cast<String, dynamic>()),
-        tokens: AuthTokens.fromJson(j),
-      );
+    user: AppUser.fromJson((j['user'] as Map).cast<String, dynamic>()),
+    tokens: AuthTokens.fromJson(j),
+  );
 }

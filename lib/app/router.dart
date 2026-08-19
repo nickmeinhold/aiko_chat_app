@@ -97,7 +97,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       // observes that transient — no one-frame /login flash on ban arrival, no
       // dependence on Riverpod/GoRouter notification timing (cage-match Carnot +
       // Tesla converged: the forbidden intermediate must not route to /login).
-      final banned = ref.read(suspendedProvider) ||
+      final banned =
+          ref.read(suspendedProvider) ||
           (auth.hasError && auth.error is AccountSuspended);
 
       // Ban on THIS island (→ /suspended), ahead of the logged-out routing so a
@@ -150,10 +151,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/eula', builder: (_, _) => const EulaScreen()),
       GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
+      GoRoute(path: '/suspended', builder: (_, _) => const SuspendedScreen()),
       GoRoute(
-          path: '/suspended', builder: (_, _) => const SuspendedScreen()),
-      GoRoute(
-          path: '/claim-handle', builder: (_, _) => const ClaimHandleScreen()),
+        path: '/claim-handle',
+        builder: (_, _) => const ClaimHandleScreen(),
+      ),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
       GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
       GoRoute(
@@ -163,14 +165,17 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
       GoRoute(
-          path: '/settings/carried-record',
-          builder: (_, _) => const CarriedRecordScreen()),
+        path: '/settings/carried-record',
+        builder: (_, _) => const CarriedRecordScreen(),
+      ),
       GoRoute(
-          path: '/settings/gateway',
-          builder: (_, _) => const GatewayPickerScreen()),
+        path: '/settings/gateway',
+        builder: (_, _) => const GatewayPickerScreen(),
+      ),
       GoRoute(
-          path: '/settings/blocked',
-          builder: (_, _) => const BlockedUsersScreen()),
+        path: '/settings/blocked',
+        builder: (_, _) => const BlockedUsersScreen(),
+      ),
       // Operator seat (#33/#35). The Settings ENTRY is moderator-gated, but this
       // typed path itself is not router-gated — a deep link mounts it for any
       // logged-in user, at which point the screen's own isModeratorProvider gate
@@ -178,11 +183,13 @@ final routerProvider = Provider<GoRouter>((ref) {
       // server-side (the real boundary). Router-level gating is deferred polish,
       // not a security gap (cage-match Tesla).
       GoRoute(
-          path: '/moderation/reports',
-          builder: (_, _) => const ReportQueueScreen()),
+        path: '/moderation/reports',
+        builder: (_, _) => const ReportQueueScreen(),
+      ),
       GoRoute(
-          path: '/settings/eula',
-          builder: (_, _) => const EulaScreen(gate: false)),
+        path: '/settings/eula',
+        builder: (_, _) => const EulaScreen(gate: false),
+      ),
     ],
   );
 });

@@ -47,7 +47,12 @@ class ServerEntry {
   /// surfacing a tile that points nowhere. A missing name falls back to the host,
   /// so a half-populated directory still renders something tappable.
   static ServerEntry? tryFromJson(Map<String, dynamic> json) {
-    final url = _firstString(json, const ['base_url', 'baseUrl', 'httpBaseUrl', 'url']);
+    final url = _firstString(json, const [
+      'base_url',
+      'baseUrl',
+      'httpBaseUrl',
+      'url',
+    ]);
     if (url == null || url.trim().isEmpty) return null;
     final trimmed = url.trim();
     // The directory is attacker-influenceable content, and a preset/directory
@@ -62,7 +67,13 @@ class ServerEntry {
         uri.host.isEmpty) {
       return null;
     }
-    final name = _firstString(json, const ['name', 'display_name', 'displayName', 'label']) ??
+    final name =
+        _firstString(json, const [
+          'name',
+          'display_name',
+          'displayName',
+          'label',
+        ]) ??
         Uri.tryParse(trimmed)?.host ??
         trimmed;
     return ServerEntry(
@@ -89,12 +100,12 @@ class ServerEntry {
   /// a persisted base URL is attacker-influenceable (it came from a directory
   /// response) and must clear the same http(s)+host bar as a freshly-fetched one.
   Map<String, dynamic> toJson() => {
-        'base_url': httpBaseUrl,
-        'display_name': label,
-        if (id != null) 'id': id,
-        if (description != null) 'description': description,
-        if (region != null) 'region': region,
-      };
+    'base_url': httpBaseUrl,
+    'display_name': label,
+    if (id != null) 'id': id,
+    if (description != null) 'description': description,
+    if (region != null) 'region': region,
+  };
 }
 
 /// The built-in seeds — the always-present bootstrap source for the picker list,

@@ -67,11 +67,7 @@ const _tileShape = RoundedRectangleBorder(
 /// there is no row to long-press — the app bar's conversation title wraps this
 /// instead, which is what lets mute leave the action strip entirely.
 class MuteGesture extends ConsumerWidget {
-  const MuteGesture({
-    super.key,
-    required this.mute,
-    required this.child,
-  });
+  const MuteGesture({super.key, required this.mute, required this.child});
 
   /// The row's full mute state — conversation AND peer. The menu acts on
   /// whatever is actually causing the silence, so the glyph and the control can
@@ -101,9 +97,13 @@ class MuteGesture extends ConsumerWidget {
     ProviderContainer container, {
     required String? expectUserId,
     required Offset at,
-  }) =>
-      showConversationMuteMenu(context, container,
-          mute: mute, expectUserId: expectUserId, at: at);
+  }) => showConversationMuteMenu(
+    context,
+    container,
+    mute: mute,
+    expectUserId: expectUserId,
+    at: at,
+  );
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -114,12 +114,20 @@ class MuteGesture extends ConsumerWidget {
     final expectUserId = ref.watch(currentUserProvider)?.userId;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onLongPressEnd: (d) => _show(context, container,
-          expectUserId: expectUserId, at: d.globalPosition),
+      onLongPressEnd: (d) => _show(
+        context,
+        container,
+        expectUserId: expectUserId,
+        at: d.globalPosition,
+      ),
       onSecondaryTapUp: kIsWeb
           ? null
-          : (d) => _show(context, container,
-              expectUserId: expectUserId, at: d.globalPosition),
+          : (d) => _show(
+              context,
+              container,
+              expectUserId: expectUserId,
+              at: d.globalPosition,
+            ),
       child: child,
     );
   }
@@ -161,16 +169,20 @@ Future<void> showConversationMuteMenu(
     final local = overlay.globalToLocal(at) + const Offset(8, 8);
     final picked = await showMenu<bool>(
       context: context,
-      position:
-          RelativeRect.fromRect(local & Size.zero, Offset.zero & overlay.size),
+      position: RelativeRect.fromRect(
+        local & Size.zero,
+        Offset.zero & overlay.size,
+      ),
       items: [
         PopupMenuItem<bool>(
           value: !muted,
           child: ListTile(
             contentPadding: EdgeInsets.zero,
-            leading: Icon(muted
-                ? Icons.notifications_none
-                : Icons.notifications_off_outlined),
+            leading: Icon(
+              muted
+                  ? Icons.notifications_none
+                  : Icons.notifications_off_outlined,
+            ),
             title: Text(muted ? 'Unmute' : 'Mute'),
             // Say WHICH silence this undoes whenever a PERSON is one of the
             // causes — not only when they are the sole cause. Gating on
@@ -187,15 +199,17 @@ Future<void> showConversationMuteMenu(
             // mute keeps the row at zero while the glyph disappears with
             // `byConversation`, closing the undo door on a row that is still
             // quiet (cage-match #135 round 11, Tesla).
-            subtitle: Text(muted
-                ? (mute.byPeer
-                    ? 'This person is muted everywhere — unmute them'
-                    : mute.indeterminate
+            subtitle: Text(
+              muted
+                  ? (mute.byPeer
+                        ? 'This person is muted everywhere — unmute them'
+                        : mute.indeterminate
                         ? 'Unmute this conversation'
                         : 'Show unread again')
-                : mute.indeterminate
-                    ? 'No unread badge from this conversation'
-                    : 'No unread badge'),
+                  : mute.indeterminate
+                  ? 'No unread badge from this conversation'
+                  : 'No unread badge',
+            ),
           ),
         ),
       ],
@@ -204,8 +218,11 @@ Future<void> showConversationMuteMenu(
     // toggle: if the mute changed while the menu was open, this write is an
     // idempotent no-op rather than an inversion of someone else's change.
     if (picked == null) return;
-    mute.apply(container.read(mutesProvider.notifier),
-        muted: picked, expectUserId: expectUserId);
+    mute.apply(
+      container.read(mutesProvider.notifier),
+      muted: picked,
+      expectUserId: expectUserId,
+    );
   }
 }
 
@@ -249,10 +266,12 @@ Widget? _rowTrailing(
     // speaker-with-slash is the universal glyph for muting call audio — a
     // different verb entirely from "stop badging this conversation". The
     // notification glyph is what Slack and Discord use for exactly this.
-    return Icon(Icons.notifications_off_outlined,
-        key: Key('sidebar-muted-$id'),
-        size: 16,
-        color: Theme.of(context).colorScheme.onSurfaceVariant);
+    return Icon(
+      Icons.notifications_off_outlined,
+      key: Key('sidebar-muted-$id'),
+      size: 16,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
   }
   return null;
 }
@@ -275,8 +294,10 @@ class ChatSidebar extends ConsumerWidget {
     final channels = sections.rooms;
     final dms = sections.dms;
     final selectedId = ref.watch(selectedChannelIdProvider);
-    final active =
-        ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);
+    final active = ChatScreen.resolveActive(
+      ref.watch(navigableChannelsProvider),
+      selectedId,
+    );
 
     // Tinted a step off the pane's surface so the rail reads as chrome, not
     // content.
@@ -306,16 +327,22 @@ class ChatSidebar extends ConsumerWidget {
                 // what it can, when it can honestly claim it.
                 child: repoAsync.hasValue
                     ? (channels.isEmpty && dms.isEmpty
-                        ? const Center(child: Text('No conversations yet.'))
-                        : _conversationList(context, ref,
-                            channels: channels, dms: dms, active: active))
+                          ? const Center(child: Text('No conversations yet.'))
+                          : _conversationList(
+                              context,
+                              ref,
+                              channels: channels,
+                              dms: dms,
+                              active: active,
+                            ))
                     : repoAsync.hasError
-                        ? Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Text(
-                                'Could not load conversations.\n${repoAsync.error}'),
-                          )
-                        : const Center(child: CircularProgressIndicator()),
+                    ? Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          'Could not load conversations.\n${repoAsync.error}',
+                        ),
+                      )
+                    : const Center(child: CircularProgressIndicator()),
               ),
               const Divider(height: 1),
               const _SidebarFooter(),
@@ -339,7 +366,9 @@ class ChatSidebar extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     return ListView(
       padding: const EdgeInsets.symmetric(
-          vertical: 4, horizontal: kSidebarTileInset),
+        vertical: 4,
+        horizontal: kSidebarTileInset,
+      ),
       children: [
         for (final c in channels)
           _SidebarChannelTile(channel: c, selected: c.id == active?.id),
@@ -348,10 +377,9 @@ class ChatSidebar extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
             child: Text(
               'Direct messages',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
           for (final d in dms)
@@ -374,8 +402,9 @@ class _SidebarChannelTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final unread =
-        selected ? 0 : ref.watch(channelUnreadCountProvider(channel.id));
+    final unread = selected
+        ? 0
+        : ref.watch(channelUnreadCountProvider(channel.id));
     // No peer: a group channel is silenced only by its own mute.
     final mute = watchConversationMute(ref, channel.id);
     return MuteGesture(
@@ -403,8 +432,9 @@ class _SidebarChannelTile extends ConsumerWidget {
         ),
         onTap: selected
             ? null
-            : () =>
-                ref.read(selectedChannelIdProvider.notifier).select(channel.id),
+            : () => ref
+                  .read(selectedChannelIdProvider.notifier)
+                  .select(channel.id),
       ),
     );
   }
@@ -439,10 +469,16 @@ class _SidebarDmTile extends ConsumerWidget {
     // as completely as muting the conversation — the row must say so, and its
     // menu must be able to undo THAT rather than offering a mute the user
     // already has (see [ConversationMute]).
-    final mute = watchConversationMute(ref, dm.id,
-        peerId: dmPeerId(roster, myId), hasPeer: true);
+    final mute = watchConversationMute(
+      ref,
+      dm.id,
+      peerId: dmPeerId(roster, myId),
+      hasPeer: true,
+    );
     return MuteGesture(
-      key: Key('mute-gesture-${dm.id}'), // see _SidebarChannelTile — slot vs identity
+      key: Key(
+        'mute-gesture-${dm.id}',
+      ), // see _SidebarChannelTile — slot vs identity
       mute: mute,
       child: ListTile(
         key: Key('sidebar-dm-${dm.id}'),
@@ -483,7 +519,9 @@ class _ServerSwitcher extends ConsumerWidget {
     // Seed-first: render the known set immediately, overlay the live directory
     // once it lands — identical to the picker so the two lists agree.
     final known = ref.watch(knownGatewaysProvider);
-    final servers = ref.watch(gatewayDirectoryProvider).maybeWhen(
+    final servers = ref
+        .watch(gatewayDirectoryProvider)
+        .maybeWhen(
           data: (directory) => mergeDirectory(
             directory,
             known,
@@ -492,8 +530,9 @@ class _ServerSwitcher extends ConsumerWidget {
           orElse: () => known,
         );
     final currentEntry = servers
-        .where((e) =>
-            GatewayConfig.normalized(e.httpBaseUrl).httpBaseUrl == current)
+        .where(
+          (e) => GatewayConfig.normalized(e.httpBaseUrl).httpBaseUrl == current,
+        )
         .firstOrNull;
     final currentLabel = currentEntry?.label ?? _hostOf(current);
 
@@ -505,12 +544,14 @@ class _ServerSwitcher extends ConsumerWidget {
           context.push('/settings/gateway');
           return;
         }
-        final entry = servers
-            .where((e) => e.httpBaseUrl == value)
-            .firstOrNull;
+        final entry = servers.where((e) => e.httpBaseUrl == value).firstOrNull;
         if (entry == null) return;
-        confirmAndSwitchGateway(context, ref,
-            url: entry.httpBaseUrl, label: entry.label);
+        confirmAndSwitchGateway(
+          context,
+          ref,
+          url: entry.httpBaseUrl,
+          label: entry.label,
+        );
       },
       itemBuilder: (context) => [
         for (final e in servers)
@@ -530,19 +571,27 @@ class _ServerSwitcher extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
         child: Row(
           children: [
-            Icon(Icons.dns_outlined,
-                size: 20, color: theme.colorScheme.onSurfaceVariant),
+            Icon(
+              Icons.dns_outlined,
+              size: 20,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Server',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant)),
-                  Text(currentLabel,
-                      style: theme.textTheme.titleSmall,
-                      overflow: TextOverflow.ellipsis),
+                  Text(
+                    'Server',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Text(
+                    currentLabel,
+                    style: theme.textTheme.titleSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
               ),
             ),
@@ -588,8 +637,7 @@ class _SidebarFooter extends ConsumerWidget {
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
-            onPressed: () =>
-                ref.read(authControllerProvider.notifier).logout(),
+            onPressed: () => ref.read(authControllerProvider.notifier).logout(),
           ),
         ],
       ),

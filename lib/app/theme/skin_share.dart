@@ -67,10 +67,13 @@ enum SkinImportError {
   tooLong('That code is too long to be a skin.'),
   notASkin('That does not look like an aiko skin code.'),
   wrongVersion(
-      'That skin was made by a newer version of the app. Update to use it.'),
+    'That skin was made by a newer version of the app. Update to use it.',
+  ),
   malformed('That skin code is damaged or incomplete.'),
-  unusable('That skin would make parts of the app unreadable, so it '
-      "can't be used as-is.");
+  unusable(
+    'That skin would make parts of the app unreadable, so it '
+    "can't be used as-is.",
+  );
 
   const SkinImportError(this.message);
   final String message;
@@ -206,11 +209,14 @@ Map<PaletteRole, Color> _roles(Object? raw) {
   final out = <PaletteRole, Color>{};
   for (final entry in raw.entries) {
     if (out.length >= PaletteRole.values.length) break; // no unbounded growth
-    final role =
-        PaletteRole.values.where((r) => r.name == entry.key).firstOrNull;
+    final role = PaletteRole.values
+        .where((r) => r.name == entry.key)
+        .firstOrNull;
     if (role == null) continue;
-    final parsed =
-        int.tryParse('${entry.value}'.replaceFirst('#', ''), radix: 16);
+    final parsed = int.tryParse(
+      '${entry.value}'.replaceFirst('#', ''),
+      radix: 16,
+    );
     if (parsed == null) continue;
     out[role] = Color(parsed);
   }

@@ -89,15 +89,29 @@ void main() {
               'indistinguishable');
     });
 
-    test('the colour space is actually used — a palette that collapsed to one '
-        'colour would make the mark useless without failing anything else', () {
+    test('THE REAL ISLANDS ARE DIFFERENT COLOURS — this shipped broken', () {
+      // "the islands don't seem to be a different color" was not a perception
+      // problem. The first cut picked from a palette of EIGHT, and the two
+      // islands actually in play both landed on dusk violet. With eight buckets
+      // that is a one-in-eight coin flipped every time anyone adds an island —
+      // and it came up heads on the only pair that existed.
+      final a = IslandIdentity.of('chat.imagineering.cc');
+      final b = IslandIdentity.of('enspyr.co');
+      expect(a.water, isNot(b.water),
+          reason: 'the two real islands must not share a colour');
+    });
+
+    test('the colour space is CONTINUOUS, not a handful of buckets', () {
       final colours = {
         for (var i = 0; i < 200; i++)
           IslandIdentity.of('island$i.example.org').water.toARGB32(),
       };
-      expect(colours.length, greaterThanOrEqualTo(6),
-          reason: 'only ${colours.length} distinct water colours across 200 '
-              'islands');
+      // A fixed palette of N caps this at N no matter how many islands exist.
+      // Well over a hundred distinct colours is the shape of a continuous hue;
+      // anything in single digits means someone reintroduced a palette.
+      expect(colours.length, greaterThan(100),
+          reason: 'only ${colours.length} distinct colours across 200 islands '
+              '— that is a palette, not a hue');
     });
   });
 
@@ -175,6 +189,39 @@ void main() {
       ));
       expect(tester.getSize(find.byType(IslandMark)).width, 18,
           reason: 'a decoration takes exactly the space it draws');
+    });
+  });
+
+  group('the KEY is the identity, the URL is a fallback', () {
+    const pubkey = 'z6MkkPnAewuWA3bMUqjVMUKfoLEvQVboCVcoLnHi1ZZPCCXW';
+
+    test('when the island publishes a key, the mark follows the KEY', () {
+      final byUrl = IslandIdentity.of('chat.example.org');
+      final byKey =
+          IslandIdentity.of('chat.example.org', islandPubkey: pubkey);
+      expect(byKey.water, isNot(byUrl.water));
+    });
+
+    test('the SAME key at a DIFFERENT address is the SAME island — a domain is '
+        'rented, the key is what the island IS', () {
+      final before = IslandIdentity.of('old.example.org', islandPubkey: pubkey);
+      final after = IslandIdentity.of('new.example.net', islandPubkey: pubkey);
+      expect(after.water, before.water);
+      expect(after.shapeSeed, before.shapeSeed);
+    });
+
+    test('and a DIFFERENT key at the SAME address is a DIFFERENT island — '
+        'inheriting a lapsed domain must not inherit its mark', () {
+      final incumbent =
+          IslandIdentity.of('chat.example.org', islandPubkey: pubkey);
+      final squatter = IslandIdentity.of('chat.example.org',
+          islandPubkey: 'z6MkuSomeoneElseEntirelyDifferentKeyHere00000000');
+      expect(squatter.water, isNot(incumbent.water));
+    });
+
+    test('an empty key is not a key — fall back rather than derive from ""', () {
+      expect(IslandIdentity.of('chat.example.org', islandPubkey: '').water,
+          IslandIdentity.of('chat.example.org').water);
     });
   });
 }

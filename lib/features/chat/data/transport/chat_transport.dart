@@ -10,15 +10,24 @@ export 'envelopes.dart' show TransportErrorCode;
 /// initial "no socket requested yet" state — distinct from `disconnected` so a
 /// consumer sampling the seeded replay before `connect()` was ever called
 /// doesn't misread startup as a server drop (a false "unreachable" banner).
-enum ConnectionState { idle, disconnected, connecting, connected, unauthenticated }
+enum ConnectionState {
+  idle,
+  disconnected,
+  connecting,
+  connected,
+  unauthenticated,
+}
 
 /// Server `ack` decoded — maps our optimistic [clientMsgId] to the server [msgId].
 class AckResult {
   final String clientMsgId;
   final String msgId;
   final String? createdAt;
-  const AckResult(
-      {required this.clientMsgId, required this.msgId, this.createdAt});
+  const AckResult({
+    required this.clientMsgId,
+    required this.msgId,
+    this.createdAt,
+  });
 }
 
 /// Server `error` decoded. [refClientMsgId] ties it to a failed send when known.
@@ -35,11 +44,12 @@ class TransportError {
   final TransportErrorCode parsedCode;
   final String detail;
   final String? refClientMsgId;
-  const TransportError(
-      {required this.code,
-      required this.parsedCode,
-      required this.detail,
-      this.refClientMsgId});
+  const TransportError({
+    required this.code,
+    required this.parsedCode,
+    required this.detail,
+    this.refClientMsgId,
+  });
 }
 
 /// The realtime seam (plan §B1). Riverpod + the repository depend on THIS, never

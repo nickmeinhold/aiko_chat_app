@@ -42,11 +42,11 @@ class SkinSelection {
   AppFont get font => fontById(fontId);
 
   SkinSelection withFont(String id) => SkinSelection(
-        presetId: presetId,
-        fontId: id,
-        lightOverrides: lightOverrides,
-        darkOverrides: darkOverrides,
-      );
+    presetId: presetId,
+    fontId: id,
+    lightOverrides: lightOverrides,
+    darkOverrides: darkOverrides,
+  );
 
   SkinSelection withOverride({
     required Brightness brightness,
@@ -86,8 +86,7 @@ class SkinSelection {
 
   /// Drop every colour edit, keeping the preset AND the font — the font was
   /// never a colour edit, so "reset colours" must not silently take it away.
-  SkinSelection get reset =>
-      SkinSelection(presetId: presetId, fontId: fontId);
+  SkinSelection get reset => SkinSelection(presetId: presetId, fontId: fontId);
 
   /// The preset as this reader actually sees it.
   ThemePreset resolve() {
@@ -132,10 +131,9 @@ class SkinSelection {
       // Prefer dropping a role the reader actually overrode; a violation can
       // name a role they never touched (their new ground broke the dim ink),
       // in which case drop any override and re-check rather than spin.
-      final blame = broken.map((b) => b.role).firstWhere(
-            kept.containsKey,
-            orElse: () => kept.keys.first,
-          );
+      final blame = broken
+          .map((b) => b.role)
+          .firstWhere(kept.containsKey, orElse: () => kept.keys.first);
       kept.remove(blame);
     }
   }
@@ -143,18 +141,18 @@ class SkinSelection {
   // ---- Wire format ----------------------------------------------------------
 
   Map<String, dynamic> toJson() => {
-        'preset': presetId,
-        if (fontId != kDefaultFontId) 'font': fontId,
-        if (lightOverrides.isNotEmpty) 'light': _encode(lightOverrides),
-        if (darkOverrides.isNotEmpty) 'dark': _encode(darkOverrides),
-      };
+    'preset': presetId,
+    if (fontId != kDefaultFontId) 'font': fontId,
+    if (lightOverrides.isNotEmpty) 'light': _encode(lightOverrides),
+    if (darkOverrides.isNotEmpty) 'dark': _encode(darkOverrides),
+  };
 
   String encode() => jsonEncode(toJson());
 
   static Map<String, String> _encode(Map<PaletteRole, Color> m) => {
-        for (final e in m.entries)
-          e.key.name: '#${e.value.toARGB32().toRadixString(16).padLeft(8, '0')}',
-      };
+    for (final e in m.entries)
+      e.key.name: '#${e.value.toARGB32().toRadixString(16).padLeft(8, '0')}',
+  };
 
   static Map<PaletteRole, Color> _decode(Object? raw) {
     if (raw is! Map) return const {};
