@@ -52,7 +52,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget build(BuildContext context) {
     final query = ref.watch(messageSearchQueryProvider);
     final resultsAsync = ref.watch(messageSearchResultsProvider);
-    final channelNames = ref.watch(channelsProvider).maybeWhen(
+    final channelNames = ref
+        .watch(channelsProvider)
+        .maybeWhen(
           data: (chs) => {for (final Channel c in chs) c.id: c.name},
           orElse: () => const <String, String>{},
         );
@@ -124,10 +126,9 @@ class _Hint extends StatelessWidget {
         child: Text(
           text,
           textAlign: TextAlign.center,
-          style: Theme.of(context)
-              .textTheme
-              .bodyMedium
-              ?.copyWith(color: Theme.of(context).hintColor),
+          style: Theme.of(
+            context,
+          ).textTheme.bodyMedium?.copyWith(color: Theme.of(context).hintColor),
         ),
       ),
     );
@@ -155,16 +156,19 @@ class _SearchResultTile extends StatelessWidget {
       title: Row(
         children: [
           Flexible(
-            child: Text(sender,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-                overflow: TextOverflow.ellipsis),
+            child: Text(
+              sender,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           const SizedBox(width: 8),
-          Text('#$channelName',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(color: Theme.of(context).hintColor)),
+          Text(
+            '#$channelName',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Theme.of(context).hintColor,
+            ),
+          ),
         ],
       ),
       subtitle: _Highlighted(text: message.body, query: query),
@@ -199,10 +203,12 @@ class _Highlighted extends StatelessWidget {
       if (idx > start) {
         spans.add(TextSpan(text: text.substring(start, idx)));
       }
-      spans.add(TextSpan(
-        text: text.substring(idx, idx + lowerQuery.length),
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ));
+      spans.add(
+        TextSpan(
+          text: text.substring(idx, idx + lowerQuery.length),
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      );
       start = idx + lowerQuery.length;
     }
     return Text.rich(

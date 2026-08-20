@@ -23,8 +23,10 @@ class NetworkStatusBanner extends ConsumerWidget {
     final (String label, Color color)? banner = switch (status) {
       NetworkStatus.online => null, // healthy → no chrome
       NetworkStatus.offline => ("You're offline", errorColor),
-      NetworkStatus.serverUnreachable =>
-        ("Can't reach the server", kMaritimeBeaconAmber),
+      NetworkStatus.serverUnreachable => (
+        "Can't reach the server",
+        kMaritimeBeaconAmber,
+      ),
     };
     if (banner == null) return const SizedBox.shrink();
     return Container(

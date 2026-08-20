@@ -6,7 +6,7 @@ void main() {
   group('GatewayCapabilities.parse (three-state, #1896)', () {
     test('explicit carriage.origin == true → carriesOrigin true', () {
       final c = GatewayCapabilities.parse({
-        'carriage': {'origin': true}
+        'carriage': {'origin': true},
       });
       expect(c?.carriesOrigin, isTrue);
     });
@@ -14,7 +14,7 @@ void main() {
     test('explicit carriage.origin == false → carriesOrigin false '
         '(endpoint authoritative)', () {
       final c = GatewayCapabilities.parse({
-        'carriage': {'origin': false}
+        'carriage': {'origin': false},
       });
       expect(c?.carriesOrigin, isFalse);
     });
@@ -22,29 +22,41 @@ void main() {
     // THE BUG FIX (cage-match Tesla + Carnot): a partial/stub 200 must decode to
     // UNKNOWN (null), NOT an authoritative false — else it flips an allowlisted
     // host off during the /capabilities rollout. null → resolver keeps the seed.
-    test('missing carriage/origin → null (unknown, NOT authoritative false)',
-        () {
-      expect(GatewayCapabilities.parse({}), isNull);
-      expect(GatewayCapabilities.parse({'carriage': {}}), isNull);
-      expect(
+    test(
+      'missing carriage/origin → null (unknown, NOT authoritative false)',
+      () {
+        expect(GatewayCapabilities.parse({}), isNull);
+        expect(GatewayCapabilities.parse({'carriage': {}}), isNull);
+        expect(
           GatewayCapabilities.parse({
-            'carriage': {'other': true}
+            'carriage': {'other': true},
           }),
-          isNull);
-    });
+          isNull,
+        );
+      },
+    );
 
     test('non-bool origin → null (never enables AND never authoritatively '
         'disables on garbage)', () {
       // A String "true", a 1, or a null are all "unknown" — they can neither
       // turn the gate on nor flip a known host off.
       for (final bad in [
-        <String, dynamic>{'carriage': {'origin': 'true'}},
-        <String, dynamic>{'carriage': {'origin': 1}},
-        <String, dynamic>{'carriage': {'origin': null}},
+        <String, dynamic>{
+          'carriage': {'origin': 'true'},
+        },
+        <String, dynamic>{
+          'carriage': {'origin': 1},
+        },
+        <String, dynamic>{
+          'carriage': {'origin': null},
+        },
         <String, dynamic>{'carriage': 'origin'},
       ]) {
-        expect(GatewayCapabilities.parse(bad), isNull,
-            reason: 'non-bool origin is unknown, not authoritative: $bad');
+        expect(
+          GatewayCapabilities.parse(bad),
+          isNull,
+          reason: 'non-bool origin is unknown, not authoritative: $bad',
+        );
       }
     });
   });
@@ -58,14 +70,16 @@ void main() {
       expect(c.carriesOrigin, isTrue);
     });
 
-    test('non-allowlisted host seeds carriesOrigin=false (fail-closed stranger)',
-        () {
-      final c = CarriageCapability(
-        host: 'new-island.example',
-        fetch: () async => null,
-      );
-      expect(c.carriesOrigin, isFalse);
-    });
+    test(
+      'non-allowlisted host seeds carriesOrigin=false (fail-closed stranger)',
+      () {
+        final c = CarriageCapability(
+          host: 'new-island.example',
+          fetch: () async => null,
+        );
+        expect(c.carriesOrigin, isFalse);
+      },
+    );
 
     test('allowlisted host is matched case-insensitively and past a trailing '
         'FQDN dot (cage-match Tesla — no silent downgrade)', () {
@@ -75,8 +89,11 @@ void main() {
         'chat.imagineering.cc.',
       ]) {
         final c = CarriageCapability(host: variant, fetch: () async => null);
-        expect(c.carriesOrigin, isTrue,
-            reason: 'normalized variant must match the allowlist: $variant');
+        expect(
+          c.carriesOrigin,
+          isTrue,
+          reason: 'normalized variant must match the allowlist: $variant',
+        );
       }
     });
 
@@ -100,8 +117,11 @@ void main() {
         fetch: () async => null, // 404 today
       );
       await c.refresh();
-      expect(c.carriesOrigin, isTrue,
-          reason: 'a 404 must never flip the live carriage host OFF');
+      expect(
+        c.carriesOrigin,
+        isTrue,
+        reason: 'a 404 must never flip the live carriage host OFF',
+      );
     });
 
     test('a fetch THROWING resolves to the allowlist seed', () async {
@@ -127,10 +147,17 @@ void main() {
         fetch: () async => answers[i++],
       );
       await c.refresh();
-      expect(c.carriesOrigin, isFalse, reason: 'explicit false is authoritative');
+      expect(
+        c.carriesOrigin,
+        isFalse,
+        reason: 'explicit false is authoritative',
+      );
       await c.refresh();
-      expect(c.carriesOrigin, isTrue,
-          reason: 'unknown after a transient false re-seeds to the allowlist');
+      expect(
+        c.carriesOrigin,
+        isTrue,
+        reason: 'unknown after a transient false re-seeds to the allowlist',
+      );
     });
 
     test('stranger: explicit true then null RE-SEEDS to OFF '
@@ -147,8 +174,11 @@ void main() {
       await c.refresh();
       expect(c.carriesOrigin, isTrue, reason: 'stranger proved carriage');
       await c.refresh();
-      expect(c.carriesOrigin, isFalse,
-          reason: 'endpoint went dark → re-seed to stranger seed (false)');
+      expect(
+        c.carriesOrigin,
+        isFalse,
+        reason: 'endpoint went dark → re-seed to stranger seed (false)',
+      );
     });
 
     test('stranger: proved true then a THROWING fetch resolves to seed=false '
@@ -165,21 +195,30 @@ void main() {
       expect(c.carriesOrigin, isTrue);
       throwNow = true;
       await c.refresh();
-      expect(c.carriesOrigin, isFalse,
-          reason: 'unknown (throw) → seed; a dropped bad_origin message is '
-              'worse than an unsigned one');
+      expect(
+        c.carriesOrigin,
+        isFalse,
+        reason:
+            'unknown (throw) → seed; a dropped bad_origin message is '
+            'worse than an unsigned one',
+      );
     });
 
-    test('injected allowlist entries are normalized too (cage-match Carnot)',
-        () {
-      final c = CarriageCapability(
-        host: 'chat.imagineering.cc',
-        knownCarriageHosts: const {'CHAT.IMAGINEERING.CC'},
-        fetch: () async => null,
-      );
-      expect(c.carriesOrigin, isTrue,
-          reason: 'a mixed-case allowlist entry must still match');
-    });
+    test(
+      'injected allowlist entries are normalized too (cage-match Carnot)',
+      () {
+        final c = CarriageCapability(
+          host: 'chat.imagineering.cc',
+          knownCarriageHosts: const {'CHAT.IMAGINEERING.CC'},
+          fetch: () async => null,
+        );
+        expect(
+          c.carriesOrigin,
+          isTrue,
+          reason: 'a mixed-case allowlist entry must still match',
+        );
+      },
+    );
 
     test('stranger island that PROVES carriage flips on', () async {
       final c = CarriageCapability(
@@ -199,8 +238,11 @@ void main() {
       );
       expect(c.carriesOrigin, isTrue, reason: 'allowlist seed');
       await c.refresh();
-      expect(c.carriesOrigin, isFalse,
-          reason: 'a live negative answer overrides the transitional allowlist');
+      expect(
+        c.carriesOrigin,
+        isFalse,
+        reason: 'a live negative answer overrides the transitional allowlist',
+      );
     });
   });
 }

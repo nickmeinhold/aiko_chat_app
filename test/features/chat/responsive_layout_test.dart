@@ -27,10 +27,11 @@ void main() {
   // testPrefs is shared for the whole suite; drop any read-state a prior test
   // wrote so unread baselines start clean.
   setUp(() async {
-    for (final k in testPrefs
-        .getKeys()
-        .where((k) => k.startsWith('aiko_channel_lastread_'))
-        .toList()) {
+    for (final k
+        in testPrefs
+            .getKeys()
+            .where((k) => k.startsWith('aiko_channel_lastread_'))
+            .toList()) {
       await testPrefs.remove(k);
     }
   });
@@ -48,7 +49,10 @@ void main() {
         id: id,
         channelId: channelId,
         sender: MessageSender(
-            userId: userId, kind: SenderKind.human, label: 'User $userId'),
+          userId: userId,
+          kind: SenderKind.human,
+          label: 'User $userId',
+        ),
         body: body,
         createdAt: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
         deliveryState: DeliveryState.sent,
@@ -56,7 +60,8 @@ void main() {
 
   Future<void> settle(WidgetTester tester) async {
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pumpAndSettle();
   }
 
@@ -74,8 +79,9 @@ void main() {
   testWidgets('narrow: app-bar dropdown switcher, no sidebar', (tester) async {
     setWidth(tester, narrow);
     final container = makeContainer(
-        rest: FakeRestApi(channels: twoChannels),
-        transport: FakeChatTransport());
+      rest: FakeRestApi(channels: twoChannels),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -91,12 +97,14 @@ void main() {
     expect(find.byIcon(Icons.search), findsOneWidget);
   });
 
-  testWidgets('wide: sidebar with channel rows, no app-bar dropdown',
-      (tester) async {
+  testWidgets('wide: sidebar with channel rows, no app-bar dropdown', (
+    tester,
+  ) async {
     setWidth(tester, wide);
     final container = makeContainer(
-        rest: FakeRestApi(channels: twoChannels),
-        transport: FakeChatTransport());
+      rest: FakeRestApi(channels: twoChannels),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -113,11 +121,15 @@ void main() {
     // solely by the highlighted rail tile (the default/first channel selected).
     expect(find.byType(AppBar), findsNothing);
     expect(
-      tester.widget<ListTile>(find.byKey(const Key('sidebar-channel-c1'))).selected,
+      tester
+          .widget<ListTile>(find.byKey(const Key('sidebar-channel-c1')))
+          .selected,
       isTrue,
     );
     expect(
-      tester.widget<ListTile>(find.byKey(const Key('sidebar-channel-c2'))).selected,
+      tester
+          .widget<ListTile>(find.byKey(const Key('sidebar-channel-c2')))
+          .selected,
       isFalse,
     );
     // Search must be reachable on wide too — it lives in the sidebar footer,
@@ -126,41 +138,49 @@ void main() {
     expect(find.byIcon(Icons.search), findsOneWidget);
   });
 
-  testWidgets('wide: tapping a sidebar tile swaps the pane (re-keys MessageList)',
-      (tester) async {
-    setWidth(tester, wide);
-    final rest = FakeRestApi(channels: twoChannels);
-    final transport = FakeChatTransport();
-    final container = makeContainer(rest: rest, transport: transport);
-    addTearDown(container.dispose);
+  testWidgets(
+    'wide: tapping a sidebar tile swaps the pane (re-keys MessageList)',
+    (tester) async {
+      setWidth(tester, wide);
+      final rest = FakeRestApi(channels: twoChannels);
+      final transport = FakeChatTransport();
+      final container = makeContainer(rest: rest, transport: transport);
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
+      await pumpApp(tester, container);
+      await signIn(tester);
 
-    // A message lands in the default channel c1.
-    await tester.enterText(find.byType(TextField).first, 'in-general');
-    await tester.tap(find.byKey(const Key('composer-send')));
-    await settle(tester);
-    expect(find.text('in-general'), findsOneWidget);
-    expect(find.byKey(const ValueKey('c1')), findsOneWidget); // MessageList key
+      // A message lands in the default channel c1.
+      await tester.enterText(find.byType(TextField).first, 'in-general');
+      await tester.tap(find.byKey(const Key('composer-send')));
+      await settle(tester);
+      expect(find.text('in-general'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('c1')),
+        findsOneWidget,
+      ); // MessageList key
 
-    // Tap the c2 tile in the sidebar (same mutator as the dropdown).
-    await tester.tap(find.byKey(const Key('sidebar-channel-c2')));
-    await tester.pumpAndSettle();
+      // Tap the c2 tile in the sidebar (same mutator as the dropdown).
+      await tester.tap(find.byKey(const Key('sidebar-channel-c2')));
+      await tester.pumpAndSettle();
 
-    // The pane swapped: c1's message is gone, MessageList re-keyed to c2.
-    expect(find.text('in-general'), findsNothing);
-    expect(find.byKey(const ValueKey('c2')), findsOneWidget);
-    expect(container.read(selectedChannelIdProvider), 'c2');
-    expect(find.text('No messages yet. Say hello!'), findsOneWidget);
-  });
+      // The pane swapped: c1's message is gone, MessageList re-keyed to c2.
+      expect(find.text('in-general'), findsNothing);
+      expect(find.byKey(const ValueKey('c2')), findsOneWidget);
+      expect(container.read(selectedChannelIdProvider), 'c2');
+      expect(find.text('No messages yet. Say hello!'), findsOneWidget);
+    },
+  );
 
-  testWidgets('wide: sidebar unread badge reflects channelUnreadCountProvider',
-      (tester) async {
+  testWidgets('wide: sidebar unread badge reflects channelUnreadCountProvider', (
+    tester,
+  ) async {
     setWidth(tester, wide);
     final transport = FakeChatTransport();
     final container = makeContainer(
-        rest: FakeRestApi(channels: twoChannels), transport: transport);
+      rest: FakeRestApi(channels: twoChannels),
+      transport: transport,
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -181,81 +201,106 @@ void main() {
     // the shared UnreadBadge, and the count matches the provider directly.
     final badge = find.byKey(const Key('sidebar-unread-c2'));
     expect(badge, findsOneWidget);
-    expect(find.descendant(of: badge, matching: find.text('1')), findsOneWidget);
+    expect(
+      find.descendant(of: badge, matching: find.text('1')),
+      findsOneWidget,
+    );
     expect(container.read(channelUnreadCountProvider('c2')), 1);
   });
 
   testWidgets(
-      'Option A: resizing across the breakpoint preserves scroll + draft',
-      (tester) async {
-    setWidth(tester, wide);
-    final rest = FakeRestApi(channels: twoChannels);
-    final transport = FakeChatTransport();
-    final container = makeContainer(rest: rest, transport: transport);
-    addTearDown(container.dispose);
+    'Option A: resizing across the breakpoint preserves scroll + draft',
+    (tester) async {
+      setWidth(tester, wide);
+      final rest = FakeRestApi(channels: twoChannels);
+      final transport = FakeChatTransport();
+      final container = makeContainer(rest: rest, transport: transport);
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
+      await pumpApp(tester, container);
+      await signIn(tester);
 
-    // Overflow the viewport so the list has somewhere to scroll.
-    for (var i = 0; i < 25; i++) {
-      await tester.enterText(find.byType(TextField).first, 'msg-$i');
-      await tester.tap(find.byKey(const Key('composer-send')));
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 15)));
+      // Overflow the viewport so the list has somewhere to scroll.
+      for (var i = 0; i < 25; i++) {
+        await tester.enterText(find.byType(TextField).first, 'msg-$i');
+        await tester.tap(find.byKey(const Key('composer-send')));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 15)),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      final listFinder = find.descendant(
+        of: find.byType(MessageList),
+        matching: find.byType(Scrollable),
+      );
+      final position = tester.state<ScrollableState>(listFinder).position;
+      expect(position.maxScrollExtent, greaterThan(0));
+
+      // Scroll UP to a mid offset — clearly NOT the bottom. A remount would
+      // recreate _MessageListState and auto-scroll back to maxScrollExtent, so a
+      // preserved mid offset is proof the Element/State survived.
+      final target = position.maxScrollExtent / 2;
+      position.jumpTo(target);
       await tester.pumpAndSettle();
-    }
 
-    final listFinder = find.descendant(
-        of: find.byType(MessageList), matching: find.byType(Scrollable));
-    final position = tester.state<ScrollableState>(listFinder).position;
-    expect(position.maxScrollExtent, greaterThan(0));
+      // Type a draft but do NOT send — a remount recreates _ComposerState with an
+      // empty controller, so a surviving draft is the second proof.
+      await tester.enterText(find.byType(TextField).first, 'crossing-draft');
+      await tester.pump();
 
-    // Scroll UP to a mid offset — clearly NOT the bottom. A remount would
-    // recreate _MessageListState and auto-scroll back to maxScrollExtent, so a
-    // preserved mid offset is proof the Element/State survived.
-    final target = position.maxScrollExtent / 2;
-    position.jumpTo(target);
-    await tester.pumpAndSettle();
+      // Cross DOWN below the breakpoint (macOS window shrink).
+      tester.view.physicalSize = const Size(narrow, 900);
+      await tester.pumpAndSettle();
+      expect(
+        find.byType(ChatSidebar),
+        findsNothing,
+      ); // collapsed to phone layout
 
-    // Type a draft but do NOT send — a remount recreates _ComposerState with an
-    // empty controller, so a surviving draft is the second proof.
-    await tester.enterText(find.byType(TextField).first, 'crossing-draft');
-    await tester.pump();
+      // State survived the crossing.
+      final afterDown = tester
+          .state<ScrollableState>(
+            find.descendant(
+              of: find.byType(MessageList),
+              matching: find.byType(Scrollable),
+            ),
+          )
+          .position;
+      expect(
+        afterDown.pixels,
+        closeTo(target, 1.0),
+        reason: 'scroll offset must survive the resize (Option A)',
+      );
+      expect(
+        find.text('crossing-draft'),
+        findsOneWidget,
+        reason: 'composer draft must survive the resize (Option A)',
+      );
 
-    // Cross DOWN below the breakpoint (macOS window shrink).
-    tester.view.physicalSize = const Size(narrow, 900);
-    await tester.pumpAndSettle();
-    expect(find.byType(ChatSidebar), findsNothing); // collapsed to phone layout
+      // Cross BACK UP above the breakpoint — re-assert.
+      tester.view.physicalSize = const Size(wide, 900);
+      await tester.pumpAndSettle();
+      expect(find.byType(ChatSidebar), findsOneWidget);
 
-    // State survived the crossing.
-    final afterDown = tester
-        .state<ScrollableState>(find.descendant(
-            of: find.byType(MessageList), matching: find.byType(Scrollable)))
-        .position;
-    expect(afterDown.pixels, closeTo(target, 1.0),
-        reason: 'scroll offset must survive the resize (Option A)');
-    expect(find.text('crossing-draft'), findsOneWidget,
-        reason: 'composer draft must survive the resize (Option A)');
-
-    // Cross BACK UP above the breakpoint — re-assert.
-    tester.view.physicalSize = const Size(wide, 900);
-    await tester.pumpAndSettle();
-    expect(find.byType(ChatSidebar), findsOneWidget);
-
-    final afterUp = tester
-        .state<ScrollableState>(find.descendant(
-            of: find.byType(MessageList), matching: find.byType(Scrollable)))
-        .position;
-    expect(afterUp.pixels, closeTo(target, 1.0));
-    expect(find.text('crossing-draft'), findsOneWidget);
-  });
+      final afterUp = tester
+          .state<ScrollableState>(
+            find.descendant(
+              of: find.byType(MessageList),
+              matching: find.byType(Scrollable),
+            ),
+          )
+          .position;
+      expect(afterUp.pixels, closeTo(target, 1.0));
+      expect(find.text('crossing-draft'), findsOneWidget);
+    },
+  );
 
   testWidgets('wide: server switcher shows the current server', (tester) async {
     setWidth(tester, wide);
     final container = makeContainer(
-        rest: FakeRestApi(channels: twoChannels),
-        transport: FakeChatTransport());
+      rest: FakeRestApi(channels: twoChannels),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -266,12 +311,14 @@ void main() {
     expect(find.text('Production'), findsOneWidget);
   });
 
-  testWidgets('wide: server switcher no-op guard on the current server',
-      (tester) async {
+  testWidgets('wide: server switcher no-op guard on the current server', (
+    tester,
+  ) async {
     setWidth(tester, wide);
     final container = makeContainer(
-        rest: FakeRestApi(channels: twoChannels),
-        transport: FakeChatTransport());
+      rest: FakeRestApi(channels: twoChannels),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -282,52 +329,71 @@ void main() {
     await tester.pumpAndSettle();
     // 'Production' now appears in both the header and the menu item; tap the
     // menu entry itself (its checkmark padding offsets the label from center).
-    await tester.tap(find.ancestor(
+    await tester.tap(
+      find.ancestor(
         of: find.text('Production'),
-        matching: find.byType(CheckedPopupMenuItem<String>)));
+        matching: find.byType(CheckedPopupMenuItem<String>),
+      ),
+    );
     await tester.pumpAndSettle();
 
     // No confirm dialog — the no-op guard fired with a snackbar instead.
     expect(find.text('Switch server?'), findsNothing);
     expect(find.text('Already connected to this server.'), findsOneWidget);
     // Still logged in on the same gateway.
-    expect(container.read(configProvider).httpBaseUrl,
-        'https://chat.imagineering.cc');
+    expect(
+      container.read(configProvider).httpBaseUrl,
+      'https://chat.imagineering.cc',
+    );
   });
 
   testWidgets(
-      'wide: server switcher confirm → switchGateway (logs out, flips config)',
-      (tester) async {
-    setWidth(tester, wide);
-    final transport = FakeChatTransport();
-    final container = makeContainer(
-        rest: FakeRestApi(channels: twoChannels), transport: transport);
-    addTearDown(container.dispose);
+    'wide: server switcher confirm → switchGateway (logs out, flips config)',
+    (tester) async {
+      setWidth(tester, wide);
+      final transport = FakeChatTransport();
+      final container = makeContainer(
+        rest: FakeRestApi(channels: twoChannels),
+        transport: transport,
+      );
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-    expect(container.read(configProvider).httpBaseUrl,
-        'https://chat.imagineering.cc');
+      await pumpApp(tester, container);
+      await signIn(tester);
+      expect(
+        container.read(configProvider).httpBaseUrl,
+        'https://chat.imagineering.cc',
+      );
 
-    // Open the switcher and pick a DIFFERENT preset (Enspyr).
-    await tester.tap(find.byType(PopupMenuButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.ancestor(
-        of: find.text('Enspyr'),
-        matching: find.byType(CheckedPopupMenuItem<String>)));
-    await tester.pumpAndSettle();
+      // Open the switcher and pick a DIFFERENT preset (Enspyr).
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.ancestor(
+          of: find.text('Enspyr'),
+          matching: find.byType(CheckedPopupMenuItem<String>),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    // The shared confirm dialog appears — confirm the switch.
-    expect(find.text('Switch server?'), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, 'Switch'));
-    await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
-    await tester.pumpAndSettle();
+      // The shared confirm dialog appears — confirm the switch.
+      expect(find.text('Switch server?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Switch'));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pumpAndSettle();
 
-    // switchGateway ran: the live config flipped to Enspyr and the user is logged
-    // out (back at the login screen on the new gateway).
-    expect(
-        container.read(configProvider).httpBaseUrl, 'https://chat.enspyr.co');
-    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
-  });
+      // switchGateway ran: the live config flipped to Enspyr and the user is logged
+      // out (back at the login screen on the new gateway).
+      expect(
+        container.read(configProvider).httpBaseUrl,
+        'https://chat.enspyr.co',
+      );
+      expect(
+        find.widgetWithText(FilledButton, 'Create a passkey'),
+        findsOneWidget,
+      );
+    },
+  );
 }

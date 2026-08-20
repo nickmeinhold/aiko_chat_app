@@ -48,8 +48,10 @@ Future<Message> _signedMessage(
     body: body,
   );
   final signature = await sign(key, payload);
-  final origin =
-      OriginEnvelope.fromSignature(signature, clientMsgId: clientTempId);
+  final origin = OriginEnvelope.fromSignature(
+    signature,
+    clientMsgId: clientTempId,
+  );
   return Message(
     clientTempId: clientTempId,
     id: clientTempId,
@@ -63,10 +65,12 @@ Future<Message> _signedMessage(
 }
 
 Future<void> _pump(WidgetTester tester, List<Message> messages) async {
-  final container = ProviderContainer(overrides: [
-    currentUserProvider.overrideWithValue(_meUser),
-    myCarriedMessagesProvider.overrideWith((ref) async => messages),
-  ]);
+  final container = ProviderContainer(
+    overrides: [
+      currentUserProvider.overrideWithValue(_meUser),
+      myCarriedMessagesProvider.overrideWith((ref) async => messages),
+    ],
+  );
   addTearDown(container.dispose);
   // Taller-than-default surface: the screen constrains content to a 560px
   // reading column (ReadingColumn), so entries wrap taller than at full width —
@@ -91,47 +95,63 @@ void main() {
     key = await SovereignKeyStore().loadOrCreate();
   });
 
-  testWidgets('lists my signed messages as verified and excludes other authors',
-      (tester) async {
-    final mine = await _signedMessage(key, clientTempId: 'a', body: 'hello mine');
-    final theirs = await _signedMessage(
-      key,
-      clientTempId: 'b',
-      body: 'not mine',
-      senderUserId: 'someone-else',
-    );
+  testWidgets(
+    'lists my signed messages as verified and excludes other authors',
+    (tester) async {
+      final mine = await _signedMessage(
+        key,
+        clientTempId: 'a',
+        body: 'hello mine',
+      );
+      final theirs = await _signedMessage(
+        key,
+        clientTempId: 'b',
+        body: 'not mine',
+        senderUserId: 'someone-else',
+      );
 
-    await _pump(tester, [mine, theirs]);
+      await _pump(tester, [mine, theirs]);
 
-    // My message is listed and marked verified.
-    expect(find.text('hello mine'), findsOneWidget);
-    expect(find.text('Verified — provably yours'), findsOneWidget);
-    // The other author's message is excluded entirely.
-    expect(find.text('not mine'), findsNothing);
-  });
+      // My message is listed and marked verified.
+      expect(find.text('hello mine'), findsOneWidget);
+      expect(find.text('Verified — provably yours'), findsOneWidget);
+      // The other author's message is excluded entirely.
+      expect(find.text('not mine'), findsNothing);
+    },
+  );
 
   testWidgets(
-      'SECURITY: a valid signature under a FOREIGN key (sender.userId == me) '
-      'never renders "provably yours"', (tester) async {
-    // A forged/cached row claiming to be from me, carrying a well-formed VALID
-    // signature — but signed by an attacker's own key. Must NOT read verified.
-    final attacker = await _freshKey();
-    final forged = await _signedMessage(attacker,
-        clientTempId: 'x', body: 'I never wrote this');
+    'SECURITY: a valid signature under a FOREIGN key (sender.userId == me) '
+    'never renders "provably yours"',
+    (tester) async {
+      // A forged/cached row claiming to be from me, carrying a well-formed VALID
+      // signature — but signed by an attacker's own key. Must NOT read verified.
+      final attacker = await _freshKey();
+      final forged = await _signedMessage(
+        attacker,
+        clientTempId: 'x',
+        body: 'I never wrote this',
+      );
 
-    await _pump(tester, [forged]);
+      await _pump(tester, [forged]);
 
-    expect(find.text('I never wrote this'), findsOneWidget);
-    // Never claimed as mine.
-    expect(find.text('Verified — provably yours'), findsNothing);
-    // Honestly labelled as a different key.
-    expect(find.text('Signed by a different key — not this device'),
-        findsOneWidget);
-  });
+      expect(find.text('I never wrote this'), findsOneWidget);
+      // Never claimed as mine.
+      expect(find.text('Verified — provably yours'), findsNothing);
+      // Honestly labelled as a different key.
+      expect(
+        find.text('Signed by a different key — not this device'),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('a tampered message renders as invalid', (tester) async {
-    final tampered = (await _signedMessage(key, clientTempId: 'a', body: 'orig'))
-        .copyWith(body: 'attacker edited this');
+    final tampered = (await _signedMessage(
+      key,
+      clientTempId: 'a',
+      body: 'orig',
+    )).copyWith(body: 'attacker edited this');
 
     await _pump(tester, [tampered]);
 
@@ -157,10 +177,15 @@ void main() {
     expect(find.text('Unsigned — no signature carried'), findsOneWidget);
   });
 
-  testWidgets('a mixed record shows all three verdicts together', (tester) async {
+  testWidgets('a mixed record shows all three verdicts together', (
+    tester,
+  ) async {
     final good = await _signedMessage(key, clientTempId: 'g', body: 'good one');
-    final bad = (await _signedMessage(key, clientTempId: 'b', body: 'was good'))
-        .copyWith(body: 'tampered one');
+    final bad = (await _signedMessage(
+      key,
+      clientTempId: 'b',
+      body: 'was good',
+    )).copyWith(body: 'tampered one');
     final none = Message(
       clientTempId: 'n',
       id: 'n',

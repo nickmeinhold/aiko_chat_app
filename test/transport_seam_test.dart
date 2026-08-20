@@ -72,37 +72,44 @@ void main() {
       expect(t, 'access1');
       expect(await tp.currentAccessToken(), 'access1');
       expect(store.current?.accessToken, 'access1');
-      expect(store.current?.refreshToken, 'refresh0',
-          reason: 'refresh token is NOT rotated');
+      expect(
+        store.current?.refreshToken,
+        'refresh0',
+        reason: 'refresh token is NOT rotated',
+      );
     });
 
-    test('RefreshRejected -> null, clears store, fires onUnauthenticated',
-        () async {
-      final store = InMemoryTokenStore(_seed);
-      var unauth = 0;
-      final tp = DefaultTokenProvider(
-        store: store,
-        onUnauthenticated: () => unauth++,
-        remoteRefresh: (rt) async => throw const RefreshRejected(),
-      );
-      expect(await tp.refreshAccessToken(), isNull);
-      expect(store.current, isNull, reason: 'logout clears tokens');
-      expect(unauth, 1);
-    });
+    test(
+      'RefreshRejected -> null, clears store, fires onUnauthenticated',
+      () async {
+        final store = InMemoryTokenStore(_seed);
+        var unauth = 0;
+        final tp = DefaultTokenProvider(
+          store: store,
+          onUnauthenticated: () => unauth++,
+          remoteRefresh: (rt) async => throw const RefreshRejected(),
+        );
+        expect(await tp.refreshAccessToken(), isNull);
+        expect(store.current, isNull, reason: 'logout clears tokens');
+        expect(unauth, 1);
+      },
+    );
 
-    test('transient error -> THROWS, store NOT cleared (no logout on blip)',
-        () async {
-      final store = InMemoryTokenStore(_seed);
-      var unauth = 0;
-      final tp = DefaultTokenProvider(
-        store: store,
-        onUnauthenticated: () => unauth++,
-        remoteRefresh: (rt) async => throw Exception('network down'),
-      );
-      await expectLater(tp.refreshAccessToken(), throwsA(isA<Exception>()));
-      expect(store.current, _seed, reason: 'transient failure keeps tokens');
-      expect(unauth, 0, reason: 'a network blip must NOT log out');
-    });
+    test(
+      'transient error -> THROWS, store NOT cleared (no logout on blip)',
+      () async {
+        final store = InMemoryTokenStore(_seed);
+        var unauth = 0;
+        final tp = DefaultTokenProvider(
+          store: store,
+          onUnauthenticated: () => unauth++,
+          remoteRefresh: (rt) async => throw Exception('network down'),
+        );
+        await expectLater(tp.refreshAccessToken(), throwsA(isA<Exception>()));
+        expect(store.current, _seed, reason: 'transient failure keeps tokens');
+        expect(unauth, 0, reason: 'a network blip must NOT log out');
+      },
+    );
   });
 
   group('AuthInterceptor 401 -> refresh -> retry', () {
@@ -139,8 +146,9 @@ void main() {
       var call = 0;
       final dio = Dio(BaseOptions(baseUrl: 'http://x'));
       dio.interceptors.add(AuthInterceptor(tp, dio));
-      dio.httpClientAdapter =
-          FakeHttpAdapter((opts) => (call++, jsonBody(401, '{}')).$2);
+      dio.httpClientAdapter = FakeHttpAdapter(
+        (opts) => (call++, jsonBody(401, '{}')).$2,
+      );
 
       await expectLater(dio.get('/v1/me'), throwsA(isA<DioException>()));
       expect(call, 2, reason: 'original + one retry, no infinite loop');
@@ -157,8 +165,12 @@ void main() {
     }
 
     test('getHistory parses messages + both cursors', () async {
-      final api = apiWith((_) => jsonBody(200,
-          '{"channel_id":"c1","messages":[{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}],"next_before":"01J","next_after":"01K"}'));
+      final api = apiWith(
+        (_) => jsonBody(
+          200,
+          '{"channel_id":"c1","messages":[{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}],"next_before":"01J","next_after":"01K"}',
+        ),
+      );
       final page = await api.getHistory('c1');
       expect((page.items.single as MessageHistoryItem).message.body, 'hi');
       expect(page.nextBefore, '01J');
@@ -174,16 +186,21 @@ void main() {
       // (NOT dropped) so the pager's cursor advances THROUGH it — a dropped unknown
       // trailing the last known row would wedge catch-up at the fence (cage-match
       // Carnot HIGH). The recast's single forward stream will grow item types.
-      final api = apiWith((_) => jsonBody(200, '''
+      final api = apiWith(
+        (_) => jsonBody(200, '''
         {"channel_id":"c1","messages":[
           {"msg_id":"01A","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"legacy","created_at":"2026-06-21T00:00:00Z","reply_to":null},
           {"type":"message","msg_id":"01B","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"typed","created_at":"2026-06-21T00:00:01Z","reply_to":null},
           {"type":"retraction","id":"01C","target_msg_id":"01A","channel_id":"c1"},
           {"type":"reaction","id":"01D","emoji":"x"}
-        ],"next_after":"01D"}'''));
+        ],"next_after":"01D"}'''),
+      );
       final page = await api.getHistory('c1');
-      expect(page.items.length, 4,
-          reason: 'the unknown "reaction" is carried inertly, not dropped');
+      expect(
+        page.items.length,
+        4,
+        reason: 'the unknown "reaction" is carried inertly, not dropped',
+      );
       expect((page.items[0] as MessageHistoryItem).message.body, 'legacy');
       expect((page.items[1] as MessageHistoryItem).message.id, '01B');
       final r = page.items[2] as RetractionHistoryItem;
@@ -198,18 +215,26 @@ void main() {
       expect(page.nextAfter, '01D');
     });
 
-    test('getHistory drops an unknown type with NO id field (the one residual — '
-        'nothing to advance the cursor to)', () async {
-      final api = apiWith((_) => jsonBody(200, '''
+    test(
+      'getHistory drops an unknown type with NO id field (the one residual — '
+      'nothing to advance the cursor to)',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(200, '''
         {"channel_id":"c1","messages":[
           {"msg_id":"01A","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null},
           {"type":"reaction","emoji":"x"}
-        ],"next_after":"01A"}'''));
-      final page = await api.getHistory('c1');
-      expect(page.items.length, 1,
-          reason: 'an idless unknown has no cursor to carry → dropped');
-      expect((page.items.single as MessageHistoryItem).message.id, '01A');
-    });
+        ],"next_after":"01A"}'''),
+        );
+        final page = await api.getHistory('c1');
+        expect(
+          page.items.length,
+          1,
+          reason: 'an idless unknown has no cursor to carry → dropped',
+        );
+        expect((page.items.single as MessageHistoryItem).message.id, '01A');
+      },
+    );
 
     test('getHistory FAILS the page on a malformed RETRACTION — fail-closed, never '
         'salvaged as inert (cage-match Tesla HIGH)', () async {
@@ -218,10 +243,12 @@ void main() {
       // watermark past a takedown that never applied — a silent moderation leak).
       // It throws, same family as a malformed message row: retry, don't claim
       // coverage.
-      final api = apiWith((_) => jsonBody(200, '''
+      final api = apiWith(
+        (_) => jsonBody(200, '''
         {"channel_id":"c1","messages":[
           {"type":"retraction","id":"01C","channel_id":"c1"}
-        ],"next_after":"01C"}'''));
+        ],"next_after":"01C"}'''),
+      );
       await expectLater(api.getHistory('c1'), throwsA(isA<FormatException>()));
     });
 
@@ -229,33 +256,43 @@ void main() {
     // (/capabilities 404s). Cage-match Maxwell + Tesla + Carnot all flagged it
     // untested. Three-state at the wire: explicit bool → value; every "can't
     // determine" path (404, non-Map, missing field) → null.
-    test('getCapabilities: explicit {carriage:{origin:true}} → carriesOrigin',
-        () async {
-      final api = apiWith((_) => jsonBody(200, '{"carriage":{"origin":true}}'));
-      final caps = await api.getCapabilities();
-      expect(caps?.carriesOrigin, isTrue);
-    });
+    test(
+      'getCapabilities: explicit {carriage:{origin:true}} → carriesOrigin',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(200, '{"carriage":{"origin":true}}'),
+        );
+        final caps = await api.getCapabilities();
+        expect(caps?.carriesOrigin, isTrue);
+      },
+    );
 
-    test('getCapabilities: explicit origin:false → carriesOrigin false',
-        () async {
-      final api = apiWith((_) => jsonBody(200, '{"carriage":{"origin":false}}'));
-      final caps = await api.getCapabilities();
-      expect(caps?.carriesOrigin, isFalse);
-    });
+    test(
+      'getCapabilities: explicit origin:false → carriesOrigin false',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(200, '{"carriage":{"origin":false}}'),
+        );
+        final caps = await api.getCapabilities();
+        expect(caps?.carriesOrigin, isFalse);
+      },
+    );
 
     test('getCapabilities: 404 → null (the live prod branch)', () async {
       final api = apiWith((_) => jsonBody(404, '{"detail":"not found"}'));
       expect(await api.getCapabilities(), isNull);
     });
 
-    test('getCapabilities: stub 200 with missing origin → null (NOT false)',
-        () async {
-      // The bug: this must be unknown, so the resolver keeps the seed.
-      final api = apiWith((_) => jsonBody(200, '{"carriage":{}}'));
-      expect(await api.getCapabilities(), isNull);
-      final api2 = apiWith((_) => jsonBody(200, '{}'));
-      expect(await api2.getCapabilities(), isNull);
-    });
+    test(
+      'getCapabilities: stub 200 with missing origin → null (NOT false)',
+      () async {
+        // The bug: this must be unknown, so the resolver keeps the seed.
+        final api = apiWith((_) => jsonBody(200, '{"carriage":{}}'));
+        expect(await api.getCapabilities(), isNull);
+        final api2 = apiWith((_) => jsonBody(200, '{}'));
+        expect(await api2.getCapabilities(), isNull);
+      },
+    );
 
     test('getCapabilities: non-object / non-JSON body → null', () async {
       final api = apiWith((_) => jsonBody(200, '"just a string"'));
@@ -268,7 +305,10 @@ void main() {
       RequestOptions? captured;
       final api = apiWith((opts) {
         captured = opts;
-        return jsonBody(200, '{"channel_id":"c1","messages":[],"next_after":null}');
+        return jsonBody(
+          200,
+          '{"channel_id":"c1","messages":[],"next_after":null}',
+        );
       });
       await api.getHistory('c1', after: '01ABC');
       expect(captured!.queryParameters['after'], '01ABC');
@@ -286,12 +326,19 @@ void main() {
       String body = '{}',
     }) {
       final tokens = DefaultTokenProvider(
-          store: InMemoryTokenStore(_seed), remoteRefresh: remoteRefresh);
+        store: InMemoryTokenStore(_seed),
+        remoteRefresh: remoteRefresh,
+      );
       ResponseBody handler(RequestOptions _) => jsonBody(statusCode, body);
       final authed = Dio(BaseOptions(baseUrl: 'http://x'))
         ..httpClientAdapter = FakeHttpAdapter(handler)
-        ..interceptors.add(AuthInterceptor(
-            tokens, Dio(BaseOptions(baseUrl: 'http://x'))..httpClientAdapter = FakeHttpAdapter(handler)));
+        ..interceptors.add(
+          AuthInterceptor(
+            tokens,
+            Dio(BaseOptions(baseUrl: 'http://x'))
+              ..httpClientAdapter = FakeHttpAdapter(handler),
+          ),
+        );
       final bare = Dio(BaseOptions(baseUrl: 'http://x'))
         ..httpClientAdapter = FakeHttpAdapter(handler);
       return GatewayRestApi(bare: bare, authed: authed);
@@ -299,27 +346,33 @@ void main() {
 
     test('a TERMINAL 401 (refresh rejected) → Unauthorized', () async {
       final api = backend(
-          remoteRefresh: (_) async => throw const RefreshRejected(),
-          statusCode: 401);
+        remoteRefresh: (_) async => throw const RefreshRejected(),
+        statusCode: 401,
+      );
       await expectLater(api.getHistory('c1'), throwsA(isA<Unauthorized>()));
     });
 
-    test('a TRANSIENT 401 (refresh network blip) → NOT Unauthorized — stays a '
-        'DioException so rows redrain and the user is not logged out', () async {
-      final api = backend(
-          remoteRefresh: (_) async => throw Exception('refresh network blip'),
-          statusCode: 401);
-      await expectLater(
-        api.getHistory('c1'),
-        throwsA(allOf(isA<DioException>(), isNot(isA<Unauthorized>()))),
-      );
-    });
-
     test(
-        'a plain (non-suspended) 403 → Forbidden, NOT Unauthorized — an authZ '
+      'a TRANSIENT 401 (refresh network blip) → NOT Unauthorized — stays a '
+      'DioException so rows redrain and the user is not logged out',
+      () async {
+        final api = backend(
+          remoteRefresh: (_) async => throw Exception('refresh network blip'),
+          statusCode: 401,
+        );
+        await expectLater(
+          api.getHistory('c1'),
+          throwsA(allOf(isA<DioException>(), isNot(isA<Unauthorized>()))),
+        );
+      },
+    );
+
+    test('a plain (non-suspended) 403 → Forbidden, NOT Unauthorized — an authZ '
         'denial must not log the user out (A3 taxonomy unbundle)', () async {
-      final api =
-          backend(remoteRefresh: (_) async => 'unused', statusCode: 403);
+      final api = backend(
+        remoteRefresh: (_) async => 'unused',
+        statusCode: 403,
+      );
       await expectLater(
         api.getHistory('c1'),
         // Forbidden is NOT a subtype of Unauthorized, so the terminal-auth
@@ -346,12 +399,11 @@ void main() {
 
   group('GatewayTransport demux + send', () {
     DefaultTokenProvider tokens() => DefaultTokenProvider(
-          store: InMemoryTokenStore(_seed),
-          remoteRefresh: (rt) async => 'access1',
-        );
+      store: InMemoryTokenStore(_seed),
+      remoteRefresh: (rt) async => 'access1',
+    );
 
-    test('connect passes token in query; frames demux to typed streams',
-        () async {
+    test('connect passes token in query; frames demux to typed streams', () async {
       late FakeWebSocketChannel fake;
       Uri? connectedUri;
       final t = GatewayTransport(
@@ -365,22 +417,35 @@ void main() {
       await t.connect();
       expect(connectedUri.toString(), 'ws://host/v1/ws?token=access0');
 
-      final gotAck = expectLater(t.acks, emits(predicate<AckResult>(
-          (a) => a.clientMsgId == 'tmp1' && a.msgId == '01J')));
+      final gotAck = expectLater(
+        t.acks,
+        emits(
+          predicate<AckResult>(
+            (a) => a.clientMsgId == 'tmp1' && a.msgId == '01J',
+          ),
+        ),
+      );
       final gotMsg = expectLater(
-          t.messages, emits(predicate<Message>((m) => m.body == 'hi')));
+        t.messages,
+        emits(predicate<Message>((m) => m.body == 'hi')),
+      );
       // The raw wire `code` is preserved verbatim AND classified at the parse
       // boundary: an unrecognised code (`bad`) maps to `unknown`, never silently
       // to a known/transient code.
       final gotErr = expectLater(
-          t.errors,
-          emits(predicate<TransportError>((e) =>
-              e.code == 'bad' &&
-              e.parsedCode == TransportErrorCode.unknown)));
+        t.errors,
+        emits(
+          predicate<TransportError>(
+            (e) =>
+                e.code == 'bad' && e.parsedCode == TransportErrorCode.unknown,
+          ),
+        ),
+      );
 
       fake.emit('{"type":"ack","client_msg_id":"tmp1","msg_id":"01J"}');
       fake.emit(
-          '{"type":"message","msg":{"msg_id":"02J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z"}}');
+        '{"type":"message","msg":{"msg_id":"02J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z"}}',
+      );
       fake.emit('{"type":"error","code":"bad","detail":"x"}');
       fake.emit('{"type":"typing"}'); // unknown -> dropped, must not crash
 
@@ -398,18 +463,24 @@ void main() {
       final subF = t.subscribe(['c1']);
       fake.emit('{"type":"suback","channel_fences":{"c1":"01J"}}');
       await subF; // resolved by the suback
-      final id = t.sendMessage(const OutgoingMessage(
-          clientTempId: 'tmp1', channelId: 'c1', body: 'hello'));
+      final id = t.sendMessage(
+        const OutgoingMessage(
+          clientTempId: 'tmp1',
+          channelId: 'c1',
+          body: 'hello',
+        ),
+      );
       expect(id, 'tmp1');
       expect(fake.sent.any((f) => f.contains('"type":"subscribe"')), isTrue);
       expect(
-          fake.sent.any(
-              (f) => f.contains('"type":"send"') && f.contains('"body":"hello"')),
-          isTrue);
+        fake.sent.any(
+          (f) => f.contains('"type":"send"') && f.contains('"body":"hello"'),
+        ),
+        isTrue,
+      );
     });
 
-    test(
-        'connectionState replays the CURRENT state to a late subscriber '
+    test('connectionState replays the CURRENT state to a late subscriber '
         '(state, not an event log)', () async {
       // A consumer that mounts AFTER `connected` fired (e.g. a repository
       // rebuilt by the gateway-recovery channel refetch, task #16) must still
@@ -420,43 +491,54 @@ void main() {
         tokens: tokens(),
         channelFactory: (uri) => FakeWebSocketChannel(),
       );
-      expect(await t.connectionState.first, ConnectionState.idle,
-          reason: 'pre-connect subscriber is seeded with idle — no socket has '
-              'been requested yet, which is NOT a server drop (a disconnected '
-              'seed would flash a false "unreachable" banner at startup)');
+      expect(
+        await t.connectionState.first,
+        ConnectionState.idle,
+        reason:
+            'pre-connect subscriber is seeded with idle — no socket has '
+            'been requested yet, which is NOT a server drop (a disconnected '
+            'seed would flash a false "unreachable" banner at startup)',
+      );
       await t.connect();
-      expect(await t.connectionState.first, ConnectionState.connected,
-          reason: 'a late subscriber is seeded with the live state');
+      expect(
+        await t.connectionState.first,
+        ConnectionState.connected,
+        reason: 'a late subscriber is seeded with the live state',
+      );
     });
 
     // A well-formed origin (32-byte key, 64-byte sig, id == frame id) passes the
     // real _originWire self-assert and IS serialised onto the wire frame.
-    test('sendMessage emits a well-formed origin through the real wire path',
-        () async {
-      late FakeWebSocketChannel fake;
-      final t = GatewayTransport(
-        wsBaseUrl: 'ws://host',
-        tokens: tokens(),
-        channelFactory: (uri) => fake = FakeWebSocketChannel(),
-        carriesOrigin: () => true, // gate open (default is now fail-closed)
-      );
-      await t.connect();
-      t.sendMessage(OutgoingMessage(
-        clientTempId: 'tmp1',
-        channelId: 'c1',
-        body: 'hello',
-        origin: OriginEnvelope(
-          keyVersion: 1,
-          rawPublicKey: Uint8List(32),
-          clientMsgId: 'tmp1',
-          signedAtMs: 1,
-          sig: Uint8List(64),
-        ),
-      ));
-      final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
-      expect(sent.contains('"origin"'), isTrue);
-      expect(sent.contains('"sender_pubkey"'), isTrue);
-    });
+    test(
+      'sendMessage emits a well-formed origin through the real wire path',
+      () async {
+        late FakeWebSocketChannel fake;
+        final t = GatewayTransport(
+          wsBaseUrl: 'ws://host',
+          tokens: tokens(),
+          channelFactory: (uri) => fake = FakeWebSocketChannel(),
+          carriesOrigin: () => true, // gate open (default is now fail-closed)
+        );
+        await t.connect();
+        t.sendMessage(
+          OutgoingMessage(
+            clientTempId: 'tmp1',
+            channelId: 'c1',
+            body: 'hello',
+            origin: OriginEnvelope(
+              keyVersion: 1,
+              rawPublicKey: Uint8List(32),
+              clientMsgId: 'tmp1',
+              signedAtMs: 1,
+              sig: Uint8List(64),
+            ),
+          ),
+        );
+        final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
+        expect(sent.contains('"origin"'), isTrue);
+        expect(sent.contains('"sender_pubkey"'), isTrue);
+      },
+    );
 
     // cage-match Carnot F1 + Tesla: a MALFORMED self-built origin (bad-length
     // key) makes toWire() throw OriginError. The strip must catch it (never-throws
@@ -472,22 +554,27 @@ void main() {
       );
       await t.connect();
       // 10-byte key → encodeMultikey (inside toWire) throws OriginError.
-      final id = t.sendMessage(OutgoingMessage(
-        clientTempId: 'tmp1',
-        channelId: 'c1',
-        body: 'hello',
-        origin: OriginEnvelope(
-          keyVersion: 1,
-          rawPublicKey: Uint8List(10),
-          clientMsgId: 'tmp1',
-          signedAtMs: 1,
-          sig: Uint8List(64),
+      final id = t.sendMessage(
+        OutgoingMessage(
+          clientTempId: 'tmp1',
+          channelId: 'c1',
+          body: 'hello',
+          origin: OriginEnvelope(
+            keyVersion: 1,
+            rawPublicKey: Uint8List(10),
+            clientMsgId: 'tmp1',
+            signedAtMs: 1,
+            sig: Uint8List(64),
+          ),
         ),
-      ));
+      );
       expect(id, 'tmp1', reason: 'never throws — the message still sends');
       final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
-      expect(sent.contains('"origin"'), isFalse,
-          reason: 'malformed origin stripped; message emitted unsigned');
+      expect(
+        sent.contains('"origin"'),
+        isFalse,
+        reason: 'malformed origin stripped; message emitted unsigned',
+      );
       expect(sent.contains('"body":"hello"'), isTrue);
     });
 
@@ -504,22 +591,29 @@ void main() {
         carriesOrigin: () => false, // gateway advertises NO origin carriage
       );
       await t.connect();
-      final id = t.sendMessage(OutgoingMessage(
-        clientTempId: 'tmp1',
-        channelId: 'c1',
-        body: 'hello',
-        origin: OriginEnvelope(
-          keyVersion: 1,
-          rawPublicKey: Uint8List(32), // a VALID origin — gate, not malformation
-          clientMsgId: 'tmp1',
-          signedAtMs: 1,
-          sig: Uint8List(64),
+      final id = t.sendMessage(
+        OutgoingMessage(
+          clientTempId: 'tmp1',
+          channelId: 'c1',
+          body: 'hello',
+          origin: OriginEnvelope(
+            keyVersion: 1,
+            rawPublicKey: Uint8List(
+              32,
+            ), // a VALID origin — gate, not malformation
+            clientMsgId: 'tmp1',
+            signedAtMs: 1,
+            sig: Uint8List(64),
+          ),
         ),
-      ));
+      );
       expect(id, 'tmp1', reason: 'the message still sends, just unsigned');
       final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
-      expect(sent.contains('"origin"'), isFalse,
-          reason: 'non-carriage gateway → origin withheld, message unsigned');
+      expect(
+        sent.contains('"origin"'),
+        isFalse,
+        reason: 'non-carriage gateway → origin withheld, message unsigned',
+      );
       expect(sent.contains('"body":"hello"'), isTrue);
     });
 
@@ -533,18 +627,20 @@ void main() {
         carriesOrigin: () => true,
       );
       await t.connect();
-      t.sendMessage(OutgoingMessage(
-        clientTempId: 'tmp1',
-        channelId: 'c1',
-        body: 'hello',
-        origin: OriginEnvelope(
-          keyVersion: 1,
-          rawPublicKey: Uint8List(32),
-          clientMsgId: 'tmp1',
-          signedAtMs: 1,
-          sig: Uint8List(64),
+      t.sendMessage(
+        OutgoingMessage(
+          clientTempId: 'tmp1',
+          channelId: 'c1',
+          body: 'hello',
+          origin: OriginEnvelope(
+            keyVersion: 1,
+            rawPublicKey: Uint8List(32),
+            clientMsgId: 'tmp1',
+            signedAtMs: 1,
+            sig: Uint8List(64),
+          ),
         ),
-      ));
+      );
       final sent = fake.sent.firstWhere((f) => f.contains('"type":"send"'));
       expect(sent.contains('"origin"'), isTrue);
     });
@@ -580,51 +676,60 @@ void main() {
 
     // cage-match Carnot: prove the full loop — a stranger seeds OFF, the
     // on-connect refresh flips the gate ON, and a subsequent send then emits.
-    test('onConnected refresh flips the gate → a later send emits origin',
-        () async {
-      late FakeWebSocketChannel fake;
-      var carries = false; // stranger seed: OFF until proven
-      final t = GatewayTransport(
-        wsBaseUrl: 'ws://host',
-        tokens: tokens(),
-        channelFactory: (uri) => fake = FakeWebSocketChannel(),
-        carriesOrigin: () => carries,
-        onConnected: () async => carries = true, // endpoint proves carriage
-      );
-      await t.connect();
-      await Future<void>.delayed(Duration.zero); // let the fire-and-forget hook run
-      OutgoingMessage msg(String id) => OutgoingMessage(
-            clientTempId: id,
-            channelId: 'c1',
-            body: 'hi',
-            origin: OriginEnvelope(
-              keyVersion: 1,
-              rawPublicKey: Uint8List(32),
-              clientMsgId: id,
-              signedAtMs: 1,
-              sig: Uint8List(64),
-            ),
-          );
-      t.sendMessage(msg('after'));
-      final sent = fake.sent.lastWhere((f) => f.contains('"type":"send"'));
-      expect(sent.contains('"origin"'), isTrue,
-          reason: 'gate flipped ON by the refresh → this send carries origin');
-    });
+    test(
+      'onConnected refresh flips the gate → a later send emits origin',
+      () async {
+        late FakeWebSocketChannel fake;
+        var carries = false; // stranger seed: OFF until proven
+        final t = GatewayTransport(
+          wsBaseUrl: 'ws://host',
+          tokens: tokens(),
+          channelFactory: (uri) => fake = FakeWebSocketChannel(),
+          carriesOrigin: () => carries,
+          onConnected: () async => carries = true, // endpoint proves carriage
+        );
+        await t.connect();
+        await Future<void>.delayed(
+          Duration.zero,
+        ); // let the fire-and-forget hook run
+        OutgoingMessage msg(String id) => OutgoingMessage(
+          clientTempId: id,
+          channelId: 'c1',
+          body: 'hi',
+          origin: OriginEnvelope(
+            keyVersion: 1,
+            rawPublicKey: Uint8List(32),
+            clientMsgId: id,
+            signedAtMs: 1,
+            sig: Uint8List(64),
+          ),
+        );
+        t.sendMessage(msg('after'));
+        final sent = fake.sent.lastWhere((f) => f.contains('"type":"send"'));
+        expect(
+          sent.contains('"origin"'),
+          isTrue,
+          reason: 'gate flipped ON by the refresh → this send carries origin',
+        );
+      },
+    );
 
-    test('subscribe awaits the suback and returns the per-channel fence map',
-        () async {
-      late FakeWebSocketChannel fake;
-      final t = GatewayTransport(
-        wsBaseUrl: 'ws://host',
-        tokens: tokens(),
-        channelFactory: (uri) => fake = FakeWebSocketChannel(),
-      );
-      await t.connect();
-      final subF = t.subscribe(['c1', 'c2']);
-      // c2 is an empty channel -> "" fence (no history boundary).
-      fake.emit('{"type":"suback","channel_fences":{"c1":"01J","c2":""}}');
-      expect(await subF, {'c1': '01J', 'c2': ''});
-    });
+    test(
+      'subscribe awaits the suback and returns the per-channel fence map',
+      () async {
+        late FakeWebSocketChannel fake;
+        final t = GatewayTransport(
+          wsBaseUrl: 'ws://host',
+          tokens: tokens(),
+          channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        );
+        await t.connect();
+        final subF = t.subscribe(['c1', 'c2']);
+        // c2 is an empty channel -> "" fence (no history boundary).
+        fake.emit('{"type":"suback","channel_fences":{"c1":"01J","c2":""}}');
+        expect(await subF, {'c1': '01J', 'c2': ''});
+      },
+    );
 
     test('a suback with no pending subscribe is ignored, not fatal', () async {
       // The transport's reconnect resubscribe fires a frame without an awaiter;
@@ -660,23 +765,27 @@ void main() {
       fake.emit('{"type":"suback","channel_fences":{"c1":"01A"}}');
       // The real ack for our subscribe (covers c2) arrives next.
       fake.emit('{"type":"suback","channel_fences":{"c1":"01A","c2":"01B"}}');
-      expect(await subF, {'c1': '01A', 'c2': '01B'},
-          reason: 'must resolve with the ack that actually carries c2');
+      expect(await subF, {
+        'c1': '01A',
+        'c2': '01B',
+      }, reason: 'must resolve with the ack that actually carries c2');
     });
 
-    test('a pending subscribe rejects when the socket drops before its suback',
-        () async {
-      late FakeWebSocketChannel fake;
-      final t = GatewayTransport(
-        wsBaseUrl: 'ws://host',
-        tokens: tokens(),
-        channelFactory: (uri) => fake = FakeWebSocketChannel(),
-      );
-      await t.connect();
-      final subF = t.subscribe(['c1']); // no suback emitted
-      fake.closeFromServer(); // drop before the ack arrives
-      await expectLater(subF, throwsA(isA<TransportError>()));
-    });
+    test(
+      'a pending subscribe rejects when the socket drops before its suback',
+      () async {
+        late FakeWebSocketChannel fake;
+        final t = GatewayTransport(
+          wsBaseUrl: 'ws://host',
+          tokens: tokens(),
+          channelFactory: (uri) => fake = FakeWebSocketChannel(),
+        );
+        await t.connect();
+        final subF = t.subscribe(['c1']); // no suback emitted
+        fake.closeFromServer(); // drop before the ack arrives
+        await expectLater(subF, throwsA(isA<TransportError>()));
+      },
+    );
 
     test('connect failure with dead refresh -> unauthenticated', () async {
       final t = GatewayTransport(
@@ -689,7 +798,9 @@ void main() {
             FakeWebSocketChannel(readyError: Exception('refused')),
       );
       final gotUnauth = expectLater(
-          t.connectionState, emitsThrough(ConnectionState.unauthenticated));
+        t.connectionState,
+        emitsThrough(ConnectionState.unauthenticated),
+      );
       await t.connect();
       await gotUnauth;
     });

@@ -38,8 +38,7 @@ class CachedUserStore {
     final raw = _prefs!.getString(_key);
     if (raw == null) return null;
     try {
-      return AppUser.fromJson(
-          (jsonDecode(raw) as Map).cast<String, dynamic>());
+      return AppUser.fromJson((jsonDecode(raw) as Map).cast<String, dynamic>());
     } catch (_) {
       return null;
     }

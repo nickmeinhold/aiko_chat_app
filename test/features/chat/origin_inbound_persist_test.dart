@@ -27,10 +27,14 @@ void main() {
   });
   tearDown(() => cache.close());
 
-  Future<MessageRow> rawRow(String ulid) async => MessageRow.fromRow(await cache
-      .customSelect('SELECT * FROM messages WHERE server_ulid = ?',
-          variables: [Variable(ulid)])
-      .getSingle());
+  Future<MessageRow> rawRow(String ulid) async => MessageRow.fromRow(
+    await cache
+        .customSelect(
+          'SELECT * FROM messages WHERE server_ulid = ?',
+          variables: [Variable(ulid)],
+        )
+        .getSingle(),
+  );
 
   Future<Message> readDomain(String ulid) async {
     final rows = await cache.watchChannel(_chan).first;
@@ -56,8 +60,10 @@ void main() {
       replyTo: replyTo,
     );
     final sig = await sign(signer, payload);
-    final origin =
-        OriginEnvelope.fromSignature(sig, clientMsgId: signedCmid).toWire();
+    final origin = OriginEnvelope.fromSignature(
+      sig,
+      clientMsgId: signedCmid,
+    ).toWire();
     return {
       'msg_id': ulid,
       'channel_id': _chan,
@@ -76,85 +82,138 @@ void main() {
     final verified = o == null
         ? m
         : m.copyWith(
-            originCryptoValid: await verifyOrigin(o,
-                channelId: m.channelId, body: m.body, replyTo: m.replyToId));
+            originCryptoValid: await verifyOrigin(
+              o,
+              channelId: m.channelId,
+              body: m.body,
+              replyTo: m.replyToId,
+            ),
+          );
     await cache.upsertInbound(verified);
   }
 
   group('fromView — inbound origin shape gate (T2)', () {
     test('a valid origin is admitted and carried on the Message', () async {
-      final m = Message.fromView(await signedView(
-          ulid: '01ULID', signedCmid: 'sender-tmp-1', signedBody: 'hi'));
+      final m = Message.fromView(
+        await signedView(
+          ulid: '01ULID',
+          signedCmid: 'sender-tmp-1',
+          signedBody: 'hi',
+        ),
+      );
       expect(m.origin, isNotNull);
       expect(m.origin!.clientMsgId, 'sender-tmp-1');
-      expect(m.originCryptoValid, isNull, reason: 'verify is async, not in fromView');
+      expect(
+        m.originCryptoValid,
+        isNull,
+        reason: 'verify is async, not in fromView',
+      );
     });
 
-    test('a MALFORMED origin is dropped; the message is still delivered', () async {
-      final view = await signedView(
-          ulid: '01ULID', signedCmid: 'c', signedBody: 'hi');
-      (view['origin'] as Map)['extra'] = 'boom'; // breaks the exact-key-set gate
-      final m = Message.fromView(view);
-      expect(m.origin, isNull, reason: 'bad envelope dropped');
-      expect(m.body, 'hi', reason: 'message survives (absent == unverified)');
-    });
+    test(
+      'a MALFORMED origin is dropped; the message is still delivered',
+      () async {
+        final view = await signedView(
+          ulid: '01ULID',
+          signedCmid: 'c',
+          signedBody: 'hi',
+        );
+        (view['origin'] as Map)['extra'] =
+            'boom'; // breaks the exact-key-set gate
+        final m = Message.fromView(view);
+        expect(m.origin, isNull, reason: 'bad envelope dropped');
+        expect(m.body, 'hi', reason: 'message survives (absent == unverified)');
+      },
+    );
   });
 
   group('persist + verify (T5) into typed columns (T3)', () {
-    test('a valid inbound origin persists verified=1 into the typed columns',
-        () async {
-      await persist(await signedView(
-          ulid: '01A', signedCmid: 'sender-tmp', signedBody: 'hello'));
-      final row = await rawRow('01A');
-      expect(row.sig, isNotNull);
-      expect(row.senderPubkey, isNotNull);
-      expect(row.signedAtMs, 1720000000000);
-      expect(row.keyVersion, 1);
-      expect(row.originCryptoValid, 1, reason: 'verified at ingest');
-      // The signed id is stored because it differs from the ULID PK.
-      expect(row.signedClientMsgId, 'sender-tmp');
-    });
+    test(
+      'a valid inbound origin persists verified=1 into the typed columns',
+      () async {
+        await persist(
+          await signedView(
+            ulid: '01A',
+            signedCmid: 'sender-tmp',
+            signedBody: 'hello',
+          ),
+        );
+        final row = await rawRow('01A');
+        expect(row.sig, isNotNull);
+        expect(row.senderPubkey, isNotNull);
+        expect(row.signedAtMs, 1720000000000);
+        expect(row.keyVersion, 1);
+        expect(row.originCryptoValid, 1, reason: 'verified at ingest');
+        // The signed id is stored because it differs from the ULID PK.
+        expect(row.signedClientMsgId, 'sender-tmp');
+      },
+    );
 
     test('a well-formed but INVALID signature persists verified=0 (carried-but-'
         'invalid), sig still stored', () async {
       // Sign over "real", but the view body is "tampered" → sig can't verify.
-      await persist(await signedView(
+      await persist(
+        await signedView(
           ulid: '01B',
           signedCmid: 'c',
           signedBody: 'real',
-          viewBody: 'tampered'));
+          viewBody: 'tampered',
+        ),
+      );
       final row = await rawRow('01B');
       expect(row.sig, isNotNull, reason: 'carried, so stored');
       expect(row.originCryptoValid, 0, reason: 'body mismatch → unverifiable');
     });
 
-    test('round-trips: _toDomain reconstructs the origin + verdict from columns',
-        () async {
-      await persist(await signedView(
-          ulid: '01C', signedCmid: 'sender-tmp', signedBody: 'rt'));
-      final m = await readDomain('01C');
-      expect(m.originCryptoValid, isTrue);
-      expect(m.origin, isNotNull);
-      expect(m.origin!.clientMsgId, 'sender-tmp',
-          reason: 'signed id survives the round-trip, not the ULID');
-      // The reconstructed origin re-verifies against the message content.
-      expect(
-          await verifyOrigin(m.origin!,
-              channelId: m.channelId, body: m.body, replyTo: m.replyToId),
-          isTrue);
-    });
+    test(
+      'round-trips: _toDomain reconstructs the origin + verdict from columns',
+      () async {
+        await persist(
+          await signedView(
+            ulid: '01C',
+            signedCmid: 'sender-tmp',
+            signedBody: 'rt',
+          ),
+        );
+        final m = await readDomain('01C');
+        expect(m.originCryptoValid, isTrue);
+        expect(m.origin, isNotNull);
+        expect(
+          m.origin!.clientMsgId,
+          'sender-tmp',
+          reason: 'signed id survives the round-trip, not the ULID',
+        );
+        // The reconstructed origin re-verifies against the message content.
+        expect(
+          await verifyOrigin(
+            m.origin!,
+            channelId: m.channelId,
+            body: m.body,
+            replyTo: m.replyToId,
+          ),
+          isTrue,
+        );
+      },
+    );
   });
 
   group('collapse / set-on-success law (T4)', () {
-    test('SET-on-success: a first fanout INSERT sets the origin columns', () async {
-      await persist(await signedView(
-          ulid: '01D', signedCmid: 'c', signedBody: 'x'));
-      expect((await rawRow('01D')).originCryptoValid, 1);
-    });
+    test(
+      'SET-on-success: a first fanout INSERT sets the origin columns',
+      () async {
+        await persist(
+          await signedView(ulid: '01D', signedCmid: 'c', signedBody: 'x'),
+        );
+        expect((await rawRow('01D')).originCryptoValid, 1);
+      },
+    );
 
     test('a content-identical re-echo PRESERVES the verdict + sig', () async {
-      final view =
-          await signedView(ulid: '01E', signedCmid: 'c', signedBody: 'same');
+      final view = await signedView(
+        ulid: '01E',
+        signedCmid: 'c',
+        signedBody: 'same',
+      );
       await persist(view);
       final first = await rawRow('01E');
       await persist(view); // identical re-echo (history re-sync)
@@ -168,83 +227,118 @@ void main() {
       // Server re-echoes the same ULID with a NEW body AND a new envelope signing
       // that new body. The origin follows the incoming body → SET (verified=1),
       // never cleared at the zero-crossing.
-      await persist(await signedView(
-          ulid: '01H', signedCmid: 'c1', signedBody: 'v1'));
-      await persist(await signedView(
-          ulid: '01H', signedCmid: 'c2', signedBody: 'v2'));
+      await persist(
+        await signedView(ulid: '01H', signedCmid: 'c1', signedBody: 'v1'),
+      );
+      await persist(
+        await signedView(ulid: '01H', signedCmid: 'c2', signedBody: 'v2'),
+      );
       final row = await rawRow('01H');
       expect(row.body, 'v2');
-      expect(row.sig, isNotNull, reason: 'the fresh origin replaces the old one');
-      expect(row.originCryptoValid, 1, reason: 'the new origin signs the new body');
+      expect(
+        row.sig,
+        isNotNull,
+        reason: 'the fresh origin replaces the old one',
+      );
+      expect(
+        row.originCryptoValid,
+        1,
+        reason: 'the new origin signs the new body',
+      );
       expect(row.signedClientMsgId, 'c2', reason: 'the new signed id, not c1');
     });
 
-    test('a diverged-body re-echo CLEARS sig + verdict + signed id (coherence)',
-        () async {
-      await persist(await signedView(
-          ulid: '01F', signedCmid: 'c', signedBody: 'orig'));
-      expect((await rawRow('01F')).sig, isNotNull);
+    test(
+      'a diverged-body re-echo CLEARS sig + verdict + signed id (coherence)',
+      () async {
+        await persist(
+          await signedView(ulid: '01F', signedCmid: 'c', signedBody: 'orig'),
+        );
+        expect((await rawRow('01F')).sig, isNotNull);
 
-      // Server re-echoes the SAME ULID with an edited body and no origin.
-      await cache.upsertInbound(Message(
-        clientTempId: '01F',
-        id: '01F',
-        channelId: _chan,
-        sender: const MessageSender(kind: SenderKind.human),
-        body: 'edited',
-        createdAt: DateTime.now().toUtc(),
-        deliveryState: DeliveryState.sent,
-      ));
-      final row = await rawRow('01F');
-      expect(row.body, 'edited');
-      expect(row.sig, isNull, reason: 'stale sig cleared');
-      expect(row.originCryptoValid, isNull, reason: 'verdict clears WITH the sig');
-      expect(row.signedClientMsgId, isNull, reason: 'signed id clears too');
-    });
+        // Server re-echoes the SAME ULID with an edited body and no origin.
+        await cache.upsertInbound(
+          Message(
+            clientTempId: '01F',
+            id: '01F',
+            channelId: _chan,
+            sender: const MessageSender(kind: SenderKind.human),
+            body: 'edited',
+            createdAt: DateTime.now().toUtc(),
+            deliveryState: DeliveryState.sent,
+          ),
+        );
+        final row = await rawRow('01F');
+        expect(row.body, 'edited');
+        expect(row.sig, isNull, reason: 'stale sig cleared');
+        expect(
+          row.originCryptoValid,
+          isNull,
+          reason: 'verdict clears WITH the sig',
+        );
+        expect(row.signedClientMsgId, isNull, reason: 'signed id clears too');
+      },
+    );
   });
 
   // cage-match Carnot/Tesla: post-emit, a self-echo (ru) carrying a verified origin
   // can land before our ack; the collapse must ADOPT ru's carriage state onto the
   // survivor, not let it die with the deleted row.
-  test('collapse ADOPTS a carried self-echo origin (not lost when ru is deleted)',
-      () async {
-    const myTmp = 'my-tmp-echo';
-    // 1) our optimistic outbound row with a LOCAL signature (no verdict).
-    final payload = SignedPayload(
-      rawPublicKey: signer.rawPublicKey,
-      channelId: _chan,
-      clientMsgId: myTmp,
-      signedAtMs: 1720000000000,
-      body: 'echo me',
-    );
-    final mySig = await sign(signer, payload);
-    await cache.insertOptimistic(
-      Message(
-        clientTempId: myTmp,
+  test(
+    'collapse ADOPTS a carried self-echo origin (not lost when ru is deleted)',
+    () async {
+      const myTmp = 'my-tmp-echo';
+      // 1) our optimistic outbound row with a LOCAL signature (no verdict).
+      final payload = SignedPayload(
+        rawPublicKey: signer.rawPublicKey,
         channelId: _chan,
-        sender: const MessageSender(userId: 'me', kind: SenderKind.human),
+        clientMsgId: myTmp,
+        signedAtMs: 1720000000000,
         body: 'echo me',
-        createdAt: DateTime.now().toUtc(),
-        deliveryState: DeliveryState.sending,
-      ),
-      signature: mySig,
-    );
-    // 2) the gateway self-echo lands FIRST (verified origin, same content), signed
-    //    id == our temp id (what we'd have emitted).
-    await persist(await signedView(
-        ulid: '01ECHO', signedCmid: myTmp, signedBody: 'echo me'));
-    // 3) our ack collapses the optimistic row onto the echo's ULID.
-    await cache.reconcileAck(
-        myTmp, '01ECHO', DateTime.parse('2026-01-01T00:00:00Z').toUtc());
+      );
+      final mySig = await sign(signer, payload);
+      await cache.insertOptimistic(
+        Message(
+          clientTempId: myTmp,
+          channelId: _chan,
+          sender: const MessageSender(userId: 'me', kind: SenderKind.human),
+          body: 'echo me',
+          createdAt: DateTime.now().toUtc(),
+          deliveryState: DeliveryState.sending,
+        ),
+        signature: mySig,
+      );
+      // 2) the gateway self-echo lands FIRST (verified origin, same content), signed
+      //    id == our temp id (what we'd have emitted).
+      await persist(
+        await signedView(
+          ulid: '01ECHO',
+          signedCmid: myTmp,
+          signedBody: 'echo me',
+        ),
+      );
+      // 3) our ack collapses the optimistic row onto the echo's ULID.
+      await cache.reconcileAck(
+        myTmp,
+        '01ECHO',
+        DateTime.parse('2026-01-01T00:00:00Z').toUtc(),
+      );
 
-    final rows = await cache.watchChannel(_chan).first;
-    final survivor = rows.firstWhere((m) => m.id == '01ECHO');
-    expect(survivor.originCryptoValid, isTrue,
-        reason: 'the carried verdict survives the collapse');
-    expect(survivor.origin, isNotNull,
-        reason: 'the carried origin is adopted, not lost with ru');
-    expect(survivor.origin!.clientMsgId, myTmp);
-  });
+      final rows = await cache.watchChannel(_chan).first;
+      final survivor = rows.firstWhere((m) => m.id == '01ECHO');
+      expect(
+        survivor.originCryptoValid,
+        isTrue,
+        reason: 'the carried verdict survives the collapse',
+      );
+      expect(
+        survivor.origin,
+        isNotNull,
+        reason: 'the carried origin is adopted, not lost with ru',
+      );
+      expect(survivor.origin!.clientMsgId, myTmp);
+    },
+  );
 
   group('named trust-boundary limitations (cage-match Carnot)', () {
     // HIGH: originCryptoValid proves signature-over-content, NOT message-identity.
@@ -256,15 +350,18 @@ void main() {
         '(content-integrity, not position-binding)', () async {
       // Same signer, same signed body/cmid, but delivered under two different ULIDs.
       Map<String, dynamic> v(String ulid) => {
-            'msg_id': ulid,
-            'channel_id': _chan,
-            'sender': {'user_id': 'other', 'kind': 'human', 'label': 'O'},
-            'body': 'shared',
-            'created_at': '2026-01-01T00:00:00Z',
-            'reply_to': null,
-          };
+        'msg_id': ulid,
+        'channel_id': _chan,
+        'sender': {'user_id': 'other', 'kind': 'human', 'label': 'O'},
+        'body': 'shared',
+        'created_at': '2026-01-01T00:00:00Z',
+        'reply_to': null,
+      };
       final signed = await signedView(
-          ulid: 'IGNORED', signedCmid: 'sig-over-shared', signedBody: 'shared');
+        ulid: 'IGNORED',
+        signedCmid: 'sig-over-shared',
+        signedBody: 'shared',
+      );
       final a = v('01AAA')..['origin'] = signed['origin'];
       final b = v('01BBB')..['origin'] = signed['origin'];
       await persist(a);
@@ -277,41 +374,51 @@ void main() {
 
     // MEDIUM: our own OUTBOUND local signature populates the same sig columns but
     // was never carried on the wire → it must NOT surface as Message.origin.
-    test('an outbound local signature does NOT surface as a carried origin',
-        () async {
-      final payload = SignedPayload(
-        rawPublicKey: signer.rawPublicKey,
-        channelId: _chan,
-        clientMsgId: 'my-tmp',
-        signedAtMs: 1720000000000,
-        body: 'mine',
-      );
-      final mySig = await sign(signer, payload);
-      await cache.insertOptimistic(
-        Message(
-          clientTempId: 'my-tmp',
+    test(
+      'an outbound local signature does NOT surface as a carried origin',
+      () async {
+        final payload = SignedPayload(
+          rawPublicKey: signer.rawPublicKey,
           channelId: _chan,
-          sender: const MessageSender(userId: 'me', kind: SenderKind.human),
+          clientMsgId: 'my-tmp',
+          signedAtMs: 1720000000000,
           body: 'mine',
-          createdAt: DateTime.now().toUtc(),
-          deliveryState: DeliveryState.sending,
-        ),
-        signature: mySig,
-      );
-      final rows = await cache.watchChannel(_chan).first;
-      final mine = rows.firstWhere((m) => m.clientTempId == 'my-tmp');
-      // sig columns ARE set (local verifiable history)...
-      expect(
-          MessageRow.fromRow(await cache
-                  .customSelect('SELECT * FROM messages WHERE client_temp_id = ?',
-                      variables: [Variable('my-tmp')])
-                  .getSingle())
-              .sig,
-          isNotNull);
-      // ...but Message.origin is null — nothing was carried on the wire.
-      expect(mine.origin, isNull, reason: 'local sig is not a carried origin');
-      expect(mine.originCryptoValid, isNull);
-    });
+        );
+        final mySig = await sign(signer, payload);
+        await cache.insertOptimistic(
+          Message(
+            clientTempId: 'my-tmp',
+            channelId: _chan,
+            sender: const MessageSender(userId: 'me', kind: SenderKind.human),
+            body: 'mine',
+            createdAt: DateTime.now().toUtc(),
+            deliveryState: DeliveryState.sending,
+          ),
+          signature: mySig,
+        );
+        final rows = await cache.watchChannel(_chan).first;
+        final mine = rows.firstWhere((m) => m.clientTempId == 'my-tmp');
+        // sig columns ARE set (local verifiable history)...
+        expect(
+          MessageRow.fromRow(
+            await cache
+                .customSelect(
+                  'SELECT * FROM messages WHERE client_temp_id = ?',
+                  variables: [Variable('my-tmp')],
+                )
+                .getSingle(),
+          ).sig,
+          isNotNull,
+        );
+        // ...but Message.origin is null — nothing was carried on the wire.
+        expect(
+          mine.origin,
+          isNull,
+          reason: 'local sig is not a carried origin',
+        );
+        expect(mine.originCryptoValid, isNull);
+      },
+    );
   });
 
   test('upsertInbound REJECTS a carried origin with no verdict — the illegal '
@@ -323,7 +430,8 @@ void main() {
     // production door `_persistInbound` always computes the verdict first, so this
     // is unreachable in the real app; the guard makes the contract caller-proof.
     final m = Message.fromView(
-        await signedView(ulid: '01SEAL', signedCmid: 'c', signedBody: 'hi'));
+      await signedView(ulid: '01SEAL', signedCmid: 'c', signedBody: 'hi'),
+    );
     expect(m.originCryptoValid, isNull, reason: 'verify has not run');
     await expectLater(cache.upsertInbound(m), throwsArgumentError);
   });

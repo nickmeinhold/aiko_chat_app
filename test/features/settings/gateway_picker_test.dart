@@ -35,7 +35,8 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       final c = ProviderContainer(
-          overrides: [sharedPreferencesProvider.overrideWithValue(prefs)]);
+        overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      );
       addTearDown(c.dispose);
 
       expect(c.read(configProvider).httpBaseUrl, kDefaultGatewayBaseUrl);
@@ -45,7 +46,8 @@ void main() {
       SharedPreferences.setMockInitialValues({_kKey: 'http://localhost:8095/'});
       final prefs = await SharedPreferences.getInstance();
       final c = ProviderContainer(
-          overrides: [sharedPreferencesProvider.overrideWithValue(prefs)]);
+        overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      );
       addTearDown(c.dispose);
 
       // Resolved AND normalized (trailing slash stripped).
@@ -56,81 +58,130 @@ void main() {
   group('AuthController.switchGateway', () {
     /// A logged-in container: real config + real auth controller, leaf seams
     /// faked. Seeded tokens + FakeRestApi.me() restore the session to logged-in.
-    Future<({ProviderContainer container, InMemoryTokenStore store, FakeChatTransport transport, SharedPreferences prefs})>
-        loggedInContainer() async {
+    Future<
+      ({
+        ProviderContainer container,
+        InMemoryTokenStore store,
+        FakeChatTransport transport,
+        SharedPreferences prefs,
+      })
+    >
+    loggedInContainer() async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       final store = InMemoryTokenStore(
-          const AuthTokens(accessToken: 'a', refreshToken: 'r'));
+        const AuthTokens(accessToken: 'a', refreshToken: 'r'),
+      );
       final transport = FakeChatTransport();
       late final ProviderContainer container;
-      container = ProviderContainer(overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        secureTokenStoreProvider.overrideWithValue(store),
-        restApiProvider.overrideWithValue(FakeRestApi()),
-        transportProvider.overrideWithValue(transport),
-        tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
-          store: store,
-          remoteRefresh: (_) async => 'a2',
-          onUnauthenticated: () => container.read(authEventsProvider).add(null),
-        )),
-      ]);
+      container = ProviderContainer(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+          secureTokenStoreProvider.overrideWithValue(store),
+          restApiProvider.overrideWithValue(FakeRestApi()),
+          transportProvider.overrideWithValue(transport),
+          tokenProviderProvider.overrideWithValue(
+            DefaultTokenProvider(
+              store: store,
+              remoteRefresh: (_) async => 'a2',
+              onUnauthenticated: () =>
+                  container.read(authEventsProvider).add(null),
+            ),
+          ),
+        ],
+      );
       // Drive the cold-start restore to a logged-in session.
       await container.read(authControllerProvider.future);
-      expect(container.read(authControllerProvider).value, isNotNull,
-          reason: 'precondition: session restored to logged-in');
+      expect(
+        container.read(authControllerProvider).value,
+        isNotNull,
+        reason: 'precondition: session restored to logged-in',
+      );
       // Initial gateway is the prod default (nothing persisted).
       expect(
-          container.read(configProvider).httpBaseUrl, kDefaultGatewayBaseUrl);
-      return (container: container, store: store, transport: transport, prefs: prefs);
+        container.read(configProvider).httpBaseUrl,
+        kDefaultGatewayBaseUrl,
+      );
+      return (
+        container: container,
+        store: store,
+        transport: transport,
+        prefs: prefs,
+      );
     }
 
-    test('switching to a DIFFERENT gateway tears down the session AND switches',
-        () async {
-      final h = await loggedInContainer();
-      addTearDown(h.container.dispose);
+    test(
+      'switching to a DIFFERENT gateway tears down the session AND switches',
+      () async {
+        final h = await loggedInContainer();
+        addTearDown(h.container.dispose);
 
-      await h.container
-          .read(authControllerProvider.notifier)
-          .switchGateway('http://localhost:8095');
+        await h.container
+            .read(authControllerProvider.notifier)
+            .switchGateway('http://localhost:8095');
 
-      // Session torn down — the JWT for the old gateway is gone before any call
-      // could fire it at the new host.
-      expect(await h.store.read(), isNull, reason: 'tokens cleared on switch');
-      expect(h.transport.disconnectCalls, greaterThanOrEqualTo(1),
-          reason: 'old socket disconnected');
-      expect(h.container.read(authControllerProvider).value, isNull,
-          reason: 'logged out → router lands on /login for the new gateway');
-      // Config flipped + persisted.
-      expect(h.container.read(configProvider).httpBaseUrl,
-          'http://localhost:8095');
-      expect(h.prefs.getString(_kKey), 'http://localhost:8095');
-    });
+        // Session torn down — the JWT for the old gateway is gone before any call
+        // could fire it at the new host.
+        expect(
+          await h.store.read(),
+          isNull,
+          reason: 'tokens cleared on switch',
+        );
+        expect(
+          h.transport.disconnectCalls,
+          greaterThanOrEqualTo(1),
+          reason: 'old socket disconnected',
+        );
+        expect(
+          h.container.read(authControllerProvider).value,
+          isNull,
+          reason: 'logged out → router lands on /login for the new gateway',
+        );
+        // Config flipped + persisted.
+        expect(
+          h.container.read(configProvider).httpBaseUrl,
+          'http://localhost:8095',
+        );
+        expect(h.prefs.getString(_kKey), 'http://localhost:8095');
+      },
+    );
 
-    test('publishes loading BEFORE logged-out, so login is blocked mid-switch',
-        () async {
-      // Carnot F1: a plain logout() publishes data(null) before teardown +
-      // config-flip, exposing a window where the router lands on /login against
-      // the OLD gateway. The switch must instead pass through `loading` (router
-      // → /splash) until the config has flipped. RED-prove: revert switchGateway
-      // to `await logout()` and the loading state never appears → this fails.
-      final h = await loggedInContainer();
-      addTearDown(h.container.dispose);
+    test(
+      'publishes loading BEFORE logged-out, so login is blocked mid-switch',
+      () async {
+        // Carnot F1: a plain logout() publishes data(null) before teardown +
+        // config-flip, exposing a window where the router lands on /login against
+        // the OLD gateway. The switch must instead pass through `loading` (router
+        // → /splash) until the config has flipped. RED-prove: revert switchGateway
+        // to `await logout()` and the loading state never appears → this fails.
+        final h = await loggedInContainer();
+        addTearDown(h.container.dispose);
 
-      final sawLoading = <bool>[];
-      h.container.listen(authControllerProvider,
-          (_, next) => sawLoading.add(next.isLoading), fireImmediately: false);
+        final sawLoading = <bool>[];
+        h.container.listen(
+          authControllerProvider,
+          (_, next) => sawLoading.add(next.isLoading),
+          fireImmediately: false,
+        );
 
-      await h.container
-          .read(authControllerProvider.notifier)
-          .switchGateway('http://localhost:8095');
+        await h.container
+            .read(authControllerProvider.notifier)
+            .switchGateway('http://localhost:8095');
 
-      expect(sawLoading.contains(true), isTrue,
-          reason: 'switch parked auth in loading → router /splash, login blocked');
-      expect(sawLoading.last, isFalse,
-          reason: 'settles at a concrete logged-out state, not stuck loading');
-      expect(h.container.read(authControllerProvider).value, isNull);
-    });
+        expect(
+          sawLoading.contains(true),
+          isTrue,
+          reason:
+              'switch parked auth in loading → router /splash, login blocked',
+        );
+        expect(
+          sawLoading.last,
+          isFalse,
+          reason: 'settles at a concrete logged-out state, not stuck loading',
+        );
+        expect(h.container.read(authControllerProvider).value, isNull);
+      },
+    );
 
     test('a teardown failure still flips config to the new gateway (no '
         'old-gateway login window on the error path)', () async {
@@ -142,20 +193,26 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       final store = InMemoryTokenStore(
-          const AuthTokens(accessToken: 'a', refreshToken: 'r'));
+        const AuthTokens(accessToken: 'a', refreshToken: 'r'),
+      );
       final transport = _ThrowingDisconnectTransport();
       late final ProviderContainer container;
-      container = ProviderContainer(overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        secureTokenStoreProvider.overrideWithValue(store),
-        restApiProvider.overrideWithValue(FakeRestApi()),
-        transportProvider.overrideWithValue(transport),
-        tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
-          store: store,
-          remoteRefresh: (_) async => 'a2',
-          onUnauthenticated: () => container.read(authEventsProvider).add(null),
-        )),
-      ]);
+      container = ProviderContainer(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+          secureTokenStoreProvider.overrideWithValue(store),
+          restApiProvider.overrideWithValue(FakeRestApi()),
+          transportProvider.overrideWithValue(transport),
+          tokenProviderProvider.overrideWithValue(
+            DefaultTokenProvider(
+              store: store,
+              remoteRefresh: (_) async => 'a2',
+              onUnauthenticated: () =>
+                  container.read(authEventsProvider).add(null),
+            ),
+          ),
+        ],
+      );
       addTearDown(container.dispose);
       await container.read(authControllerProvider.future);
 
@@ -164,70 +221,96 @@ void main() {
           .read(authControllerProvider.notifier)
           .switchGateway('http://localhost:8095');
 
-      expect(transport.disconnectCalls, greaterThanOrEqualTo(1),
-          reason: 'teardown was attempted');
-      expect(container.read(configProvider).httpBaseUrl, 'http://localhost:8095',
-          reason: 'config flipped to the new gateway despite teardown error');
-      expect(container.read(authControllerProvider).value, isNull);
-    });
-
-    test('a token-CLEAR failure is NOT silently swallowed (it propagates)',
-        () async {
-      // Carnot final re-review: the narrow swallow covers only the best-effort
-      // disconnect. A failure to clear the OLD credential is security-critical
-      // and must surface (→ picker error UI), not vanish. The config still flips
-      // in the finally so the app can't brick on /splash. RED-prove: widen the
-      // catch back to the whole teardown → this stops throwing.
-      SharedPreferences.setMockInitialValues({});
-      final prefs = await SharedPreferences.getInstance();
-      final store = _ThrowingClearStore(
-          const AuthTokens(accessToken: 'a', refreshToken: 'r'));
-      late final ProviderContainer container;
-      container = ProviderContainer(overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        secureTokenStoreProvider.overrideWithValue(store),
-        restApiProvider.overrideWithValue(FakeRestApi()),
-        transportProvider.overrideWithValue(FakeChatTransport()),
-        tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
-          store: store,
-          remoteRefresh: (_) async => 'a2',
-          onUnauthenticated: () => container.read(authEventsProvider).add(null),
-        )),
-      ]);
-      addTearDown(container.dispose);
-      await container.read(authControllerProvider.future);
-
-      await expectLater(
-        container
-            .read(authControllerProvider.notifier)
-            .switchGateway('http://localhost:8095'),
-        throwsA(isA<Exception>()),
-        reason: 'a token-clear failure surfaces instead of being swallowed',
+      expect(
+        transport.disconnectCalls,
+        greaterThanOrEqualTo(1),
+        reason: 'teardown was attempted',
       );
-      // Even so, the config flipped (finally) and the app is logged out — no
-      // stuck-loading brick on /splash.
-      expect(container.read(configProvider).httpBaseUrl, 'http://localhost:8095');
+      expect(
+        container.read(configProvider).httpBaseUrl,
+        'http://localhost:8095',
+        reason: 'config flipped to the new gateway despite teardown error',
+      );
       expect(container.read(authControllerProvider).value, isNull);
     });
 
-    test('re-selecting the CURRENT gateway is a no-op (keeps the session)',
-        () async {
-      final h = await loggedInContainer();
-      addTearDown(h.container.dispose);
+    test(
+      'a token-CLEAR failure is NOT silently swallowed (it propagates)',
+      () async {
+        // Carnot final re-review: the narrow swallow covers only the best-effort
+        // disconnect. A failure to clear the OLD credential is security-critical
+        // and must surface (→ picker error UI), not vanish. The config still flips
+        // in the finally so the app can't brick on /splash. RED-prove: widen the
+        // catch back to the whole teardown → this stops throwing.
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await SharedPreferences.getInstance();
+        final store = _ThrowingClearStore(
+          const AuthTokens(accessToken: 'a', refreshToken: 'r'),
+        );
+        late final ProviderContainer container;
+        container = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(prefs),
+            secureTokenStoreProvider.overrideWithValue(store),
+            restApiProvider.overrideWithValue(FakeRestApi()),
+            transportProvider.overrideWithValue(FakeChatTransport()),
+            tokenProviderProvider.overrideWithValue(
+              DefaultTokenProvider(
+                store: store,
+                remoteRefresh: (_) async => 'a2',
+                onUnauthenticated: () =>
+                    container.read(authEventsProvider).add(null),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+        await container.read(authControllerProvider.future);
 
-      // Same gateway, with a trailing slash — normalization must treat it as a
-      // no-op and NOT log the user out.
-      await h.container
-          .read(authControllerProvider.notifier)
-          .switchGateway('$kDefaultGatewayBaseUrl/');
+        await expectLater(
+          container
+              .read(authControllerProvider.notifier)
+              .switchGateway('http://localhost:8095'),
+          throwsA(isA<Exception>()),
+          reason: 'a token-clear failure surfaces instead of being swallowed',
+        );
+        // Even so, the config flipped (finally) and the app is logged out — no
+        // stuck-loading brick on /splash.
+        expect(
+          container.read(configProvider).httpBaseUrl,
+          'http://localhost:8095',
+        );
+        expect(container.read(authControllerProvider).value, isNull);
+      },
+    );
 
-      expect(await h.store.read(), isNotNull, reason: 'tokens kept — no logout');
-      expect(h.transport.disconnectCalls, 0, reason: 'no teardown on no-op');
-      expect(h.container.read(authControllerProvider).value, isNotNull,
-          reason: 'still logged in');
-      // Persistence untouched (no write on a no-op).
-      expect(h.prefs.getString(_kKey), isNull);
-    });
+    test(
+      're-selecting the CURRENT gateway is a no-op (keeps the session)',
+      () async {
+        final h = await loggedInContainer();
+        addTearDown(h.container.dispose);
+
+        // Same gateway, with a trailing slash — normalization must treat it as a
+        // no-op and NOT log the user out.
+        await h.container
+            .read(authControllerProvider.notifier)
+            .switchGateway('$kDefaultGatewayBaseUrl/');
+
+        expect(
+          await h.store.read(),
+          isNotNull,
+          reason: 'tokens kept — no logout',
+        );
+        expect(h.transport.disconnectCalls, 0, reason: 'no teardown on no-op');
+        expect(
+          h.container.read(authControllerProvider).value,
+          isNotNull,
+          reason: 'still logged in',
+        );
+        // Persistence untouched (no write on a no-op).
+        expect(h.prefs.getString(_kKey), isNull);
+      },
+    );
   });
 
   group('GatewayPickerScreen', () {
@@ -235,35 +318,44 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       final store = InMemoryTokenStore(
-          const AuthTokens(accessToken: 'a', refreshToken: 'r'));
+        const AuthTokens(accessToken: 'a', refreshToken: 'r'),
+      );
       final transport = FakeChatTransport();
       late final ProviderContainer container;
-      container = ProviderContainer(overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        secureTokenStoreProvider.overrideWithValue(store),
-        restApiProvider.overrideWithValue(FakeRestApi()),
-        transportProvider.overrideWithValue(transport),
-        tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
-          store: store,
-          remoteRefresh: (_) async => 'a2',
-          onUnauthenticated: () => container.read(authEventsProvider).add(null),
-        )),
-        // No live directory here — these tests exercise the picker/switch flow,
-        // not discovery. An empty result makes the screen render the known seed
-        // set and fires no real network (which would leak a pending timer).
-        gatewayDirectoryProvider.overrideWith((ref) async => const []),
-      ]);
+      container = ProviderContainer(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+          secureTokenStoreProvider.overrideWithValue(store),
+          restApiProvider.overrideWithValue(FakeRestApi()),
+          transportProvider.overrideWithValue(transport),
+          tokenProviderProvider.overrideWithValue(
+            DefaultTokenProvider(
+              store: store,
+              remoteRefresh: (_) async => 'a2',
+              onUnauthenticated: () =>
+                  container.read(authEventsProvider).add(null),
+            ),
+          ),
+          // No live directory here — these tests exercise the picker/switch flow,
+          // not discovery. An empty result makes the screen render the known seed
+          // set and fires no real network (which would leak a pending timer).
+          gatewayDirectoryProvider.overrideWith((ref) async => const []),
+        ],
+      );
       await container.read(authControllerProvider.future);
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: const MaterialApp(home: GatewayPickerScreen()),
-      ));
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: GatewayPickerScreen()),
+        ),
+      );
       await tester.pumpAndSettle();
       return container;
     }
 
-    testWidgets('renders the presets and marks the active gateway',
-        (tester) async {
+    testWidgets('renders the presets and marks the active gateway', (
+      tester,
+    ) async {
       final container = await pumpPicker(tester);
       addTearDown(container.dispose);
 
@@ -274,8 +366,9 @@ void main() {
       expect(find.text('Connected'), findsOneWidget);
     });
 
-    testWidgets('confirming a different preset switches the gateway',
-        (tester) async {
+    testWidgets('confirming a different preset switches the gateway', (
+      tester,
+    ) async {
       final container = await pumpPicker(tester);
       addTearDown(container.dispose);
 
@@ -287,11 +380,15 @@ void main() {
       await tester.tap(find.text('Switch'));
       await tester.pumpAndSettle();
 
-      expect(container.read(configProvider).httpBaseUrl,
-          'http://localhost:8095');
+      expect(
+        container.read(configProvider).httpBaseUrl,
+        'http://localhost:8095',
+      );
     });
 
-    testWidgets('an invalid custom URL is rejected (no switch)', (tester) async {
+    testWidgets('an invalid custom URL is rejected (no switch)', (
+      tester,
+    ) async {
       final container = await pumpPicker(tester);
       addTearDown(container.dispose);
 
@@ -302,7 +399,9 @@ void main() {
       // No confirm dialog, gateway unchanged.
       expect(find.text('Switch server?'), findsNothing);
       expect(
-          container.read(configProvider).httpBaseUrl, kDefaultGatewayBaseUrl);
+        container.read(configProvider).httpBaseUrl,
+        kDefaultGatewayBaseUrl,
+      );
     });
   });
 }

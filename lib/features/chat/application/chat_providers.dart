@@ -41,13 +41,11 @@ final currentUserProvider = Provider<AppUser?>(
 /// without this — [currentUserProvider] is already current — this covers OTHER
 /// members, refreshed on channel (re)open (a peer's mid-view rename lags until
 /// the next fetch; acceptable for v1).
-final channelRosterProvider =
-    FutureProvider.autoDispose.family<Map<String, String>, String>(
-  (ref, channelId) async {
-    final members = await ref.watch(restApiProvider).listMembers(channelId);
-    return {for (final m in members) m.userId: m.handle};
-  },
-);
+final channelRosterProvider = FutureProvider.autoDispose
+    .family<Map<String, String>, String>((ref, channelId) async {
+      final members = await ref.watch(restApiProvider).listMembers(channelId);
+      return {for (final m in members) m.userId: m.handle};
+    });
 
 /// The channels the user can see. Gated on auth: empty when logged out so the
 /// repository (which derives its subscription set from this) never tries to
@@ -68,8 +66,9 @@ class _ConnectedRetryLatch {
   bool armed = false;
 }
 
-final _connectedRetryLatchProvider =
-    Provider<_ConnectedRetryLatch>((_) => _ConnectedRetryLatch());
+final _connectedRetryLatchProvider = Provider<_ConnectedRetryLatch>(
+  (_) => _ConnectedRetryLatch(),
+);
 
 final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   final user = ref.watch(authControllerProvider).value;
@@ -159,7 +158,8 @@ class _LastKnownDms extends Notifier<({String userId, List<Channel> dms})?> {
 
 final _lastKnownDmsProvider =
     NotifierProvider<_LastKnownDms, ({String userId, List<Channel> dms})?>(
-        _LastKnownDms.new);
+      _LastKnownDms.new,
+    );
 
 /// DMs the island has AUTHORITATIVELY minted (`POST /v1/dm` returned them),
 /// held visible until a DM-list fetch that started AFTER the mint has had its
@@ -236,8 +236,8 @@ class _SeededDms
 
   List<Channel> forUser(String userId) =>
       (state != null && state!.userId == userId)
-          ? state!.items.map((e) => e.dm).toList()
-          : const [];
+      ? state!.items.map((e) => e.dm).toList()
+      : const [];
 
   /// Retire the seeds [server] has CONFIRMED — the ones it now lists itself.
   ///
@@ -261,8 +261,9 @@ class _SeededDms
   void retireConfirmed(String userId, List<Channel> server) {
     if (state == null || state!.userId != userId) return;
     final confirmed = server.map((c) => c.id).toSet();
-    final kept =
-        state!.items.where((e) => !confirmed.contains(e.dm.id)).toList();
+    final kept = state!.items
+        .where((e) => !confirmed.contains(e.dm.id))
+        .toList();
     if (kept.length == state!.items.length) return;
     state = kept.isEmpty ? null : (userId: userId, items: kept);
   }
@@ -270,8 +271,11 @@ class _SeededDms
   void clear() => state = null;
 }
 
-final _seededDmsProvider = NotifierProvider<_SeededDms,
-    ({String userId, List<({Channel dm, int gen})> items})?>(_SeededDms.new);
+final _seededDmsProvider =
+    NotifierProvider<
+      _SeededDms,
+      ({String userId, List<({Channel dm, int gen})> items})?
+    >(_SeededDms.new);
 
 /// [server] plus any still-unretired seed it does not already contain, in a
 /// stable order (server truth first). Ids dedupe, so a confirmed seed appears
@@ -421,23 +425,24 @@ final visibleDmsProvider = Provider.autoDispose<List<Channel>>((ref) {
 /// it happens the DM entry wins, for the same reason the split is by source.
 typedef ConversationSections = ({List<Channel> rooms, List<Channel> dms});
 
-final conversationSectionsProvider =
-    Provider.autoDispose<ConversationSections>((ref) {
-  final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
-  final dms = ref.watch(visibleDmsProvider);
-  final dmIds = {for (final d in dms) d.id};
-  final seen = <String>{};
-  return (
-    rooms: [
-      for (final c in channels)
-        if (!dmIds.contains(c.id) && seen.add(c.id)) c,
-    ],
-    dms: [
-      for (final d in dms)
-        if (seen.add(d.id)) d,
-    ],
-  );
-});
+final conversationSectionsProvider = Provider.autoDispose<ConversationSections>(
+  (ref) {
+    final channels = ref.watch(channelsProvider).value ?? const <Channel>[];
+    final dms = ref.watch(visibleDmsProvider);
+    final dmIds = {for (final d in dms) d.id};
+    final seen = <String>{};
+    return (
+      rooms: [
+        for (final c in channels)
+          if (!dmIds.contains(c.id) && seen.add(c.id)) c,
+      ],
+      dms: [
+        for (final d in dms)
+          if (seen.add(d.id)) d,
+      ],
+    );
+  },
+);
 
 /// The two sections flattened — rooms then DMs. The resolver's view; the UI reads
 /// [conversationSectionsProvider] so its rows and this list cannot disagree.
@@ -461,8 +466,9 @@ final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
 /// all three: a conversation not yet in the navigable set gets room treatment
 /// (a name, a conversation-scoped mute) rather than a peer lookup that cannot
 /// resolve.
-final dmConversationIdsProvider = Provider.autoDispose<Set<String>>((ref) =>
-    {for (final d in ref.watch(conversationSectionsProvider).dms) d.id});
+final dmConversationIdsProvider = Provider.autoDispose<Set<String>>(
+  (ref) => {for (final d in ref.watch(conversationSectionsProvider).dms) d.id},
+);
 
 /// The reconcile engine, fully wired and connected. Construction requires the
 /// authenticated [AppUser] (for optimistic "me" rendering) and the fixed
@@ -474,10 +480,13 @@ final dmConversationIdsProvider = Provider.autoDispose<Set<String>>((ref) =>
 /// must-be-seen signals are surfaced in the shipped app. Making this a first-
 /// class dependency (rather than an inline arg) is what lets a unit test pin
 /// that production wires a non-no-op sink (cage-match Carnot, PR #45).
-final chatTelemetryProvider =
-    Provider<ChatTelemetry>((ref) => const LoggingChatTelemetry());
+final chatTelemetryProvider = Provider<ChatTelemetry>(
+  (ref) => const LoggingChatTelemetry(),
+);
 
-final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) async {
+final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((
+  ref,
+) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) {
     // Not reachable from the UI (the router shows login when logged out), but
@@ -588,7 +597,9 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((ref) 
 /// Riverpod 3 removed `AutoDisposeNotifier` (folded into `Notifier`), so disposal
 /// rides on the provider's `.autoDispose`, not the notifier type.
 final selectedChannelIdProvider =
-    NotifierProvider.autoDispose<SelectedChannelId, String?>(SelectedChannelId.new);
+    NotifierProvider.autoDispose<SelectedChannelId, String?>(
+      SelectedChannelId.new,
+    );
 
 class SelectedChannelId extends Notifier<String?> {
   @override
@@ -614,9 +625,10 @@ class SelectedChannelId extends Notifier<String?> {
 /// [blockedUserIdsProvider] means a fresh block rebuilds this provider and
 /// re-filters immediately. A null `sender.userId` (external actor) is never in the
 /// set, so bot/LLM messages are always kept.
-final messagesProvider =
-    StreamProvider.autoDispose.family<List<Message>, String>(
-        (ref, channelId) => _watchVisibleMessages(ref, channelId));
+final messagesProvider = StreamProvider.autoDispose
+    .family<List<Message>, String>(
+      (ref, channelId) => _watchVisibleMessages(ref, channelId),
+    );
 
 /// The blocked-filtered, cache-backed message stream for a channel — the shared
 /// body of [messagesProvider] and [_unreadMessagesProvider]. Kept as a function
@@ -634,9 +646,13 @@ Stream<List<Message>> _watchVisibleMessages(Ref ref, String channelId) async* {
   // seed changes).
   if (!ref.mounted) return;
   final blocked = ref.watch(blockedUserIdsProvider);
-  yield* repo.watchChannel(channelId).map((msgs) => blocked.isEmpty
-      ? msgs
-      : msgs.where((m) => !blocked.contains(m.sender.userId)).toList());
+  yield* repo
+      .watchChannel(channelId)
+      .map(
+        (msgs) => blocked.isEmpty
+            ? msgs
+            : msgs.where((m) => !blocked.contains(m.sender.userId)).toList(),
+      );
 }
 
 // --- cross-channel message search (#8, grep tier) --------------------------
@@ -647,7 +663,8 @@ Stream<List<Message>> _watchVisibleMessages(Ref ref, String channelId) async* {
 /// `StateProvider`) to match the house style ([SelectedChannelId] et al.).
 final messageSearchQueryProvider =
     NotifierProvider.autoDispose<MessageSearchQuery, String>(
-        MessageSearchQuery.new);
+      MessageSearchQuery.new,
+    );
 
 class MessageSearchQuery extends Notifier<String> {
   @override
@@ -665,8 +682,9 @@ class MessageSearchQuery extends Notifier<String> {
 /// exactly as [messagesProvider] layers it over the visibility-agnostic
 /// [ChatRepository.watchChannel]. An empty/whitespace query short-circuits to an
 /// empty list with no scan.
-final messageSearchResultsProvider =
-    FutureProvider.autoDispose<List<Message>>((ref) async {
+final messageSearchResultsProvider = FutureProvider.autoDispose<List<Message>>((
+  ref,
+) async {
   final query = ref.watch(messageSearchQueryProvider).trim();
   if (query.isEmpty) return const [];
   final repo = await ref.watch(chatRepositoryProvider.future);
@@ -706,7 +724,8 @@ final channelReadStoreProvider = Provider<ChannelReadStore>(
 /// "setState during build".
 final channelReadMarksProvider =
     NotifierProvider.autoDispose<ChannelReadMarks, Map<String, String>>(
-        ChannelReadMarks.new);
+      ChannelReadMarks.new,
+    );
 
 class ChannelReadMarks extends Notifier<Map<String, String>> {
   @override
@@ -741,12 +760,15 @@ class ChannelReadMarks extends Notifier<Map<String, String>> {
   /// count — and it persists the "observed" fact so a restart doesn't re-baseline
   /// over messages that landed while away).
   void baseline(String channelId, String newestUlid) {
-    if (!ChannelReadStore.isSortableWatermark(newestUlid)) return; // reject junk
+    if (!ChannelReadStore.isSortableWatermark(newestUlid))
+      return; // reject junk
     if (state.containsKey(channelId)) return; // already observed / has a mark
     final userId = ref.read(currentUserProvider)?.userId;
     if (userId == null) return;
     state = {...state, channelId: newestUlid};
-    ref.read(channelReadStoreProvider).setWatermark(userId, channelId, newestUlid);
+    ref
+        .read(channelReadStoreProvider)
+        .setWatermark(userId, channelId, newestUlid);
   }
 }
 
@@ -762,9 +784,10 @@ class ChannelReadMarks extends Notifier<Map<String, String>> {
 /// active). Backing the two onto distinct drift streams removes the shared node,
 /// so a list mount never rebuilds the switcher mid-build. (The extra stream is one
 /// cheap cache query per visible channel — the repo already subscribes to all.)
-final _unreadMessagesProvider =
-    StreamProvider.autoDispose.family<List<Message>, String>(
-        (ref, channelId) => _watchVisibleMessages(ref, channelId));
+final _unreadMessagesProvider = StreamProvider.autoDispose
+    .family<List<Message>, String>(
+      (ref, channelId) => _watchVisibleMessages(ref, channelId),
+    );
 
 /// The unread count for [channelId]: cached messages strictly newer (by server
 /// ULID) than the channel's last-read watermark, EXCLUDING the current user's
@@ -781,9 +804,11 @@ final _unreadMessagesProvider =
 /// floor and flood the switcher once history lands (cage-match #109 closure,
 /// Carnot + Tesla). A DISTINCT stream from the message/display providers, same
 /// isolation rationale as [_unreadMessagesProvider].
-final _historyFenceProvider =
-    StreamProvider.autoDispose.family<String?, String>((ref, channelId) =>
-        ref.watch(cacheProvider).watchHistoryContiguousThrough(channelId));
+final _historyFenceProvider = StreamProvider.autoDispose
+    .family<String?, String>(
+      (ref, channelId) =>
+          ref.watch(cacheProvider).watchHistoryContiguousThrough(channelId),
+    );
 
 /// On FIRST SIGHT of a channel (no watermark yet) it reports 0 and, ONCE HISTORY
 /// HAS SETTLED for the channel, lazily baselines it to the newest cached message
@@ -804,8 +829,10 @@ final _historyFenceProvider =
 /// same fact derived two ways. A mute suppresses only this COUNT: the messages
 /// themselves stay in [messagesProvider] and on screen, which is the whole
 /// difference between muting and blocking.
-final channelUnreadCountProvider =
-    Provider.autoDispose.family<int, String>((ref, channelId) {
+final channelUnreadCountProvider = Provider.autoDispose.family<int, String>((
+  ref,
+  channelId,
+) {
   final messages =
       ref.watch(_unreadMessagesProvider(channelId)).value ?? const <Message>[];
   final marks = ref.watch(channelReadMarksProvider);

@@ -88,12 +88,14 @@ abstract interface class ReachabilityProbe {
 class HttpReachabilityProbe implements ReachabilityProbe {
   @override
   Future<bool> canReach(String httpBaseUrl) async {
-    final dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 4),
-      receiveTimeout: const Duration(seconds: 4),
-      // ANY status is "reachable" — we only care that the server answered.
-      validateStatus: (_) => true,
-    ));
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 4),
+        receiveTimeout: const Duration(seconds: 4),
+        // ANY status is "reachable" — we only care that the server answered.
+        validateStatus: (_) => true,
+      ),
+    );
     try {
       await dio.getUri(Uri.parse(httpBaseUrl));
       return true;

@@ -22,18 +22,25 @@ void main() {
     inviteId: 'inv-1',
     channelId: 'dm:aaa:bbb',
     from: const MessageSender(
-        userId: 'robin-key', kind: SenderKind.human, label: 'Robin'),
+      userId: 'robin-key',
+      kind: SenderKind.human,
+      label: 'Robin',
+    ),
     startedAt: DateTime.utc(2026, 8, 15, 13),
   );
 
   Widget harness({CallInvite? initial}) {
     final router = GoRouter(
       routes: [
-        GoRoute(path: '/', builder: (_, _) => const Scaffold(body: Text('home'))),
         GoRoute(
-            path: '/call/:channelId',
-            builder: (_, s) => Scaffold(
-                body: Text('CALL ${s.pathParameters['channelId']}'))),
+          path: '/',
+          builder: (_, _) => const Scaffold(body: Text('home')),
+        ),
+        GoRoute(
+          path: '/call/:channelId',
+          builder: (_, s) =>
+              Scaffold(body: Text('CALL ${s.pathParameters['channelId']}')),
+        ),
       ],
     );
     return ProviderScope(
@@ -62,8 +69,9 @@ void main() {
     expect(find.text('home'), findsOneWidget);
   });
 
-  testWidgets('a ring shows the caller, Answer and Ignore over the route',
-      (tester) async {
+  testWidgets('a ring shows the caller, Answer and Ignore over the route', (
+    tester,
+  ) async {
     await tester.pumpWidget(harness(initial: invite));
     await tester.pumpAndSettle();
     expect(find.text('Robin'), findsOneWidget);
@@ -77,8 +85,9 @@ void main() {
     expect(find.text('home'), findsOneWidget);
   });
 
-  testWidgets('Answer navigates to the call route for the invited channel',
-      (tester) async {
+  testWidgets('Answer navigates to the call route for the invited channel', (
+    tester,
+  ) async {
     // THE test this file exists for. The overlay lives in MaterialApp.router's
     // `builder`; if that placement sits outside go_router's InheritedGoRouter
     // scope, `context.push` throws the moment anyone taps Answer — and no other
@@ -104,18 +113,20 @@ void main() {
     expect(find.text('home'), findsOneWidget);
   });
 
-  testWidgets('an unnamed caller still renders as a person, never a blank row',
-      (tester) async {
-    final anon = CallInvite(
-      inviteId: 'inv-2',
-      channelId: 'dm:aaa:bbb',
-      from: const MessageSender(userId: 'k', kind: SenderKind.human),
-      startedAt: DateTime.utc(2026, 8, 15, 13),
-    );
-    await tester.pumpWidget(harness(initial: anon));
-    await tester.pumpAndSettle();
-    expect(find.text('Someone'), findsOneWidget);
-  });
+  testWidgets(
+    'an unnamed caller still renders as a person, never a blank row',
+    (tester) async {
+      final anon = CallInvite(
+        inviteId: 'inv-2',
+        channelId: 'dm:aaa:bbb',
+        from: const MessageSender(userId: 'k', kind: SenderKind.human),
+        startedAt: DateTime.utc(2026, 8, 15, 13),
+      );
+      await tester.pumpWidget(harness(initial: anon));
+      await tester.pumpAndSettle();
+      expect(find.text('Someone'), findsOneWidget);
+    },
+  );
 }
 
 class _FakeRing extends RingController {

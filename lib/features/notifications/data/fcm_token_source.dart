@@ -20,13 +20,13 @@ import '../domain/push_token_source.dart';
 /// half that consumes these tokens.
 class FcmTokenSource implements PushTokenSource {
   FcmTokenSource({TargetPlatform? platformOverride})
-      : assert(
-          (platformOverride ?? defaultTargetPlatform) == TargetPlatform.android,
-          'FcmTokenSource is Android-only. On Apple platforms the APNs device '
-          'token is taken natively so that Google is not in the path — see '
-          'DevicePlatform. If you are here to "just make it work on iOS", that '
-          'is the decision this assertion exists to make you take deliberately.',
-        );
+    : assert(
+        (platformOverride ?? defaultTargetPlatform) == TargetPlatform.android,
+        'FcmTokenSource is Android-only. On Apple platforms the APNs device '
+        'token is taken natively so that Google is not in the path — see '
+        'DevicePlatform. If you are here to "just make it work on iOS", that '
+        'is the decision this assertion exists to make you take deliberately.',
+      );
 
   /// Initialise Firebase for this process. Safe to call more than once.
   ///

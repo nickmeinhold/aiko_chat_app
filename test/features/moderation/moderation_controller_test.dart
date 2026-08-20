@@ -66,7 +66,9 @@ void main() {
     final c = await _loggedIn(rest);
     await c.read(blockedUsersProvider.future);
 
-    await c.read(blockedUsersProvider.notifier).block('u2', displayName: 'Alice');
+    await c
+        .read(blockedUsersProvider.notifier)
+        .block('u2', displayName: 'Alice');
 
     expect(c.read(blockedUserIdsProvider), {'u2'});
     expect(c.read(blockedUsersProvider).value!.single.displayName, 'Alice');
@@ -135,8 +137,11 @@ void main() {
     // on the gated load → NOT done. Without it, block() races ahead and completes.
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
-    expect(blockDone, isFalse,
-        reason: 'block must wait for the initial load to settle before mutating');
+    expect(
+      blockDone,
+      isFalse,
+      reason: 'block must wait for the initial load to settle before mutating',
+    );
 
     rest.listBlocksGate!.complete();
     await blockFut;
@@ -144,16 +149,19 @@ void main() {
     expect(c.read(blockedUserIdsProvider), {'u2'});
   });
 
-  test('a failing block surfaces the error and leaves state unchanged', () async {
-    final rest = FakeRestApi();
-    final c = await _loggedIn(rest);
-    await c.read(blockedUsersProvider.future);
-    rest.moderationThrows = StateError('boom');
+  test(
+    'a failing block surfaces the error and leaves state unchanged',
+    () async {
+      final rest = FakeRestApi();
+      final c = await _loggedIn(rest);
+      await c.read(blockedUsersProvider.future);
+      rest.moderationThrows = StateError('boom');
 
-    await expectLater(
-      c.read(blockedUsersProvider.notifier).block('u2'),
-      throwsA(isA<StateError>()),
-    );
-    expect(c.read(blockedUserIdsProvider), isEmpty);
-  });
+      await expectLater(
+        c.read(blockedUsersProvider.notifier).block('u2'),
+        throwsA(isA<StateError>()),
+      );
+      expect(c.read(blockedUserIdsProvider), isEmpty);
+    },
+  );
 }

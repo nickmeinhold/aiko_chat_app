@@ -100,22 +100,32 @@ void main() {
       expect(c.read(themePresetProvider).id, kDefaultPresetId);
     });
 
-    test('selectPreset() applies immediately AND writes the id through',
-        () async {
-      final c = await containerWith({});
-      final other = kThemePresets.firstWhere((p) => p.id != kDefaultPresetId);
+    test(
+      'selectPreset() applies immediately AND writes the id through',
+      () async {
+        final c = await containerWith({});
+        final other = kThemePresets.firstWhere((p) => p.id != kDefaultPresetId);
 
-      c.read(skinSelectionProvider.notifier).selectPreset(other);
+        c.read(skinSelectionProvider.notifier).selectPreset(other);
 
-      expect(c.read(themePresetProvider).id, other.id,
-          reason: 'the in-memory state is the fast path — the app re-themes '
-              'on the next frame, not after the disk write');
-      final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString(themePresetPrefKey), contains(other.id),
-          reason: 'the ID is stored, never a resolved palette — so a later '
+        expect(
+          c.read(themePresetProvider).id,
+          other.id,
+          reason:
+              'the in-memory state is the fast path — the app re-themes '
+              'on the next frame, not after the disk write',
+        );
+        final prefs = await SharedPreferences.getInstance();
+        expect(
+          prefs.getString(themePresetPrefKey),
+          contains(other.id),
+          reason:
+              'the ID is stored, never a resolved palette — so a later '
               'build can revise the colours without stranding readers on a '
-              'frozen copy');
-    });
+              'frozen copy',
+        );
+      },
+    );
 
     test('a bare id written by the PREVIOUS build still resolves — readers on '
         'PR #143 have exactly this stored right now', () async {

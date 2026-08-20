@@ -162,13 +162,9 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       );
     }
     final remote = _session.service.remoteParticipants.values;
-    final remoteVideo =
-        remote.isEmpty ? null : _videoOf(remote.first);
+    final remoteVideo = remote.isEmpty ? null : _videoOf(remote.first);
     if (remoteVideo != null) {
-      return VideoTrackRenderer(
-        remoteVideo,
-        fit: VideoViewFit.contain,
-      );
+      return VideoTrackRenderer(remoteVideo, fit: VideoViewFit.contain);
     }
     // Connected but no remote video yet → waiting.
     return _centeredMessage(
@@ -187,7 +183,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         color: Colors.white12,
         child: localVideo == null
             ? const Center(
-                child: Icon(Icons.videocam_off, color: Colors.white54))
+                child: Icon(Icons.videocam_off, color: Colors.white54),
+              )
             : VideoTrackRenderer(
                 localVideo,
                 fit: VideoViewFit.cover,
@@ -217,13 +214,17 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                       width: 16,
                       height: 16,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 Flexible(
-                  child: Text(msg,
-                      style: const TextStyle(color: Colors.white),
-                      textAlign: TextAlign.center),
+                  child: Text(
+                    msg,
+                    style: const TextStyle(color: Colors.white),
+                    textAlign: TextAlign.center,
+                  ),
                 ),
               ],
             ),
@@ -234,7 +235,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   }
 
   Widget _toolbar(CallConnectionState state) {
-    final live = state == CallConnectionState.connected ||
+    final live =
+        state == CallConnectionState.connected ||
         state == CallConnectionState.reconnecting;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 20),
@@ -247,8 +249,9 @@ class _CallScreenState extends ConsumerState<CallScreen> {
               valueListenable: _session.service.micEnabled,
               builder: (context, on, _) => _circleButton(
                 icon: on ? Icons.mic : Icons.mic_off,
-                background:
-                    on ? kMaritimeSignalCyan.withValues(alpha: 0.30) : Colors.white10,
+                background: on
+                    ? kMaritimeSignalCyan.withValues(alpha: 0.30)
+                    : Colors.white10,
                 onTap: () => _session.service.setMicrophoneEnabled(!on),
               ),
             ),
@@ -257,8 +260,9 @@ class _CallScreenState extends ConsumerState<CallScreen> {
               valueListenable: _session.service.cameraEnabled,
               builder: (context, on, _) => _circleButton(
                 icon: on ? Icons.videocam : Icons.videocam_off,
-                background:
-                    on ? kMaritimeSignalCyan.withValues(alpha: 0.30) : Colors.white10,
+                background: on
+                    ? kMaritimeSignalCyan.withValues(alpha: 0.30)
+                    : Colors.white10,
                 onTap: () => _session.service.setCameraEnabled(!on),
               ),
             ),
@@ -272,8 +276,10 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                 children: [
                   Icon(Icons.visibility, size: 18, color: Colors.white70),
                   SizedBox(width: 8),
-                  Text('Receive only',
-                      style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  Text(
+                    'Receive only',
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
                 ],
               ),
             ),
@@ -284,8 +290,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
             // Fall back to '/' when there's nothing to pop — a cold/deep-linked
             // /call/:id has an empty stack, so a bare pop() would be a dead
             // button and leave() would never run (cage-match Carnot+Tesla HIGH).
-            onTap: () =>
-                context.canPop() ? context.pop() : context.go('/'),
+            onTap: () => context.canPop() ? context.pop() : context.go('/'),
           ),
         ],
       ),
@@ -320,9 +325,11 @@ class _CallScreenState extends ConsumerState<CallScreen> {
           const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Text(text,
-                style: const TextStyle(color: Colors.white70),
-                textAlign: TextAlign.center),
+            child: Text(
+              text,
+              style: const TextStyle(color: Colors.white70),
+              textAlign: TextAlign.center,
+            ),
           ),
         ],
       ),

@@ -15,8 +15,12 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart';
 
-const _me =
-    AppUser(userId: 'me', username: 'me', displayName: 'Me', aikoUsername: 'me');
+const _me = AppUser(
+  userId: 'me',
+  username: 'me',
+  displayName: 'Me',
+  aikoUsername: 'me',
+);
 const _chan = 'chan';
 
 void main() {
@@ -84,14 +88,22 @@ void main() {
       'body': viewBody ?? signedBody,
       'created_at': '2026-01-01T00:00:00Z',
       'reply_to': null,
-      'origin': OriginEnvelope.fromSignature(sig, clientMsgId: 'sig-$ulid').toWire(),
+      'origin': OriginEnvelope.fromSignature(
+        sig,
+        clientMsgId: 'sig-$ulid',
+      ).toWire(),
     });
   }
 
   test('a carried-but-invalid origin fires the probe exactly once + persists '
       'verdict=false', () async {
     transport.emitMessage(
-        await signedInbound(ulid: '01BAD', signedBody: 'real', viewBody: 'tampered'));
+      await signedInbound(
+        ulid: '01BAD',
+        signedBody: 'real',
+        viewBody: 'tampered',
+      ),
+    );
     await pump();
 
     expect(spy.originVerificationFailures, hasLength(1));
@@ -110,17 +122,26 @@ void main() {
     // The exact double-count the probe must NOT do: live fanout, then a history
     // re-page / reconnect replay of the SAME server ULID (cage-match Carnot + Tesla).
     final bad = await signedInbound(
-        ulid: '01DUP', signedBody: 'real', viewBody: 'tampered');
+      ulid: '01DUP',
+      signedBody: 'real',
+      viewBody: 'tampered',
+    );
     transport.emitMessage(bad);
     await pump();
     transport.emitMessage(bad); // identical re-delivery (history re-sync)
     await pump();
 
-    expect(spy.originVerificationFailures, hasLength(1),
-        reason: 'the second delivery is a no-op update, not a newly-invalid '
-            'transition — the probe counts the message once');
-    expect((await rows()).firstWhere((m) => m.id == '01DUP').originCryptoValid,
-        isFalse);
+    expect(
+      spy.originVerificationFailures,
+      hasLength(1),
+      reason:
+          'the second delivery is a no-op update, not a newly-invalid '
+          'transition — the probe counts the message once',
+    );
+    expect(
+      (await rows()).firstWhere((m) => m.id == '01DUP').originCryptoValid,
+      isFalse,
+    );
   });
 
   test('a verified message re-signed to INVALID fires the probe on the '
@@ -132,35 +153,48 @@ void main() {
     // Then the SAME ULID re-echoed with a diverged body the origin doesn't sign
     // → verdict flips true→false → a genuinely new invalid observation fires once.
     transport.emitMessage(
-        await signedInbound(ulid: '01T', signedBody: 'v1', viewBody: 'v2'));
+      await signedInbound(ulid: '01T', signedBody: 'v1', viewBody: 'v2'),
+    );
     await pump();
-    expect(spy.originVerificationFailures, hasLength(1),
-        reason: 'true→false is a newly-invalid transition, not a replay');
+    expect(
+      spy.originVerificationFailures,
+      hasLength(1),
+      reason: 'true→false is a newly-invalid transition, not a replay',
+    );
   });
 
-  test('a VALID carried origin does NOT fire the probe (verdict=true)', () async {
-    transport.emitMessage(await signedInbound(ulid: '01OK', signedBody: 'hello'));
-    await pump();
+  test(
+    'a VALID carried origin does NOT fire the probe (verdict=true)',
+    () async {
+      transport.emitMessage(
+        await signedInbound(ulid: '01OK', signedBody: 'hello'),
+      );
+      await pump();
 
-    expect(spy.originVerificationFailures, isEmpty);
-    final m = (await rows()).firstWhere((m) => m.id == '01OK');
-    expect(m.originCryptoValid, isTrue);
-  });
+      expect(spy.originVerificationFailures, isEmpty);
+      final m = (await rows()).firstWhere((m) => m.id == '01OK');
+      expect(m.originCryptoValid, isTrue);
+    },
+  );
 
-  test('an UNSIGNED inbound message does NOT fire the probe (verdict=null)',
-      () async {
-    transport.emitMessage(Message.fromView({
-      'msg_id': '01PLAIN',
-      'channel_id': _chan,
-      'sender': {'user_id': 'other', 'kind': 'human', 'label': 'Other'},
-      'body': 'plain',
-      'created_at': '2026-01-01T00:00:00Z',
-      'reply_to': null,
-    }));
-    await pump();
+  test(
+    'an UNSIGNED inbound message does NOT fire the probe (verdict=null)',
+    () async {
+      transport.emitMessage(
+        Message.fromView({
+          'msg_id': '01PLAIN',
+          'channel_id': _chan,
+          'sender': {'user_id': 'other', 'kind': 'human', 'label': 'Other'},
+          'body': 'plain',
+          'created_at': '2026-01-01T00:00:00Z',
+          'reply_to': null,
+        }),
+      );
+      await pump();
 
-    expect(spy.originVerificationFailures, isEmpty);
-    final m = (await rows()).firstWhere((m) => m.id == '01PLAIN');
-    expect(m.originCryptoValid, isNull);
-  });
+      expect(spy.originVerificationFailures, isEmpty);
+      final m = (await rows()).firstWhere((m) => m.id == '01PLAIN');
+      expect(m.originCryptoValid, isNull);
+    },
+  );
 }

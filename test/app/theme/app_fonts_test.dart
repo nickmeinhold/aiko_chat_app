@@ -15,7 +15,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-Future<ProviderContainer> _container([Map<String, Object> initial = const {}]) async {
+Future<ProviderContainer> _container([
+  Map<String, Object> initial = const {},
+]) async {
   SharedPreferences.setMockInitialValues(initial);
   final prefs = await SharedPreferences.getInstance();
   final c = ProviderContainer(
@@ -59,10 +61,18 @@ void main() {
 
       const base = TextTheme(bodyMedium: TextStyle(fontSize: 14));
       final applied = systemFont.apply(base);
-      expect(applied.bodyMedium?.fontFamily, isNull,
-          reason: 'the system font must not name a family — naming one is '
-              'exactly the thing that triggers a fetch');
-      expect(applied.bodyMedium?.fontSize, 14, reason: 'and it changes nothing else');
+      expect(
+        applied.bodyMedium?.fontFamily,
+        isNull,
+        reason:
+            'the system font must not name a family — naming one is '
+            'exactly the thing that triggers a fetch',
+      );
+      expect(
+        applied.bodyMedium?.fontSize,
+        14,
+        reason: 'and it changes nothing else',
+      );
     });
 
     test('every NON-system font names a family to fetch', () {
@@ -89,11 +99,14 @@ void main() {
   });
 
   group('the font composes with the other preferences', () {
-    test('it is orthogonal to the palette: switching preset KEEPS the font', () {
-      const s = SkinSelection(presetId: 'maritime', fontId: 'inter');
-      expect(s.withPreset('radar').fontId, 'inter');
-      expect(s.withPreset('radar').presetId, 'radar');
-    });
+    test(
+      'it is orthogonal to the palette: switching preset KEEPS the font',
+      () {
+        const s = SkinSelection(presetId: 'maritime', fontId: 'inter');
+        expect(s.withPreset('radar').fontId, 'inter');
+        expect(s.withPreset('radar').presetId, 'radar');
+      },
+    );
 
     test('resetting COLOURS keeps the font — it was never a colour edit', () {
       const s = SkinSelection(
@@ -108,22 +121,28 @@ void main() {
     test('editing a colour keeps the font', () {
       final s = const SkinSelection(presetId: 'maritime', fontId: 'inter')
           .withOverride(
-        brightness: Brightness.light,
-        role: PaletteRole.signal,
-        colour: const Color(0xFF0B5F6C),
-      );
+            brightness: Brightness.light,
+            role: PaletteRole.signal,
+            colour: const Color(0xFF0B5F6C),
+          );
       expect(s.fontId, 'inter');
     });
 
-    test('it round-trips through storage, and the default is not written out', () {
-      const withFont = SkinSelection(presetId: 'maritime', fontId: 'inter');
-      expect(SkinSelection.decode(withFont.encode()).fontId, 'inter');
+    test(
+      'it round-trips through storage, and the default is not written out',
+      () {
+        const withFont = SkinSelection(presetId: 'maritime', fontId: 'inter');
+        expect(SkinSelection.decode(withFont.encode()).fontId, 'inter');
 
-      const plain = SkinSelection(presetId: 'maritime');
-      expect(plain.encode(), isNot(contains('font')),
-          reason: 'the default is the absence of a choice, not a stored value');
-      expect(SkinSelection.decode(plain.encode()).fontId, kDefaultFontId);
-    });
+        const plain = SkinSelection(presetId: 'maritime');
+        expect(
+          plain.encode(),
+          isNot(contains('font')),
+          reason: 'the default is the absence of a choice, not a stored value',
+        );
+        expect(SkinSelection.decode(plain.encode()).fontId, kDefaultFontId);
+      },
+    );
 
     test('a stored font id from a build that offered more faces falls back '
         'rather than throwing', () {
@@ -137,7 +156,8 @@ void main() {
   group('the composed theme', () {
     test('carries the palette AND the font, and stays lawful', () async {
       final c = await _container();
-      c.read(skinSelectionProvider.notifier)
+      c
+          .read(skinSelectionProvider.notifier)
           .selectFont(kAppFonts.firstWhere((f) => !f.isSystem));
 
       // The palette laws are colour laws; a typeface cannot break them, and
@@ -152,17 +172,29 @@ void main() {
       final inter = kAppFonts.firstWhere((f) => f.id == 'inter');
       c.read(skinSelectionProvider.notifier).selectFont(inter);
 
-      final family = c.read(lightThemeProvider).textTheme.bodyMedium?.fontFamily;
-      expect(family, isNotNull,
-          reason: 'a chosen face that never reaches the TextTheme is a setting '
-              'that does nothing');
+      final family = c
+          .read(lightThemeProvider)
+          .textTheme
+          .bodyMedium
+          ?.fontFamily;
+      expect(
+        family,
+        isNotNull,
+        reason:
+            'a chosen face that never reaches the TextTheme is a setting '
+            'that does nothing',
+      );
       expect(family, contains('Inter'));
     });
 
     test('the system face IMPOSES no family of ours — whatever the platform '
         'typography says stands', () async {
       final c = await _container();
-      final family = c.read(lightThemeProvider).textTheme.bodyMedium?.fontFamily;
+      final family = c
+          .read(lightThemeProvider)
+          .textTheme
+          .bodyMedium
+          ?.fontFamily;
 
       // NOT `isNull`: Flutter's own Typography names a face (Roboto on non-Apple
       // hosts, including the test harness) before we touch the theme. The claim
@@ -173,14 +205,18 @@ void main() {
           .map((f) => f.googleFamily!)
           .toList();
       for (final o in ours) {
-        expect(family, isNot(contains(o)),
-            reason: 'the system face pulled in $o');
+        expect(
+          family,
+          isNot(contains(o)),
+          reason: 'the system face pulled in $o',
+        );
       }
     });
 
     test('the choice persists across a restart', () async {
       final c = await _container();
-      c.read(skinSelectionProvider.notifier)
+      c
+          .read(skinSelectionProvider.notifier)
           .selectFont(kAppFonts.firstWhere((f) => f.id == 'literata'));
 
       final prefs = await SharedPreferences.getInstance();

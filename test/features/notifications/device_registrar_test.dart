@@ -49,7 +49,9 @@ void main() {
   test('sign-in registers the current token with its own transport', () async {
     await registrar.start();
 
-    expect(api.registeredDevices, [(platform: DevicePlatform.apns, token: 'tok-1')]);
+    expect(api.registeredDevices, [
+      (platform: DevicePlatform.apns, token: 'tok-1'),
+    ]);
   });
 
   test('a refused permission registers NOTHING — a denial is an answer, not a '
@@ -61,24 +63,29 @@ void main() {
     expect(api.registeredDevices, isEmpty);
   });
 
-  test('a rotated token is registered — the case that fails silently', () async {
-    await registrar.start();
+  test(
+    'a rotated token is registered — the case that fails silently',
+    () async {
+      await registrar.start();
 
-    source.refreshes.add('tok-2');
-    await pumpEventQueue();
+      source.refreshes.add('tok-2');
+      await pumpEventQueue();
 
-    expect(api.registeredDevices.map((d) => d.token), ['tok-1', 'tok-2']);
-  });
+      expect(api.registeredDevices.map((d) => d.token), ['tok-1', 'tok-2']);
+    },
+  );
 
-  test('an unchanged token is not re-registered on every refresh event',
-      () async {
-    await registrar.start();
+  test(
+    'an unchanged token is not re-registered on every refresh event',
+    () async {
+      await registrar.start();
 
-    source.refreshes.add('tok-1');
-    await pumpEventQueue();
+      source.refreshes.add('tok-1');
+      await pumpEventQueue();
 
-    expect(api.registeredDevices, hasLength(1));
-  });
+      expect(api.registeredDevices, hasLength(1));
+    },
+  );
 
   test('sign-out unregisters the token the island ACTUALLY holds, not the one '
       'it was first given', () async {
@@ -98,9 +105,13 @@ void main() {
     api.registerDeviceThrows = Exception('APNs unreachable');
 
     await expectLater(registrar.start(), completes);
-    expect(registrar.registeredToken, isNull,
-        reason: 'a failed register must not be recorded as landed, or the next '
-            'sign-in will skip it and the device stays unreachable forever');
+    expect(
+      registrar.registeredToken,
+      isNull,
+      reason:
+          'a failed register must not be recorded as landed, or the next '
+          'sign-in will skip it and the device stays unreachable forever',
+    );
   });
 
   test('start is idempotent — a second call does not double-subscribe or '
@@ -113,7 +124,10 @@ void main() {
     source.refreshes.add('tok-2');
     await pumpEventQueue();
     // Two subscriptions would register the rotation twice.
-    expect(api.registeredDevices.where((d) => d.token == 'tok-2'), hasLength(1));
+    expect(
+      api.registeredDevices.where((d) => d.token == 'tok-2'),
+      hasLength(1),
+    );
   });
 
   test('after sign-out, a late rotation does NOT re-register — the stream is '
@@ -124,9 +138,13 @@ void main() {
     source.refreshes.add('tok-late');
     await pumpEventQueue();
 
-    expect(api.registeredDevices.map((d) => d.token), isNot(contains('tok-late')),
-        reason: 'a signed-out app that re-registers on rotation resurrects push '
-            'routing for an account nobody is signed in to');
+    expect(
+      api.registeredDevices.map((d) => d.token),
+      isNot(contains('tok-late')),
+      reason:
+          'a signed-out app that re-registers on rotation resurrects push '
+          'routing for an account nobody is signed in to',
+    );
   });
 
   test('stop without start is a no-op, not a spurious unregister', () async {

@@ -87,8 +87,10 @@ const Map<String, String> kEmojiShortcodes = {
 /// alphabetical within each band, capped at [limit]. Returns (shortcode, emoji)
 /// entries. An empty query returns nothing (the picker only opens once the user
 /// has typed at least one character after the colon).
-List<MapEntry<String, String>> filterEmojiShortcodes(String query,
-    {int limit = 8}) {
+List<MapEntry<String, String>> filterEmojiShortcodes(
+  String query, {
+  int limit = 8,
+}) {
   final q = query.toLowerCase();
   if (q.isEmpty) return const [];
   final starts = <MapEntry<String, String>>[];

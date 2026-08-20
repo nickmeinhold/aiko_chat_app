@@ -55,11 +55,14 @@ class FakeChatTransport implements ChatTransport {
 
   @override
   Stream<ConnectionState> get connectionState => Stream.multi((c) {
-        c.add(lastConn);
-        final sub =
-            _conn.stream.listen(c.add, onError: c.addError, onDone: c.close);
-        c.onCancel = sub.cancel;
-      });
+    c.add(lastConn);
+    final sub = _conn.stream.listen(
+      c.add,
+      onError: c.addError,
+      onDone: c.close,
+    );
+    c.onCancel = sub.cancel;
+  });
   @override
   Stream<Message> get messages => _messages.stream;
   @override
@@ -93,28 +96,35 @@ class FakeChatTransport implements ChatTransport {
   }
 
   // --- test drivers ----------------------------------------------------------
-  void emitAck(String clientMsgId, String msgId, {String? createdAt}) => _acks
-      .add(AckResult(clientMsgId: clientMsgId, msgId: msgId, createdAt: createdAt));
+  void emitAck(String clientMsgId, String msgId, {String? createdAt}) =>
+      _acks.add(
+        AckResult(clientMsgId: clientMsgId, msgId: msgId, createdAt: createdAt),
+      );
   void emitMessage(Message m) => _messages.add(m);
   void emitError(TransportError e) => _errors.add(e);
 
   /// Emit a moderator takedown (island #104) onto the retraction stream.
   void emitRetraction(String channelId, String id, String targetMsgId) =>
       _retractions.add(
-          Retraction(channelId: channelId, id: id, targetMsgId: targetMsgId));
+        Retraction(channelId: channelId, id: id, targetMsgId: targetMsgId),
+      );
 
   /// Emit an error from a RAW wire `code`, running it through the production
   /// [TransportErrorCode.fromWire] mapping (exactly as `gateway_transport` does)
   /// so tests exercise the real raw→enum classification — including the
   /// unknown-code path — rather than hand-supplying the parsed enum.
-  void emitErrorCode(String code,
-          {String detail = '', String? refClientMsgId}) =>
-      _errors.add(TransportError(
-        code: code,
-        parsedCode: TransportErrorCode.fromWire(code),
-        detail: detail,
-        refClientMsgId: refClientMsgId,
-      ));
+  void emitErrorCode(
+    String code, {
+    String detail = '',
+    String? refClientMsgId,
+  }) => _errors.add(
+    TransportError(
+      code: code,
+      parsedCode: TransportErrorCode.fromWire(code),
+      detail: detail,
+      refClientMsgId: refClientMsgId,
+    ),
+  );
   void emitConn(ConnectionState s) {
     lastConn = s;
     _conn.add(s);
@@ -154,8 +164,12 @@ class FakeChatRestApi implements ChatRestApi {
   Completer<void>? getHistoryGate;
 
   @override
-  Future<HistoryPage> getHistory(String channelId,
-      {String? before, String? after, int limit = 50}) async {
+  Future<HistoryPage> getHistory(
+    String channelId, {
+    String? before,
+    String? after,
+    int limit = 50,
+  }) async {
     getHistoryCalls.add(after);
     if (getHistoryGate != null) await getHistoryGate!.future;
     if (throwOnGetHistory != null) throw throwOnGetHistory!;
@@ -220,15 +234,17 @@ class FakeChatRestApi implements ChatRestApi {
       throw UnimplementedError();
   @override
   Future<IdentityOutcome> finishPasskeyRegistration(
-          String state, String credentialJson) =>
-      throw UnimplementedError();
+    String state,
+    String credentialJson,
+  ) => throw UnimplementedError();
   @override
   Future<PasskeyChallenge> startPasskeyAuthentication() =>
       throw UnimplementedError();
   @override
   Future<IdentityOutcome> finishPasskeyAuthentication(
-          String state, String credentialJson) =>
-      throw UnimplementedError();
+    String state,
+    String credentialJson,
+  ) => throw UnimplementedError();
   @override
   Future<AppUser> addPasskey(String state, String credentialJson) =>
       throw UnimplementedError();
@@ -237,8 +253,7 @@ class FakeChatRestApi implements ChatRestApi {
     required String provisioningToken,
     required String handle,
     required String displayName,
-  }) =>
-      throw UnimplementedError();
+  }) => throw UnimplementedError();
   @override
   Future<AppUser> updateProfile({String? handle, String? displayName}) =>
       throw UnimplementedError();
@@ -273,8 +288,11 @@ class SpyTelemetry extends ChatTelemetry {
       historyGaps.add((channelId, cursor, fence));
   @override
   void historySyncFault(
-          String channelId, String? cursor, String fence, int streak) =>
-      historySyncFaults.add((channelId, cursor, fence, streak));
+    String channelId,
+    String? cursor,
+    String fence,
+    int streak,
+  ) => historySyncFaults.add((channelId, cursor, fence, streak));
   @override
   void inboundWriteFailed(Object error, StackTrace stack) =>
       inboundWriteErrors.add(error);
@@ -287,7 +305,10 @@ class SpyTelemetry extends ChatTelemetry {
     required String channelId,
     required String serverUlid,
     required String clientMsgId,
-  }) =>
-      originVerificationFailures
-          .add((senderUserId, channelId, serverUlid, clientMsgId));
+  }) => originVerificationFailures.add((
+    senderUserId,
+    channelId,
+    serverUlid,
+    clientMsgId,
+  ));
 }

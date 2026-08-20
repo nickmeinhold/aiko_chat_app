@@ -31,47 +31,47 @@ import 'package:flutter_test/flutter_test.dart';
 /// the theme's claim is that an undecorated widget comes out dressed, so an
 /// undecorated widget is what we render.
 Widget _slice(ThemeData theme) => MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: theme,
-      home: Scaffold(
-        appBar: AppBar(title: const Text('# general')),
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(12),
-                child: Text('a message on a panel'),
-              ),
-            ),
-            const Divider(),
-            const ListTile(
-              leading: Icon(Icons.tag),
-              title: Text('a list tile'),
-              subtitle: Text('with a dimmer second line'),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  FilledButton(onPressed: () {}, child: const Text('Send')),
-                  const SizedBox(width: 12),
-                  TextButton(onPressed: () {}, child: const Text('Cancel')),
-                ],
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: TextField(decoration: InputDecoration(hintText: 'Message')),
-            ),
-          ],
+  debugShowCheckedModeBanner: false,
+  theme: theme,
+  home: Scaffold(
+    appBar: AppBar(title: const Text('# general')),
+    body: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(12),
+            child: Text('a message on a panel'),
+          ),
         ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () {},
-          child: const Icon(Icons.send),
+        const Divider(),
+        const ListTile(
+          leading: Icon(Icons.tag),
+          title: Text('a list tile'),
+          subtitle: Text('with a dimmer second line'),
         ),
-      ),
-    );
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              FilledButton(onPressed: () {}, child: const Text('Send')),
+              const SizedBox(width: 12),
+              TextButton(onPressed: () {}, child: const Text('Cancel')),
+            ],
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.all(12),
+          child: TextField(decoration: InputDecoration(hintText: 'Message')),
+        ),
+      ],
+    ),
+    floatingActionButton: FloatingActionButton(
+      onPressed: () {},
+      child: const Icon(Icons.send),
+    ),
+  ),
+);
 
 /// The pixel at [x],[y] of a rasterised widget tree.
 Color _pixelAt(ByteData bytes, int width, int x, int y) {
@@ -92,7 +92,9 @@ void main() {
   // binding does not schedule the frame the second `toImage()` awaits — so the
   // loop lives inside a single test. The failure `reason` on each expect carries
   // the theme name, so a failure is still identifiable without separate cases.
-  testWidgets('every preset actually PAINTS in its own colours', (tester) async {
+  testWidgets('every preset actually PAINTS in its own colours', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(800, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -131,23 +133,32 @@ void main() {
         // `theme_relationships_test.dart` — its ColorScheme is still internally
         // consistent — and fails right here.
         final bg = _pixelAt(bytes, image.width, image.width - 4, 4);
-        expect(bg, palette.ground,
-            reason: '$name painted $bg where its ground is ${palette.ground} — '
-                'the palette did not reach the pixels');
+        expect(
+          bg,
+          palette.ground,
+          reason:
+              '$name painted $bg where its ground is ${palette.ground} — '
+              'the palette did not reach the pixels',
+        );
 
         // And nothing was painted under the app bar: the flatness law, checked
         // as ink on screen rather than as an `elevation: 0` field.
-        expect(_pixelAt(bytes, image.width, image.width - 4, 120), bg,
-            reason: '$name has something under the app bar that is not the '
-                'ground — a shadow or a surface tint got painted');
+        expect(
+          _pixelAt(bytes, image.width, image.width - 4, 120),
+          bg,
+          reason:
+              '$name has something under the app bar that is not the '
+              'ground — a shadow or a surface tint got painted',
+        );
 
         if (outDir != null) {
           final png = await tester.runAsync(
             () => image.toByteData(format: ui.ImageByteFormat.png),
           );
           Directory(outDir).createSync(recursive: true);
-          File('$outDir/$name.png')
-              .writeAsBytesSync(png!.buffer.asUint8List(), flush: true);
+          File(
+            '$outDir/$name.png',
+          ).writeAsBytesSync(png!.buffer.asUint8List(), flush: true);
         }
         image.dispose();
       }

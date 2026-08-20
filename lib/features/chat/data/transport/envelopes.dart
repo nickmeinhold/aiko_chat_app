@@ -46,27 +46,25 @@ enum TransportErrorCode {
   /// The auth-terminal codes — the closed set that stops draining and routes to
   /// `unauthenticated`. Exhaustive by construction (compiler-checked switch).
   bool get isAuthTerminal => switch (this) {
-        TransportErrorCode.unauthorized ||
-        TransportErrorCode.tokenExpired ||
-        TransportErrorCode.forbidden =>
-          true,
-        TransportErrorCode.other || TransportErrorCode.unknown => false,
-      };
+    TransportErrorCode.unauthorized ||
+    TransportErrorCode.tokenExpired ||
+    TransportErrorCode.forbidden => true,
+    TransportErrorCode.other || TransportErrorCode.unknown => false,
+  };
 
   /// Map a raw wire `code` string to the closed set. Unrecognised → [unknown]
   /// (NOT [other]) so a typo/additive code is loud, not silently benign. An
   /// empty/missing code (the envelope default `'unknown'`) also lands here.
   static TransportErrorCode fromWire(String code) => switch (code) {
-        'unauthorized' => TransportErrorCode.unauthorized,
-        'token_expired' => TransportErrorCode.tokenExpired,
-        'forbidden' => TransportErrorCode.forbidden,
-        'no_channel' ||
-        'rate_limited' ||
-        'invalid' ||
-        'too_large' =>
-          TransportErrorCode.other,
-        _ => TransportErrorCode.unknown,
-      };
+    'unauthorized' => TransportErrorCode.unauthorized,
+    'token_expired' => TransportErrorCode.tokenExpired,
+    'forbidden' => TransportErrorCode.forbidden,
+    'no_channel' ||
+    'rate_limited' ||
+    'invalid' ||
+    'too_large' => TransportErrorCode.other,
+    _ => TransportErrorCode.unknown,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +139,7 @@ sealed class ServerFrame {
         if (cid is! String || rid is! String || target is! String) {
           return UnknownFrame(raw, reason: 'retraction missing ids');
         }
-        return RetractionFrame(
-            channelId: cid, id: rid, targetMsgId: target);
+        return RetractionFrame(channelId: cid, id: rid, targetMsgId: target);
       default:
         return UnknownFrame(raw, reason: 'unknown type ${j['type']}');
     }
@@ -155,8 +152,11 @@ class AckFrame extends ServerFrame {
   final String clientMsgId;
   final String msgId;
   final String? createdAt;
-  const AckFrame(
-      {required this.clientMsgId, required this.msgId, this.createdAt});
+  const AckFrame({
+    required this.clientMsgId,
+    required this.msgId,
+    this.createdAt,
+  });
 }
 
 /// A message to render. [msg] is a raw MessageView map (decode via
@@ -191,11 +191,12 @@ class ErrorFrame extends ServerFrame {
   final TransportErrorCode parsedCode;
   final String detail;
   final String? refClientMsgId;
-  const ErrorFrame(
-      {required this.code,
-      required this.parsedCode,
-      required this.detail,
-      this.refClientMsgId});
+  const ErrorFrame({
+    required this.code,
+    required this.parsedCode,
+    required this.detail,
+    this.refClientMsgId,
+  });
 }
 
 /// A moderator takedown reached this client (island #104). References the
@@ -206,8 +207,11 @@ class RetractionFrame extends ServerFrame {
   final String channelId;
   final String id;
   final String targetMsgId;
-  const RetractionFrame(
-      {required this.channelId, required this.id, required this.targetMsgId});
+  const RetractionFrame({
+    required this.channelId,
+    required this.id,
+    required this.targetMsgId,
+  });
 }
 
 /// A frame we couldn't classify. Held (not thrown) so the transport can log it
@@ -227,8 +231,10 @@ class SubscribeFrame {
   final List<String> channelIds;
   const SubscribeFrame(this.channelIds);
 
-  Map<String, dynamic> toJson() =>
-      {'type': 'subscribe', 'channel_ids': channelIds};
+  Map<String, dynamic> toJson() => {
+    'type': 'subscribe',
+    'channel_ids': channelIds,
+  };
 
   String encode() => jsonEncode(toJson());
 }
@@ -258,13 +264,13 @@ class SendFrame {
   });
 
   Map<String, dynamic> toJson() => {
-        'type': 'send',
-        'client_msg_id': clientMsgId,
-        'channel_id': channelId,
-        'body': body,
-        if (replyTo != null) 'reply_to': replyTo,
-        if (origin != null) 'origin': origin,
-      };
+    'type': 'send',
+    'client_msg_id': clientMsgId,
+    'channel_id': channelId,
+    'body': body,
+    if (replyTo != null) 'reply_to': replyTo,
+    if (origin != null) 'origin': origin,
+  };
 
   String encode() => jsonEncode(toJson());
 }

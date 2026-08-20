@@ -59,9 +59,11 @@ class _EulaScreenState extends ConsumerState<EulaScreen> {
       // swallowed back button — re-enable the button and let them retry.
       if (!mounted) return;
       setState(() => _accepting = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Could not save your acceptance. Please try again.'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not save your acceptance. Please try again.'),
+        ),
+      );
     }
   }
 
@@ -141,8 +143,9 @@ class _EulaScreenState extends ConsumerState<EulaScreen> {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
                   'Scroll to the bottom to continue',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
               ),
             SizedBox(
@@ -189,7 +192,10 @@ class _EulaText extends StatelessWidget {
           children: [
             Text(title, style: theme.textTheme.headlineSmall),
             const SizedBox(height: 16),
-            Text(body, style: theme.textTheme.bodyMedium?.copyWith(height: 1.45)),
+            Text(
+              body,
+              style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
+            ),
           ],
         ),
       ),

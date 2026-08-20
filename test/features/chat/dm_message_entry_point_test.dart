@@ -42,20 +42,26 @@ void main() {
     aikoUsername: 'nick',
   );
 
-  const generalChannel =
-      Channel(id: 'general', name: 'general', kind: ChannelKind.standard);
+  const generalChannel = Channel(
+    id: 'general',
+    name: 'general',
+    kind: ChannelKind.standard,
+  );
   const existingDm = Channel(id: 'dm:me:alice', name: '', kind: ChannelKind.dm);
 
   Message from(String channelId) => Message(
-        clientTempId: 'm1',
-        id: 'm1',
-        channelId: channelId,
-        sender: const MessageSender(
-            userId: 'alice-key-opaque', kind: SenderKind.human, label: 'Alice'),
-        body: 'hey',
-        createdAt: DateTime.utc(2026, 8, 12, 13),
-        deliveryState: DeliveryState.sent,
-      );
+    clientTempId: 'm1',
+    id: 'm1',
+    channelId: channelId,
+    sender: const MessageSender(
+      userId: 'alice-key-opaque',
+      kind: SenderKind.human,
+      label: 'Alice',
+    ),
+    body: 'hey',
+    createdAt: DateTime.utc(2026, 8, 12, 13),
+    deliveryState: DeliveryState.sent,
+  );
 
   /// A minimal surface that opens the long-press sheet for [message]. The
   /// container is returned so a test can read the resulting SELECTION — the
@@ -66,13 +72,15 @@ void main() {
     Set<String> blocked = const {},
     List<Channel> dms = const [],
   }) {
-    final container = ProviderContainer(overrides: [
-      restApiProvider.overrideWithValue(fake),
-      blockedUserIdsProvider.overrideWithValue(blocked),
-      currentUserProvider.overrideWithValue(me),
-      channelsProvider.overrideWith((ref) async => const [generalChannel]),
-      dmsProvider.overrideWith((ref) async => dms),
-    ]);
+    final container = ProviderContainer(
+      overrides: [
+        restApiProvider.overrideWithValue(fake),
+        blockedUserIdsProvider.overrideWithValue(blocked),
+        currentUserProvider.overrideWithValue(me),
+        channelsProvider.overrideWith((ref) async => const [generalChannel]),
+        dmsProvider.overrideWith((ref) async => dms),
+      ],
+    );
     // Both providers are autoDispose and, in the real app, are kept alive by
     // ChatScreen watching them. This bare harness has no such watcher, so hold
     // subscriptions ourselves — otherwise `select()` writes into a provider that
@@ -80,25 +88,27 @@ void main() {
     container.listen(selectedChannelIdProvider, (_, _) {});
     container.listen(navigableChannelsProvider, (_, _) {});
 
-    final router = GoRouter(routes: [
-      GoRoute(
-        path: '/',
-        builder: (context, _) => Scaffold(
-          body: Consumer(
-            builder: (context, ref, _) => TextButton(
-              onPressed: () => showMessageActions(context, ref, message),
-              child: const Text('open-actions'),
+    final router = GoRouter(
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, _) => Scaffold(
+            body: Consumer(
+              builder: (context, ref, _) => TextButton(
+                onPressed: () => showMessageActions(context, ref, message),
+                child: const Text('open-actions'),
+              ),
             ),
           ),
         ),
-      ),
-      // Stub call route — a marker proving Message did NOT take the call path.
-      GoRoute(
-        path: '/call/:channelId',
-        builder: (context, state) =>
-            Scaffold(body: Text('CALL:${state.pathParameters['channelId']}')),
-      ),
-    ]);
+        // Stub call route — a marker proving Message did NOT take the call path.
+        GoRoute(
+          path: '/call/:channelId',
+          builder: (context, state) =>
+              Scaffold(body: Text('CALL:${state.pathParameters['channelId']}')),
+        ),
+      ],
+    );
     return (
       widget: UncontrolledProviderScope(
         container: container,
@@ -108,8 +118,9 @@ void main() {
     );
   }
 
-  testWidgets('Message opens the DM with the sender key and selects it',
-      (tester) async {
+  testWidgets('Message opens the DM with the sender key and selects it', (
+    tester,
+  ) async {
     final fake = FakeRestApi()..openDmReturns = existingDm;
     final h = harness(fake, from('general'));
     addTearDown(h.container.dispose);
@@ -134,8 +145,7 @@ void main() {
   // a source that is mid-refresh. Deleting that `isLoading` guard turns this red
   // again, which is the point — the seed's own invalidate is what opens the
   // window, so any DM entry point that seeds walks straight into it.
-  testWidgets(
-      'end-to-end: long-press → Message seeds the DM, opens it, and the '
+  testWidgets('end-to-end: long-press → Message seeds the DM, opens it, and the '
       'self-heal does NOT eject it mid-refresh', (tester) async {
     // The real app, the real long-press, and a `GET /v1/dm` that still reports
     // NOTHING — so the DM can only reach the sidebar via the seed. This is the
@@ -154,11 +164,19 @@ void main() {
       ..listDmsThrows = const NetworkUnavailable();
     rest.membersByChannel['dm:me:alice'] = const [
       ChannelMember(
-          userId: 'u1', role: 'member', canPost: true, handle: 'me',
-          displayName: 'Me'),
+        userId: 'u1',
+        role: 'member',
+        canPost: true,
+        handle: 'me',
+        displayName: 'Me',
+      ),
       ChannelMember(
-          userId: 'alice-key-opaque', role: 'member', canPost: true,
-          handle: 'alice', displayName: 'Alice'),
+        userId: 'alice-key-opaque',
+        role: 'member',
+        canPost: true,
+        handle: 'alice',
+        displayName: 'Alice',
+      ),
     ];
     final transport = FakeChatTransport();
     final container = makeContainer(rest: rest, transport: transport);
@@ -181,36 +199,39 @@ void main() {
   });
 
   testWidgets(
-      'messaging someone you ALREADY DM with selects it WITHOUT re-seeding',
-      (tester) async {
-    // The common path once a conversation exists. `openDm` is idempotent, so
-    // this must NOT seed: seeding invalidates dmsProvider, which rebuilds the
-    // repository (dispose → reconnect → resubscribe-all). Re-opening a
-    // conversation you already have should cost a selection change, nothing more
-    // (cage-match #132 Tesla — the same churn argument as the call path).
-    final fake = FakeRestApi()..openDmReturns = existingDm;
-    final h = harness(fake, from('general'), dms: const [existingDm]);
-    addTearDown(h.container.dispose);
-    await tester.pumpWidget(h.widget);
-    // Let the (overridden) DM list resolve, so `openDm`'s answer is recognised
-    // as already-known rather than new.
-    await tester.pumpAndSettle();
+    'messaging someone you ALREADY DM with selects it WITHOUT re-seeding',
+    (tester) async {
+      // The common path once a conversation exists. `openDm` is idempotent, so
+      // this must NOT seed: seeding invalidates dmsProvider, which rebuilds the
+      // repository (dispose → reconnect → resubscribe-all). Re-opening a
+      // conversation you already have should cost a selection change, nothing more
+      // (cage-match #132 Tesla — the same churn argument as the call path).
+      final fake = FakeRestApi()..openDmReturns = existingDm;
+      final h = harness(fake, from('general'), dms: const [existingDm]);
+      addTearDown(h.container.dispose);
+      await tester.pumpWidget(h.widget);
+      // Let the (overridden) DM list resolve, so `openDm`'s answer is recognised
+      // as already-known rather than new.
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.text('open-actions'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Message Alice'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('open-actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Message Alice'));
+      await tester.pumpAndSettle();
 
-    expect(h.container.read(selectedChannelIdProvider), 'dm:me:alice');
-    // Still exactly one list entry — no duplicate row from a redundant seed.
-    expect(
-      h.container.read(navigableChannelsProvider).where((c) => c.kind == ChannelKind.dm).length,
-      1,
-    );
-  });
+      expect(h.container.read(selectedChannelIdProvider), 'dm:me:alice');
+      // Still exactly one list entry — no duplicate row from a redundant seed.
+      expect(
+        h.container
+            .read(navigableChannelsProvider)
+            .where((c) => c.kind == ChannelKind.dm)
+            .length,
+        1,
+      );
+    },
+  );
 
-  testWidgets(
-      'the self-heal still clears a DEPARTED selection — the isLoading guard '
+  testWidgets('the self-heal still clears a DEPARTED selection — the isLoading guard '
       'defers healing, it does not cancel it', (tester) async {
     // Tesla's cage-match #133 harmonic, run rather than argued: with the heal now
     // skipping a mid-refresh source, does a selection whose DM genuinely departed
@@ -228,11 +249,19 @@ void main() {
     rest.dms = const [existingDm];
     rest.membersByChannel['dm:me:alice'] = const [
       ChannelMember(
-          userId: 'u1', role: 'member', canPost: true, handle: 'me',
-          displayName: 'Me'),
+        userId: 'u1',
+        role: 'member',
+        canPost: true,
+        handle: 'me',
+        displayName: 'Me',
+      ),
       ChannelMember(
-          userId: 'alice-key-opaque', role: 'member', canPost: true,
-          handle: 'alice', displayName: 'Alice'),
+        userId: 'alice-key-opaque',
+        role: 'member',
+        canPost: true,
+        handle: 'alice',
+        displayName: 'Alice',
+      ),
     ];
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
@@ -252,13 +281,17 @@ void main() {
     container.invalidate(dmsProvider);
     await tester.pumpAndSettle();
 
-    expect(container.read(selectedChannelIdProvider), isNull,
-        reason: 'a departed selection must still clear once both sources settle');
+    expect(
+      container.read(selectedChannelIdProvider),
+      isNull,
+      reason: 'a departed selection must still clear once both sources settle',
+    );
     expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsNothing);
   });
 
-  testWidgets('a seed that changes nothing does NOT refetch the DM list',
-      (tester) async {
+  testWidgets('a seed that changes nothing does NOT refetch the DM list', (
+    tester,
+  ) async {
     // Two racing taps (or one tap during a refresh) both read dmsProvider as
     // "not listed" — its value is null → [] mid-refresh — so both call
     // seedOpenedDm. The union is idempotent by id, but the INVALIDATE was not,
@@ -273,11 +306,19 @@ void main() {
       ..listDmsThrows = const NetworkUnavailable();
     rest.membersByChannel['dm:me:alice'] = const [
       ChannelMember(
-          userId: 'u1', role: 'member', canPost: true, handle: 'me',
-          displayName: 'Me'),
+        userId: 'u1',
+        role: 'member',
+        canPost: true,
+        handle: 'me',
+        displayName: 'Me',
+      ),
       ChannelMember(
-          userId: 'alice-key-opaque', role: 'member', canPost: true,
-          handle: 'alice', displayName: 'Alice'),
+        userId: 'alice-key-opaque',
+        role: 'member',
+        canPost: true,
+        handle: 'alice',
+        displayName: 'Alice',
+      ),
     ];
     final transport = FakeChatTransport();
     final container = makeContainer(rest: rest, transport: transport);
@@ -306,13 +347,17 @@ void main() {
     await tester.tap(find.text('Message Alice'));
     await tester.pumpAndSettle();
 
-    expect(rest.listDmsCalls, listDmsAfterFirst,
-        reason: 'a no-op seed must not invalidate dmsProvider');
+    expect(
+      rest.listDmsCalls,
+      listDmsAfterFirst,
+      reason: 'a no-op seed must not invalidate dmsProvider',
+    );
     expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
   });
 
-  testWidgets('Message is HIDDEN inside a DM (it would be a no-op there)',
-      (tester) async {
+  testWidgets('Message is HIDDEN inside a DM (it would be a no-op there)', (
+    tester,
+  ) async {
     final fake = FakeRestApi();
     final h = harness(fake, from('dm:me:alice'), dms: const [existingDm]);
     addTearDown(h.container.dispose);
@@ -327,8 +372,9 @@ void main() {
     expect(find.text('Report message'), findsOneWidget);
   });
 
-  testWidgets('a failed open shows a SnackBar and changes no selection',
-      (tester) async {
+  testWidgets('a failed open shows a SnackBar and changes no selection', (
+    tester,
+  ) async {
     final fake = FakeRestApi()..openDmThrows = const DmTargetNotFound();
     final h = harness(fake, from('general'));
     addTearDown(h.container.dispose);
@@ -343,8 +389,9 @@ void main() {
     expect(h.container.read(selectedChannelIdProvider), isNull);
   });
 
-  testWidgets('offline gets its own copy, not a generic retry message',
-      (tester) async {
+  testWidgets('offline gets its own copy, not a generic retry message', (
+    tester,
+  ) async {
     final fake = FakeRestApi()..openDmThrows = const NetworkUnavailable();
     final h = harness(fake, from('general'));
     addTearDown(h.container.dispose);
@@ -359,22 +406,24 @@ void main() {
     expect(h.container.read(selectedChannelIdProvider), isNull);
   });
 
-  testWidgets('Message fails closed on a blocked target — no openDm, no select',
-      (tester) async {
-    final fake = FakeRestApi();
-    final h = harness(fake, from('general'), blocked: {'alice-key-opaque'});
-    addTearDown(h.container.dispose);
-    await tester.pumpWidget(h.widget);
+  testWidgets(
+    'Message fails closed on a blocked target — no openDm, no select',
+    (tester) async {
+      final fake = FakeRestApi();
+      final h = harness(fake, from('general'), blocked: {'alice-key-opaque'});
+      addTearDown(h.container.dispose);
+      await tester.pumpWidget(h.widget);
 
-    await tester.tap(find.text('open-actions'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Message Alice'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('open-actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Message Alice'));
+      await tester.pumpAndSettle();
 
-    // Never even asked the island for a room (defence-in-depth on the UGC
-    // boundary — the same fail-closed stance the Call path takes).
-    expect(fake.openDmCalls, 0);
-    expect(find.textContaining("You've blocked Alice"), findsOneWidget);
-    expect(h.container.read(selectedChannelIdProvider), isNull);
-  });
+      // Never even asked the island for a room (defence-in-depth on the UGC
+      // boundary — the same fail-closed stance the Call path takes).
+      expect(fake.openDmCalls, 0);
+      expect(find.textContaining("You've blocked Alice"), findsOneWidget);
+      expect(h.container.read(selectedChannelIdProvider), isNull);
+    },
+  );
 }

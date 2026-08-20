@@ -22,33 +22,39 @@ import 'package:flutter_test/flutter_test.dart';
 DriftCache makeCache() => DriftCache(NativeDatabase.memory());
 
 const _me = MessageSender(userId: 'me', kind: SenderKind.human, label: 'Me');
-const _alice =
-    MessageSender(userId: 'u2', kind: SenderKind.human, label: 'Alice');
+const _alice = MessageSender(
+  userId: 'u2',
+  kind: SenderKind.human,
+  label: 'Alice',
+);
 
 Message optimistic(String tempId, String channel, String body) => Message(
-      clientTempId: tempId,
-      channelId: channel,
-      sender: _me,
-      body: body,
-      createdAt: DateTime.utc(2026, 1, 1, 12),
-      deliveryState: DeliveryState.sending,
-    );
+  clientTempId: tempId,
+  channelId: channel,
+  sender: _me,
+  body: body,
+  createdAt: DateTime.utc(2026, 1, 1, 12),
+  deliveryState: DeliveryState.sending,
+);
 
 Message server(String ulid, String channel, String body) => Message(
-      clientTempId: ulid,
-      id: ulid,
-      channelId: channel,
-      sender: _alice,
-      body: body,
-      createdAt: DateTime.utc(2026, 1, 1, 12),
-      deliveryState: DeliveryState.sent,
-    );
+  clientTempId: ulid,
+  id: ulid,
+  channelId: channel,
+  sender: _alice,
+  body: body,
+  createdAt: DateTime.utc(2026, 1, 1, 12),
+  deliveryState: DeliveryState.sent,
+);
 
 void main() {
   // Subscribe to watchChannel, drain the initial emission, run [act], and return
   // how many NEW emissions [act] produced. The whole point of the contract.
   Future<int> emissionsFrom(
-      DriftCache cache, String channel, Future<void> Function() act) async {
+    DriftCache cache,
+    String channel,
+    Future<void> Function() act,
+  ) async {
     final seen = <List<Message>>[];
     final sub = cache.watchChannel(channel).listen(seen.add);
     await pumpEventQueue();
@@ -65,7 +71,10 @@ void main() {
       final cache = makeCache();
       expect(
         await emissionsFrom(
-            cache, 'c', () => cache.insertOptimistic(optimistic('t1', 'c', 'hi'))),
+          cache,
+          'c',
+          () => cache.insertOptimistic(optimistic('t1', 'c', 'hi')),
+        ),
         greaterThan(0),
       );
     });
@@ -74,8 +83,11 @@ void main() {
       final cache = makeCache();
       await cache.insertOptimistic(optimistic('t1', 'c', 'hi'));
       expect(
-        await emissionsFrom(cache, 'c',
-            () => cache.reconcileAck('t1', 'ULID1', DateTime.utc(2026, 1, 1, 12))),
+        await emissionsFrom(
+          cache,
+          'c',
+          () => cache.reconcileAck('t1', 'ULID1', DateTime.utc(2026, 1, 1, 12)),
+        ),
         greaterThan(0),
       );
     });
@@ -84,7 +96,10 @@ void main() {
       final cache = makeCache();
       expect(
         await emissionsFrom(
-            cache, 'c', () => cache.upsertInbound(server('ULID2', 'c', 'yo'))),
+          cache,
+          'c',
+          () => cache.upsertInbound(server('ULID2', 'c', 'yo')),
+        ),
         greaterThan(0),
       );
     });
@@ -113,10 +128,16 @@ void main() {
       await cache.upsertInbound(server('ULID3', 'c', 'gone soon'));
       expect(
         await emissionsFrom(
-            cache,
-            'c',
-            () => cache.applyRetraction(const Retraction(
-                channelId: 'c', id: 'RETRACT1', targetMsgId: 'ULID3'))),
+          cache,
+          'c',
+          () => cache.applyRetraction(
+            const Retraction(
+              channelId: 'c',
+              id: 'RETRACT1',
+              targetMsgId: 'ULID3',
+            ),
+          ),
+        ),
         greaterThan(0),
       );
     });
@@ -126,7 +147,11 @@ void main() {
     test('markFailed on an already-sent row does NOT emit', () async {
       final cache = makeCache();
       await cache.insertOptimistic(optimistic('t1', 'c', 'hi'));
-      await cache.reconcileAck('t1', 'ULID1', DateTime.utc(2026, 1, 1, 12)); // sent
+      await cache.reconcileAck(
+        't1',
+        'ULID1',
+        DateTime.utc(2026, 1, 1, 12),
+      ); // sent
       expect(
         // WHERE serverUlid IS NULL now matches zero rows.
         await emissionsFrom(cache, 'c', () => cache.markFailed('t1')),
@@ -137,18 +162,23 @@ void main() {
     test('retry on an already-sent row does NOT emit', () async {
       final cache = makeCache();
       await cache.insertOptimistic(optimistic('t1', 'c', 'hi'));
-      await cache.reconcileAck('t1', 'ULID1', DateTime.utc(2026, 1, 1, 12)); // sent
-      expect(
-        await emissionsFrom(cache, 'c', () => cache.retry('t1')),
-        0,
-      );
+      await cache.reconcileAck(
+        't1',
+        'ULID1',
+        DateTime.utc(2026, 1, 1, 12),
+      ); // sent
+      expect(await emissionsFrom(cache, 'c', () => cache.retry('t1')), 0);
     });
 
     test('markFailed for an unknown ref does NOT emit', () async {
       final cache = makeCache();
       await cache.insertOptimistic(optimistic('t1', 'c', 'hi'));
       expect(
-        await emissionsFrom(cache, 'c', () => cache.markFailed('no-such-temp-id')),
+        await emissionsFrom(
+          cache,
+          'c',
+          () => cache.markFailed('no-such-temp-id'),
+        ),
         0,
       );
     });

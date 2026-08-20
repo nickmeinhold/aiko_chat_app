@@ -69,8 +69,11 @@ void main() {
       clientTempId: 'M1',
       id: 'M1',
       channelId: dmId,
-      sender:
-          MessageSender(userId: from, kind: SenderKind.human, label: 'Robin'),
+      sender: MessageSender(
+        userId: from,
+        kind: SenderKind.human,
+        label: 'Robin',
+      ),
       body: body,
       createdAt: DateTime.now().toUtc(),
       origin: OriginEnvelope.fromSignature(sig, clientMsgId: 'M1'),
@@ -91,19 +94,23 @@ void main() {
       newTempId: () => 'tmp',
     );
     repo.start();
-    container = ProviderContainer(overrides: [
-      chatRepositoryProvider.overrideWith((ref) async => repo),
-      currentUserProvider.overrideWithValue(me),
-      blockedUserIdsProvider.overrideWithValue(const <String>{}),
-      mutedChannelIdsProvider.overrideWithValue(const <String>{}),
-      mutedUserIdsProvider.overrideWithValue(const <String>{}),
-      // The ring resolves DM-ness from the app's OWN channel model, never from
-      // the id's shape — a real DM channel id is a bare ULID (live-verified),
-      // and the `dm:` prefix lives on a column the app never receives.
-      dmsProvider.overrideWith((ref) async => [
+    container = ProviderContainer(
+      overrides: [
+        chatRepositoryProvider.overrideWith((ref) async => repo),
+        currentUserProvider.overrideWithValue(me),
+        blockedUserIdsProvider.overrideWithValue(const <String>{}),
+        mutedChannelIdsProvider.overrideWithValue(const <String>{}),
+        mutedUserIdsProvider.overrideWithValue(const <String>{}),
+        // The ring resolves DM-ness from the app's OWN channel model, never from
+        // the id's shape — a real DM channel id is a bare ULID (live-verified),
+        // and the `dm:` prefix lives on a column the app never receives.
+        dmsProvider.overrideWith(
+          (ref) async => [
             const Channel(id: dmId, name: 'Ring Test', kind: ChannelKind.dm),
-          ]),
-    ]);
+          ],
+        ),
+      ],
+    );
   });
 
   tearDown(() async {
@@ -115,8 +122,7 @@ void main() {
 
   /// Let the transport listener, the repo's inbound FIFO, the drift write and
   /// the announcement all drain.
-  Future<void> pump() =>
-      Future<void>.delayed(const Duration(milliseconds: 30));
+  Future<void> pump() => Future<void>.delayed(const Duration(milliseconds: 30));
 
   /// Warm `dmsProvider` before the ring reads it. In production the repository
   /// itself watches it (the subscription set is built from it), so it is always
@@ -174,7 +180,8 @@ void main() {
     await pump();
 
     transport.emitMessage(
-        await inbound(age: kCallInviteFreshness + const Duration(seconds: 5)));
+      await inbound(age: kCallInviteFreshness + const Duration(seconds: 5)),
+    );
     await pump();
 
     expect(container.read(incomingRingProvider), isNull);
@@ -200,8 +207,11 @@ void main() {
     // The SAME invitation, redelivered well inside its freshness window.
     transport.emitMessage(msg);
     await pump();
-    expect(container.read(incomingRingProvider), isNull,
-        reason: 'a settled invitation must never ring twice');
+    expect(
+      container.read(incomingRingProvider),
+      isNull,
+      reason: 'a settled invitation must never ring twice',
+    );
   });
 
   test('a RETRACTED invite is never announced, so it never rings', () async {
@@ -224,8 +234,11 @@ void main() {
     transport.emitMessage(msg);
     await pump();
 
-    expect(container.read(incomingRingProvider), isNull,
-        reason: 'a retracted invitation must never ring');
+    expect(
+      container.read(incomingRingProvider),
+      isNull,
+      reason: 'a retracted invitation must never ring',
+    );
   });
 
   test('a live ring SURVIVES a repository rebuild', () async {
@@ -243,30 +256,38 @@ void main() {
     container.invalidate(chatRepositoryProvider);
     await pump();
 
-    expect(container.read(incomingRingProvider), isNotNull,
-        reason: 'a repo reconnecting is not the user ignoring a call');
+    expect(
+      container.read(incomingRingProvider),
+      isNotNull,
+      reason: 'a repo reconnecting is not the user ignoring a call',
+    );
   });
 
-  test('the ring window is measured from the SIGNED start, rebuild or not',
-      () async {
-    // One state, one equation of motion. `_consider` used to arm an absolute
-    // kCallRingDuration while `_republish` derived the remainder from
-    // startedAt, so a ring's length depended on whether a rebuild happened
-    // (cage-match #139 R5, Carnot). An invitation already older than the ring
-    // window must not ring at all — even though it is inside the 10s freshness
-    // gate, admission and duration are different clocks.
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+  test(
+    'the ring window is measured from the SIGNED start, rebuild or not',
+    () async {
+      // One state, one equation of motion. `_consider` used to arm an absolute
+      // kCallRingDuration while `_republish` derived the remainder from
+      // startedAt, so a ring's length depended on whether a rebuild happened
+      // (cage-match #139 R5, Carnot). An invitation already older than the ring
+      // window must not ring at all — even though it is inside the 10s freshness
+      // gate, admission and duration are different clocks.
+      await warmDms();
+      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+      await pump();
 
-    // Freshness gate is 10s and ring duration is 30s, so this cannot arise from
-    // a real signature; drive it directly to pin the arithmetic.
-    final ctl = container.read(incomingRingProvider.notifier);
-    expect(kCallRingDuration > kCallInviteFreshness, isTrue,
-        reason: 'if this inverts, the admission gate alone bounds the ring');
-    ctl.stopRinging();
-    expect(container.read(incomingRingProvider), isNull);
-  });
+      // Freshness gate is 10s and ring duration is 30s, so this cannot arise from
+      // a real signature; drive it directly to pin the arithmetic.
+      final ctl = container.read(incomingRingProvider.notifier);
+      expect(
+        kCallRingDuration > kCallInviteFreshness,
+        isTrue,
+        reason: 'if this inverts, the admission gate alone bounds the ring',
+      );
+      ctl.stopRinging();
+      expect(container.read(incomingRingProvider), isNull);
+    },
+  );
 
   test('stopRinging clears it', () async {
     await warmDms();

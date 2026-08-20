@@ -87,7 +87,8 @@ class ChannelReadStore {
     final result = _writes.then((_) async {
       final map = Map<String, String>.from(readAll(userId));
       final current = map[channelId];
-      if (current != null && ulid.compareTo(current) <= 0) return; // CAS: no rewind
+      if (current != null && ulid.compareTo(current) <= 0)
+        return; // CAS: no rewind
       map[channelId] = ulid;
       await _prefs.setString(_key(userId), jsonEncode(map));
     });

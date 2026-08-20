@@ -71,11 +71,15 @@ void main() {
         panels.forEach((label, panel) {
           final ink = label.endsWith('Container') && label != 'surfaceContainer'
               ? (label == 'primaryContainer'
-                  ? s.onPrimaryContainer
-                  : s.onSecondaryContainer)
+                    ? s.onPrimaryContainer
+                    : s.onSecondaryContainer)
               : s.onSurface;
-          expect(_seen(ink, panel), greaterThanOrEqualTo(4.5),
-              reason: 'ink on $label is ${_seen(ink, panel).toStringAsFixed(2)}:1');
+          expect(
+            _seen(ink, panel),
+            greaterThanOrEqualTo(4.5),
+            reason:
+                'ink on $label is ${_seen(ink, panel).toStringAsFixed(2)}:1',
+          );
         });
       });
 
@@ -85,12 +89,21 @@ void main() {
       });
 
       test('a label on a filled accent clears 4.5:1', () {
-        expect(_seen(s.onPrimary, s.primary), greaterThanOrEqualTo(4.5),
-            reason: 'onPrimary vs primary');
-        expect(_seen(s.onSecondary, s.secondary), greaterThanOrEqualTo(4.5),
-            reason: 'onSecondary vs secondary');
-        expect(_seen(s.onError, s.error), greaterThanOrEqualTo(4.5),
-            reason: 'onError vs error');
+        expect(
+          _seen(s.onPrimary, s.primary),
+          greaterThanOrEqualTo(4.5),
+          reason: 'onPrimary vs primary',
+        );
+        expect(
+          _seen(s.onSecondary, s.secondary),
+          greaterThanOrEqualTo(4.5),
+          reason: 'onSecondary vs secondary',
+        );
+        expect(
+          _seen(s.onError, s.error),
+          greaterThanOrEqualTo(4.5),
+          reason: 'onError vs error',
+        );
       });
     });
 
@@ -134,20 +147,29 @@ void main() {
           for (var j = i + 1; j < names.length; j++) {
             final a = accents[names[i]]!;
             final b = accents[names[j]]!;
-            var dh = (HSLColor.fromColor(a).hue - HSLColor.fromColor(b).hue).abs();
+            var dh = (HSLColor.fromColor(a).hue - HSLColor.fromColor(b).hue)
+                .abs();
             if (dh > 180) dh = 360 - dh;
             final pair = '${names[i]} vs ${names[j]}';
 
-            expect(dh, greaterThanOrEqualTo(25.0),
-                reason: '$pair are ${dh.round()}° apart — the same colour '
-                    'wearing two meanings');
+            expect(
+              dh,
+              greaterThanOrEqualTo(25.0),
+              reason:
+                  '$pair are ${dh.round()}° apart — the same colour '
+                  'wearing two meanings',
+            );
 
             if (dh < 60.0) {
               final lum = _contrast(a, b);
-              expect(lum, greaterThanOrEqualTo(1.4),
-                  reason: '$pair are only ${dh.round()}° apart, so lightness '
-                      'has to carry the distinction — and it is only '
-                      '${lum.toStringAsFixed(2)}:1');
+              expect(
+                lum,
+                greaterThanOrEqualTo(1.4),
+                reason:
+                    '$pair are only ${dh.round()}° apart, so lightness '
+                    'has to carry the distinction — and it is only '
+                    '${lum.toStringAsFixed(2)}:1',
+              );
             }
           }
         }
@@ -160,20 +182,32 @@ void main() {
       test('an ARMED mark is more present than a RESTING mark', () {
         final rest = _seen(s.outlineVariant, s.surface);
         final armed = _seen(s.secondary, s.surface);
-        expect(armed, greaterThan(rest),
-            reason: 'rest ${rest.toStringAsFixed(2)}:1, '
-                'armed ${armed.toStringAsFixed(2)}:1');
+        expect(
+          armed,
+          greaterThan(rest),
+          reason:
+              'rest ${rest.toStringAsFixed(2)}:1, '
+              'armed ${armed.toStringAsFixed(2)}:1',
+        );
       });
 
       test('a hairline is SEEN but never shouts — quieter than the ink', () {
         final hairline = _seen(s.outline, s.surface);
         final ink = _seen(s.onSurface, s.surface);
-        expect(hairline, greaterThan(1.15),
-            reason: 'an invisible hairline is not separation '
-                '(${hairline.toStringAsFixed(2)}:1)');
-        expect(hairline, lessThan(ink),
-            reason: 'a hairline louder than the text is a border, and this '
-                'design removed borders');
+        expect(
+          hairline,
+          greaterThan(1.15),
+          reason:
+              'an invisible hairline is not separation '
+              '(${hairline.toStringAsFixed(2)}:1)',
+        );
+        expect(
+          hairline,
+          lessThan(ink),
+          reason:
+              'a hairline louder than the text is a border, and this '
+              'design removed borders',
+        );
       });
 
       test('every panel is distinguishable from the ground it sits on', () {
@@ -182,8 +216,11 @@ void main() {
           s.surfaceContainer,
           s.surfaceContainerHigh,
         ]) {
-          expect(_contrast(panel, s.surface), greaterThan(1.03),
-              reason: 'a panel that matches the ground is not a panel');
+          expect(
+            _contrast(panel, s.surface),
+            greaterThan(1.03),
+            reason: 'a panel that matches the ground is not a panel',
+          );
         }
       });
     });
@@ -193,8 +230,11 @@ void main() {
       // how the light theme kept Material's default shadows and surface tints
       // for four months without anyone noticing.
       test('the theme casts no shadow', () {
-        expect(theme.shadowColor.a, 0.0,
-            reason: 'shadowColor is ${theme.shadowColor}');
+        expect(
+          theme.shadowColor.a,
+          0.0,
+          reason: 'shadowColor is ${theme.shadowColor}',
+        );
         expect(s.shadow.a, 0.0, reason: 'colorScheme.shadow is ${s.shadow}');
       });
 
@@ -204,14 +244,25 @@ void main() {
       });
 
       test('surfaces are not tinted by elevation', () {
-        expect(theme.cardTheme.surfaceTintColor?.a, 0.0,
-            reason: 'card surfaceTint is ${theme.cardTheme.surfaceTintColor}');
-        expect(theme.dialogTheme.surfaceTintColor?.a, 0.0,
-            reason: 'dialog surfaceTint is '
-                '${theme.dialogTheme.surfaceTintColor}');
-        expect(theme.popupMenuTheme.surfaceTintColor?.a, 0.0,
-            reason: 'menu surfaceTint is '
-                '${theme.popupMenuTheme.surfaceTintColor}');
+        expect(
+          theme.cardTheme.surfaceTintColor?.a,
+          0.0,
+          reason: 'card surfaceTint is ${theme.cardTheme.surfaceTintColor}',
+        );
+        expect(
+          theme.dialogTheme.surfaceTintColor?.a,
+          0.0,
+          reason:
+              'dialog surfaceTint is '
+              '${theme.dialogTheme.surfaceTintColor}',
+        );
+        expect(
+          theme.popupMenuTheme.surfaceTintColor?.a,
+          0.0,
+          reason:
+              'menu surfaceTint is '
+              '${theme.popupMenuTheme.surfaceTintColor}',
+        );
       });
 
       test('panels do not float', () {
@@ -233,17 +284,29 @@ void main() {
       // `ColorScheme.fromSeed` wearing the app's name. A generated scheme has
       // no component subthemes, so the absence of them IS the tell.
       test('it carries a hand-authored text theme', () {
-        expect(theme.textTheme.bodyMedium?.color, isNotNull,
-            reason: 'no explicit ink — the TextTheme was never authored');
+        expect(
+          theme.textTheme.bodyMedium?.color,
+          isNotNull,
+          reason: 'no explicit ink — the TextTheme was never authored',
+        );
       });
 
       test('it dresses the input, the list tile and the chrome', () {
-        expect(theme.inputDecorationTheme.enabledBorder, isNotNull,
-            reason: 'the input decoration was never authored');
-        expect(theme.listTileTheme.textColor, isNotNull,
-            reason: 'the list tile was never authored');
-        expect(theme.appBarTheme.backgroundColor, isNotNull,
-            reason: 'the app bar was never authored');
+        expect(
+          theme.inputDecorationTheme.enabledBorder,
+          isNotNull,
+          reason: 'the input decoration was never authored',
+        );
+        expect(
+          theme.listTileTheme.textColor,
+          isNotNull,
+          reason: 'the list tile was never authored',
+        );
+        expect(
+          theme.appBarTheme.backgroundColor,
+          isNotNull,
+          reason: 'the app bar was never authored',
+        );
       });
     });
   });

@@ -104,7 +104,10 @@ void main() {
       });
       expect(r.channelId, '');
       expect(r.reporterDisplayName, isNull);
-      expect(r.reasonLabel, 'some_future_reason'); // unknown → raw wire, not dropped
+      expect(
+        r.reasonLabel,
+        'some_future_reason',
+      ); // unknown → raw wire, not dropped
       expect(r.createdAt.millisecondsSinceEpoch, 0); // epoch fallback
     });
 
@@ -120,16 +123,21 @@ void main() {
   });
 
   group('pendingReportsProvider gating', () {
-    test('a NON-moderator never calls the gated endpoint (empty queue)', () async {
-      final rest = FakeRestApi(user: FakeRestApi.defaultUser); // isModerator=false
-      rest.pendingReports = [_report('r1')];
-      final c = await _loggedIn(rest);
+    test(
+      'a NON-moderator never calls the gated endpoint (empty queue)',
+      () async {
+        final rest = FakeRestApi(
+          user: FakeRestApi.defaultUser,
+        ); // isModerator=false
+        rest.pendingReports = [_report('r1')];
+        final c = await _loggedIn(rest);
 
-      final reports = await c.read(pendingReportsProvider.future);
-      expect(reports, isEmpty);
-      // The whole point: no guaranteed-403 call for a plain user.
-      expect(rest.listPendingReportsCalls, 0);
-    });
+        final reports = await c.read(pendingReportsProvider.future);
+        expect(reports, isEmpty);
+        // The whole point: no guaranteed-403 call for a plain user.
+        expect(rest.listPendingReportsCalls, 0);
+      },
+    );
 
     test('a moderator loads the pending queue', () async {
       final rest = FakeRestApi(user: _modUser);
@@ -152,10 +160,9 @@ void main() {
       await c.read(pendingReportsProvider.notifier).resolve('r1');
 
       expect(rest.resolvedReports, ['r1']);
-      expect(
-        c.read(pendingReportsProvider).value!.map((r) => r.reportId),
-        ['r2'],
-      );
+      expect(c.read(pendingReportsProvider).value!.map((r) => r.reportId), [
+        'r2',
+      ]);
     });
 
     test('dismiss removes that report from the queue', () async {
@@ -167,10 +174,9 @@ void main() {
       await c.read(pendingReportsProvider.notifier).dismiss('r2');
 
       expect(rest.dismissedReports, ['r2']);
-      expect(
-        c.read(pendingReportsProvider).value!.map((r) => r.reportId),
-        ['r1'],
-      );
+      expect(c.read(pendingReportsProvider).value!.map((r) => r.reportId), [
+        'r1',
+      ]);
     });
 
     test('ban suspends the sender but LEAVES the report in the queue', () async {
@@ -241,33 +247,45 @@ void main() {
 
       // The reconcile flipped the flag → the screen's top-level gate closes.
       expect(c.read(isModeratorProvider), isFalse);
-      expect(c.read(authControllerProvider).value, isNotNull); // never logged out
+      expect(
+        c.read(authControllerProvider).value,
+        isNotNull,
+      ); // never logged out
     });
 
-    test('a Forbidden load whose /me reconcile FAILS transiently stays an ERROR, '
-        'never a false "queue clear" (empty is the wrong carrier for 403)',
-        () async {
-      final rest = FakeRestApi(user: _modUser);
-      final c = await _loggedIn(rest);
+    test(
+      'a Forbidden load whose /me reconcile FAILS transiently stays an ERROR, '
+      'never a false "queue clear" (empty is the wrong carrier for 403)',
+      () async {
+        final rest = FakeRestApi(user: _modUser);
+        final c = await _loggedIn(rest);
 
-      // The list 403s, but the reconciling /me can't land (network down).
-      rest.operatorThrows = const Forbidden('/v1/reports');
-      rest.meThrows = const NetworkUnavailable();
+        // The list 403s, but the reconciling /me can't land (network down).
+        rest.operatorThrows = const Forbidden('/v1/reports');
+        rest.meThrows = const NetworkUnavailable();
 
-      final sub = c.listen(pendingReportsProvider, (_, _) {});
-      addTearDown(sub.close);
-      await settle(c);
+        final sub = c.listen(pendingReportsProvider, (_, _) {});
+        addTearDown(sub.close);
+        await settle(c);
 
-      // The queue must remain an ERROR (honest "couldn't load"), NOT a
-      // success-empty that reads as "the queue is clear". The flag couldn't flip,
-      // so the server remains the gate.
-      final state = c.read(pendingReportsProvider);
-      expect(state.hasError, isTrue);
-      expect(state.hasValue && (state.value?.isEmpty ?? false), isFalse,
-          reason: 'a Forbidden load must never present as an empty (clear) queue');
-      expect(c.read(isModeratorProvider), isTrue);
-      expect(c.read(authControllerProvider).value, isNotNull); // not logged out
-    });
+        // The queue must remain an ERROR (honest "couldn't load"), NOT a
+        // success-empty that reads as "the queue is clear". The flag couldn't flip,
+        // so the server remains the gate.
+        final state = c.read(pendingReportsProvider);
+        expect(state.hasError, isTrue);
+        expect(
+          state.hasValue && (state.value?.isEmpty ?? false),
+          isFalse,
+          reason:
+              'a Forbidden load must never present as an empty (clear) queue',
+        );
+        expect(c.read(isModeratorProvider), isTrue);
+        expect(
+          c.read(authControllerProvider).value,
+          isNotNull,
+        ); // not logged out
+      },
+    );
 
     test('a BAN discovered during the Forbidden refresh routes to the suspended '
         'zone, NOT a plain logout (single suspended door)', () async {

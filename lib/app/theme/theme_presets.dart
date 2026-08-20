@@ -159,6 +159,6 @@ const kThemePresets = <ThemePreset>[_maritime, _blueprint, _radar];
 /// preference is device state that can outlive the build that wrote it —
 /// downgrading, or a preset we retire, must never leave a reader with no theme.
 ThemePreset presetById(String? id) => kThemePresets.firstWhere(
-      (p) => p.id == id,
-      orElse: () => kThemePresets.firstWhere((p) => p.id == kDefaultPresetId),
-    );
+  (p) => p.id == id,
+  orElse: () => kThemePresets.firstWhere((p) => p.id == kDefaultPresetId),
+);

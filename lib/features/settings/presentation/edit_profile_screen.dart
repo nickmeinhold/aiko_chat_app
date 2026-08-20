@@ -72,15 +72,17 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       // 401 → logout), so this screen only handles the user-actionable errors
       // below. A null return means a terminal signal was settled and the router
       // is redirecting — do NOT pop/toast (cage-match #114 confirming round).
-      final updated =
-          await ref.read(authControllerProvider.notifier).saveProfile(
-                handle: handleChanged ? newHandle : null,
-                displayName: nameChanged ? newName : null,
-              );
+      final updated = await ref
+          .read(authControllerProvider.notifier)
+          .saveProfile(
+            handle: handleChanged ? newHandle : null,
+            displayName: nameChanged ? newName : null,
+          );
       if (updated == null) return;
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Profile updated')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Profile updated')));
       Navigator.of(context).pop();
     } on HandleTaken {
       if (mounted) {
@@ -93,7 +95,8 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't update your profile")));
+          const SnackBar(content: Text("Couldn't update your profile")),
+        );
       }
     } finally {
       if (mounted) setState(() => _saving = false);

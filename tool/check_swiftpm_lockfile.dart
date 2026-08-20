@@ -173,8 +173,12 @@ String? _platformOf(String repoRelPath) {
 /// `git ls-files` so only TRACKED files count — an untracked local lockfile never
 /// ships, so it is not the gate's concern.
 ({Map<String, Set<String>> declared, Map<String, List<Lockfile>> lockfiles})
-    collectFromGit(String root) {
-  final ls = Process.runSync('git', ['-C', root, 'ls-files'], stdoutEncoding: utf8);
+collectFromGit(String root) {
+  final ls = Process.runSync('git', [
+    '-C',
+    root,
+    'ls-files',
+  ], stdoutEncoding: utf8);
   if (ls.exitCode != 0) {
     stderr.writeln('git ls-files failed in $root: ${ls.stderr}');
     exit(2);
@@ -190,8 +194,9 @@ String? _platformOf(String repoRelPath) {
     final base = rel.split('/').last;
     if (base == 'project.pbxproj') {
       final contents = File('$root/$rel').readAsStringSync();
-      (declared[platform] ??= <String>{})
-          .addAll(declaredIdentitiesFromPbxproj(contents));
+      (declared[platform] ??= <String>{}).addAll(
+        declaredIdentitiesFromPbxproj(contents),
+      );
     } else if (base == 'Package.resolved') {
       final contents = File('$root/$rel').readAsStringSync();
       final Set<String> pins;
@@ -208,8 +213,10 @@ String? _platformOf(String repoRelPath) {
 }
 
 void main() {
-  final rootProc =
-      Process.runSync('git', ['rev-parse', '--show-toplevel'], stdoutEncoding: utf8);
+  final rootProc = Process.runSync('git', [
+    'rev-parse',
+    '--show-toplevel',
+  ], stdoutEncoding: utf8);
   final root = rootProc.exitCode == 0
       ? (rootProc.stdout as String).trim()
       : Directory.current.path;
@@ -221,10 +228,14 @@ void main() {
   );
 
   if (problems.isEmpty) {
-    final declaredCount =
-        inputs.declared.values.fold<int>(0, (n, s) => n + s.length);
-    final lockCount =
-        inputs.lockfiles.values.fold<int>(0, (n, l) => n + l.length);
+    final declaredCount = inputs.declared.values.fold<int>(
+      0,
+      (n, s) => n + s.length,
+    );
+    final lockCount = inputs.lockfiles.values.fold<int>(
+      0,
+      (n, l) => n + l.length,
+    );
     stdout.writeln(
       '✓ SwiftPM lockfile gate: clean '
       '($declaredCount declared remote package(s), $lockCount committed lockfile(s)).',

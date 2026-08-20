@@ -9,13 +9,13 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/test_helpers.dart';
 
 SignedPayload _fixture(Uint8List pub) => SignedPayload(
-      rawPublicKey: pub,
-      channelId: 'chan-1',
-      clientMsgId: 'tmp-abc',
-      signedAtMs: 1720000000000,
-      body: 'hello world',
-      replyTo: null,
-    );
+  rawPublicKey: pub,
+  channelId: 'chan-1',
+  clientMsgId: 'tmp-abc',
+  signedAtMs: 1720000000000,
+  body: 'hello world',
+  replyTo: null,
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -29,12 +29,15 @@ void main() {
       expect(key.keyVersion, 1);
     });
 
-    test('loadOrCreate is stable across a fresh store instance (restart proxy)',
-        () async {
-      final first = await SovereignKeyStore().loadOrCreate();
-      final second = await SovereignKeyStore().loadOrCreate(); // new instance, same storage
-      expect(second.rawPublicKey, first.rawPublicKey);
-    });
+    test(
+      'loadOrCreate is stable across a fresh store instance (restart proxy)',
+      () async {
+        final first = await SovereignKeyStore().loadOrCreate();
+        final second = await SovereignKeyStore()
+            .loadOrCreate(); // new instance, same storage
+        expect(second.rawPublicKey, first.rawPublicKey);
+      },
+    );
 
     test('clear() wipes — a subsequent load mints a NEW key', () async {
       final store = SovereignKeyStore();
@@ -47,30 +50,38 @@ void main() {
     // Cage-match Tesla R2: the single-flight cache must NOT cache a rejected
     // future — a transient first-use fault would otherwise mute signing forever.
     test('a failed first-use is evicted so a later load can retry', () async {
-      const channel =
-          MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+      const channel = MethodChannel(
+        'plugins.it_nomads.com/flutter_secure_storage',
+      );
       final backing = <String, String>{};
       var failNextRead = true;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
-        final args = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
-        if (call.method == 'read' && failNextRead) {
-          failNextRead = false;
-          throw PlatformException(code: 'transient', message: 'storage blip');
-        }
-        switch (call.method) {
-          case 'write':
-            backing[args['key'] as String] = args['value'] as String;
-            return null;
-          case 'read':
-            return backing[args['key'] as String];
-          default:
-            return null;
-        }
-      });
+            final args =
+                (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
+            if (call.method == 'read' && failNextRead) {
+              failNextRead = false;
+              throw PlatformException(
+                code: 'transient',
+                message: 'storage blip',
+              );
+            }
+            switch (call.method) {
+              case 'write':
+                backing[args['key'] as String] = args['value'] as String;
+                return null;
+              case 'read':
+                return backing[args['key'] as String];
+              default:
+                return null;
+            }
+          });
 
       final store = SovereignKeyStore();
-      await expectLater(store.loadOrCreate(), throwsA(isA<PlatformException>()));
+      await expectLater(
+        store.loadOrCreate(),
+        throwsA(isA<PlatformException>()),
+      );
       // The failed future was evicted → this retry runs cleanly.
       final key = await store.loadOrCreate();
       expect(key.rawPublicKey.length, 32);
@@ -81,25 +92,33 @@ void main() {
     test('length-prefixing makes field boundaries unambiguous', () {
       final pub = Uint8List(32);
       // "ab"+"c" must not collide with "a"+"bc" in the channel/client slots.
-      final a = signingBytes(SignedPayload(
+      final a = signingBytes(
+        SignedPayload(
           rawPublicKey: pub,
           channelId: 'ab',
           clientMsgId: 'c',
           signedAtMs: 0,
-          body: 'x'));
-      final b = signingBytes(SignedPayload(
+          body: 'x',
+        ),
+      );
+      final b = signingBytes(
+        SignedPayload(
           rawPublicKey: pub,
           channelId: 'a',
           clientMsgId: 'bc',
           signedAtMs: 0,
-          body: 'x'));
+          body: 'x',
+        ),
+      );
       expect(a, isNot(b));
     });
 
     test('binds the domain tag (alg) in-bytes', () {
       final bytes = signingBytes(_fixture(Uint8List(32)));
-      expect(utf8.decode(bytes.sublist(4, 4 + kSigningDomainTag.length)),
-          kSigningDomainTag);
+      expect(
+        utf8.decode(bytes.sublist(4, 4 + kSigningDomainTag.length)),
+        kSigningDomainTag,
+      );
     });
 
     // GOLDEN VECTOR (CI gate): a fixed key + payload → known signingBytes hex.
@@ -137,27 +156,34 @@ void main() {
       final p = _fixture(key.rawPublicKey);
       final s = await sign(key, p);
       final tampered = SignedPayload(
-          rawPublicKey: p.rawPublicKey,
-          channelId: p.channelId,
-          clientMsgId: p.clientMsgId,
-          signedAtMs: p.signedAtMs,
-          body: 'hello worlD'); // one byte
+        rawPublicKey: p.rawPublicKey,
+        channelId: p.channelId,
+        clientMsgId: p.clientMsgId,
+        signedAtMs: p.signedAtMs,
+        body: 'hello worlD',
+      ); // one byte
       expect(await verifySignature(key.rawPublicKey, s.sig, tampered), isFalse);
     });
 
-    test('tamper: a different channel fails (no cross-channel replay)', () async {
-      final key = await SovereignKeyStore().loadOrCreate();
-      final p = _fixture(key.rawPublicKey);
-      final s = await sign(key, p);
-      final otherChannel = SignedPayload(
+    test(
+      'tamper: a different channel fails (no cross-channel replay)',
+      () async {
+        final key = await SovereignKeyStore().loadOrCreate();
+        final p = _fixture(key.rawPublicKey);
+        final s = await sign(key, p);
+        final otherChannel = SignedPayload(
           rawPublicKey: p.rawPublicKey,
           channelId: 'chan-2',
           clientMsgId: p.clientMsgId,
           signedAtMs: p.signedAtMs,
-          body: p.body);
-      expect(
-          await verifySignature(key.rawPublicKey, s.sig, otherChannel), isFalse);
-    });
+          body: p.body,
+        );
+        expect(
+          await verifySignature(key.rawPublicKey, s.sig, otherChannel),
+          isFalse,
+        );
+      },
+    );
 
     test('tamper: a substituted public key fails verification', () async {
       final key = await SovereignKeyStore().loadOrCreate();
@@ -165,11 +191,12 @@ void main() {
       final s = await sign(key, p);
       final wrongPub = Uint8List(32); // all-zero, not the signer
       final substituted = SignedPayload(
-          rawPublicKey: wrongPub,
-          channelId: p.channelId,
-          clientMsgId: p.clientMsgId,
-          signedAtMs: p.signedAtMs,
-          body: p.body);
+        rawPublicKey: wrongPub,
+        channelId: p.channelId,
+        clientMsgId: p.clientMsgId,
+        signedAtMs: p.signedAtMs,
+        body: p.body,
+      );
       expect(await verifySignature(wrongPub, s.sig, substituted), isFalse);
     });
 
@@ -184,39 +211,51 @@ void main() {
     });
   });
 
-  group('domain-bounds validation (cage-match: Carnot — fail loud at the boundary)', () {
-    SignedPayload payload({
-      Uint8List? pub,
-      String channelId = 'c',
-      String clientMsgId = 'm',
-      int signedAtMs = 1,
-      String? replyTo,
-    }) =>
-        SignedPayload(
-            rawPublicKey: pub ?? Uint8List(32),
-            channelId: channelId,
-            clientMsgId: clientMsgId,
-            signedAtMs: signedAtMs,
-            body: 'b',
-            replyTo: replyTo);
+  group(
+    'domain-bounds validation (cage-match: Carnot — fail loud at the boundary)',
+    () {
+      SignedPayload payload({
+        Uint8List? pub,
+        String channelId = 'c',
+        String clientMsgId = 'm',
+        int signedAtMs = 1,
+        String? replyTo,
+      }) => SignedPayload(
+        rawPublicKey: pub ?? Uint8List(32),
+        channelId: channelId,
+        clientMsgId: clientMsgId,
+        signedAtMs: signedAtMs,
+        body: 'b',
+        replyTo: replyTo,
+      );
 
-    test('a non-32-byte public key is rejected', () {
-      expect(() => signingBytes(payload(pub: Uint8List(31))), throwsArgumentError);
-    });
-    test('an empty channelId / clientMsgId is rejected', () {
-      expect(() => signingBytes(payload(channelId: '')), throwsArgumentError);
-      expect(() => signingBytes(payload(clientMsgId: '')), throwsArgumentError);
-    });
-    test('a negative signedAtMs is rejected', () {
-      expect(() => signingBytes(payload(signedAtMs: -1)), throwsArgumentError);
-    });
-    test('an empty-string replyTo is rejected (absent != present-empty)', () {
-      expect(() => signingBytes(payload(replyTo: '')), throwsArgumentError);
-    });
-    test('a null replyTo is allowed', () {
-      expect(signingBytes(payload(replyTo: null)), isNotNull);
-    });
-  });
+      test('a non-32-byte public key is rejected', () {
+        expect(
+          () => signingBytes(payload(pub: Uint8List(31))),
+          throwsArgumentError,
+        );
+      });
+      test('an empty channelId / clientMsgId is rejected', () {
+        expect(() => signingBytes(payload(channelId: '')), throwsArgumentError);
+        expect(
+          () => signingBytes(payload(clientMsgId: '')),
+          throwsArgumentError,
+        );
+      });
+      test('a negative signedAtMs is rejected', () {
+        expect(
+          () => signingBytes(payload(signedAtMs: -1)),
+          throwsArgumentError,
+        );
+      });
+      test('an empty-string replyTo is rejected (absent != present-empty)', () {
+        expect(() => signingBytes(payload(replyTo: '')), throwsArgumentError);
+      });
+      test('a null replyTo is allowed', () {
+        expect(signingBytes(payload(replyTo: null)), isNotNull);
+      });
+    },
+  );
 }
 
 String _hex(Uint8List b) =>

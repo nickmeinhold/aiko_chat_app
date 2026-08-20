@@ -23,8 +23,9 @@ import '../domain/call_invite.dart';
 /// whatever screen happened to be on top when the call arrived. It is torn down
 /// with the repository (logout), which is the correct lifetime — a ring that
 /// outlived a logout would ring for a conversation the next user cannot open.
-final incomingRingProvider =
-    NotifierProvider<RingController, CallInvite?>(RingController.new);
+final incomingRingProvider = NotifierProvider<RingController, CallInvite?>(
+  RingController.new,
+);
 
 class RingController extends Notifier<CallInvite?> {
   StreamSubscription<Message>? _sub;
@@ -64,7 +65,8 @@ class RingController extends Notifier<CallInvite?> {
   Set<String> _dmIds = const {};
 
   void _forget(DateTime now) => _settled.removeWhere(
-      (_, at) => now.difference(at) > kCallInviteFreshness * 2);
+    (_, at) => now.difference(at) > kCallInviteFreshness * 2,
+  );
 
   /// Re-publish the live invitation after a rebuild, re-arming its expiry with
   /// the time it has LEFT.
@@ -123,7 +125,7 @@ class RingController extends Notifier<CallInvite?> {
     // here both keeps it alive for this provider's lifetime and gives
     // `_consider` a resolved list to read synchronously.
     _dmIds = {
-      for (final c in ref.watch(dmsProvider).value ?? const <Channel>[]) c.id
+      for (final c in ref.watch(dmsProvider).value ?? const <Channel>[]) c.id,
     };
     final repoAsync = ref.watch(chatRepositoryProvider);
     repoAsync.whenData((repo) {

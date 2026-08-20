@@ -12,7 +12,7 @@ class SecureTokenStore {
   final FlutterSecureStorage _storage;
 
   SecureTokenStore([FlutterSecureStorage? storage])
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   Future<AuthTokens?> read() async {
     final access = await _storage.read(key: _kAccess);

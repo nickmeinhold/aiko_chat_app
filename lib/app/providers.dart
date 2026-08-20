@@ -63,8 +63,7 @@ const gatewayBaseUrlPrefKey = 'aiko_gateway_base_url';
 /// the gateway flips this state, and the REST backend + WSS transport rebuild
 /// automatically against the new host (transport's `onDispose` disconnects the
 /// old socket cleanly).
-final configProvider =
-    NotifierProvider<GatewayConfigController, GatewayConfig>(
+final configProvider = NotifierProvider<GatewayConfigController, GatewayConfig>(
   GatewayConfigController.new,
 );
 
@@ -128,20 +127,19 @@ final authEventsProvider = Provider<StreamController<void>>((ref) {
 /// token provider, and an interceptor-wrapped authed client — wired cycle-free
 /// by [buildGatewayBackend]. The token provider is shared with the transport so
 /// REST and WSS draw from ONE source of tokens.
-final backendProvider = Provider<({ChatRestApi api, DefaultTokenProvider tokens})>(
-  (ref) {
-    final config = ref.watch(configProvider);
-    final store = ref.watch(secureTokenStoreProvider);
-    final events = ref.watch(authEventsProvider);
-    return buildGatewayBackend(
-      baseUrl: config.httpBaseUrl,
-      store: store,
-      // Lazy: only fires at runtime on a definitive RT rejection, long after
-      // the auth controller exists — pushing onto the event sink (no cycle).
-      onUnauthenticated: () => events.add(null),
-    );
-  },
-);
+final backendProvider =
+    Provider<({ChatRestApi api, DefaultTokenProvider tokens})>((ref) {
+      final config = ref.watch(configProvider);
+      final store = ref.watch(secureTokenStoreProvider);
+      final events = ref.watch(authEventsProvider);
+      return buildGatewayBackend(
+        baseUrl: config.httpBaseUrl,
+        store: store,
+        // Lazy: only fires at runtime on a definitive RT rejection, long after
+        // the auth controller exists — pushing onto the event sink (no cycle).
+        onUnauthenticated: () => events.add(null),
+      );
+    });
 
 /// The REST seam the UI + repository depend on (never `dio`).
 final restApiProvider = Provider<ChatRestApi>(

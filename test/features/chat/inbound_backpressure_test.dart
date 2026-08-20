@@ -30,19 +30,26 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/fake_chat_transport.dart';
 
 const _me = AppUser(
-    userId: 'me', username: 'me', displayName: 'Me', aikoUsername: 'me');
+  userId: 'me',
+  username: 'me',
+  displayName: 'Me',
+  aikoUsername: 'me',
+);
 const _chan = 'chan';
 
 Message _server(String ulid) => Message(
-      clientTempId: ulid,
-      id: ulid,
-      channelId: _chan,
-      sender: const MessageSender(
-          userId: 'u2', kind: SenderKind.human, label: 'Alice'),
-      body: 'body-$ulid',
-      createdAt: DateTime.parse('2026-01-01T12:00:01Z').toUtc(),
-      deliveryState: DeliveryState.sent,
-    );
+  clientTempId: ulid,
+  id: ulid,
+  channelId: _chan,
+  sender: const MessageSender(
+    userId: 'u2',
+    kind: SenderKind.human,
+    label: 'Alice',
+  ),
+  body: 'body-$ulid',
+  createdAt: DateTime.parse('2026-01-01T12:00:01Z').toUtc(),
+  deliveryState: DeliveryState.sent,
+);
 
 /// A real in-memory cache whose `upsertInbound` can be GATED on a completer, so a
 /// test can wedge inbound handlers mid-write and watch the FIFO depth climb.
@@ -51,7 +58,9 @@ class _GatingCache extends DriftCache {
   Completer<void>? gate;
 
   @override
-  Future<({bool inserted, bool newlyInvalid})> upsertInbound(Message serverMsg) async {
+  Future<({bool inserted, bool newlyInvalid})> upsertInbound(
+    Message serverMsg,
+  ) async {
     if (gate != null) await gate!.future;
     return super.upsertInbound(serverMsg);
   }
@@ -110,10 +119,14 @@ void main() {
     await pump();
 
     // Engaged exactly once, at the high-water mark.
-    expect(spy.backpressure.where((t) => t.$1).toList(), [(true, 3)],
-        reason: 'pause fires once, at depth == high-water');
-    expect(spy.backpressure.any((t) => !t.$1), isFalse,
-        reason: 'still wedged → not released yet');
+    expect(spy.backpressure.where((t) => t.$1).toList(), [
+      (true, 3),
+    ], reason: 'pause fires once, at depth == high-water');
+    expect(
+      spy.backpressure.any((t) => !t.$1),
+      isFalse,
+      reason: 'still wedged → not released yet',
+    );
 
     // Emit 3 MORE while paused. They buffer on the paused subs (no delivery, no
     // loss) — depth must NOT climb past the high-water mark.
@@ -121,18 +134,24 @@ void main() {
       transport.emitMessage(_server('m$i'));
     }
     await pump();
-    expect(spy.backpressure.where((t) => t.$1).toList(), [(true, 3)],
-        reason: 'paused: no further engage, depth stayed capped at high-water');
+    expect(spy.backpressure.where((t) => t.$1).toList(), [
+      (true, 3),
+    ], reason: 'paused: no further engage, depth stayed capped at high-water');
 
     // Release the writer → the queue drains, crosses the low-water mark, resumes.
     cache.gate!.complete();
     await pump();
     await pump();
 
-    expect(spy.backpressure.last.$1, isFalse,
-        reason: 'settled released, not stuck engaged');
-    expect(spy.backpressure.where((t) => !t.$1).first, (false, 1),
-        reason: 'resume fires at depth == low-water');
+    expect(
+      spy.backpressure.last.$1,
+      isFalse,
+      reason: 'settled released, not stuck engaged',
+    );
+    expect(spy.backpressure.where((t) => !t.$1).first, (
+      false,
+      1,
+    ), reason: 'resume fires at depth == low-water');
 
     // NO LOSS: every one of the 7 messages (incl. the ones emitted while paused)
     // landed in the cache. This is the correctness crux — pause never drops.
@@ -146,8 +165,11 @@ void main() {
     transport.emitMessage(_server('b'));
     await pump();
 
-    expect(spy.backpressure, isEmpty,
-        reason: 'never crossed high-water → valve silent');
+    expect(
+      spy.backpressure,
+      isEmpty,
+      reason: 'never crossed high-water → valve silent',
+    );
     expect((await rows()).map((m) => m.id).toSet(), {'a', 'b'});
   });
 }

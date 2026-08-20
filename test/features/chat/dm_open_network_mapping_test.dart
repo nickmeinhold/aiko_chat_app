@@ -37,9 +37,15 @@ void main() {
     await expectLater(api.openDm('ghost'), throwsA(isA<DmTargetNotFound>()));
     // And specifically NOT the terminal-auth type that would eject the session.
     await expectLater(
-        api.openDm('ghost'),
-        throwsA(isA<Object>()
-            .having((e) => e is Unauthorized, 'is Unauthorized', isFalse)));
+      api.openDm('ghost'),
+      throwsA(
+        isA<Object>().having(
+          (e) => e is Unauthorized,
+          'is Unauthorized',
+          isFalse,
+        ),
+      ),
+    );
   });
 
   test('terminal 401 → Unauthorized', () async {
@@ -48,11 +54,13 @@ void main() {
   });
 
   test('connection-class failure → NetworkUnavailable', () async {
-    final api = apiThatThrows(DioException(
-      requestOptions: RequestOptions(path: '/v1/dm'),
-      type: DioExceptionType.connectionError,
-      error: 'Failed host lookup',
-    ));
+    final api = apiThatThrows(
+      DioException(
+        requestOptions: RequestOptions(path: '/v1/dm'),
+        type: DioExceptionType.connectionError,
+        error: 'Failed host lookup',
+      ),
+    );
     await expectLater(api.openDm('peer'), throwsA(isA<NetworkUnavailable>()));
   });
 }

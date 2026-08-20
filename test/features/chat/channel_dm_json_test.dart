@@ -16,7 +16,10 @@ void main() {
 
     expect(c.id, 'dm:01ABC:01XYZ'); // channel_id → id (NOT the absent `id` key)
     expect(c.kind, ChannelKind.dm);
-    expect(c.name, ''); // a DM has no server name; the peer is the display title
+    expect(
+      c.name,
+      '',
+    ); // a DM has no server name; the peer is the display title
   });
 
   test('fromDmJson FAILS CLOSED on a non-dm kind (contract drift)', () {
@@ -28,7 +31,9 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => Channel.fromDmJson(const {'channel_id': 'x'}), // absent kind → standard → throw
+      () => Channel.fromDmJson(const {
+        'channel_id': 'x',
+      }), // absent kind → standard → throw
       throwsFormatException,
     );
   });

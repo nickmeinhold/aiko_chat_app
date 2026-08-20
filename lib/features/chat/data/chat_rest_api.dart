@@ -82,11 +82,12 @@ class HistoryPage {
   final List<HistoryItem> items;
   final String? nextBefore;
   final String? nextAfter;
-  const HistoryPage(
-      {required this.channelId,
-      required this.items,
-      this.nextBefore,
-      this.nextAfter});
+  const HistoryPage({
+    required this.channelId,
+    required this.items,
+    this.nextBefore,
+    this.nextAfter,
+  });
 
   /// Convenience for a message-only page (the common case, and every caller that
   /// predates retractions): wraps each [Message] as a [MessageHistoryItem].
@@ -95,13 +96,12 @@ class HistoryPage {
     required List<Message> messages,
     String? nextBefore,
     String? nextAfter,
-  }) =>
-      HistoryPage(
-        channelId: channelId,
-        items: messages.map<HistoryItem>(MessageHistoryItem.new).toList(),
-        nextBefore: nextBefore,
-        nextAfter: nextAfter,
-      );
+  }) => HistoryPage(
+    channelId: channelId,
+    items: messages.map<HistoryItem>(MessageHistoryItem.new).toList(),
+    nextBefore: nextBefore,
+    nextAfter: nextAfter,
+  );
 }
 
 /// A passkey ceremony's `start` response: the gateway's WebAuthn `options`
@@ -299,7 +299,9 @@ abstract interface class ChatRestApi {
   /// [Authenticated] for a straight-in mint, or [PendingHandle] when the gateway
   /// still needs a handle.
   Future<IdentityOutcome> finishPasskeyRegistration(
-      String state, String credentialJson);
+    String state,
+    String credentialJson,
+  );
 
   /// Begin passkey AUTHENTICATION (usernameless / discoverable credential).
   /// Returns the WebAuthn request options + a binding [PasskeyChallenge.state].
@@ -309,7 +311,9 @@ abstract interface class ChatRestApi {
   /// with the [state] from [startPasskeyAuthentication]. Returns the shared
   /// [IdentityOutcome] (verified signature → tokens).
   Future<IdentityOutcome> finishPasskeyAuthentication(
-      String state, String credentialJson);
+    String state,
+    String credentialJson,
+  );
 
   /// Link a NEW passkey to the CURRENTLY authenticated account (add-to-existing,
   /// #1727). Unlike [finishPasskeyRegistration] — which MINTS a new account and
@@ -428,8 +432,12 @@ abstract interface class ChatRestApi {
   /// A page of channel history (ascending). [before] pages older (scroll-up);
   /// [after] pages newer (reconnect catch-up). Mutually exclusive — the gateway
   /// uses `after` if both are given.
-  Future<HistoryPage> getHistory(String channelId,
-      {String? before, String? after, int limit = 50});
+  Future<HistoryPage> getHistory(
+    String channelId, {
+    String? before,
+    String? after,
+    int limit = 50,
+  });
 
   // --- moderation (UGC — Apple 1.2 / Google UGC, #7) -----------------------
 

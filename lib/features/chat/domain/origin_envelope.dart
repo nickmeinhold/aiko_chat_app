@@ -60,9 +60,12 @@ const int _kSigRawLen = 64;
 // gateway caps so the two boundaries reject the identical set of oversize inputs.
 const int _kMaxPubkeyStr = 128;
 const int _kMaxSigStr = 128;
-const int _kMaxClientMsgId = 64; // matches the messages.client_msg_id column width
-const int _kMaxSignedAtMs = 1 << 62; // sane u64-ish upper bound, well past any real clock
-const int _kMaxB58Str = 128; // decodeMultikey input cap (defense-in-depth for the bigint loop)
+const int _kMaxClientMsgId =
+    64; // matches the messages.client_msg_id column width
+const int _kMaxSignedAtMs =
+    1 << 62; // sane u64-ish upper bound, well past any real clock
+const int _kMaxB58Str =
+    128; // decodeMultikey input cap (defense-in-depth for the bigint loop)
 
 /// base58btc alphabet — the gateway's exact `_B58_ALPHABET` (Bitcoin ordering).
 const String _kB58Alphabet =
@@ -114,28 +117,26 @@ class OriginEnvelope {
   factory OriginEnvelope.fromSignature(
     MessageSignature s, {
     required String clientMsgId,
-  }) =>
-      OriginEnvelope(
-        keyVersion: s.keyVersion,
-        rawPublicKey: s.rawPublicKey,
-        clientMsgId: clientMsgId,
-        signedAtMs: s.signedAtMs,
-        sig: s.sig,
-      );
+  }) => OriginEnvelope(
+    keyVersion: s.keyVersion,
+    rawPublicKey: s.rawPublicKey,
+    clientMsgId: clientMsgId,
+    signedAtMs: s.signedAtMs,
+    sig: s.sig,
+  );
 
   /// The exact 7-key wire object — no extra keys (the gateway rejects unknowns).
   /// Encodes `sender_pubkey` as a Multikey and `sig` as unpadded base64url on the
   /// way out; both are decoded back on the way in by [validateOrigin].
   Map<String, dynamic> toWire() => {
-        'v': kOriginVersion,
-        'alg': kOriginAlg,
-        'key_version': keyVersion,
-        'sender_pubkey': encodeMultikey(rawPublicKey),
-        'client_msg_id': clientMsgId,
-        'signed_at_ms': signedAtMs,
-        'sig': base64UrlUnpadded(sig),
-      };
-
+    'v': kOriginVersion,
+    'alg': kOriginAlg,
+    'key_version': keyVersion,
+    'sender_pubkey': encodeMultikey(rawPublicKey),
+    'client_msg_id': clientMsgId,
+    'signed_at_ms': signedAtMs,
+    'sig': base64UrlUnpadded(sig),
+  };
 }
 
 // NOTE on persistence (wire-half TEMPER T3, resolved): there is deliberately NO
@@ -152,11 +153,16 @@ class OriginEnvelope {
 String encodeMultikey(Uint8List raw32) {
   if (raw32.length != _kPubkeyRawLen) {
     throw OriginError(
-        'public key must be $_kPubkeyRawLen raw bytes, got ${raw32.length}');
+      'public key must be $_kPubkeyRawLen raw bytes, got ${raw32.length}',
+    );
   }
   final full = Uint8List(_kMulticodecEd25519.length + _kPubkeyRawLen)
     ..setRange(0, _kMulticodecEd25519.length, _kMulticodecEd25519)
-    ..setRange(_kMulticodecEd25519.length, _kMulticodecEd25519.length + _kPubkeyRawLen, raw32);
+    ..setRange(
+      _kMulticodecEd25519.length,
+      _kMulticodecEd25519.length + _kPubkeyRawLen,
+      raw32,
+    );
   return 'z${_b58encode(full)}';
 }
 
@@ -167,7 +173,8 @@ String encodeMultikey(Uint8List raw32) {
 Uint8List decodeMultikey(String s) {
   if (s.isEmpty || s[0] != 'z') {
     throw const OriginError(
-        'sender_pubkey must be a multibase-base58btc Multikey (z…)');
+      'sender_pubkey must be a multibase-base58btc Multikey (z…)',
+    );
   }
   // Length-guard before the O(n^2) bigint decode — defense in depth even if a
   // caller forgets the field cap.
@@ -179,12 +186,14 @@ Uint8List decodeMultikey(String s) {
       decoded[0] != _kMulticodecEd25519[0] ||
       decoded[1] != _kMulticodecEd25519[1]) {
     throw const OriginError(
-        'sender_pubkey is not an ed25519 Multikey (bad multicodec)');
+      'sender_pubkey is not an ed25519 Multikey (bad multicodec)',
+    );
   }
   final raw = decoded.sublist(_kMulticodecEd25519.length);
   if (raw.length != _kPubkeyRawLen) {
     throw OriginError(
-        'sender_pubkey raw length ${raw.length} != $_kPubkeyRawLen');
+      'sender_pubkey raw length ${raw.length} != $_kPubkeyRawLen',
+    );
   }
   return Uint8List.fromList(raw);
 }
@@ -200,9 +209,15 @@ String base64UrlUnpadded(Uint8List raw) {
 /// Charset-gate BEFORE decoding (Dart's decoder tolerates padding / is lenient),
 /// so a padded or standard-alphabet string can't decode to the right length and
 /// slip across the boundary as if canonical. Mirror of the gateway's `_b64url_raw`.
-Uint8List _b64urlRaw(String s, {required int expectLen, required String field}) {
+Uint8List _b64urlRaw(
+  String s, {
+  required int expectLen,
+  required String field,
+}) {
   if (!_kB64UrlUnpadded.hasMatch(s)) {
-    throw OriginError("$field must be unpadded base64url ([A-Za-z0-9_-], no '=')");
+    throw OriginError(
+      "$field must be unpadded base64url ([A-Za-z0-9_-], no '=')",
+    );
   }
   final Uint8List raw;
   try {
@@ -251,7 +266,9 @@ OriginEnvelope? validateOrigin(
   if (keys.length != raw.length || !_setEquals(keys, _kRequiredKeys)) {
     final missing = _kRequiredKeys.difference(keys).toList()..sort();
     final extra = keys.difference(_kRequiredKeys).toList()..sort();
-    throw OriginError('origin key set invalid (missing=$missing, unexpected=$extra)');
+    throw OriginError(
+      'origin key set invalid (missing=$missing, unexpected=$extra)',
+    );
   }
 
   // `v`: frozen discriminator. In Dart a JSON `true`/`false` decodes to `bool`,
@@ -259,10 +276,14 @@ OriginEnvelope? validateOrigin(
   // the frozen contract.
   final v = raw['v'];
   if (v is! int || v is bool || v != kOriginVersion) {
-    throw OriginError('origin.v ${_show(v)} unsupported (expected int $kOriginVersion)');
+    throw OriginError(
+      'origin.v ${_show(v)} unsupported (expected int $kOriginVersion)',
+    );
   }
   if (raw['alg'] != kOriginAlg) {
-    throw OriginError('origin.alg ${_show(raw['alg'])} not allowed (only "$kOriginAlg")');
+    throw OriginError(
+      'origin.alg ${_show(raw['alg'])} not allowed (only "$kOriginAlg")',
+    );
   }
   final kv = raw['key_version'];
   if (kv is! int || kv is bool || kv < 1) {
@@ -271,21 +292,31 @@ OriginEnvelope? validateOrigin(
 
   final pubkey = raw['sender_pubkey'];
   if (pubkey is! String || pubkey.length > _kMaxPubkeyStr) {
-    throw const OriginError('origin.sender_pubkey must be a string within the size cap');
+    throw const OriginError(
+      'origin.sender_pubkey must be a string within the size cap',
+    );
   }
-  final rawPublicKey = decodeMultikey(pubkey); // throws if not a well-formed Multikey
+  final rawPublicKey = decodeMultikey(
+    pubkey,
+  ); // throws if not a well-formed Multikey
 
   final cmid = raw['client_msg_id'];
   if (cmid is! String || cmid.length > _kMaxClientMsgId) {
-    throw const OriginError('origin.client_msg_id must be a string within the size cap');
+    throw const OriginError(
+      'origin.client_msg_id must be a string within the size cap',
+    );
   }
   if (cmid != frameClientMsgId) {
-    throw const OriginError('origin.client_msg_id does not match the frame client_msg_id');
+    throw const OriginError(
+      'origin.client_msg_id does not match the frame client_msg_id',
+    );
   }
 
   final ts = raw['signed_at_ms'];
   if (ts is! int || ts is bool || ts < 0 || ts > _kMaxSignedAtMs) {
-    throw const OriginError('origin.signed_at_ms must be a sane non-negative integer');
+    throw const OriginError(
+      'origin.signed_at_ms must be a sane non-negative integer',
+    );
   }
 
   final sig = raw['sig'];

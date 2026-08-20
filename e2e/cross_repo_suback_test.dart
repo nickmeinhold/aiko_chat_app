@@ -77,9 +77,11 @@ void main() {
 
     // /v1/channels requires auth (gateway I1) — pass the registration token.
     final channels = await gw.getJson('/v1/channels', bearer: accessToken);
-    final channelId = (channels['channels'] as List)
-        .map((c) => c as Map)
-        .firstWhere((c) => c['aiko_channel'] == 'general')['id'] as String;
+    final channelId =
+        (channels['channels'] as List)
+                .map((c) => c as Map)
+                .firstWhere((c) => c['aiko_channel'] == 'general')['id']
+            as String;
 
     // --- the real Dart transport against the real gateway --------------------
     final transport = GatewayTransport(
@@ -95,43 +97,62 @@ void main() {
     final conn = _Inbox<ConnectionState>(transport.connectionState);
 
     await transport.connect();
-    await conn.firstWhere((s) => s == ConnectionState.connected,
-        reason: 'transport never reached connected');
+    await conn.firstWhere(
+      (s) => s == ConnectionState.connected,
+      reason: 'transport never reached connected',
+    );
 
     // 1. subscribe → suback. Empty channel → empty-string fence.
     final fences = await transport.subscribe([channelId]);
-    expect(fences, containsPair(channelId, ''),
-        reason: 'empty channel must fence to "" (gateway latest_ulid of empty)');
+    expect(
+      fences,
+      containsPair(channelId, ''),
+      reason: 'empty channel must fence to "" (gateway latest_ulid of empty)',
+    );
 
     // 2. send → ack correlating client_msg_id → server msg_id.
     final clientMsgId = const Uuid().v4();
     final beforeSend = DateTime.now().toUtc();
-    transport.sendMessage(OutgoingMessage(
-      clientTempId: clientMsgId,
-      channelId: channelId,
-      body: 'hello from alice',
-    ));
+    transport.sendMessage(
+      OutgoingMessage(
+        clientTempId: clientMsgId,
+        channelId: channelId,
+        body: 'hello from alice',
+      ),
+    );
 
-    final ack = await acks.firstWhere((a) => a.clientMsgId == clientMsgId,
-        reason: 'no ack for our send');
+    final ack = await acks.firstWhere(
+      (a) => a.clientMsgId == clientMsgId,
+      reason: 'no ack for our send',
+    );
     expect(ack.msgId, isNotEmpty);
     expect(ack.createdAt, isNotNull);
 
     // 3. Change B: the fanned-back message frame carries username + timestamp.
     // (Fanout includes the sender, so a single connection sees its own message.)
-    final msg = await messages.firstWhere((m) => m.id == ack.msgId,
-        reason: 'sent message was not fanned back to the subscriber');
+    final msg = await messages.firstWhere(
+      (m) => m.id == ack.msgId,
+      reason: 'sent message was not fanned back to the subscriber',
+    );
     expect(msg.body, 'hello from alice');
     expect(msg.channelId, channelId);
     expect(msg.sender.kind, SenderKind.human);
     expect(msg.sender.userId, userId);
-    expect(msg.sender.label, 'Alice',
-        reason: 'Change B: username/display_name must ride the wire');
-    expect(msg.createdAt.isAfter(DateTime.utc(2020)), isTrue,
-        reason: 'Change B: a real server timestamp must ride the wire');
+    expect(
+      msg.sender.label,
+      'Alice',
+      reason: 'Change B: username/display_name must ride the wire',
+    );
+    expect(
+      msg.createdAt.isAfter(DateTime.utc(2020)),
+      isTrue,
+      reason: 'Change B: a real server timestamp must ride the wire',
+    );
     // Server timestamp should be at/after the moment we sent (sanity, not exact).
-    expect(msg.createdAt.isAfter(beforeSend.subtract(const Duration(minutes: 5))),
-        isTrue);
+    expect(
+      msg.createdAt.isAfter(beforeSend.subtract(const Duration(minutes: 5))),
+      isTrue,
+    );
 
     // 4. The handshake survives a reconnect: drop the socket, reconnect, and a
     // fresh subscribe must suback with the fence now advanced to the persisted
@@ -142,20 +163,29 @@ void main() {
     // (the connected from the FIRST connect is already in the buffer).
     final beforeDisconnect = conn.mark();
     await transport.disconnect();
-    await conn.firstWhere((s) => s == ConnectionState.disconnected,
-        from: beforeDisconnect,
-        reason: 'no NEW disconnected after disconnect()');
+    await conn.firstWhere(
+      (s) => s == ConnectionState.disconnected,
+      from: beforeDisconnect,
+      reason: 'no NEW disconnected after disconnect()',
+    );
 
     final beforeReconnect = conn.mark();
     await transport.connect();
-    await conn.firstWhere((s) => s == ConnectionState.connected,
-        from: beforeReconnect,
-        reason: 'no NEW connected after reconnect (stale-state false-green guard)');
+    await conn.firstWhere(
+      (s) => s == ConnectionState.connected,
+      from: beforeReconnect,
+      reason:
+          'no NEW connected after reconnect (stale-state false-green guard)',
+    );
 
     final fences2 = await transport.subscribe([channelId]);
-    expect(fences2, containsPair(channelId, ack.msgId),
-        reason: 'after reconnect the suback fence must equal the persisted '
-            'message id (gateway latest_ulid == client fence)');
+    expect(
+      fences2,
+      containsPair(channelId, ack.msgId),
+      reason:
+          'after reconnect the suback fence must equal the persisted '
+          'message id (gateway latest_ulid == client fence)',
+    );
   });
 }
 
@@ -199,10 +229,12 @@ class _Inbox<T> {
   /// only be satisfied by an event that arrives AFTER this point.
   int mark() => _seen.length;
 
-  Future<T> firstWhere(bool Function(T) test,
-      {int from = 0,
-      String? reason,
-      Duration timeout = const Duration(seconds: 15)}) {
+  Future<T> firstWhere(
+    bool Function(T) test, {
+    int from = 0,
+    String? reason,
+    Duration timeout = const Duration(seconds: 15),
+  }) {
     final completer = Completer<T>();
     late void Function() check;
     check = () {
@@ -217,12 +249,18 @@ class _Inbox<T> {
     };
     _waiters.add(check);
     check();
-    return completer.future.timeout(timeout, onTimeout: () {
-      _waiters.remove(check); // timed out — don't leave a dead waiter installed.
-      throw TimeoutException(
+    return completer.future.timeout(
+      timeout,
+      onTimeout: () {
+        _waiters.remove(
+          check,
+        ); // timed out — don't leave a dead waiter installed.
+        throw TimeoutException(
           'Inbox.firstWhere timed out${reason == null ? '' : ': $reason'}. '
-          'Seen: $_seen');
-    });
+          'Seen: $_seen',
+        );
+      },
+    );
   }
 }
 
@@ -266,7 +304,8 @@ class _Gateway {
     await probe.close();
 
     final dbFile = File(
-        '${Directory.systemTemp.path}/aiko_xrepo_${port}_${DateTime.now().microsecondsSinceEpoch}.db');
+      '${Directory.systemTemp.path}/aiko_xrepo_${port}_${DateTime.now().microsecondsSinceEpoch}.db',
+    );
 
     // Shared by the migrate step AND uvicorn: both must see the SAME DB_URL so the
     // schema is built on the exact file uvicorn then serves.
@@ -305,8 +344,15 @@ class _Gateway {
     final proc = await Process.start(
       python,
       [
-        '-m', 'uvicorn', 'aiko_gateway.main:app',
-        '--host', '127.0.0.1', '--port', '$port', '--log-level', 'warning',
+        '-m',
+        'uvicorn',
+        'aiko_gateway.main:app',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        '$port',
+        '--log-level',
+        'warning',
       ],
       workingDirectory: gatewayDir,
       environment: gatewayEnv,
@@ -323,20 +369,30 @@ class _Gateway {
     try {
       // Tee the gateway log so a failure prints something actionable.
       final log = <String>[];
-      proc.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen(log.add);
-      proc.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen(log.add);
+      proc.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen(log.add);
+      proc.stderr
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen(log.add);
 
       gw = _Gateway._(proc, port, dbFile);
       var procExited = false;
       unawaited(proc.exitCode.then((_) => procExited = true));
 
-      final ok = await gw._awaitHealth(const Duration(seconds: 20), () => procExited);
+      final ok = await gw._awaitHealth(
+        const Duration(seconds: 20),
+        () => procExited,
+      );
       if (!ok) {
         throw StateError(
-            'Gateway did not become healthy on :$port within 20s '
-            '(process ${procExited ? "exited early — likely a stolen port" : "alive but no /health 200"}).\n'
-            'python=$python\ngatewayDir=$gatewayDir\n'
-            '--- gateway log ---\n${log.join('\n')}');
+          'Gateway did not become healthy on :$port within 20s '
+          '(process ${procExited ? "exited early — likely a stolen port" : "alive but no /health 200"}).\n'
+          'python=$python\ngatewayDir=$gatewayDir\n'
+          '--- gateway log ---\n${log.join('\n')}',
+        );
       }
       return gw;
     } catch (_) {
@@ -345,7 +401,9 @@ class _Gateway {
       if (await dbFile.exists()) {
         try {
           await dbFile.delete();
-        } catch (_) {/* best-effort temp cleanup */}
+        } catch (_) {
+          /* best-effort temp cleanup */
+        }
       }
       rethrow;
     }
@@ -379,7 +437,9 @@ class _Gateway {
   }
 
   Future<Map<String, dynamic>> postJson(
-      String path, Map<String, dynamic> payload) async {
+    String path,
+    Map<String, dynamic> payload,
+  ) async {
     final req = await _http.postUrl(Uri.parse('http://127.0.0.1:$port$path'));
     req.headers.contentType = ContentType.json;
     req.add(utf8.encode(jsonEncode(payload)));
@@ -402,7 +462,9 @@ class _Gateway {
     if (await _dbFile.exists()) {
       try {
         await _dbFile.delete();
-      } catch (_) {/* best-effort temp cleanup */}
+      } catch (_) {
+        /* best-effort temp cleanup */
+      }
     }
   }
 
@@ -411,8 +473,12 @@ class _Gateway {
   /// container entrypoint runs. Fail-closed: a non-zero exit (or a hang) removes
   /// the temp db and throws with the captured migrate output, so setUpAll surfaces
   /// an actionable schema error instead of a downstream "gateway unhealthy".
-  static Future<void> _migrate(String gatewayDir, String python,
-      Map<String, String> env, File dbFile) async {
+  static Future<void> _migrate(
+    String gatewayDir,
+    String python,
+    Map<String, String> env,
+    File dbFile,
+  ) async {
     ProcessResult result;
     try {
       result = await Process.run(
@@ -423,15 +489,18 @@ class _Gateway {
       ).timeout(const Duration(seconds: 60));
     } catch (e) {
       await _bestEffortDelete(dbFile);
-      throw StateError('Gateway migrate step failed to run (python=$python).\n$e');
+      throw StateError(
+        'Gateway migrate step failed to run (python=$python).\n$e',
+      );
     }
     if (result.exitCode != 0) {
       await _bestEffortDelete(dbFile);
       throw StateError(
-          'Gateway migrate step exited ${result.exitCode} — schema not built.\n'
-          'python=$python\ngatewayDir=$gatewayDir\n'
-          '--- migrate stdout ---\n${result.stdout}\n'
-          '--- migrate stderr ---\n${result.stderr}');
+        'Gateway migrate step exited ${result.exitCode} — schema not built.\n'
+        'python=$python\ngatewayDir=$gatewayDir\n'
+        '--- migrate stdout ---\n${result.stdout}\n'
+        '--- migrate stderr ---\n${result.stderr}',
+      );
     }
   }
 
@@ -439,8 +508,12 @@ class _Gateway {
   /// harness): create an EMPTY canonical `general` channel via the island's own
   /// `upsert_channel` service, so field-mapping can't drift from prod. Fail-closed
   /// like [_migrate].
-  static Future<void> _seedGeneralChannel(String gatewayDir, String python,
-      Map<String, String> env, File dbFile) async {
+  static Future<void> _seedGeneralChannel(
+    String gatewayDir,
+    String python,
+    Map<String, String> env,
+    File dbFile,
+  ) async {
     const seed = '''
 import asyncio
 from aiko_gateway.db import SessionLocal
@@ -461,15 +534,18 @@ asyncio.run(main())
       ).timeout(const Duration(seconds: 30));
     } catch (e) {
       await _bestEffortDelete(dbFile);
-      throw StateError('Gateway channel-seed step failed to run (python=$python).\n$e');
+      throw StateError(
+        'Gateway channel-seed step failed to run (python=$python).\n$e',
+      );
     }
     if (result.exitCode != 0) {
       await _bestEffortDelete(dbFile);
       throw StateError(
-          'Gateway channel-seed step exited ${result.exitCode}.\n'
-          'python=$python\ngatewayDir=$gatewayDir\n'
-          '--- seed stdout ---\n${result.stdout}\n'
-          '--- seed stderr ---\n${result.stderr}');
+        'Gateway channel-seed step exited ${result.exitCode}.\n'
+        'python=$python\ngatewayDir=$gatewayDir\n'
+        '--- seed stdout ---\n${result.stdout}\n'
+        '--- seed stderr ---\n${result.stderr}',
+      );
     }
   }
 
@@ -477,7 +553,9 @@ asyncio.run(main())
     if (await f.exists()) {
       try {
         await f.delete();
-      } catch (_) {/* best-effort temp cleanup */}
+      } catch (_) {
+        /* best-effort temp cleanup */
+      }
     }
   }
 
@@ -491,8 +569,9 @@ asyncio.run(main())
     final resolved = dir.absolute.path;
     if (!Directory('$resolved/src/aiko_gateway').existsSync()) {
       throw StateError(
-          'aiko-chat-island not found at $resolved. Set AIKO_GATEWAY_DIR to '
-          'point at a checkout (expected <dir>/src/aiko_gateway to exist).');
+        'aiko-chat-island not found at $resolved. Set AIKO_GATEWAY_DIR to '
+        'point at a checkout (expected <dir>/src/aiko_gateway to exist).',
+      );
     }
     return resolved;
   }
@@ -502,9 +581,10 @@ asyncio.run(main())
     final python = override ?? '$gatewayDir/.venv/bin/python';
     if (!File(python).existsSync()) {
       throw StateError(
-          'Gateway python not found at $python. Create the venv '
-          '(python -m venv .venv && .venv/bin/pip install -e ".[dev]") or set '
-          'AIKO_GATEWAY_PYTHON.');
+        'Gateway python not found at $python. Create the venv '
+        '(python -m venv .venv && .venv/bin/pip install -e ".[dev]") or set '
+        'AIKO_GATEWAY_PYTHON.',
+      );
     }
     return python;
   }

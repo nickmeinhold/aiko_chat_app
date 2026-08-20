@@ -15,12 +15,12 @@ void main() {
   final now = DateTime.utc(2026, 8, 15, 13, 30);
 
   OriginEnvelope signedAt(DateTime t) => OriginEnvelope(
-        keyVersion: 1,
-        rawPublicKey: Uint8List(32),
-        clientMsgId: 'm1',
-        signedAtMs: t.millisecondsSinceEpoch,
-        sig: Uint8List(64),
-      );
+    keyVersion: 1,
+    rawPublicKey: Uint8List(32),
+    clientMsgId: 'm1',
+    signedAtMs: t.millisecondsSinceEpoch,
+    sig: Uint8List(64),
+  );
 
   Message invite({
     String from = robin,
@@ -30,34 +30,34 @@ void main() {
     bool? cryptoValid = true,
     bool withOrigin = true,
     SenderKind kind = SenderKind.human,
-  }) =>
-      Message(
-        clientTempId: 'm1',
-        id: 'm1',
-        channelId: channelId,
-        sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
-        body: body,
-        // Deliberately SKEWED away from the signed time: every freshness
-        // assertion below must be reading `origin.signedAtMs`, not this. If a
-        // regression re-keys freshness to `createdAt`, these tests fail.
-        createdAt: now.subtract(const Duration(days: 7)),
-        origin: withOrigin ? signedAt(now.subtract(age)) : null,
-        originCryptoValid: cryptoValid,
-        deliveryState: DeliveryState.sent,
-      );
+  }) => Message(
+    clientTempId: 'm1',
+    id: 'm1',
+    channelId: channelId,
+    sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
+    body: body,
+    // Deliberately SKEWED away from the signed time: every freshness
+    // assertion below must be reading `origin.signedAtMs`, not this. If a
+    // regression re-keys freshness to `createdAt`, these tests fail.
+    createdAt: now.subtract(const Duration(days: 7)),
+    origin: withOrigin ? signedAt(now.subtract(age)) : null,
+    originCryptoValid: cryptoValid,
+    deliveryState: DeliveryState.sent,
+  );
 
   CallInvite? admit(
     Message m, {
     Set<String> blocked = const {},
     bool muted = false,
     bool isDm = true,
-  }) =>
-      admitRing(m,
-          meUserId: me,
-          blockedUserIds: blocked,
-          conversationMuted: muted,
-          isDm: isDm,
-          now: now);
+  }) => admitRing(
+    m,
+    meUserId: me,
+    blockedUserIds: blocked,
+    conversationMuted: muted,
+    isDm: isDm,
+    now: now,
+  );
 
   group('the pinned sentinel', () {
     // GOLDEN. This string is signed and written to permanent island history, so
@@ -67,25 +67,33 @@ void main() {
       expect(kCallInviteBody, 'aiko:call/1 · 📞 started a call');
     });
 
-    test('matches exactly — a sentinel with anything appended is NOT an invite',
-        () {
-      // A startsWith/contains test would let anyone ring you by typing the
-      // sentinel with a word after it, and would make every quotation ring.
-      expect(isCallInviteBody(kCallInviteBody), isTrue);
-      expect(isCallInviteBody('$kCallInviteBody and now you ring'), isFalse);
-      expect(isCallInviteBody('look: aiko:call/1 · 📞 started a call'), isFalse);
-      expect(isCallInviteBody(''), isFalse);
-    });
+    test(
+      'matches exactly — a sentinel with anything appended is NOT an invite',
+      () {
+        // A startsWith/contains test would let anyone ring you by typing the
+        // sentinel with a word after it, and would make every quotation ring.
+        expect(isCallInviteBody(kCallInviteBody), isTrue);
+        expect(isCallInviteBody('$kCallInviteBody and now you ring'), isFalse);
+        expect(
+          isCallInviteBody('look: aiko:call/1 · 📞 started a call'),
+          isFalse,
+        );
+        expect(isCallInviteBody(''), isFalse);
+      },
+    );
   });
 
   group('admits', () {
-    test('a fresh invite from a peer in an unmuted, unblocked conversation', () {
-      final got = admit(invite());
-      expect(got, isNotNull);
-      expect(got!.channelId, 'dm:aaa:bbb');
-      expect(got.from.userId, robin);
-      expect(got.startedAt, now.subtract(const Duration(seconds: 1)));
-    });
+    test(
+      'a fresh invite from a peer in an unmuted, unblocked conversation',
+      () {
+        final got = admit(invite());
+        expect(got, isNotNull);
+        expect(got!.channelId, 'dm:aaa:bbb');
+        expect(got.from.userId, robin);
+        expect(got.startedAt, now.subtract(const Duration(seconds: 1)));
+      },
+    );
 
     test('an invite exactly AT the freshness boundary', () {
       expect(admit(invite(age: kCallInviteFreshness)), isNotNull);
@@ -136,8 +144,11 @@ void main() {
       // lives on `channels.aiko_channel`, a column the app never receives. An
       // earlier gate tested `channelId.startsWith('dm:')` and would therefore
       // have refused EVERY real DM. A realistic ULID channel id must admit.
-      expect(admit(invite(channelId: '01M02Y4QS94QRRQ3658BZAB0PG')), isNotNull,
-          reason: 'a real DM channel id is a ULID, not a dm:-prefixed string');
+      expect(
+        admit(invite(channelId: '01M02Y4QS94QRRQ3658BZAB0PG')),
+        isNotNull,
+        reason: 'a real DM channel id is a ULID, not a dm:-prefixed string',
+      );
     });
 
     test('a stale SIGNED time, even with a fresh server timestamp', () {
@@ -149,7 +160,10 @@ void main() {
         id: 'm1',
         channelId: 'dm:aaa:bbb',
         sender: const MessageSender(
-            userId: robin, kind: SenderKind.human, label: 'Robin'),
+          userId: robin,
+          kind: SenderKind.human,
+          label: 'Robin',
+        ),
         body: kCallInviteBody,
         createdAt: now, // island says "just now"
         origin: signedAt(now.subtract(const Duration(days: 7))), // truth
@@ -159,18 +173,25 @@ void main() {
       expect(admit(resurrected), isNull);
     });
 
-    test('every NON-HUMAN sender — the refusal a user could not make themselves',
-        () {
-      // Bus actors are unblockable by island design (NULL sender_user_id is
-      // always visible; claude-tasks#27). Without this, @@armbot posting the
-      // sentinel in #general rings every member and no block or mute stops it.
-      // Enumerated rather than spot-checked: `!= human` must hold for the WHOLE
-      // non-human set, and a new SenderKind added later inherits the refusal.
-      for (final kind in SenderKind.values.where((k) => k != SenderKind.human)) {
-        expect(admit(invite(kind: kind)), isNull,
-            reason: 'a $kind must not ring');
-      }
-    });
+    test(
+      'every NON-HUMAN sender — the refusal a user could not make themselves',
+      () {
+        // Bus actors are unblockable by island design (NULL sender_user_id is
+        // always visible; claude-tasks#27). Without this, @@armbot posting the
+        // sentinel in #general rings every member and no block or mute stops it.
+        // Enumerated rather than spot-checked: `!= human` must hold for the WHOLE
+        // non-human set, and a new SenderKind added later inherits the refusal.
+        for (final kind in SenderKind.values.where(
+          (k) => k != SenderKind.human,
+        )) {
+          expect(
+            admit(invite(kind: kind)),
+            isNull,
+            reason: 'a $kind must not ring',
+          );
+        }
+      },
+    );
 
     test('a blocked sender', () {
       expect(admit(invite(), blocked: {robin}), isNull);
@@ -182,8 +203,10 @@ void main() {
     });
 
     test('a stale invite — history replay must not ring the backlog', () {
-      expect(admit(invite(age: kCallInviteFreshness + const Duration(seconds: 1))),
-          isNull);
+      expect(
+        admit(invite(age: kCallInviteFreshness + const Duration(seconds: 1))),
+        isNull,
+      );
       expect(admit(invite(age: const Duration(hours: 3))), isNull);
     });
 

@@ -23,8 +23,8 @@ import '../domain/push_token_source.dart';
 /// because a push service was unreachable, so [start] swallows and logs.
 class DeviceRegistrar {
   DeviceRegistrar({required PushTokenSource source, required ChatRestApi api})
-      : _source = source,
-        _api = api;
+    : _source = source,
+      _api = api;
 
   final PushTokenSource _source;
   final ChatRestApi _api;
@@ -79,7 +79,9 @@ class DeviceRegistrar {
     try {
       await _api.unregisterDevice(token);
     } catch (e) {
-      debugPrint('DeviceRegistrar: unregister failed, row survives island-side: $e');
+      debugPrint(
+        'DeviceRegistrar: unregister failed, row survives island-side: $e',
+      );
     }
   }
 
@@ -97,7 +99,9 @@ class DeviceRegistrar {
       // later sign-in re-registers rather than assuming this one landed.
       rethrow;
     } catch (e) {
-      debugPrint('DeviceRegistrar: register failed, this device will not wake: $e');
+      debugPrint(
+        'DeviceRegistrar: register failed, this device will not wake: $e',
+      );
     }
   }
 }

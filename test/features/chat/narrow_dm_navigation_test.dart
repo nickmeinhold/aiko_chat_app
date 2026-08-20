@@ -44,11 +44,15 @@ void main() {
   // conversation, so a stale mute makes an unread assertion fail as "no badge"
   // with nothing pointing at the previous test. Found exactly that way.
   setUp(() async {
-    for (final k in testPrefs
-        .getKeys()
-        .where((k) =>
-            k.startsWith('aiko_channel_lastread_') || k.startsWith('aiko_muted_'))
-        .toList()) {
+    for (final k
+        in testPrefs
+            .getKeys()
+            .where(
+              (k) =>
+                  k.startsWith('aiko_channel_lastread_') ||
+                  k.startsWith('aiko_muted_'),
+            )
+            .toList()) {
       await testPrefs.remove(k);
     }
   });
@@ -62,13 +66,19 @@ void main() {
   // me (u1, the signed-in default) + the peer Alice (u2).
   const roster = [
     ChannelMember(
-        userId: 'u1', role: 'member', canPost: true, handle: 'me', displayName: 'Me'),
+      userId: 'u1',
+      role: 'member',
+      canPost: true,
+      handle: 'me',
+      displayName: 'Me',
+    ),
     ChannelMember(
-        userId: 'u2',
-        role: 'member',
-        canPost: true,
-        handle: 'alice',
-        displayName: 'Alice'),
+      userId: 'u2',
+      role: 'member',
+      canPost: true,
+      handle: 'alice',
+      displayName: 'Alice',
+    ),
   ];
 
   FakeRestApi restWithDm({List<Channel> chans = channels}) {
@@ -92,32 +102,39 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('ENTRY: the DM is listed in the narrow dropdown, under a header',
-      (tester) async {
+  testWidgets(
+    'ENTRY: the DM is listed in the narrow dropdown, under a header',
+    (tester) async {
+      setNarrow(tester);
+      final container = makeContainer(
+        rest: restWithDm(),
+        transport: FakeChatTransport(),
+      );
+      addTearDown(container.dispose);
+
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
+
+      await openMenu(tester);
+
+      // Both channels, the section boundary, and the DM titled by its peer's
+      // CURRENT handle (a DM has no server name — identity=key, ADR-0004).
+      expect(find.text('general'), findsWidgets);
+      expect(find.text('random'), findsWidgets);
+      expect(find.text('Direct messages'), findsOneWidget);
+      expect(find.text('alice'), findsWidgets);
+    },
+  );
+
+  testWidgets('ENTRY: picking the DM selects it and it STAYS selected', (
+    tester,
+  ) async {
     setNarrow(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
-    addTearDown(container.dispose);
-
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
-
-    await openMenu(tester);
-
-    // Both channels, the section boundary, and the DM titled by its peer's
-    // CURRENT handle (a DM has no server name — identity=key, ADR-0004).
-    expect(find.text('general'), findsWidgets);
-    expect(find.text('random'), findsWidgets);
-    expect(find.text('Direct messages'), findsOneWidget);
-    expect(find.text('alice'), findsWidgets);
-  });
-
-  testWidgets('ENTRY: picking the DM selects it and it STAYS selected',
-      (tester) async {
-    setNarrow(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -136,8 +153,10 @@ void main() {
   testWidgets('LEAVE: with the DM active the switcher is still shown, and a '
       'channel pick gets you out', (tester) async {
     setNarrow(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -161,8 +180,10 @@ void main() {
   testWidgets('every id that can be ACTIVE has an item (no DropdownButton '
       'value assertion for any navigable conversation)', (tester) async {
     setNarrow(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -176,8 +197,11 @@ void main() {
       container.read(selectedChannelIdProvider.notifier).select(c.id);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: 'active=${c.id}');
-      expect(find.byType(DropdownButton<String>), findsOneWidget,
-          reason: 'active=${c.id}');
+      expect(
+        find.byType(DropdownButton<String>),
+        findsOneWidget,
+        reason: 'active=${c.id}',
+      );
     }
   });
 
@@ -189,10 +213,12 @@ void main() {
   // surely as zero items do. Deduped once in navigableChannelsProvider, so every
   // consumer gets the same answer (cage-match #136, Kelvin).
   FakeRestApi restWithLeak(ChannelKind leakedKind) {
-    final rest = FakeRestApi(channels: [
-      const Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-      Channel(id: 'dm1', name: '', kind: leakedKind),
-    ]);
+    final rest = FakeRestApi(
+      channels: [
+        const Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+        Channel(id: 'dm1', name: '', kind: leakedKind),
+      ],
+    );
     rest.dms = [dm];
     rest.membersByChannel['dm1'] = roster;
     return rest;
@@ -200,39 +226,43 @@ void main() {
 
   for (final leakedKind in ChannelKind.values) {
     testWidgets(
-        'a conversation listed by BOTH sources appears ONCE, whatever kind the '
-        'channel list claims (leak kind: ${leakedKind.name})', (tester) async {
-      setNarrow(tester);
-      final container =
-          makeContainer(rest: restWithLeak(leakedKind), transport: FakeChatTransport());
-      addTearDown(container.dispose);
+      'a conversation listed by BOTH sources appears ONCE, whatever kind the '
+      'channel list claims (leak kind: ${leakedKind.name})',
+      (tester) async {
+        setNarrow(tester);
+        final container = makeContainer(
+          rest: restWithLeak(leakedKind),
+          transport: FakeChatTransport(),
+        );
+        addTearDown(container.dispose);
 
-      await pumpApp(tester, container);
-      await signIn(tester);
-      await tester.pumpAndSettle();
+        await pumpApp(tester, container);
+        await signIn(tester);
+        await tester.pumpAndSettle();
 
-      // Deduped, and the DM entry WINS: GET /v1/dm is the authority on what a DM
-      // is. Letting the channel copy's kind survive would route a DM to a room
-      // row, which paints its (empty) `name` and reads its mute with no peer —
-      // the exact seat _DmMenuItem exists to fill (cage-match #136, Tesla).
-      final navigable = container.read(navigableChannelsProvider);
-      expect(navigable.where((c) => c.id == 'dm1').length, 1);
-      expect(navigable.firstWhere((c) => c.id == 'dm1').kind, ChannelKind.dm);
+        // Deduped, and the DM entry WINS: GET /v1/dm is the authority on what a DM
+        // is. Letting the channel copy's kind survive would route a DM to a room
+        // row, which paints its (empty) `name` and reads its mute with no peer —
+        // the exact seat _DmMenuItem exists to fill (cage-match #136, Tesla).
+        final navigable = container.read(navigableChannelsProvider);
+        expect(navigable.where((c) => c.id == 'dm1').length, 1);
+        expect(navigable.firstWhere((c) => c.id == 'dm1').kind, ChannelKind.dm);
 
-      // No assertion, switcher up, and selecting the doubled id resolves cleanly.
-      expect(tester.takeException(), isNull);
-      expect(find.byType(DropdownButton<String>), findsOneWidget);
-      container.read(selectedChannelIdProvider.notifier).select('dm1');
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      expect(container.read(selectedChannelIdProvider), 'dm1');
-    });
+        // No assertion, switcher up, and selecting the doubled id resolves cleanly.
+        expect(tester.takeException(), isNull);
+        expect(find.byType(DropdownButton<String>), findsOneWidget);
+        container.read(selectedChannelIdProvider.notifier).select('dm1');
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(container.read(selectedChannelIdProvider), 'dm1');
+      },
+    );
   }
 
-  for (final wrongKind
-      in ChannelKind.values.where((k) => k != ChannelKind.dm)) {
-    testWidgets(
-        'a DM stays in the DM section even when its own kind says otherwise '
+  for (final wrongKind in ChannelKind.values.where(
+    (k) => k != ChannelKind.dm,
+  )) {
+    testWidgets('a DM stays in the DM section even when its own kind says otherwise '
         '(kind: ${wrongKind.name})', (tester) async {
       setNarrow(tester);
       // Sectioning is by SOURCE — which endpoint listed it — not by `Channel.kind`.
@@ -244,7 +274,10 @@ void main() {
       final rest = FakeRestApi(channels: channels);
       rest.dms = [Channel(id: 'dm1', name: '', kind: wrongKind)];
       rest.membersByChannel['dm1'] = roster;
-      final container = makeContainer(rest: rest, transport: FakeChatTransport());
+      final container = makeContainer(
+        rest: rest,
+        transport: FakeChatTransport(),
+      );
       addTearDown(container.dispose);
 
       await pumpApp(tester, container);
@@ -274,15 +307,18 @@ void main() {
       // Peer-aware: only a peer-aware read sees an ACCOUNT mute on this row.
       expect(
         tester
-            .widget<IconButton>(find.byKey(const Key('appbar-mute-conversation')))
+            .widget<IconButton>(
+              find.byKey(const Key('appbar-mute-conversation')),
+            )
             .tooltip,
         'This person is muted everywhere',
       );
     });
   }
 
-  testWidgets('a COLD channel-list failure tells the SAME story at both widths',
-      (tester) async {
+  testWidgets('a COLD channel-list failure tells the SAME story at both widths', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1000, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -310,8 +346,9 @@ void main() {
     await tester.pumpAndSettle();
 
     // The DMs are known — this is not a data loss, it is a serving decision.
-    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id),
-        ['dm1']);
+    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id), [
+      'dm1',
+    ]);
     // ...and no surface offers one it cannot serve: the rail says what the pane
     // says, rather than offering a row that lands on an error.
     expect(find.byKey(const Key('sidebar-dm-dm1')), findsNothing);
@@ -342,16 +379,21 @@ void main() {
     await tester.tap(find.text('Already have a passkey? Sign in'));
     for (var i = 0; i < 6; i++) {
       await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
       await tester.pump(const Duration(milliseconds: 20));
     }
 
     // DMs are in; channels are not. The repo — which awaits BOTH — is still
     // loading, so nothing conversational may be on screen: no composer to type
     // into, no message list to send from.
-    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id),
-        ['dm1']);
-    expect(container.read(chatRepositoryProvider), isA<AsyncLoading<ChatRepository>>());
+    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id), [
+      'dm1',
+    ]);
+    expect(
+      container.read(chatRepositoryProvider),
+      isA<AsyncLoading<ChatRepository>>(),
+    );
     expect(find.byType(TextField), findsNothing);
     expect(find.byKey(const Key('composer-send')), findsNothing);
     // The BAR is on the same circuit as the pane. Gating only the pane left the
@@ -363,7 +405,8 @@ void main() {
 
     channelGate.complete();
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pumpAndSettle();
 
     // Now both are in, the default resolves ONCE, and it is stable.
@@ -393,18 +436,21 @@ void main() {
     await tester.tap(find.text('Already have a passkey? Sign in'));
     for (var i = 0; i < 6; i++) {
       await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
       await tester.pump(const Duration(milliseconds: 20));
     }
 
     // DMs are in, channels are not — no row may claim to be the one you are in.
-    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id),
-        ['dm1']);
+    expect(container.read(conversationSectionsProvider).dms.map((c) => c.id), [
+      'dm1',
+    ]);
     expect(find.byKey(const Key('sidebar-dm-dm1')), findsNothing);
 
     channelGate.complete();
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pumpAndSettle();
 
     // Settled: rows appear, and the default landed on a room and stayed there.
@@ -452,23 +498,28 @@ void main() {
     // Opening the switcher fetched NOTHING: the DM's peer was already known, so
     // the row is peer-titled on the frame it appears instead of relabelling from
     // the placeholder a round-trip later.
-    expect(rest.listMembersCalls, beforeOpen,
-        reason: 'opening the switcher must not put a GET /members on the '
-            'interaction path');
+    expect(
+      rest.listMembersCalls,
+      beforeOpen,
+      reason:
+          'opening the switcher must not put a GET /members on the '
+          'interaction path',
+    );
     expect(find.text('alice'), findsWidgets);
     expect(find.text('Direct message'), findsNothing);
   });
 
-  testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation',
-      (tester) async {
+  testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation', (
+    tester,
+  ) async {
     setNarrow(tester);
     // The switcher's EXISTENCE gate has to read the same deduped list its ITEMS
     // do. When it read the raw [...channels, ...dms], one conversation listed
     // twice counted as two and drew a switcher over a single item — the chrome
     // this layout explicitly refuses (cage-match #136, Tesla + Carnot).
-    final rest = FakeRestApi(channels: const [
-      Channel(id: 'dm1', name: '', kind: ChannelKind.dm),
-    ]);
+    final rest = FakeRestApi(
+      channels: const [Channel(id: 'dm1', name: '', kind: ChannelKind.dm)],
+    );
     rest.dms = [dm];
     rest.membersByChannel['dm1'] = roster;
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
@@ -483,8 +534,9 @@ void main() {
     expect(find.text('alice'), findsOneWidget); // a plain title instead
   });
 
-  testWidgets('a conversation vanishing while the menu is OPEN does not assert',
-      (tester) async {
+  testWidgets('a conversation vanishing while the menu is OPEN does not assert', (
+    tester,
+  ) async {
     setNarrow(tester);
     final rest = restWithDm();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
@@ -506,7 +558,8 @@ void main() {
     rest.dms = const [];
     container.invalidate(dmsProvider);
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -525,8 +578,11 @@ void main() {
     // Assert the ghost is REALLY still on screen before tapping it. Guarding the
     // tap behind an `if` would let this pass vacuously the day the overlay stops
     // retaining the snapshot — a test that skips the branch it exists to exercise.
-    expect(find.text('alice'), findsWidgets,
-        reason: 'the open overlay should still be offering the retired DM');
+    expect(
+      find.text('alice'),
+      findsWidgets,
+      reason: 'the open overlay should still be offering the retired DM',
+    );
     await tester.tap(find.text('alice').last);
     await tester.pumpAndSettle();
     expect(container.read(selectedChannelIdProvider), healed);
@@ -536,8 +592,10 @@ void main() {
   testWidgets('collapsed, non-active rows are NOT in the tree (so a phone pays '
       'no per-DM roster fetch until the menu opens)', (tester) async {
     setNarrow(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -556,14 +614,19 @@ void main() {
     expect(find.text('general'), findsOneWidget); // only the ACTIVE row renders
 
     await openMenu(tester);
-    expect(find.text('alice'), findsWidgets); // opening the menu is what mounts them
+    expect(
+      find.text('alice'),
+      findsWidgets,
+    ); // opening the menu is what mounts them
   });
 
   testWidgets('the ACTIVE row carries no mute glyph — the app-bar bell already '
       'states it', (tester) async {
     setNarrow(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -587,8 +650,10 @@ void main() {
 
   testWidgets('the section header is NOT selectable', (tester) async {
     setNarrow(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -606,8 +671,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('no header when there is no boundary to mark (DMs, no channels)',
-      (tester) async {
+  testWidgets('no header when there is no boundary to mark (DMs, no channels)', (
+    tester,
+  ) async {
     setNarrow(tester);
     // An account with no channels at all, only DMs — the header would sit alone
     // above the whole list, labelling nothing against nothing.
@@ -615,9 +681,19 @@ void main() {
     rest.dms = [dm, const Channel(id: 'dm2', name: '', kind: ChannelKind.dm)];
     rest.membersByChannel['dm2'] = const [
       ChannelMember(
-          userId: 'u1', role: 'member', canPost: true, handle: 'me', displayName: 'Me'),
+        userId: 'u1',
+        role: 'member',
+        canPost: true,
+        handle: 'me',
+        displayName: 'Me',
+      ),
       ChannelMember(
-          userId: 'u3', role: 'member', canPost: true, handle: 'bob', displayName: 'Bob'),
+        userId: 'u3',
+        role: 'member',
+        canPost: true,
+        handle: 'bob',
+        displayName: 'Bob',
+      ),
     ];
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
@@ -637,8 +713,7 @@ void main() {
       'signal a DM is waiting', (tester) async {
     setNarrow(tester);
     final transport = FakeChatTransport();
-    final container =
-        makeContainer(rest: restWithDm(), transport: transport);
+    final container = makeContainer(rest: restWithDm(), transport: transport);
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -648,32 +723,41 @@ void main() {
     await signIn(tester);
     transport.emitConn(ConnectionState.connected);
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pumpAndSettle();
 
     // Stand in a channel, then have the DM receive a message from the peer.
     container.read(selectedChannelIdProvider.notifier).select('c1');
     await tester.pumpAndSettle();
 
-    transport.emitMessage(Message(
-      clientTempId: 'm1',
-      id: '01J${'0' * 21}1',
-      channelId: 'dm1',
-      sender: const MessageSender(
-          userId: 'u2', kind: SenderKind.human, label: 'alice'),
-      body: 'hey',
-      createdAt: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
-      deliveryState: DeliveryState.sent,
-    ));
+    transport.emitMessage(
+      Message(
+        clientTempId: 'm1',
+        id: '01J${'0' * 21}1',
+        channelId: 'dm1',
+        sender: const MessageSender(
+          userId: 'u2',
+          kind: SenderKind.human,
+          label: 'alice',
+        ),
+        body: 'hey',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
+        deliveryState: DeliveryState.sent,
+      ),
+    );
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pumpAndSettle();
 
     // The collapsed app bar shows the aggregate dot. Before this slice the
     // aggregate summed channels only, so a waiting DM was invisible on a phone.
     expect(find.byKey(const Key('unread-aggregate')), findsOneWidget);
     expect(
-      tester.widget<UnreadBadge>(find.byKey(const Key('unread-aggregate'))).count,
+      tester
+          .widget<UnreadBadge>(find.byKey(const Key('unread-aggregate')))
+          .count,
       greaterThan(0),
     );
   });
@@ -681,8 +765,10 @@ void main() {
   testWidgets('a PEER-muted DM renders muted in the menu (peer-aware, like the '
       'sidebar row)', (tester) async {
     setNarrow(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);

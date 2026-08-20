@@ -34,51 +34,72 @@ void main() {
     final table = entry.key;
     final declared = entry.value;
 
-    test('onCreate schema for $table matches the declared columns/types/nullability/pk',
-        () async {
-      await cache.customSelect('SELECT 1').get(); // force onCreate
-      final info = await cache.customSelect('PRAGMA table_info($table)').get();
+    test(
+      'onCreate schema for $table matches the declared columns/types/nullability/pk',
+      () async {
+        await cache.customSelect('SELECT 1').get(); // force onCreate
+        final info = await cache
+            .customSelect('PRAGMA table_info($table)')
+            .get();
 
-      final liveByName = {for (final r in info) r.read<String>('name'): r};
+        final liveByName = {for (final r in info) r.read<String>('name'): r};
 
-      // 1. Column SET matches exactly (no missing / extra columns).
-      expect(liveByName.keys.toSet(), declared.columns.keys.toSet(),
-          reason: '$table columns drifted from the declared schema');
+        // 1. Column SET matches exactly (no missing / extra columns).
+        expect(
+          liveByName.keys.toSet(),
+          declared.columns.keys.toSet(),
+          reason: '$table columns drifted from the declared schema',
+        );
 
-      // 2. Per-column type, nullability, and default match the declaration.
-      declared.columns.forEach((col, fragment) {
-        final want = parseFragment(fragment);
-        final row = liveByName[col]!;
-        expect(row.read<String>('type'), want.type,
-            reason: '$table.$col type');
-        expect(row.read<int>('notnull') == 1, want.notNull,
-            reason: '$table.$col nullability');
-        expect(row.readNullable<String>('dflt_value'), want.dflt,
-            reason: '$table.$col default');
-      });
+        // 2. Per-column type, nullability, and default match the declaration.
+        declared.columns.forEach((col, fragment) {
+          final want = parseFragment(fragment);
+          final row = liveByName[col]!;
+          expect(
+            row.read<String>('type'),
+            want.type,
+            reason: '$table.$col type',
+          );
+          expect(
+            row.read<int>('notnull') == 1,
+            want.notNull,
+            reason: '$table.$col nullability',
+          );
+          expect(
+            row.readNullable<String>('dflt_value'),
+            want.dflt,
+            reason: '$table.$col default',
+          );
+        });
 
-      // 3. PRIMARY KEY is exactly the declared PK column.
-      final pkCols = {
-        for (final r in info)
-          if (r.read<int>('pk') > 0) r.read<String>('name')
-      };
-      expect(pkCols, {declared.pk}, reason: '$table primary key');
-    });
+        // 3. PRIMARY KEY is exactly the declared PK column.
+        final pkCols = {
+          for (final r in info)
+            if (r.read<int>('pk') > 0) r.read<String>('name'),
+        };
+        expect(pkCols, {declared.pk}, reason: '$table primary key');
+      },
+    );
   }
 
-  test('messages.server_ulid is UNIQUE (Invariant U — no duplication at rest)', () async {
-    await cache.customSelect('SELECT 1').get();
-    await cache.customStatement(
+  test(
+    'messages.server_ulid is UNIQUE (Invariant U — no duplication at rest)',
+    () async {
+      await cache.customSelect('SELECT 1').get();
+      await cache.customStatement(
         "INSERT INTO messages (client_temp_id, server_ulid, channel_id, "
         "sender_kind, kind, body, created_at, delivery_state) "
-        "VALUES ('a', 'U1', 'c', 'human', 'text', 'x', 1, 'sent')");
-    expect(
-      () => cache.customStatement(
+        "VALUES ('a', 'U1', 'c', 'human', 'text', 'x', 1, 'sent')",
+      );
+      expect(
+        () => cache.customStatement(
           "INSERT INTO messages (client_temp_id, server_ulid, channel_id, "
           "sender_kind, kind, body, created_at, delivery_state) "
-          "VALUES ('b', 'U1', 'c', 'human', 'text', 'y', 2, 'sent')"),
-      throwsA(anything),
-      reason: 'a duplicate non-null server_ulid must violate UNIQUE',
-    );
-  });
+          "VALUES ('b', 'U1', 'c', 'human', 'text', 'y', 2, 'sent')",
+        ),
+        throwsA(anything),
+        reason: 'a duplicate non-null server_ulid must violate UNIQUE',
+      );
+    },
+  );
 }

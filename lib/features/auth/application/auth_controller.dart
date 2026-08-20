@@ -31,8 +31,9 @@ import '../data/passkey_auth_client.dart';
 import '../domain/auth_models.dart';
 import '../domain/identity_models.dart';
 
-final authControllerProvider =
-    AsyncNotifierProvider<AuthController, AppUser?>(AuthController.new);
+final authControllerProvider = AsyncNotifierProvider<AuthController, AppUser?>(
+  AuthController.new,
+);
 
 /// The transient "a new identity has been verified but has not yet claimed a
 /// handle" state (first-passkey-creates-account). It lives ALONGSIDE
@@ -43,7 +44,8 @@ final authControllerProvider =
 /// or the user abandons the flow.
 final pendingHandleProvider =
     NotifierProvider<PendingHandleNotifier, PendingHandle?>(
-        PendingHandleNotifier.new);
+      PendingHandleNotifier.new,
+    );
 
 class PendingHandleNotifier extends Notifier<PendingHandle?> {
   @override
@@ -64,8 +66,9 @@ class PendingHandleNotifier extends Notifier<PendingHandle?> {
 /// switch. In-memory only: a cold restart re-discovers the ban on the next auth
 /// attempt (task #29). The host to display is read from [configProvider], so
 /// this stays a bare flag with a single owner for the host.
-final suspendedProvider =
-    NotifierProvider<SuspendedNotifier, bool>(SuspendedNotifier.new);
+final suspendedProvider = NotifierProvider<SuspendedNotifier, bool>(
+  SuspendedNotifier.new,
+);
 
 /// Whether the current user is a moderator on this island — the presentation
 /// flag that shows/hides the operator seat (report queue + takedown/ban UI).
@@ -75,7 +78,8 @@ final suspendedProvider =
 /// (`ModeratorUser`), so this flag being wrong grants no authority, just a
 /// visible-or-hidden door.
 final isModeratorProvider = Provider<bool>(
-    (ref) => ref.watch(authControllerProvider).value?.isModerator ?? false);
+  (ref) => ref.watch(authControllerProvider).value?.isModerator ?? false,
+);
 
 class SuspendedNotifier extends Notifier<bool> {
   @override
@@ -147,7 +151,9 @@ class AuthController extends AsyncNotifier<AppUser?> {
     if (existing == null) return null; // never logged in
     try {
       final user = await _rest.me();
-      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
+      await _writeCachedUser(
+        user,
+      ); // keep the offline cache fresh (best-effort)
       _clearSuspended(); // a successful me() means the ban (if any) lifted
       return user;
     } on AccountSuspended {
@@ -201,7 +207,8 @@ class AuthController extends AsyncNotifier<AppUser?> {
     bool sanitized;
     try {
       if (await _cachedUser.write(user)) return; // wrote the correct identity
-      sanitized = await _cachedUser.clear(); // write failed → erase, don't leave old
+      sanitized = await _cachedUser
+          .clear(); // write failed → erase, don't leave old
     } catch (_) {
       try {
         sanitized = await _cachedUser.clear();
@@ -216,9 +223,11 @@ class AuthController extends AsyncNotifier<AppUser?> {
     // on a terminal 401. And it SELF-HEALS: the next successful me() overwrites
     // the cache with the correct identity. We surface it via assert so it's never
     // silent in debug, but do not log the user out on a prefs hiccup.
-    assert(sanitized,
-        'CachedUserStore could not persist OR clear — stale identity may '
-        'linger until the next successful me() (self-healing, display-only).');
+    assert(
+      sanitized,
+      'CachedUserStore could not persist OR clear — stale identity may '
+      'linger until the next successful me() (self-healing, display-only).',
+    );
   }
 
   /// The shared ingress preamble for every "start a sign-in ceremony" entry
@@ -238,7 +247,8 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// (it already was, once). [ceremony] receives the captured prior state to
   /// thread into a cancellation restore / [_applyOutcome].
   Future<void> _ingress(
-      Future<AppUser?> Function(AppUser? prior) ceremony) async {
+    Future<AppUser?> Function(AppUser? prior) ceremony,
+  ) async {
     if (state.value != null || state.isLoading) return;
     final prior = state.value;
     state = const AsyncValue.loading();
@@ -313,17 +323,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// banner). A "no passkey on this device" error is a real [AuthCeremonyFailed]
   /// — surfaced, not swallowed — so the UI can nudge toward [registerWithPasskey].
   Future<void> signInWithPasskey() => _ingress((prior) async {
-        final challenge = await _rest.startPasskeyAuthentication();
-        final String assertion;
-        try {
-          assertion = await _passkey.authenticate(challenge.optionsJson);
-        } on AuthCeremonyCancelled {
-          return prior; // user dismissed the sheet — no-op, restore prior state
-        }
-        final outcome = await _rest.finishPasskeyAuthentication(
-            challenge.state, assertion);
-        return _applyOutcome(outcome, prior);
-      });
+    final challenge = await _rest.startPasskeyAuthentication();
+    final String assertion;
+    try {
+      assertion = await _passkey.authenticate(challenge.optionsJson);
+    } on AuthCeremonyCancelled {
+      return prior; // user dismissed the sheet — no-op, restore prior state
+    }
+    final outcome = await _rest.finishPasskeyAuthentication(
+      challenge.state,
+      assertion,
+    );
+    return _applyOutcome(outcome, prior);
+  });
 
   /// Create a NEW passkey and account (first-passkey-creates-account). Mirrors
   /// [signInWithPasskey] with the registration ceremony: fetch creation options,
@@ -332,17 +344,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// the SAME outcome — typically a [PendingHandle] so the new user claims a
   /// handle before landing in chat. Cancellation restores the prior state.
   Future<void> registerWithPasskey() => _ingress((prior) async {
-        final challenge = await _rest.startPasskeyRegistration();
-        final String attestation;
-        try {
-          attestation = await _passkey.register(challenge.optionsJson);
-        } on AuthCeremonyCancelled {
-          return prior; // user dismissed the sheet — no-op, restore prior state
-        }
-        final outcome = await _rest.finishPasskeyRegistration(
-            challenge.state, attestation);
-        return _applyOutcome(outcome, prior);
-      });
+    final challenge = await _rest.startPasskeyRegistration();
+    final String attestation;
+    try {
+      attestation = await _passkey.register(challenge.optionsJson);
+    } on AuthCeremonyCancelled {
+      return prior; // user dismissed the sheet — no-op, restore prior state
+    }
+    final outcome = await _rest.finishPasskeyRegistration(
+      challenge.state,
+      attestation,
+    );
+    return _applyOutcome(outcome, prior);
+  });
 
   /// Add a passkey to the CURRENTLY signed-in account (link-to-existing, #1727).
   /// This is the recovery path for a user who ALREADY has an account and wants a
@@ -379,7 +393,8 @@ class AuthController extends AsyncNotifier<AppUser?> {
     if (state.value == null) {
       throw StateError('addPasskeyToCurrentAccount requires a signed-in user');
     }
-    if (_addingPasskey) return false; // a link is already in flight — no 2nd sheet
+    if (_addingPasskey)
+      return false; // a link is already in flight — no 2nd sheet
     _addingPasskey = true;
     try {
       final challenge = await _rest.startPasskeyRegistration();
@@ -400,7 +415,10 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// identity door): a known identity adopts the tokens and publishes the user;
   /// a new identity parks the [PendingHandle] (router → /claim-handle) and keeps
   /// the [prior] state (first-passkey-creates-account).
-  Future<AppUser?> _applyOutcome(IdentityOutcome outcome, AppUser? prior) async {
+  Future<AppUser?> _applyOutcome(
+    IdentityOutcome outcome,
+    AppUser? prior,
+  ) async {
     switch (outcome) {
       case Authenticated(:final session):
         await _tokens.setTokens(session.tokens);
@@ -519,8 +537,11 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // no teardown can interleave (a teardown nulls state.value → userId mismatch).
       if (await _tokens.currentAccessToken() == null) return;
       if (state.value?.userId != startUserId) return;
-      await _writeCachedUser(user); // keep the offline cache fresh (best-effort)
-      if (state.value?.userId != startUserId) return; // re-fence after the write
+      await _writeCachedUser(
+        user,
+      ); // keep the offline cache fresh (best-effort)
+      if (state.value?.userId != startUserId)
+        return; // re-fence after the write
       state = AsyncData(user);
     } on AccountSuspended catch (e, st) {
       // A ban surfaced during the refresh — this IS terminal, but it is a BAN,
@@ -655,7 +676,8 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // error UI. Only the disconnect is best-effort.
       ref.read(pendingHandleProvider.notifier).clear();
       _clearSuspended(); // a different island may not have banned this account
-      await _tokens.clearTokens(); // security-critical: old credential gone first
+      await _tokens
+          .clearTokens(); // security-critical: old credential gone first
       await _cachedUser.clear(); // old identity gone with the old credential
       try {
         await ref.read(transportProvider).disconnect(); // best-effort cleanup

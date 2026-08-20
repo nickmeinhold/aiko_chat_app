@@ -40,10 +40,16 @@ void main() {
   group('the engine agrees with the shipped palettes', () {
     test('every preset, in both brightnesses, is judged legal', () {
       for (final preset in kThemePresets) {
-        expect(checkPalette(preset.light), isEmpty,
-            reason: '${preset.id} light: ${checkPalette(preset.light)}');
-        expect(checkPalette(preset.dark), isEmpty,
-            reason: '${preset.id} dark: ${checkPalette(preset.dark)}');
+        expect(
+          checkPalette(preset.light),
+          isEmpty,
+          reason: '${preset.id} light: ${checkPalette(preset.light)}',
+        );
+        expect(
+          checkPalette(preset.dark),
+          isEmpty,
+          reason: '${preset.id} dark: ${checkPalette(preset.dark)}',
+        );
       }
     });
   });
@@ -58,7 +64,11 @@ void main() {
     });
 
     test('unreadable body text is caught', () {
-      final p = withRole(maritimeNoon, PaletteRole.ink, const Color(0xFFE4DDCC));
+      final p = withRole(
+        maritimeNoon,
+        PaletteRole.ink,
+        const Color(0xFFE4DDCC),
+      );
       expect(
         checkPalette(p).where((v) => v.role == PaletteRole.ink),
         isNotEmpty,
@@ -67,21 +77,29 @@ void main() {
 
     test('an accent that vanishes into the ground is caught — this is the rule '
         'that kills "signal cyan on chart paper"', () {
-      final p =
-          withRole(maritimeNoon, PaletteRole.signal, const Color(0xFF7FE0A8));
+      final p = withRole(
+        maritimeNoon,
+        PaletteRole.signal,
+        const Color(0xFF7FE0A8),
+      );
       expect(
         checkPalette(p).where((v) => v.role == PaletteRole.signal),
         isNotEmpty,
       );
     });
 
-    test('two accents that are the same colour wearing two meanings are caught',
-        () {
-      // The beacon moved onto the alarm's hue.
-      final p = withRole(
-          maritimeNoon, PaletteRole.beacon, const Color(0xFF8C2318));
-      expect(checkPalette(p), isNotEmpty);
-    });
+    test(
+      'two accents that are the same colour wearing two meanings are caught',
+      () {
+        // The beacon moved onto the alarm's hue.
+        final p = withRole(
+          maritimeNoon,
+          PaletteRole.beacon,
+          const Color(0xFF8C2318),
+        );
+        expect(checkPalette(p), isNotEmpty);
+      },
+    );
 
     test('a RELATIONAL violation is reported against one of the two colours, '
         'not necessarily the one that moved', () {
@@ -93,19 +111,29 @@ void main() {
       // whether an EDIT is safe must therefore ask "is the palette clean?",
       // never "is my role blamed?".
       final p = withRole(
-          maritimeNoon, PaletteRole.beacon, const Color(0xFF8C2318));
+        maritimeNoon,
+        PaletteRole.beacon,
+        const Color(0xFF8C2318),
+      );
       final blamed = checkPalette(p).map((v) => v.role).toSet();
       expect(blamed, contains(PaletteRole.alarm));
-      expect(blamed, isNot(contains(PaletteRole.beacon)),
-          reason: 'if this ever starts blaming the beacon too, the property '
-              'above got stronger — relax this expectation, but do NOT let the '
-              'editor go back to filtering by role');
+      expect(
+        blamed,
+        isNot(contains(PaletteRole.beacon)),
+        reason:
+            'if this ever starts blaming the beacon too, the property '
+            'above got stronger — relax this expectation, but do NOT let the '
+            'editor go back to filtering by role',
+      );
     });
 
     test('an invisible hairline is caught — it is the only separator this '
         'design has', () {
       final p = withRole(
-          maritimeNoon, PaletteRole.hairline, const Color(0xFFE7E0CF));
+        maritimeNoon,
+        PaletteRole.hairline,
+        const Color(0xFFE7E0CF),
+      );
       expect(
         checkPalette(p).where((v) => v.role == PaletteRole.hairline),
         isNotEmpty,
@@ -115,7 +143,10 @@ void main() {
     test('a hairline LOUDER than the ink is caught too — the failure is '
         'two-sided, not just "more contrast is better"', () {
       final p = withRole(
-          maritimeNoon, PaletteRole.hairline, const Color(0xFF000000));
+        maritimeNoon,
+        PaletteRole.hairline,
+        const Color(0xFF000000),
+      );
       expect(
         checkPalette(p).where((v) => v.role == PaletteRole.hairline),
         isNotEmpty,
@@ -123,31 +154,39 @@ void main() {
     });
 
     test('a panel that matches the ground is caught', () {
-      final p =
-          withRole(maritimeNoon, PaletteRole.panel, maritimeNoon.ground);
+      final p = withRole(maritimeNoon, PaletteRole.panel, maritimeNoon.ground);
       expect(
         checkPalette(p).where((v) => v.role == PaletteRole.panel),
         isNotEmpty,
       );
     });
 
-    test('every violation names a role, so the editor can point at something',
-        () {
-      for (final v in checkPalette(_mud)) {
-        expect(v.message, isNotEmpty);
-        expect(v.message, isNot(contains(':1')),
-            reason: 'messages are for people — "contrast 3.2:1" is not '
-                'actionable, "this text is too faint" is');
-      }
-    });
+    test(
+      'every violation names a role, so the editor can point at something',
+      () {
+        for (final v in checkPalette(_mud)) {
+          expect(v.message, isNotEmpty);
+          expect(
+            v.message,
+            isNot(contains(':1')),
+            reason:
+                'messages are for people — "contrast 3.2:1" is not '
+                'actionable, "this text is too faint" is',
+          );
+        }
+      },
+    );
   });
 
   group('withRole/roleOf are exact inverses', () {
     test('setting a role then reading it back returns what was set', () {
       for (final role in PaletteRole.values) {
         const c = Color(0xFF123456);
-        expect(roleOf(withRole(maritimeNoon, role, c), role), c,
-            reason: role.name);
+        expect(
+          roleOf(withRole(maritimeNoon, role, c), role),
+          c,
+          reason: role.name,
+        );
       }
     });
 
@@ -157,8 +196,11 @@ void main() {
         final edited = withRole(maritimeNoon, role, const Color(0xFF123456));
         for (final other in PaletteRole.values) {
           if (other == role) continue;
-          expect(roleOf(edited, other), roleOf(maritimeNoon, other),
-              reason: 'editing ${role.name} moved ${other.name}');
+          expect(
+            roleOf(edited, other),
+            roleOf(maritimeNoon, other),
+            reason: 'editing ${role.name} moved ${other.name}',
+          );
         }
       }
     });

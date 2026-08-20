@@ -109,8 +109,11 @@ Future<void> startCall(
     if (!context.mounted) return;
     if (!rang) {
       // Honest, not fatal: the room is still opening behind this.
-      messenger.showSnackBar(SnackBar(
-          content: Text("Couldn't ring $name — they may not see the call.")));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text("Couldn't ring $name — they may not see the call."),
+        ),
+      );
     }
     await pushCall(context, dm.id);
     return;
@@ -211,7 +214,9 @@ bool _refuseBlocked(
   if (!ref.read(blockedUserIdsProvider).contains(userId)) return false;
   messenger.showSnackBar(
     SnackBar(
-      content: Text("You've blocked $name — unblock in Settings to ${verb.label}."),
+      content: Text(
+        "You've blocked $name — unblock in Settings to ${verb.label}.",
+      ),
     ),
   );
   return true;

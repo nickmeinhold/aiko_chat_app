@@ -40,38 +40,47 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
     final rest = FakeRestApi();
-    final passkey =
-        FakePasskeyAuthClient(authenticateThrows: authenticateThrows);
+    final passkey = FakePasskeyAuthClient(
+      authenticateThrows: authenticateThrows,
+    );
     final tokenStore = InMemoryTokenStore();
     late final ProviderContainer container;
-    container = ProviderContainer(overrides: [
-      sharedPreferencesProvider.overrideWithValue(prefs),
-      restApiProvider.overrideWithValue(rest),
-      transportProvider.overrideWithValue(FakeChatTransport()),
-      passkeyAuthClientProvider.overrideWithValue(passkey),
-      tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
-        store: tokenStore,
-        remoteRefresh: (_) async => 'access2',
-        onUnauthenticated: () {},
-      )),
-      // Login screen mounts NetworkStatusBanner → fake connectivity/reachability
-      // so the test never touches the platform channel or the network.
-      connectivityServiceProvider.overrideWithValue(FakeConnectivityService()),
-      reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
-      // Stub the 5s-Timer reachability loop so the pumped login screen doesn't
-      // leave a pending timer at test teardown.
-      gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
-    ]);
+    container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        restApiProvider.overrideWithValue(rest),
+        transportProvider.overrideWithValue(FakeChatTransport()),
+        passkeyAuthClientProvider.overrideWithValue(passkey),
+        tokenProviderProvider.overrideWithValue(
+          DefaultTokenProvider(
+            store: tokenStore,
+            remoteRefresh: (_) async => 'access2',
+            onUnauthenticated: () {},
+          ),
+        ),
+        // Login screen mounts NetworkStatusBanner → fake connectivity/reachability
+        // so the test never touches the platform channel or the network.
+        connectivityServiceProvider.overrideWithValue(
+          FakeConnectivityService(),
+        ),
+        reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
+        // Stub the 5s-Timer reachability loop so the pumped login screen doesn't
+        // leave a pending timer at test teardown.
+        gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
+      ],
+    );
     addTearDown(container.dispose);
 
     // Settle cold-start restore to logged-out so the ingress guard lets the
     // ceremony run (FakeRestApi.me() default is logged-out).
     expect(await container.read(authControllerProvider.future), isNull);
 
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: const MaterialApp(home: LoginScreen()),
-    ));
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: LoginScreen()),
+      ),
+    );
 
     await container.read(authControllerProvider.notifier).signInWithPasskey();
     await tester.pump();
@@ -81,47 +90,67 @@ void main() {
   }
 
   group('LoginScreen error banner (_authErrorText)', () {
-    testWidgets('no-credentials-available → nudge toward Create a passkey',
-        (tester) async {
-      await pumpFailedSignIn(tester,
-          authenticateThrows:
-              const AuthCeremonyFailed('Passkey: no-credentials-available'));
+    testWidgets('no-credentials-available → nudge toward Create a passkey', (
+      tester,
+    ) async {
+      await pumpFailedSignIn(
+        tester,
+        authenticateThrows: const AuthCeremonyFailed(
+          'Passkey: no-credentials-available',
+        ),
+      );
 
-      expect(find.textContaining('No passkey found on this device'),
-          findsOneWidget);
+      expect(
+        find.textContaining('No passkey found on this device'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Something went wrong'), findsNothing);
     });
 
-    testWidgets('domain-not-associated → names the gateway host',
-        (tester) async {
-      final r = await pumpFailedSignIn(tester,
-          authenticateThrows:
-              const AuthCeremonyFailed('Passkey: domain-not-associated'));
+    testWidgets('domain-not-associated → names the gateway host', (
+      tester,
+    ) async {
+      final r = await pumpFailedSignIn(
+        tester,
+        authenticateThrows: const AuthCeremonyFailed(
+          'Passkey: domain-not-associated',
+        ),
+      );
 
       expect(find.textContaining("aren't linked to"), findsOneWidget);
       // The host is interpolated so the user knows WHICH server isn't linked.
       expect(find.textContaining(r.host), findsWidgets);
     });
 
-    testWidgets('deviceNotSupported → plain unsupported message',
-        (tester) async {
-      await pumpFailedSignIn(tester,
-          authenticateThrows:
-              const AuthCeremonyFailed('Passkey: deviceNotSupported'));
+    testWidgets('deviceNotSupported → plain unsupported message', (
+      tester,
+    ) async {
+      await pumpFailedSignIn(
+        tester,
+        authenticateThrows: const AuthCeremonyFailed(
+          'Passkey: deviceNotSupported',
+        ),
+      );
 
       expect(find.textContaining("doesn't support passkeys"), findsOneWidget);
     });
 
-    testWidgets('an UNMAPPED code surfaces its RAW text, never the generic',
-        (tester) async {
+    testWidgets('an UNMAPPED code surfaces its RAW text, never the generic', (
+      tester,
+    ) async {
       // The never-blind-again property: a code the mapping doesn't know about
       // must still reach the user verbatim, so a future failure mode is visible.
-      await pumpFailedSignIn(tester,
-          authenticateThrows:
-              const AuthCeremonyFailed('Passkey: some-brand-new-error'));
+      await pumpFailedSignIn(
+        tester,
+        authenticateThrows: const AuthCeremonyFailed(
+          'Passkey: some-brand-new-error',
+        ),
+      );
 
-      expect(find.textContaining('Sign-in failed: Passkey: some-brand-new-error'),
-          findsOneWidget);
+      expect(
+        find.textContaining('Sign-in failed: Passkey: some-brand-new-error'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Something went wrong'), findsNothing);
     });
   });

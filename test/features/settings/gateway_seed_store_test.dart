@@ -34,22 +34,26 @@ void main() {
     expect(store.load(), isEmpty);
   });
 
-  test('a discovered island is persisted and reloaded (the GROW property)',
-      () async {
-    final store = await storeWith({});
-    await store.remember(const [
-      ServerEntry(
-          label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co', id: 'enspyr'),
-    ]);
+  test(
+    'a discovered island is persisted and reloaded (the GROW property)',
+    () async {
+      final store = await storeWith({});
+      await store.remember(const [
+        ServerEntry(
+          label: 'Enspyr',
+          httpBaseUrl: 'https://chat.enspyr.co',
+          id: 'enspyr',
+        ),
+      ]);
 
-    final loaded = store.load();
-    expect(loaded.single.httpBaseUrl, 'https://chat.enspyr.co');
-    expect(loaded.single.label, 'Enspyr');
-    expect(loaded.single.id, 'enspyr', reason: 'metadata round-trips');
-  });
+      final loaded = store.load();
+      expect(loaded.single.httpBaseUrl, 'https://chat.enspyr.co');
+      expect(loaded.single.label, 'Enspyr');
+      expect(loaded.single.id, 'enspyr', reason: 'metadata round-trips');
+    },
+  );
 
-  test('remember unions across calls and dedups on the normalized URL',
-      () async {
+  test('remember unions across calls and dedups on the normalized URL', () async {
     final store = await storeWith({});
     await store.remember(const [
       ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co'),
@@ -58,8 +62,14 @@ void main() {
     // slash (same island) and a different label. The existing entry must win and
     // the set must not double up.
     final merged = await store.remember(const [
-      ServerEntry(label: 'Enspyr RENAMED', httpBaseUrl: 'https://chat.enspyr.co/'),
-      ServerEntry(label: 'Imagineering', httpBaseUrl: 'https://chat.imagineering.cc'),
+      ServerEntry(
+        label: 'Enspyr RENAMED',
+        httpBaseUrl: 'https://chat.enspyr.co/',
+      ),
+      ServerEntry(
+        label: 'Imagineering',
+        httpBaseUrl: 'https://chat.imagineering.cc',
+      ),
     ]);
 
     final urls = merged.map((e) => _norm(e.httpBaseUrl)).toList();
@@ -67,8 +77,11 @@ void main() {
       _norm('https://chat.enspyr.co'),
       _norm('https://chat.imagineering.cc'),
     ]);
-    expect(merged.first.label, 'Enspyr',
-        reason: 'first-seen entry wins over a re-advertisement');
+    expect(
+      merged.first.label,
+      'Enspyr',
+      reason: 'first-seen entry wins over a re-advertisement',
+    );
     // And it survives a reload.
     expect(store.load().map((e) => _norm(e.httpBaseUrl)), urls);
   });
@@ -80,7 +93,10 @@ void main() {
       // each would otherwise bypass the picker's custom-URL validation straight
       // into switchGateway.
       final tampered = jsonEncode([
-        {'base_url': 'https://chat.enspyr.co', 'display_name': 'Enspyr'}, // good
+        {
+          'base_url': 'https://chat.enspyr.co',
+          'display_name': 'Enspyr',
+        }, // good
         {'base_url': 'file:///etc/passwd', 'display_name': 'pwn'}, // non-http
         {'base_url': 'javascript:alert(1)', 'display_name': 'xss'}, // scheme
         {'base_url': 'https://', 'display_name': 'no host'}, // hostless
@@ -90,18 +106,27 @@ void main() {
       final store = await storeWith({kKnownGatewaysPrefKey: tampered});
 
       final loaded = store.load();
-      expect(loaded.map((e) => e.httpBaseUrl), ['https://chat.enspyr.co'],
-          reason: 'only the http(s)+host entry survives re-validation');
+      expect(loaded.map((e) => e.httpBaseUrl), [
+        'https://chat.enspyr.co',
+      ], reason: 'only the http(s)+host entry survives re-validation');
     });
 
     test('a non-JSON / mis-typed blob yields [] (no crash)', () async {
-      expect((await storeWith({kKnownGatewaysPrefKey: 'not json {['}))
-          .load(), isEmpty);
+      expect(
+        (await storeWith({kKnownGatewaysPrefKey: 'not json {['})).load(),
+        isEmpty,
+      );
       // A JSON value that isn't a list of objects is also just "nothing".
-      expect((await storeWith({kKnownGatewaysPrefKey: jsonEncode(42)}))
-          .load(), isEmpty);
-      expect((await storeWith({kKnownGatewaysPrefKey: jsonEncode({'x': 1})}))
-          .load(), isEmpty);
+      expect(
+        (await storeWith({kKnownGatewaysPrefKey: jsonEncode(42)})).load(),
+        isEmpty,
+      );
+      expect(
+        (await storeWith({
+          kKnownGatewaysPrefKey: jsonEncode({'x': 1}),
+        })).load(),
+        isEmpty,
+      );
     });
   });
 }
