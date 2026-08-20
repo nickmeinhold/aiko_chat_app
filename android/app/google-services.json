@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "715099480073",
+    "project_id": "aiko-chat-push",
+    "storage_bucket": "aiko-chat-push.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:715099480073:android:de1ef520368a56928898d8",
+        "android_client_info": {
+          "package_name": "cc.imagineering.aiko_chat_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDFaF4_0YKxjyII_Ap_vU_13OI9MC6-bQI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

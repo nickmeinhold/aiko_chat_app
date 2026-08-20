@@ -14,6 +14,21 @@
 /// first, and buys nothing but a smaller diff. On a product whose thesis is
 /// sovereignty that is the wrong trade, and it is invisible once made.
 ///
+/// STATED AT THE SCOPE ACTUALLY PROVEN, because the built artifact is less tidy
+/// than the intent. Adding the Dart plugins for Android links the Firebase iOS
+/// SDK into the iOS binary too — measured on a real `flutter build ios`, 187
+/// FirebaseMessaging and 16 FirebaseCore symbols. It is INERT: `initializeApp`
+/// is never called on Apple platforms and no `GoogleService-Info.plist` ships,
+/// so nothing initialises and no traffic leaves. GoogleAppMeasurement, the ads
+/// SDK and on-device-conversion measured ZERO — SwiftPM resolves them to
+/// compute the graph and the linker drops them.
+///
+/// So the true claim is "Google is not in the RUNTIME PATH on Apple platforms",
+/// not "Google is not in the app". Removing the linkage entirely means taking
+/// the FCM token natively through Gradle instead of the Dart plugin — filed,
+/// not smuggled in here, because it trades real work for binary purity and the
+/// runtime property is already held.
+///
 /// Mirrors the island's closed `Platform` set, which drives a DB CHECK on
 /// `device_tokens.platform` — an out-of-set value is a 422 at its boundary, so
 /// the wire strings here are load-bearing and are asserted in
