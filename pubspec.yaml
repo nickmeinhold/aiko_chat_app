@@ -61,6 +61,7 @@ dependencies:
   device_info_plus: ^13.2.0
   package_info_plus: ^10.2.0
   share_plus: ^13.2.0
+  google_fonts: ^8.2.1
 
 # livekit_client ^2.10.0 (latest) pins device_info_plus ^12.3.0, but the rest of
 # our tree is on 13.x (package_info_plus needs win32 ^6, which 12.x can't give).
@@ -125,11 +126,14 @@ flutter:
 
   assets:
     - assets/legal/eula.md
-    # SIL OFL 1.1 requires the licence travel WITH the font. Registered into
-    # Flutter's LicenseRegistry at startup (lib/app/font_licenses.dart) so it
-    # shows up in the standard licences page rather than sitting inert in the
-    # bundle.
+    # SIL OFL 1.1 requires the licence travel WITH the font — including fonts
+    # FETCHED at runtime, which google_fonts does NOT register itself. Wired
+    # into LicenseRegistry at startup by lib/app/font_licences.dart, so these
+    # appear in the standard licences page rather than sitting inert in the
+    # bundle. OFL.txt covers the bundled IBM Plex Mono; licences/ carries one
+    # file per fetchable family (each has its own copyright line).
     - assets/fonts/OFL.txt
+    - assets/fonts/licences/
 
   # Maritime redesign type system (crucible docs/crucible/chatskin):
   # body/display text uses the platform-native UI font (no bundled family);

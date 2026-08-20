@@ -329,12 +329,8 @@ class _ThemePresetPicker extends ConsumerWidget {
         ),
         ListTile(
           leading: const Icon(Icons.palette_outlined),
-          title: const Text('Your colours'),
-          subtitle: Text(
-            ref.watch(skinSelectionProvider).isCustomised
-                ? 'Changed from ${selected.label}.'
-                : 'Start from ${selected.label} and change what you like.',
-          ),
+          title: const Text('Colours & type'),
+          subtitle: Text(_lookSummary(ref, selected)),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const PaletteEditorScreen()),
@@ -483,6 +479,15 @@ class _Dot extends StatelessWidget {
         height: 9,
         decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       );
+}
+
+/// One line describing the current look, so the tile says what is set rather
+/// than merely that a screen exists behind it.
+String _lookSummary(WidgetRef ref, ThemePreset preset) {
+  final font = ref.watch(appFontProvider);
+  final customised = ref.watch(skinSelectionProvider).isCustomised;
+  final colours = customised ? '${preset.label}, edited' : preset.label;
+  return font.isSystem ? colours : '$colours · ${font.label}';
 }
 
 class _SectionHeader extends StatelessWidget {
