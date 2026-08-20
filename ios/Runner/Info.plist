@@ -77,5 +77,26 @@
 		     question at upload/submission time. -->
 		<key>ITSAppUsesNonExemptEncryption</key>
 		<false/>
+		<!-- Firebase's own switch for "do not touch my AppDelegate", used here
+		     because the alternative is finding out on a handset.
+
+		     MEASURED, not assumed: `nm` on the built iOS binary shows
+		     FIRMessagingRemoteNotificationsProxy and its swizzleSelector:
+		     machinery linked in, hooking
+		     application:didFailToRegisterForRemoteNotificationsWithError: and
+		     its didRegister counterpart — the exact two callbacks this app now
+		     takes its APNs device token from. The Firebase iOS SDK arrives via
+		     the Dart plugins we need for ANDROID (see DevicePlatform, and
+		     claude-tasks#3269 to remove the linkage entirely), and it is inert
+		     only in the sense that `initializeApp` is never called on Apple —
+		     which is a claim about initialisation, NOT about a swizzler
+		     installed at load time.
+
+		     A stolen callback would present as no token, no registration and no
+		     error: the same silence as every other failure on this path. This
+		     key states the relationship rather than leaving it to whichever SDK
+		     ran first. -->
+		<key>FirebaseAppDelegateProxyEnabled</key>
+		<false/>
 	</dict>
 </plist>

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
+import '../data/apns_token_source.dart';
 import '../data/fcm_token_source.dart';
 import '../data/pending_unregister_store.dart';
 import '../domain/push_token_source.dart';
@@ -15,16 +16,27 @@ import 'device_registrar.dart';
 /// Where this platform's push token comes from, or null if we do not take one
 /// here.
 ///
-/// NULL IS A REAL ANSWER, not a gap to be filled defensively. A desktop or web
-/// build has no push service to ask, and Apple platforms have one that is not
-/// wired yet — the native APNs source is the next increment. In every one of
-/// those cases the right behaviour is identical: register nothing, and let the
-/// app work exactly as it does today. Reaching for the Firebase source as a
-/// stopgap on Apple is the specific mistake [FcmTokenSource]'s constructor
-/// assertion exists to stop, so this returns null rather than "something".
+/// ONE SOURCE PER TRANSPORT, never one SDK for both. Apple platforms hand over
+/// the raw APNs device token; Android hands over the FCM registration token.
+/// Firebase would relay iOS to APNs for us, and that shortcut is precisely what
+/// both constructors assert against — it would put Google in the path on the one
+/// platform where Apple is already a mandatory intermediary, invisibly. See
+/// [DevicePlatform].
+///
+/// NULL IS STILL A REAL ANSWER, not a gap to be filled defensively: a desktop or
+/// web build has no push service to ask, and the right behaviour there is to
+/// register nothing and let the app work exactly as it does today.
+///
+/// macOS is deliberately null for now. The Dart half above is platform-agnostic,
+/// but the native half is not — AppKit registers through `NSApplication`, and a
+/// sandboxed macOS app needs its own entitlement in two separate files. Filed
+/// rather than assumed-equivalent.
 final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
-  if (defaultTargetPlatform == TargetPlatform.android) return FcmTokenSource();
-  return null;
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.android => FcmTokenSource(),
+    TargetPlatform.iOS => ApnsTokenSource(),
+    _ => null,
+  };
 });
 
 /// The device-token debts this app still owes, keyed by island. Durable and
