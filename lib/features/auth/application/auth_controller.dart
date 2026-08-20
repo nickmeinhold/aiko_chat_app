@@ -560,7 +560,12 @@ class AuthController extends AsyncNotifier<AppUser?> {
   Future<void> _clearCredentialAndUnpair() async {
     final credential = await _tokens.currentAccessToken();
     try {
-      ref.read(deviceRegistrarProvider)?.unpair(credential: credential);
+      // AWAITED, and only as far as the debt being durable — a local
+      // preferences write, not the authenticated round trip, which stays out of
+      // band. Returning before that write lands meant a process kill between
+      // logout and the microtask lost the only retry record while the credential
+      // was already gone (cage-match round 4, Carnot).
+      await ref.read(deviceRegistrarProvider)?.unpair(credential: credential);
     } catch (e) {
       // Reach degrades; the session still ends. Never the other way round.
       debugPrint('AuthController: could not unpair the device: $e');

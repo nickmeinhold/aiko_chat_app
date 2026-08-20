@@ -78,8 +78,12 @@ class _RecordingRestApi extends FakeRestApi {
 
   @override
   Future<void> unregisterDevice(String token, {String? credential}) async {
+    // Logged on COMPLETION, not on entry. The invariant these tests assert is
+    // "the credential was already gone before the DELETE finished" — issuing the
+    // request early is fine and expected, because it carries its credential by
+    // value. Logging on entry measured dispatch order, which is not the property.
+    await super.unregisterDevice(token, credential: credential);
     log.add('unregisterDevice($token)');
-    return super.unregisterDevice(token, credential: credential);
   }
 }
 

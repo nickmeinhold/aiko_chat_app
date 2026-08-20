@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+    show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
@@ -118,12 +118,29 @@ final pushPairingProvider = Provider<void>((ref) {
       // cannot sign in.
       final registrar = ref.read(deviceRegistrarProvider);
       if (registrar != null) {
-        // DRAIN BEFORE START, and the sequencing is the entire safety argument
-        // for paying an old session's debt under a new session's credential —
-        // see DeviceRegistrar's class doc. Reversed, the debt's token has just
-        // been re-registered to the current user, so the DELETE would match and
-        // destroy the live pairing instead of the dead one.
-        unawaited(registrar.drainPending().then((_) => registrar.start()));
+        unawaited(() async {
+          try {
+            // DRAIN BEFORE START, and the sequencing is the entire safety
+            // argument for paying an old session's debt under a new session's
+            // credential — see DeviceRegistrar's class doc. Reversed, the debt's
+            // token has just been re-registered to the current user, so the
+            // DELETE would match and destroy the live pairing, not the dead one.
+            await registrar.drainPending();
+            // RE-CHECK THE SESSION between the two (cage-match round 4, Carnot).
+            // The drain is a network round trip, and a logout landing inside it
+            // used to let the continuation run anyway — prompting for
+            // notification permission on a session that no longer exists, then
+            // registering a token for it.
+            if (ref.read(authControllerProvider).value == null) return;
+            await registrar.start();
+          } catch (e) {
+            // TERMINAL catch on an unawaited chain. `_register` rethrows
+            // `Unauthorized` by design (the auth controller owns that
+            // transition), and with nobody awaiting this it would otherwise
+            // surface as an unhandled zone error rather than a log line.
+            debugPrint('pushPairing: pairing this session failed: $e');
+          }
+        }());
       }
     }
   });

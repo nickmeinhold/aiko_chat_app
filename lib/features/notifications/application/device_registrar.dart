@@ -80,9 +80,7 @@ class DeviceRegistrar {
     required ChatRestApi api,
     required PendingUnregisterStore pending,
     required String islandBaseUrl,
-    Duration settleWait = const Duration(seconds: 10),
-  }) : _settleWait = settleWait,
-       _source = source,
+  }) : _source = source,
        _api = api,
        _pending = pending,
        _islandBaseUrl = islandBaseUrl;
@@ -90,11 +88,6 @@ class DeviceRegistrar {
   final PushTokenSource _source;
   final ChatRestApi _api;
   final PendingUnregisterStore _pending;
-
-  /// How long a new pairing waits for the previous unpair to settle before
-  /// registering anyway. Injectable ONLY so a test can drive the timeout path
-  /// without ten real seconds — it is the same code path, not a stand-in.
-  final Duration _settleWait;
 
   /// Which island this registrar speaks for. A debt is keyed by it, so a token
   /// registered here is never deleted at the island the user switched TO.
@@ -115,6 +108,13 @@ class DeviceRegistrar {
   int _generation = 0;
 
   Future<void>? _settling;
+
+  /// A push token is a routing secret — the REST layer deliberately keeps it out
+  /// of URLs so it never reaches an access log or a proxy trace, and a debug
+  /// print that dumps it whole quietly undoes that (cage-match round 4, Carnot).
+  /// Enough prefix to correlate two log lines, never enough to route with.
+  static String _redact(String token) =>
+      '${token.length <= 8 ? token : token.substring(0, 8)}…[${token.length}]';
 
   /// Whether a token is currently registered — for tests and diagnostics.
   String? get registeredToken => _registered;
@@ -140,8 +140,8 @@ class DeviceRegistrar {
         await _api.unregisterDevice(token);
         if (!await _pending.forget(_islandBaseUrl, token)) {
           debugPrint(
-            'DeviceRegistrar: PAID the debt for $token but could not clear the '
-            'record — it will be re-attempted, which is a harmless 204 no-op.',
+            'DeviceRegistrar: PAID the debt for ${_redact(token)} but could '
+            'not clear the record — it will be re-attempted, a harmless no-op.',
           );
         }
       } catch (e) {
@@ -161,7 +161,7 @@ class DeviceRegistrar {
     // the CURRENT generation at delivery time rather than closing over this one,
     // because a refresh arriving now belongs to whatever session is live now.
     _refreshes = _source.tokenRefreshes().listen(
-      (t) => _register(t, _generation),
+      (t) => _register(t, generation),
     );
 
     if (!await _source.requestPermission()) {
@@ -181,15 +181,25 @@ class DeviceRegistrar {
     if (token != null) await _register(token, generation);
   }
 
-  /// End the pairing and record that this island is owed a DELETE.
+  /// End the pairing, and do not return until the DEBT IS DURABLE.
   ///
-  /// SYNCHRONOUS BY CONTRACT. It returns before any I/O completes, so a caller
-  /// can clear credentials on the very next line with no window in between. The
-  /// [credential] is the one that is about to be destroyed; it is carried by
-  /// value into the out-of-band attempt precisely so that attempt does not have
-  /// to happen before the clear. Passing null (no session, or none available) is
-  /// fine — the debt is still recorded, and [drainPending] settles it later.
-  void unpair({String? credential}) {
+  /// AWAIT THIS, then clear credentials — in that order (cage-match round 4,
+  /// Carnot). An earlier version returned synchronously and wrote the debt in a
+  /// later microtask, which meant a process kill or app suspension between
+  /// logout and that write lost the only retry record while the credential was
+  /// already gone. "Durability that exists only after a future runs is not
+  /// durability at teardown time."
+  ///
+  /// What is awaited is a LOCAL PREFERENCES WRITE — microseconds, no network —
+  /// so this does not re-open the window the whole design exists to remove. The
+  /// thing that must never sit ahead of the credential clear is the authenticated
+  /// ROUND TRIP, and that stays out of band in [_attemptUnregister].
+  ///
+  /// [credential] is the one about to be destroyed; it is carried by value into
+  /// that attempt precisely so the attempt need not happen before the clear.
+  /// Passing null is fine — the debt is still recorded and [drainPending] pays
+  /// it at the next sign-in.
+  Future<void> unpair({String? credential}) async {
     _generation++; // any in-flight registration is now stale
     // `.catchError` because an unawaited cancel() can complete with an error
     // from an upstream onCancel — unhandled, that surfaces as a zone error
@@ -200,7 +210,17 @@ class DeviceRegistrar {
     final token = _registered;
     _registered = null;
     if (token == null) return;
-    _settling = _settleUnpair(token, credential);
+    // The write's RESULT is checked, not discarded: SharedPreferences reports a
+    // persistence failure by returning false rather than throwing, and a debt
+    // that did not persist is a backstop that does not exist.
+    if (!await _pending.remember(_islandBaseUrl, token)) {
+      debugPrint(
+        'DeviceRegistrar: COULD NOT RECORD the unregister debt for '
+        '${_redact(token)} — if the attempt below also fails, this island keeps '
+        'a routable row and nothing will retry it.',
+      );
+    }
+    _settling = _attemptUnregister(token, credential);
   }
 
   /// Release the refresh subscription WITHOUT recording a debt.
@@ -216,24 +236,24 @@ class DeviceRegistrar {
     _refreshes = null;
   }
 
-  Future<void> _settleUnpair(String token, String? credential) async {
-    // DURABLE FIRST, always, and never "on failure". The failures this has to
-    // survive — an offline sign-out, the process being killed mid-flight — are
-    // exactly the ones that never reach a line placed after the attempt.
-    //
-    // The write's RESULT is checked, not discarded (cage-match round 3, Maxwell).
-    // SharedPreferences reports a persistence failure by returning false rather
-    // than throwing, and a debt that did not persist is a backstop that does not
-    // exist — indistinguishable from a working one unless somebody looks. This
-    // repo already treats that flag as load-bearing (`CachedUserStore.write`,
-    // `switchGateway`'s `setString` check).
-    if (!await _pending.remember(_islandBaseUrl, token)) {
-      debugPrint(
-        'DeviceRegistrar: COULD NOT RECORD the unregister debt for $token — if '
-        'the attempt below also fails, this island keeps a routable row and '
-        'nothing will retry it.',
-      );
-    }
+  /// The out-of-band DELETE, plus the repair that makes its TIMING irrelevant.
+  ///
+  /// THE STRAGGLER CANNOT BE ORDERED, so it is repaired instead (cage-match
+  /// round 4 — Carnot and Tesla converged here independently). Three rounds
+  /// tried to order it: await the DELETE (lost the teardown), fence it (abandoned
+  /// a live credential), pin the re-register behind it (correct, but unbounded),
+  /// then bound that (reopened the race). The bound was the clearest lesson —
+  /// `Future.timeout` in Dart does NOT cancel the original, it only stops
+  /// listening, so the DELETE stayed in flight with a loaded gun while we
+  /// re-registered in front of it.
+  ///
+  /// The island matches `(user_id, token)` and offers no fencing token, so a
+  /// DELETE issued for a dead session and a DELETE issued for a live one are
+  /// indistinguishable to it once in flight. We cannot make it land in order and
+  /// we cannot recall it. What we CAN do is notice afterwards: if this pairing is
+  /// still the current one when our DELETE finally completes, the row we just
+  /// removed was live, so put it back. Convergence instead of choreography.
+  Future<void> _attemptUnregister(String token, String? credential) async {
     if (credential == null) return;
     try {
       await _api.unregisterDevice(token, credential: credential);
@@ -241,36 +261,23 @@ class DeviceRegistrar {
     } catch (e) {
       debugPrint('DeviceRegistrar: unregister deferred to next sign-in: $e');
     }
+    // REPAIR, on the failure path too: a DELETE whose response was lost may still
+    // have deleted the row, so "it threw" is not "nothing happened". Re-POSTing a
+    // token the island already holds is an idempotent upsert, which makes the
+    // wrong guess here cheap and the right one load-bearing.
+    if (_registered != token) return;
+    try {
+      await _api.registerDevice(platform: _source.platform, token: token);
+      debugPrint(
+        'DeviceRegistrar: a late unregister landed on the LIVE pairing for '
+        '${_redact(token)} — re-registered it.',
+      );
+    } catch (e) {
+      debugPrint('DeviceRegistrar: could not repair a late unregister: $e');
+    }
   }
 
   Future<void> _register(String token, int generation) async {
-    // ORDER AGAINST THE PREVIOUS SESSION'S UNPAIR, which is the one way the two
-    // halves of this design could still cross. The out-of-band DELETE from a
-    // sign-out can still be in flight when the SAME user signs back in; the
-    // drain and the re-register would both complete, and then that straggler
-    // would land and delete the row we had just created — leaving the handset
-    // silently unreachable, the exact failure class this whole change is for.
-    //
-    // Awaiting it is a happens-before edge rather than a race guard. But the
-    // edge must be BOUNDED (cage-match round 3, Tesla): the gateway's Dio is
-    // built as `BaseOptions(baseUrl: ...)` with no receiveTimeout, so a server
-    // that accepts the connection and never answers leaves this future pending
-    // until the process dies — and a hot re-login after a TCP stall would then
-    // never register, silently, forever. "Bounded by the REST call underneath"
-    // was the claim; the REST call has no bound.
-    //
-    // THE NUMBER IS SAFE TO BE WRONG ABOUT, which is what makes it a bound and
-    // not a tuning knob. Timing out here only means we stop WAITING for the
-    // straggler — the debt record still holds the token, so the worst case is
-    // the same DELETE being paid at the next sign-in as a 204 no-op. Erring
-    // short costs a redundant round trip; erring long costs reach. So: short.
-    await _settling?.timeout(
-      _settleWait,
-      onTimeout: () => debugPrint(
-        'DeviceRegistrar: previous unpair still in flight after $_settleWait — '
-        'registering anyway; the debt record will settle it.',
-      ),
-    );
     if (generation != _generation) return;
     // Re-registering an unchanged token is harmless island-side (the upsert is
     // keyed on the token) but it is a pointless round trip on every rotation

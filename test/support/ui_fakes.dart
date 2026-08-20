@@ -234,6 +234,12 @@ class FakeRestApi implements ChatRestApi {
 
   @override
   Future<void> unregisterDevice(String token, {String? credential}) async {
+    // YIELD FIRST, always. Without this the fake records the call in the SAME
+    // microtask it is invoked in — something no HTTP request can do — which made
+    // it more aggressive than the real API and inverted every ordering assertion
+    // about "did the credential clear get delayed by the network". A fake that
+    // is faster-than-possible is as misleading as one that is more forgiving.
+    await Future<void>.delayed(Duration.zero);
     if (unregisterDeviceGate != null) await unregisterDeviceGate;
     if (unregisterDeviceThrows != null) throw unregisterDeviceThrows!;
     onUnregister?.call(token);

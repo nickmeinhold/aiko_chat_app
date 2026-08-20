@@ -57,15 +57,11 @@ void main() {
   late PendingUnregisterStore pending;
   late DeviceRegistrar registrar;
 
-  DeviceRegistrar build({
-    String island = _island,
-    Duration settleWait = const Duration(seconds: 10),
-  }) => DeviceRegistrar(
+  DeviceRegistrar build({String island = _island}) => DeviceRegistrar(
     source: source,
     api: api,
     pending: pending,
     islandBaseUrl: island,
-    settleWait: settleWait,
   );
 
   setUp(() async {
@@ -176,17 +172,25 @@ void main() {
   });
 
   group('unpairing is a debt, not a round trip', () {
-    test('unpair returns before ANY network work — this is what lets the '
-        'credential clear run on the very next line', () async {
+    test('unpair returns as soon as the DEBT is durable — it never waits for '
+        'the network', () async {
       await registrar.start();
+      final gate = Completer<void>();
+      api.unregisterDeviceGate = gate.future;
 
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
 
-      // Synchronously after the call returns, nothing has been sent. If unpair
-      // ever became something a caller had to await, the window that three
-      // rounds of guards failed to close would be back.
+      // It has RETURNED while the DELETE is still in flight, which is the whole
+      // point: the caller clears credentials on the next line. What it DID wait
+      // for is the debt write — a local write, microseconds — because a debt
+      // that only becomes durable in a later microtask is lost to a process kill
+      // at exactly the moment it is needed.
       expect(api.unregisteredDevices, isEmpty);
+      expect(pending.read(_island), [
+        'tok-1',
+      ], reason: 'and the debt is durable');
 
+      gate.complete();
       await registrar.settled;
       expect(api.unregisteredDevices, ['tok-1']);
     });
@@ -195,7 +199,7 @@ void main() {
         'the DELETE survives a cleared token store', () async {
       await registrar.start();
 
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
       await registrar.settled;
 
       expect(api.unregisterCredentials, ['cred-a']);
@@ -207,7 +211,7 @@ void main() {
       source.refreshes.add('tok-2');
       await pumpEventQueue();
 
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
       await registrar.settled;
 
       // The bug this pins: unregistering 'tok-1' would leave 'tok-2' — the live
@@ -220,7 +224,7 @@ void main() {
       await registrar.start();
       api.unregisterDeviceThrows = Exception('offline');
 
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
       await registrar.settled;
 
       expect(
@@ -235,7 +239,7 @@ void main() {
     test('a successful attempt discharges the debt immediately', () async {
       await registrar.start();
 
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
       await registrar.settled;
 
       expect(pending.read(_island), isEmpty);
@@ -246,7 +250,7 @@ void main() {
       () async {
         await registrar.start();
 
-        registrar.unpair();
+        await registrar.unpair();
         await registrar.settled;
 
         expect(api.unregisteredDevices, isEmpty);
@@ -254,8 +258,28 @@ void main() {
       },
     );
 
+    test('unpair does not RETURN until the debt is durable', () async {
+      // Cage-match round 4, Carnot. An earlier version returned synchronously and
+      // wrote the debt in a later microtask — so a process kill or app suspension
+      // between logout and that write lost the only retry record while the
+      // credential was already gone. "Durability that exists only after a future
+      // runs is not durability at teardown time."
+      await registrar.start();
+
+      final unpairing = registrar.unpair(credential: 'cred-a');
+      expect(
+        pending.read(_island),
+        isEmpty,
+        reason: 'precondition: the write really is in flight, not instant',
+      );
+
+      await unpairing;
+
+      expect(pending.read(_island), ['tok-1']);
+    });
+
     test('unpair without start is a no-op, not a spurious debt', () async {
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
       await registrar.settled;
 
       expect(api.unregisteredDevices, isEmpty);
@@ -265,7 +289,7 @@ void main() {
     test('after sign-out, a late rotation does NOT re-register — the stream is '
         'cancelled, not merely ignored', () async {
       await registrar.start();
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
       await registrar.settled;
 
       source.refreshes.add('tok-late');
@@ -288,7 +312,7 @@ void main() {
       source.permissionGate = Completer<void>();
       final starting = registrar.start();
 
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
       source.permissionGate!.complete();
       await starting;
       await registrar.settled;
@@ -307,7 +331,7 @@ void main() {
       final starting = registrar.start();
       await pumpEventQueue();
 
-      registrar.unpair(credential: 'cred-a');
+      await registrar.unpair(credential: 'cred-a');
       gate.complete();
       await starting;
       await pumpEventQueue();
@@ -348,68 +372,59 @@ void main() {
       expect(pending.read(_island), ['tok-owed']);
     });
 
-    test('a re-register waits for the previous unpair to SETTLE — the one way '
-        'the two halves could still cross', () async {
-      // Found by checking the fixes against each other rather than against the
-      // defect each repairs. Sign out (the DELETE goes out slowly), sign back in
-      // as the same user: the drain and the re-register both complete, and then
-      // the straggling DELETE lands on the row we just created. Silent
-      // unreachability — the exact class this change exists to remove.
+    test('a late unregister that lands on the LIVE pairing is REPAIRED', () async {
+      // The straggler, round 4 (Carnot + Tesla, independently). The DELETE is
+      // issued for a dead session, the same user signs back in and re-registers
+      // the same token, and THEN the DELETE lands — matching (user_id, token)
+      // and removing the live row. Ordering cannot fix it: Future.timeout does
+      // not cancel the request, and the island offers no fencing token. So the
+      // repair IS the contract — notice afterwards and put the row back.
       await registrar.start();
       final gate = Completer<void>();
       api.unregisterDeviceGate = gate.future;
 
-      registrar.unpair(credential: 'cred-a'); // DELETE now hanging
+      await registrar.unpair(credential: 'cred-a'); // DELETE now in flight
       await pumpEventQueue();
 
-      final restarting = registrar.start(); // the same user signs back in
+      await registrar.start(); // the same user returns, re-registers tok-1
+      expect(registrar.registeredToken, 'tok-1', reason: 'precondition');
+      expect(
+        api.registeredDevices,
+        hasLength(2),
+        reason: 'and it is not held hostage by the in-flight straggler',
+      );
+
+      gate.complete(); // the straggling DELETE finally lands on the LIVE row
+      await registrar.settled;
       await pumpEventQueue();
 
       expect(
         api.registeredDevices,
-        hasLength(1),
+        hasLength(3),
         reason:
-            'the re-register must NOT have happened yet — it is ordered after '
-            'the outstanding unpair, so the straggler cannot overtake it',
+            'the pairing must be restored — otherwise the handset is silently '
+            'unreachable, and a same-token refresh is a no-op so nothing ever '
+            'notices',
       );
-
-      gate.complete();
-      await restarting;
-      await pumpEventQueue();
-
-      expect(api.registeredDevices, hasLength(2));
-      expect(
-        api.unregisteredDevices,
-        ['tok-1'],
-        reason: 'and the DELETE landed BEFORE that second register, not after',
-      );
-      expect(registrar.registeredToken, 'tok-1');
+      expect(api.registeredDevices.last.token, 'tok-1');
     });
 
-    test(
-      'a re-register is not held hostage by an unpair that never returns',
-      () async {
-        // Cage-match round 3, Tesla. The happens-before edge was real but
-        // UNBOUNDED: the gateway Dio sets no receiveTimeout, so a server that
-        // accepts and never answers left the future pending until the process
-        // died — and a hot re-login after a TCP stall then never registered,
-        // silently, forever. The bound is safe to be wrong about because the debt
-        // record still holds the token.
-        registrar = build(settleWait: const Duration(milliseconds: 20));
-        await registrar.start();
-        api.unregisterDeviceGate = Completer<void>().future; // never completes
-        registrar.unpair(credential: 'cred-a');
-        await pumpEventQueue();
+    test('no repair fires when the pairing has genuinely ended', () async {
+      await registrar.start();
+      final gate = Completer<void>();
+      api.unregisterDeviceGate = gate.future;
 
-        await registrar.start();
+      await registrar.unpair(credential: 'cred-a');
+      await pumpEventQueue();
+      gate.complete();
+      await registrar.settled;
 
-        expect(
-          api.registeredDevices,
-          hasLength(2),
-          reason: 'the second session pairs despite the wedged straggler',
-        );
-      },
-    );
+      expect(
+        api.registeredDevices,
+        hasLength(1),
+        reason: 'nothing holds this token now, so there is nothing to restore',
+      );
+    });
 
     test('drain with nothing owed sends nothing', () async {
       await registrar.drainPending();
