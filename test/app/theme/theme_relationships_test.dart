@@ -211,17 +211,43 @@ void main() {
       });
 
       test('every panel is distinguishable from the ground it sits on', () {
+        // `primaryContainer` (panelMine — my own bubbles, and the selected row)
+        // was NOT in this list, and it is the one surface that failed. The test
+        // said "every panel" and checked three roles that happened to exclude
+        // the tinted one; the floor was also 1.03, which the worst palette met
+        // at 1.028 — set at the failing value, so it could only ever ratify.
         for (final panel in [
           s.surfaceContainerLow,
           s.surfaceContainer,
           s.surfaceContainerHigh,
+          s.primaryContainer,
         ]) {
           expect(
             _contrast(panel, s.surface),
-            greaterThan(1.03),
+            greaterThan(1.05),
             reason: 'a panel that matches the ground is not a panel',
           );
         }
+      });
+
+      test('MY OWN surface is never less separated from the ground than a '
+          'plain panel is', () {
+        // Holds for free in every DARK palette (my bubble out-separates even
+        // the menus) and broke in all three LIGHT ones, because a lift needs
+        // headroom above the ground and a light ground has almost none. That
+        // is a reason for my surface to press DOWN into the page instead — not
+        // a reason for it to stop being distinguishable.
+        final mine = _contrast(s.primaryContainer, s.surface);
+        final plain = _contrast(s.surfaceContainer, s.surface);
+        expect(
+          mine,
+          greaterThanOrEqualTo(plain),
+          reason:
+              'my own messages are separated by ${mine.toStringAsFixed(3)}'
+              ':1 and a plain panel by ${plain.toStringAsFixed(3)}:1 — mine '
+              'is the less distinguished of the two, so what marks a message '
+              'as mine is hue alone',
+        );
       });
     });
 

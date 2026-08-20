@@ -14,6 +14,7 @@ import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/pixels.dart';
 import '../../support/test_helpers.dart';
 
 /// Composite [fg] (which may be translucent) over an opaque [bg].
@@ -202,29 +203,59 @@ void main() {
   testWidgets('the waterline ignites on focus and goes out on blur', (
     tester,
   ) async {
-    await pumpComposer(tester);
-    double factor() => tester
-        .widget<AnimatedFractionallySizedBox>(
-          find.byType(AnimatedFractionallySizedBox),
-        )
-        .widthFactor!;
+    final scheme = await pumpComposer(tester);
 
-    // The lit rule grows over the base hairline from the left. Written as a
-    // test because the on-device read was ambiguous: in LIGHT mode
-    // `colorScheme.primary` is the undesigned deepPurple, which at 1.5px reads
-    // as grey, so a screenshot could not tell "not lit" from "lit, but muted".
-    // The widthFactor can.
-    expect(factor(), 0.0);
+    // MEASURED AS PIXELS, and the history is the reason. This test used to read
+    // `widthFactor` off the AnimatedFractionallySizedBox, and said so in a
+    // comment: the on-device read was ambiguous because in light mode
+    // `colorScheme.primary` was the undesigned deepPurple, which at 1.5px reads
+    // as grey, so a screenshot could not tell "not lit" from "lit but muted".
+    //
+    // That reasoning was sound when it was written and it expired without being
+    // revisited. The lit rule then shipped at ZERO HEIGHT — invisible in both
+    // themes, through three PRs and a ten-round cage-match — while this test
+    // passed, because a widthFactor animating 0→1 is perfectly true of a box
+    // with no height. The light theme is designed now (`maritimeNoon`), which
+    // removes the blocker the hedge was built around, so the assertion moves to
+    // the layer the reader actually meets.
+    // ANCHORED ON THE BASE RULE, not on the animating box. The
+    // AnimatedFractionallySizedBox measures Rect.zero at rest — no width (as
+    // designed) and also no HEIGHT, because with only a widthFactor it passes
+    // its child a loose vertical constraint and a ColoredBox has no intrinsic
+    // size. Its rect therefore cannot say where the waterline IS. The base rule
+    // underneath is a full-width ColoredBox and can.
+    final base = find.byWidgetPredicate(
+      (w) => w is ColoredBox && w.color == scheme.outlineVariant,
+    );
+    final rule = tester.getRect(base.first);
+    final probe = Offset(rule.left + 4, rule.center.dy);
+
+    expect(
+      (await capturePainted(tester)).at(probe),
+      scheme.outlineVariant,
+      reason: 'at rest the base rule is the only edge',
+    );
 
     await tester.tap(find.byType(TextField).first);
     await tester.pumpAndSettle();
-    expect(factor(), 1.0);
+    expect(
+      (await capturePainted(tester)).at(probe),
+      scheme.primary,
+      reason:
+          'the lit rule is not on screen — it may be animating its width '
+          'correctly and painting nothing, which is exactly the bug that a '
+          'widthFactor assertion here could never see',
+    );
 
     // And it must go out — a rule that stays lit after blur is just a border,
     // which is the thing this design removed.
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pumpAndSettle();
-    expect(factor(), 0.0);
+    expect(
+      (await capturePainted(tester)).at(probe),
+      scheme.outlineVariant,
+      reason: 'the waterline stayed lit after blur',
+    );
   });
 
   testWidgets('the lit rule occupies actual PIXELS, not just a widthFactor', (
