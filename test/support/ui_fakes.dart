@@ -216,10 +216,23 @@ class FakeRestApi implements ChatRestApi {
     registeredDevices.add((platform: platform, token: token));
   }
 
+  /// Fails the next [unregisterDevice] — for proving a failed attempt KEEPS the
+  /// durable debt rather than silently discharging it.
+  Object? unregisterDeviceThrows;
+
+  /// The credential each unregister carried, positionally paired with
+  /// [unregisteredDevices]. `null` means "resolved by the auth interceptor" —
+  /// the drain path — and a non-null value means it was carried BY VALUE from a
+  /// session being torn down, which is the property that lets the credential
+  /// clear run first.
+  final List<String?> unregisterCredentials = [];
+
   @override
-  Future<void> unregisterDevice(String token) async {
+  Future<void> unregisterDevice(String token, {String? credential}) async {
     if (unregisterDeviceGate != null) await unregisterDeviceGate;
+    if (unregisterDeviceThrows != null) throw unregisterDeviceThrows!;
     unregisteredDevices.add(token);
+    unregisterCredentials.add(credential);
   }
 
   /// Roster returned by [listMembers], keyed per channel id.

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,7 @@ import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
 import '../data/fcm_token_source.dart';
+import '../data/pending_unregister_store.dart';
 import '../domain/push_token_source.dart';
 import 'device_registrar.dart';
 
@@ -24,6 +27,12 @@ final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
   return null;
 });
 
+/// The device-token debts this app still owes, keyed by island. Durable and
+/// deliberately NOT session-scoped — it is written at the moment a session ends.
+final pendingUnregisterStoreProvider = Provider<PendingUnregisterStore>(
+  (ref) => PendingUnregisterStore(ref.watch(sharedPreferencesProvider)),
+);
+
 /// The registrar, or null where there is no token source to drive it.
 ///
 /// IT IS REBUILT BY A GATEWAY SWITCH, which is not obvious from here: it watches
@@ -33,17 +42,22 @@ final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
 /// closed over the OLD island's REST client — so a token rotation after the
 /// switch would register the new token with the island the user just left.
 /// Silent, permanent, and the exact residual the unpair exists to prevent.
+///
+/// The island's base URL is read from the same `configProvider` that drives the
+/// REST client, so a registrar and the debts it records can never disagree about
+/// which island they mean.
 final deviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
   final source = ref.watch(pushTokenSourceProvider);
   if (source == null) return null;
   final registrar = DeviceRegistrar(
     source: source,
     api: ref.watch(restApiProvider),
+    pending: ref.watch(pendingUnregisterStoreProvider),
+    islandBaseUrl: ref.watch(configProvider).httpBaseUrl,
   );
-  // Cancels the refresh subscription. The unregister inside stop() is a no-op
-  // here whenever the caller already unpaired explicitly (`_registered` is
-  // null), so this does not double-DELETE on a normal switch.
-  ref.onDispose(registrar.stop);
+  // Cancels the refresh subscription and NOTHING else. A rebuild is not a
+  // sign-out, so it must not record a debt — see DeviceRegistrar.dispose.
+  ref.onDispose(registrar.dispose);
   return registrar;
 });
 
@@ -59,12 +73,12 @@ final deviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
 ///   all of them, and catches the next one somebody adds without knowing this
 ///   file exists.
 ///
-///   STOP is the exact opposite. It is ORDERING-CRITICAL — `DELETE /v1/devices`
-///   is authenticated, so it must complete before the tokens are cleared — and
-///   a listener cannot express that, because it fires after the state has
-///   already changed and its async work races the teardown that follows. So
-///   stop is an awaited call at the top of `AuthController._teardownResources`,
-///   the single door every session-ending path already goes through.
+///   STOP is the exact opposite. It is ORDERING-CRITICAL relative to the
+///   credential clear, and a listener cannot express that, because it fires
+///   after the state has already changed and its async work races the teardown
+///   that follows. So unpair is called directly from the session-ending paths in
+///   `AuthController` — synchronously, and it is a debt record rather than a
+///   round trip, so it waits for nothing (see [DeviceRegistrar]).
 ///
 /// Watched from `main()` so it is alive before the session restore completes;
 /// a listener created later would miss the transition it exists to observe.
@@ -93,7 +107,15 @@ final pushPairingProvider = Provider<void>((ref) {
       // own failures for the same reason — a device that cannot register is a
       // device that will not be woken, which must not also be a device that
       // cannot sign in.
-      ref.read(deviceRegistrarProvider)?.start();
+      final registrar = ref.read(deviceRegistrarProvider);
+      if (registrar != null) {
+        // DRAIN BEFORE START, and the sequencing is the entire safety argument
+        // for paying an old session's debt under a new session's credential —
+        // see DeviceRegistrar's class doc. Reversed, the debt's token has just
+        // been re-registered to the current user, so the DELETE would match and
+        // destroy the live pairing instead of the dead one.
+        unawaited(registrar.drainPending().then((_) => registrar.start()));
+      }
     }
   });
 });

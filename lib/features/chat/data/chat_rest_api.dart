@@ -385,10 +385,30 @@ abstract interface class ChatRestApi {
   });
 
   /// Unregister [token] (`DELETE /v1/devices`), so this island stops routing
-  /// pushes to a handset the user has signed out of. Idempotent by island
-  /// contract — 204 whether or not the token was present, deliberately, since a
-  /// 404 would leak whether a given token is registered.
-  Future<void> unregisterDevice(String token);
+  /// pushes to a handset the user has signed out of.
+  ///
+  /// SCOPED TO THE CALLER ISLAND-SIDE — verified in `devices_service.py`, not
+  /// assumed. The delete matches on `(user_id, token)`, not the token alone; an
+  /// island cage-match narrowed it deliberately, so that an authed caller who
+  /// learns someone else's device token cannot push-DoS them. Two consequences
+  /// this app must build around, because neither is visible from the response:
+  ///
+  ///   - unregistering under a DIFFERENT user's credential silently matches
+  ///     nothing. The island answers 204 whether or not a row was present (also
+  ///     deliberate — a 404 would leak whether a token is registered), so a
+  ///     no-op and a success are INDISTINGUISHABLE to us. Never read a completed
+  ///     DELETE as proof the row is gone; only a same-user DELETE means that.
+  ///   - the residual it leaves is closed from the other side anyway: `register`
+  ///     REASSIGNS on conflict, so the next user to sign in on this handset takes
+  ///     ownership of the row rather than inheriting a stale one.
+  ///
+  /// [credential] carries the bearer token BY VALUE instead of letting the auth
+  /// interceptor look one up. That is what makes it callable AFTER the session's
+  /// tokens have been cleared, which is what lets the clear be unconditional and
+  /// immediate — see [PendingUnregisterStore] for the full argument. It also
+  /// skips the 401-refresh retry, correctly: a credential handed over explicitly
+  /// at the end of its life must not be resurrected.
+  Future<void> unregisterDevice(String token, {String? credential});
 
   Future<List<Channel>> listChannels();
 

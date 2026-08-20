@@ -64,9 +64,9 @@ class _RecordingRestApi extends FakeRestApi {
   final List<String> log;
 
   @override
-  Future<void> unregisterDevice(String token) async {
+  Future<void> unregisterDevice(String token, {String? credential}) async {
     log.add('unregisterDevice($token)');
-    return super.unregisterDevice(token);
+    return super.unregisterDevice(token, credential: credential);
   }
 }
 
@@ -78,6 +78,11 @@ void main() {
   setUpAll(() async {
     await initializeTestEnvironment();
   });
+
+  // `testPrefs` is one instance shared by the whole suite, so a debt written by
+  // one test would be inherited by the next and drained at its sign-in — a
+  // cross-test leak that reads as a mysterious extra unregister.
+  setUp(() => testPrefs.remove('aiko_pending_device_unregisters'));
 
   /// A container whose registrar is driven by [source], regardless of which
   /// host platform the suite happens to be running on.
@@ -202,8 +207,9 @@ void main() {
     });
   });
 
-  group('signing out unpairs it, in the only order that works', () {
-    test('unregisterDevice completes BEFORE clearTokens', () async {
+  group('signing out unpairs it, and the credential dies FIRST', () {
+    test('clearTokens runs BEFORE the unregister — the inversion is the '
+        'deliverable', () async {
       final log = <String>[];
       final rest = _RecordingRestApi(log);
       final source = _FakeSource(token: 'tok-1');
@@ -224,12 +230,21 @@ void main() {
 
       expect(
         log,
-        ['unregisterDevice(tok-1)', 'clearTokens'],
+        ['clearTokens', 'unregisterDevice(tok-1)'],
         reason:
-            'DELETE /v1/devices is AUTHENTICATED. Run after the token '
-            'clear it 401s, the island row survives, and this handset keeps '
-            'receiving the previous account pushes — silently, which on a '
-            'shared phone is the privacy-relevant residual',
+            'the DELETE is authenticated, which is why it USED to sit ahead of '
+            'the clear — but nothing slow may sit there, and every guard for '
+            'that just moved the contradiction. The credential now dies '
+            'unconditionally and first, and the unregister carries a copy of it '
+            'by value afterwards. Both still happen; neither waits for the '
+            'other',
+      );
+      expect(
+        rest.unregisterCredentials,
+        [isNotNull],
+        reason:
+            'and it must be the credential that was just destroyed, carried by '
+            'value — resolving one from the (now empty) store would 401',
       );
     });
 
@@ -285,12 +300,21 @@ void main() {
 
         expect(
           log,
-          ['unregisterDevice(tok-1)', 'clearTokens'],
+          ['clearTokens', 'unregisterDevice(tok-1)'],
           reason:
               'switchGateway tears down BY HAND rather than through '
               '_teardownResources, so it needs its own unpair. Without it the '
-              'island you just left keeps a live routable token forever — the '
-              'credential that could delete it is destroyed on the next line',
+              'island you just left keeps a live routable token forever',
+        );
+        expect(
+          testPrefs.getString('aiko_pending_device_unregisters'),
+          isNot(contains('other.example')),
+          reason:
+              'any debt recorded here belongs to the island being LEFT. The '
+              'unpair must therefore precede the invalidate(configProvider) in '
+              "switchGateway's finally — after it, both the REST client and the "
+              'registrar have been rebuilt against the NEW island, so the debt '
+              'would be keyed there and its DELETE addressed to the wrong one',
         );
       });
 
@@ -321,9 +345,13 @@ void main() {
               'it leaves behind can never be cleared afterwards',
         );
         expect(
-          log.indexOf('unregisterDevice(tok-1)') < log.indexOf('clearTokens'),
+          log.indexOf('clearTokens') < log.indexOf('unregisterDevice(tok-1)'),
           isTrue,
-          reason: 'still before the credential dies',
+          reason:
+              'the credential still dies first — and it matters more here than '
+              'anywhere: /suspended is a SOFT gate, so "try again" can reach '
+              '/login and sign in at any instant. A path that held a window '
+              'open would be holding it open against a live login screen',
         );
       });
 
@@ -353,93 +381,132 @@ void main() {
     },
   );
 
-  group('the cage-match round-1 findings', () {
+  group('there is no window left to guard', () {
+    test('an unregister that NEVER completes does not delay the teardown by '
+        'one microsecond', () async {
+      // The load-bearing one. Under every previous design the DELETE sat inside
+      // the teardown, so this container would hang here forever — and that hang
+      // is precisely the window a re-login could land in. If a future change
+      // reintroduces an awaited round trip on this path, this test stops
+      // completing rather than starting to fail, which is the honest signal.
+      final rest = FakeRestApi();
+      rest.unregisterDeviceGate = Completer<void>().future; // never completes
+      final source = _FakeSource(token: 'tok-1');
+      addTearDown(source.refreshes.close);
+      final transport = FakeChatTransport();
+      final store = InMemoryTokenStore();
+      final container = makeContainer(
+        rest: rest,
+        transport: transport,
+        store: store,
+        pushSource: source,
+      );
+      addTearDown(container.dispose);
+      final sub = container.listen(pushPairingProvider, (_, _) {});
+      addTearDown(sub.close);
+      await container.read(authControllerProvider.future);
+
+      final auth = container.read(authControllerProvider.notifier);
+      await auth.signInWithPasskey();
+      await pumpEventQueue();
+
+      await auth.logout().timeout(const Duration(seconds: 2));
+
+      expect(store.current, isNull, reason: 'the credential is gone');
+      expect(
+        transport.disconnectCalls,
+        greaterThan(0),
+        reason:
+            'and so is the socket — the round-2 finding was that a guard on '
+            'this path could abort the whole teardown, leaving the user on '
+            '/login holding a live credential the next cold start restored',
+      );
+    });
+
+    test('a re-login during the teardown is NOT stomped (Carnot R3-B)', () async {
+      final rest = FakeRestApi();
+      rest.unregisterDeviceGate = Completer<void>().future; // never completes
+      final source = _FakeSource(token: 'tok-1');
+      addTearDown(source.refreshes.close);
+      final container = await harness(rest: rest, source: source);
+
+      final auth = container.read(authControllerProvider.notifier);
+      await auth.signInWithPasskey();
+      await pumpEventQueue();
+
+      await auth.logout();
+      // The user signs in again. Under the old design this could interleave with
+      // an in-flight teardown; there is now nothing left in flight to interleave
+      // WITH, so the property holds by construction rather than by comparison.
+      await container
+          .read(tokenProviderProvider)
+          .setTokens(const AuthTokens(accessToken: 'new', refreshToken: 'r2'));
+      await pumpEventQueue();
+
+      expect(
+        await container.read(tokenProviderProvider).currentAccessToken(),
+        'new',
+        reason:
+            "the reborn session's credential must survive — stomping it leaves "
+            'the app logged-in-but-tokenless and every later call 401s',
+      );
+    });
+
     test(
-      'a registration in flight when the session ends does NOT survive it',
+      'an offline sign-out leaves a DEBT, not a silently-lost unregister',
       () async {
-        // Carnot + Tesla + Maxwell converged here. start() is deliberately
-        // unawaited, so a sign-out can land between "POST issued" and "POST
-        // returned": stop() sees _registered == null, unregisters nothing, and
-        // the registration then completes on a dead session — the island keeps a
-        // row written AFTER the unregister.
         final rest = FakeRestApi();
-        final gate = Completer<void>();
-        rest.registerDeviceGate = gate.future;
+        rest.unregisterDeviceThrows = Exception('offline');
         final source = _FakeSource(token: 'tok-1');
+        final container = await harness(rest: rest, source: source);
         addTearDown(source.refreshes.close);
-        final registrar = DeviceRegistrar(source: source, api: rest);
-
-        final starting = registrar.start(); // will block inside registerDevice
-        await pumpEventQueue();
-        await registrar.stop(); // session ends mid-flight
-        gate.complete(); // the POST now lands
-        await starting;
-        await pumpEventQueue();
-
-        expect(rest.registeredDevices.map((d) => d.token), [
-          'tok-1',
-        ], reason: 'the POST did land — that is the premise, not the bug');
-        expect(
-          rest.unregisteredDevices,
-          ['tok-1'],
-          reason:
-              'the late registration must be undone; without the generation '
-              'guard the island keeps a routable row for an ended session',
-        );
-        expect(
-          registrar.registeredToken,
-          isNull,
-          reason: 'and it must not be recorded as live',
-        );
-      },
-    );
-
-    test(
-      'a re-login during the teardown await is NOT stomped (Carnot R3-B)',
-      () async {
-        // The unpair is a network round-trip placed ahead of clearTokens, and
-        // logout publishes logged-out BEFORE awaiting it — so the router is on
-        // /login and a re-sign-in can land inside the window. Without the fence
-        // the trailing clearTokens() erases the NEW session's credential and the
-        // app is logged-in-but-tokenless.
-        final rest = FakeRestApi();
-        final gate = Completer<void>();
-        rest.unregisterDeviceGate = gate.future;
-        final source = _FakeSource(token: 'tok-1');
-        addTearDown(source.refreshes.close);
-        final store = InMemoryTokenStore();
-        final container = await harness(
-          rest: rest,
-          source: source,
-          store: store,
-        );
 
         final auth = container.read(authControllerProvider.notifier);
         await auth.signInWithPasskey();
         await pumpEventQueue();
-
-        final loggingOut = auth.logout(); // blocks inside the unpair
-        await pumpEventQueue();
-
-        // The user signs in again while the teardown is still awaiting.
-        await container
-            .read(tokenProviderProvider)
-            .setTokens(
-              const AuthTokens(accessToken: 'new', refreshToken: 'r2'),
-            );
-        gate.complete();
-        await loggingOut;
+        await auth.logout();
         await pumpEventQueue();
 
         expect(
-          await container.read(tokenProviderProvider).currentAccessToken(),
-          'new',
+          testPrefs.getString('aiko_pending_device_unregisters'),
+          contains('tok-1'),
           reason:
-              "the reborn session's credential must survive the teardown "
-              'that was already in flight — stomping it leaves the app '
-              'logged-in-but-tokenless and every later call 401s',
+              'the residual the previous increment named as an accepted tradeoff. '
+              'A sign-out with no network used to lose the unregister forever; it '
+              'is now an obligation that outlives the session',
         );
       },
     );
+
+    test('the next sign-in DRAINS the debt before registering — the ordering '
+        'that makes a cross-user drain safe', () async {
+      final rest = FakeRestApi();
+      final source = _FakeSource(token: 'tok-1');
+      final container = await harness(rest: rest, source: source);
+      addTearDown(source.refreshes.close);
+      final island = container.read(configProvider).httpBaseUrl;
+      await container
+          .read(pendingUnregisterStoreProvider)
+          .remember(island, 'tok-owed');
+
+      await container.read(authControllerProvider.notifier).signInWithPasskey();
+      await pumpEventQueue();
+
+      expect(rest.unregisteredDevices, [
+        'tok-owed',
+      ], reason: 'a debt outstanding at sign-in is paid off');
+      expect(
+        rest.registeredDevices,
+        isNotEmpty,
+        reason: 'and the new session still pairs',
+      );
+      // Reversed, the debt's token would have just been re-registered to the
+      // CURRENT user — so the island's (user_id, token)-scoped delete would
+      // match, and the drain would destroy the live pairing it just created.
+      expect(
+        container.read(pendingUnregisterStoreProvider).read(island),
+        isNull,
+      );
+    });
   });
 }

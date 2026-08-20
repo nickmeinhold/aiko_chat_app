@@ -439,12 +439,33 @@ class GatewayRestApi implements ChatRestApi {
   );
 
   @override
-  Future<void> unregisterDevice(String token) =>
-      // DELETE with a body: the island reads the token from the payload rather
-      // than the path, so a device token never lands in a URL (and therefore
-      // never in an access log or a proxy trace). Dio supports this; some HTTP
-      // stacks quietly drop a DELETE body, so this is pinned by a test.
-      _authedCall(() => _authed.delete('/v1/devices', data: {'token': token}));
+  // DELETE with a body: the island reads the token from the payload rather than
+  // the path, so a device token never lands in a URL (and therefore never in an
+  // access log or a proxy trace). Dio supports this; some HTTP stacks quietly
+  // drop a DELETE body, so this is pinned by a test.
+  Future<void> unregisterDevice(String token, {String? credential}) {
+    final body = {'token': token};
+    if (credential == null) {
+      return _authedCall(() => _authed.delete('/v1/devices', data: body));
+    }
+    // THE BARE CLIENT, not the authed one, and the difference is the point. The
+    // authed client's interceptor resolves a credential by READING THE TOKEN
+    // STORE at request time — which is the shared mutable state the session
+    // teardown is concurrently emptying, and therefore the coupling that made
+    // every previous ordering a race. Handing the header over as a value removes
+    // the store from the path entirely: this call is correct whether the clear
+    // has happened yet or not, so the clear no longer has to wait for it.
+    //
+    // It also inherits none of the interceptor's 401 handling, which is right in
+    // both directions: a dying credential must not trigger a refresh, and a
+    // rejection here must not be mapped to terminal `Unauthorized` and log
+    // anybody out — there is no session left to end.
+    return _bare.delete(
+      '/v1/devices',
+      data: body,
+      options: Options(headers: {'Authorization': 'Bearer $credential'}),
+    );
+  }
 
   // Wrapped in _mapNetwork so an unreachable gateway surfaces as the domain
   // NetworkUnavailable — channelsProvider falls back to the cached list on that,
