@@ -7,5 +7,30 @@
 		<string>webcredentials:chat.imagineering.cc</string>
 		<string>webcredentials:chat.enspyr.co</string>
 	</array>
+	<!-- Push Notifications. Without this entitlement iOS never calls
+	     didRegisterForRemoteNotificationsWithDeviceToken, so the app takes no
+	     token, registers nothing, and NOTHING REPORTS A PROBLEM — the failure is
+	     a call that simply never rings. The matching capability is already
+	     enabled on App ID cc.imagineering.aikoChatApp (verified via the ASC API:
+	     N5UDQ7GKQW_PUSH_NOTIFICATIONS is present on the bundleId record).
+
+	     THE VALUE IS THE ENVIRONMENT, AND IT WILL COST A NIGHT IF IT BITES.
+	     `development` means tokens minted by this build are valid ONLY against
+	     api.sandbox.push.apple.com; a TestFlight/App Store build's tokens are
+	     valid ONLY against api.push.apple.com. The token strings are
+	     indistinguishable, and the wrong host answers 400 BadDeviceToken for
+	     every device with no other clue. The island exposes this as
+	     APNS_USE_SANDBOX and deliberately does NOT reap on BadDeviceToken for
+	     exactly this reason — an eager reaper would delete every registered
+	     device on the first ring after a wrong flip.
+
+	     So: a dev build run to a handset needs APNS_USE_SANDBOX=true on whichever
+	     island it registers with. Xcode rewrites this key to `production` when
+	     exporting with a distribution profile (ios/ExportOptions.plist,
+	     method=app-store-connect, signingStyle=automatic), which is why one file
+	     serves all three configurations here — unlike macOS, which has separate
+	     DebugProfile/Release entitlements and states each explicitly. -->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>
