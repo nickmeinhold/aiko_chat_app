@@ -151,6 +151,18 @@ class RingController extends Notifier<CallInvite?> {
     // a block or mute applied one second before the call must be honoured.
     final me = ref.read(currentUserProvider)?.userId;
     if (me == null) return; // logged out mid-flight — nobody to ring.
+    // THE STOP IS CONSIDERED FIRST, and on the same stream as the start, because
+    // both are ordinary signed messages arriving through one door. Placing it
+    // ahead of `admitRing` costs nothing (the two sentinels are disjoint) and
+    // keeps the ordering obvious: an end can only ever be about a call that is
+    // already ringing.
+    if (admitCallEnd(m, live: _live, meUserId: me)) {
+      // `stopRinging` SETTLES the invitation, so the caller's at-least-once
+      // replay of the invite cannot resurrect the ring after the hangup — the
+      // same memory that makes Ignore stick.
+      stopRinging();
+      return;
+    }
     final now = DateTime.now().toUtc();
     final invite = admitRing(
       m,

@@ -7,7 +7,10 @@ import 'package:livekit_client/livekit_client.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/theme/maritime_theme.dart';
+import '../../chat/application/chat_providers.dart';
+import '../../chat/data/chat_repository.dart';
 import '../data/call_session.dart';
+import '../domain/call_invite.dart' show kCallEndBody;
 import '../domain/call_connection_state.dart';
 
 /// Single door for opening a call (#18). Rapid double-taps — or a tap while a
@@ -20,8 +23,11 @@ import '../domain/call_connection_state.dart';
 /// double-fired open resolves to the same room, and this dedups the screen.)
 bool _callLaunchInFlight = false;
 
-Future<void> pushCall(BuildContext context, String channelId) =>
-    pushCallOn(GoRouter.of(context), channelId);
+Future<void> pushCall(
+  BuildContext context,
+  String channelId, {
+  String? inviteId,
+}) => pushCallOn(GoRouter.of(context), channelId, inviteId: inviteId);
 
 /// Router-first form of [pushCall], for callers that have a [GoRouter] but no
 /// in-scope context.
@@ -34,11 +40,15 @@ Future<void> pushCall(BuildContext context, String channelId) =>
 /// Maxwell; pinned by `ring_overlay_test.dart`). The banner reaches the router
 /// through `routerProvider` instead. Both entry points share the ONE latch, so
 /// "is a call being launched" stays a single app-wide fact.
-Future<void> pushCallOn(GoRouter router, String channelId) async {
+Future<void> pushCallOn(
+  GoRouter router,
+  String channelId, {
+  String? inviteId,
+}) async {
   if (_callLaunchInFlight) return;
   _callLaunchInFlight = true;
   try {
-    await router.push('/call/$channelId');
+    await router.push('/call/$channelId', extra: inviteId);
   } finally {
     _callLaunchInFlight = false;
   }
@@ -54,9 +64,18 @@ void resetCallLaunchGuard() => _callLaunchInFlight = false;
 /// its lifetime; the room is the channel id. Renders the first remote
 /// participant full-screen with a mirrored local PiP overlay.
 class CallScreen extends ConsumerStatefulWidget {
-  const CallScreen({super.key, required this.channelId});
+  const CallScreen({super.key, required this.channelId, this.inviteId});
 
   final String channelId;
+
+  /// The signed `clientMsgId` of the invitation that opened this call, when we
+  /// are the party that sent it. Leaving announces the end of THAT call.
+  ///
+  /// Null for every other way in — answering someone else's ring, a deep link, a
+  /// restored route. Only the caller ends the call it started: an end from
+  /// anyone else names no live invitation and would be refused anyway
+  /// ([admitCallEnd]), so sending one would be a signed row saying nothing.
+  final String? inviteId;
 
   @override
   ConsumerState<CallScreen> createState() => _CallScreenState();
@@ -65,6 +84,12 @@ class CallScreen extends ConsumerStatefulWidget {
 class _CallScreenState extends ConsumerState<CallScreen> {
   late final CallSession _session;
 
+  /// Captured in [initState] because [dispose] must not touch `ref` — the
+  /// element is being torn down, and reading a provider there is exactly the
+  /// post-dispose ref use this repo sweeps for. The FUTURE is captured, not the
+  /// repository, so nothing is awaited on the build path.
+  late final Future<ChatRepository> _repo;
+
   @override
   void initState() {
     super.initState();
@@ -72,6 +97,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       api: ref.read(restApiProvider),
       channelId: widget.channelId,
     );
+    _repo = ref.read(chatRepositoryProvider.future);
     unawaited(_session.connect());
   }
 
@@ -81,7 +107,38 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // notifiers. The child ValueListenableBuilders unsubscribe first (children
     // unmount before this parent), so disposing the notifiers here is safe.
     unawaited(_session.leave());
+    // ANNOUNCE THE HANGUP, from the one place that reliably knows it happened.
+    // Every exit lands here — the leave button, a system back, a pop from
+    // anywhere — which is the same reason `leave()` lives here rather than on
+    // the button. A ring already self-terminates after kCallRingDuration, so
+    // this does not stop an eternal ring; it stops the 30 seconds during which
+    // the other phone rings for a call that is already over and answering it
+    // would join an empty room.
+    final inviteId = widget.inviteId;
+    if (inviteId != null) {
+      unawaited(_announceEnd(_repo, widget.channelId, inviteId));
+    }
     super.dispose();
+  }
+
+  /// STATIC, and that is the point: it closes over nothing that is being
+  /// disposed. Best-effort by design — a failed end message costs the peer a
+  /// ring that stops on its own 30 seconds later, which must never be worth
+  /// throwing out of a widget teardown.
+  static Future<void> _announceEnd(
+    Future<ChatRepository> repo,
+    String channelId,
+    String inviteId,
+  ) async {
+    try {
+      await (await repo).sendMessage(
+        channelId,
+        kCallEndBody,
+        replyToId: inviteId,
+      );
+    } catch (e) {
+      debugPrint('CallScreen: could not announce the hangup: $e');
+    }
   }
 
   /// The first available (unmuted) video track on [p], or null.

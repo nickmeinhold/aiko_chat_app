@@ -67,12 +67,89 @@ const Duration kCallInviteFreshness = Duration(seconds: 10);
 /// happened.
 const Duration kCallRingDuration = Duration(seconds: 30);
 
+/// The pinned END body — the caller saying "I hung up". **Signed and durable —
+/// never edit this string.**
+///
+/// A SECOND SENTINEL, NOT A NEW KIND, for exactly the reasons [kCallInviteBody]
+/// is one: `signingBytes()` covers the body and NOT `kind`, so a stop carried as
+/// a kind would be the one field an island could flip. It carries no parameters
+/// either — the call it ends is named by the signed `replyTo`, which is inside
+/// the same signature (see [admitCallEnd]).
+///
+/// WHY THIS IS A SMALLER DOOR THAN THE INVITE. The island does not need to learn
+/// it: `push_service` wakes a handset only on the INVITE body, so an end message
+/// is an ordinary message to the gateway and this stays an app-side change. And
+/// the privilege runs the safe way — forging a *stop* suppresses a ring, which a
+/// hostile island could achieve anyway by dropping the invite; forging a *start*
+/// lights a camera.
+///
+/// Worded to mirror the invite so a client predating the feature degrades to a
+/// readable line rather than breaking — the human words trailing the machine
+/// anchor. This client renders it as an event and never shows the anchor (see
+/// `chat_screen`), which is the half that must ship WITH the wire half: without
+/// it, hanging up would put `aiko:call/1 · 📞 ended the call` back on screen as
+/// a raw bubble — the exact thing the invite's render arm exists to prevent.
+const String kCallEndBody = 'aiko:call/1 · 📞 ended the call';
+
 /// True when [body] is the call-invitation sentinel.
 ///
 /// Exact match, deliberately: a `startsWith`/`contains` test would let anyone
 /// ring you by typing the sentinel with a word after it, and would make every
 /// quotation of this doc a ringing message.
 bool isCallInviteBody(String body) => body == kCallInviteBody;
+
+/// True when [body] is the call-END sentinel. Exact match, same reasoning.
+bool isCallEndBody(String body) => body == kCallEndBody;
+
+/// **Should [message] stop [live] ringing?** The single door for the stop, as
+/// [admitRing] is for the start.
+///
+/// The whole point is PROMPTNESS. A ring already self-terminates after
+/// [kCallRingDuration], so the reported bug is not "it rings forever" — it is
+/// that a call you hung up keeps ringing the other phone for up to 30 more
+/// seconds, and answering it joins an empty room. This closes that gap from the
+/// only place that reliably knows the call ended: the caller's own client.
+///
+/// Refusals, and why each is its own clause:
+/// - **not the sentinel** — an ordinary message.
+/// - **nothing is ringing** — nothing to stop.
+/// - **an unverified origin** — `originCryptoValid != true`. Fail CLOSED, which
+///   here means KEEP RINGING. The asymmetry with [admitRing] is deliberate and
+///   worth stating: an unverified *start* must not light a camera, and an
+///   unverified *stop* must not silence a genuine call. Both refusals preserve
+///   the ring; neither is the dangerous direction.
+/// - **not the caller** — only the account that started this call may end it. A
+///   third party in the same DM cannot silence your ring. (Inherited caveat, not
+///   a new one: `sender` is server-supplied and outside the signature, so this
+///   is as strong as the app's trust root and no stronger — see [admitRing].)
+/// - **a different call** — the signed `replyTo` must name THIS invitation.
+///
+/// FRESHNESS NEEDS NO CLOCK HERE, unlike [admitRing], and that falls out of the
+/// binding rather than being an omission: a replayed end can only match an
+/// invitation that is still live, and a live invitation is at most
+/// [kCallRingDuration] old. Re-delivery is idempotent — the ring is already
+/// stopped. So there is no window for a stale end to reach through, and no
+/// second clock to straddle.
+bool admitCallEnd(
+  Message message, {
+  required CallInvite? live,
+  required String meUserId,
+}) {
+  if (!isCallEndBody(message.body)) return false;
+  if (live == null) return false;
+  if (message.sender.userId == meUserId) return false;
+  if (message.originCryptoValid != true) return false;
+  final origin = message.origin;
+  if (origin == null) return false; // belt-and-braces: valid implies present.
+  if (message.sender.userId != live.from.userId) return false;
+  if (message.channelId != live.channelId) return false;
+  // The signed binding. `replyTo` is inside `signingBytes` (domainTag ‖ pubkey ‖
+  // channelId ‖ clientMsgId ‖ signedAtMs ‖ body ‖ replyTo), so naming the call
+  // costs no forgeable parameter — which is what lets the body stay a pure
+  // sentinel while still being about ONE call. Without it, a caller who hung up
+  // and immediately rang again would have their first end stop the second ring.
+  return message.replyToId == live.inviteId;
+}
 
 /// An admitted, ringable invitation — the room to join and who is calling.
 class CallInvite {
@@ -218,8 +295,18 @@ CallInvite? admitRing(
   );
 }
 
-/// True when [channelId] is a DM, per the island's `dm:` prefix — which is a
-/// gateway CHECK constraint (`ck_channels_dm_prefix`, case-sensitive; island
-/// design 11 "Direct messages"), not a client-side naming convention, so it is
-/// safe to key a trust decision on.
-bool isDmChannelId(String channelId) => channelId.startsWith('dm:');
+// `isDmChannelId` was DELETED here, not merely unused.
+//
+// It tested `channelId.startsWith('dm:')` and its doc called that "safe to key a
+// trust decision on". It is not: the `dm:` prefix is a CHECK constraint on
+// `channels.aiko_channel` (the bus name), while the id the app receives is
+// `channels.id`, a bare ULID — so the predicate answered false for every genuine
+// DM in production. Six adversarial review rounds reasoned from the same design
+// doc and missed it; one live `POST /v1/dm` refuted it in a second.
+//
+// The gate was fixed to take `isDm` from the app's own channel model, which left
+// this helper with zero callers — but a dead function is not an inert one. It
+// sat one import away from the ring's trust decision, wearing a doc that told
+// the next reader it was authoritative, and channel-wide calls are a real future
+// feature whose author would have found it and believed it. A confirmed-false
+// helper is a loaded gun, so it is removed rather than left for a grep to find.

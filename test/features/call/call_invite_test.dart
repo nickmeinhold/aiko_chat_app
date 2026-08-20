@@ -225,4 +225,94 @@ void main() {
       expect(kCallRingDuration, greaterThan(kCallInviteFreshness));
     });
   });
+
+  group('the hangup — admitCallEnd', () {
+    /// The invitation currently ringing, as `admitRing` would have produced it.
+    final live = admit(invite())!;
+
+    Message end({
+      String from = robin,
+      String? replyTo = 'm1',
+      String channelId = 'dm:aaa:bbb',
+      String body = kCallEndBody,
+      bool? cryptoValid = true,
+      bool withOrigin = true,
+    }) => Message(
+      clientTempId: 'e1',
+      id: 'e1',
+      channelId: channelId,
+      sender: MessageSender(
+        userId: from,
+        kind: SenderKind.human,
+        label: 'Robin',
+      ),
+      body: body,
+      replyToId: replyTo,
+      createdAt: now,
+      origin: withOrigin ? signedAt(now) : null,
+      originCryptoValid: cryptoValid,
+      deliveryState: DeliveryState.sent,
+    );
+
+    bool stops(Message m, {CallInvite? ringing}) =>
+        admitCallEnd(m, live: ringing ?? live, meUserId: me);
+
+    test('the END sentinel is pinned — it is signed, permanent history', () {
+      // A golden, for the same reason the invite has one: this string is inside
+      // signatures the moment it is first sent, so changing it is a v2 with a
+      // compatibility branch, never an edit.
+      expect(kCallEndBody, 'aiko:call/1 · 📞 ended the call');
+    });
+
+    test('the caller hanging up stops the ring', () {
+      expect(stops(end()), isTrue);
+    });
+
+    test('an ordinary message does not stop a ring', () {
+      expect(stops(end(body: 'ok bye')), isFalse);
+    });
+
+    test(
+      'an exact match only — a sentinel with a word after it is a remark',
+      () {
+        expect(stops(end(body: '$kCallEndBody now')), isFalse);
+      },
+    );
+
+    test('nothing ringing, nothing to stop', () {
+      expect(admitCallEnd(end(), live: null, meUserId: me), isFalse);
+    });
+
+    test(
+      'an UNVERIFIED end keeps ringing — fail closed means KEEP RINGING',
+      () {
+        // The asymmetry with admitRing, stated as a test: an unverified START
+        // must not light a camera, and an unverified STOP must not silence a
+        // genuine call. Both refusals preserve the ring.
+        expect(stops(end(cryptoValid: null)), isFalse);
+        expect(stops(end(cryptoValid: false)), isFalse);
+        expect(stops(end(withOrigin: false, cryptoValid: true)), isFalse);
+      },
+    );
+
+    test('a THIRD PARTY cannot silence your ring', () {
+      expect(stops(end(from: 'someone-else')), isFalse);
+    });
+
+    test('my own end does not stop my own ring', () {
+      expect(stops(end(from: me)), isFalse);
+    });
+
+    test('an end for a DIFFERENT call does not stop this one', () {
+      // The double-call race: hang up, ring again immediately, and the first
+      // end must not reach through and kill the second ring. The signed replyTo
+      // is what makes the end about ONE call.
+      expect(stops(end(replyTo: 'some-other-invite')), isFalse);
+      expect(stops(end(replyTo: null)), isFalse);
+    });
+
+    test('an end in a different channel does not stop this ring', () {
+      expect(stops(end(channelId: 'dm:ccc:ddd')), isFalse);
+    });
+  });
 }

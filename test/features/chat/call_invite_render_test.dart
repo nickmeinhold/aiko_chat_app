@@ -110,4 +110,34 @@ void main() {
       reason: 'a near-miss must render as the ordinary message it is',
     );
   });
+
+  testWidgets('the HANGUP is an event too — its anchor never reaches the '
+      'screen either', (tester) async {
+    // The half that would have silently regressed. `kCallEndBody` is worded like
+    // the invite — machine anchor first, so an old client degrades to a readable
+    // line — so shipping the wire half alone would have put
+    // `aiko:call/1 · 📞 ended the call` back into a speech bubble, undoing the
+    // exact thing the invite's render arm exists to do.
+    final container = makeContainer(
+      rest: FakeRestApi(channels: channels),
+      transport: FakeChatTransport(),
+    );
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    await tester.enterText(find.byType(TextField).first, kCallEndBody);
+    await tester.tap(find.byKey(const Key('composer-send')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('aiko:call/1'),
+      findsNothing,
+      reason: 'the wire anchor leaked into the UI on the hangup path',
+    );
+    expect(find.text('You ended the call'), findsOneWidget);
+  });
 }

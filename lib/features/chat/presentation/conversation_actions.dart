@@ -101,13 +101,13 @@ Future<void> startCall(
     // was inverted in the pre-move `_call` (cage-match #133).
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
-    final rang = await _ring(ref, dm.id);
+    final inviteId = await _ring(ref, dm.id);
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
     // longer holds here. A mounted check does not survive a subsequent await —
     // adding the ring introduced a NEW async gap, not just another statement
     // (the #133 bug class, caught by `use_build_context_synchronously`).
     if (!context.mounted) return;
-    if (!rang) {
+    if (inviteId == null) {
       // Honest, not fatal: the room is still opening behind this.
       messenger.showSnackBar(
         SnackBar(
@@ -115,7 +115,10 @@ Future<void> startCall(
         ),
       );
     }
-    await pushCall(context, dm.id);
+    // The invitation's id rides along so the leave can END this call by name.
+    // Null is fine and ordinary: a call opened without a ring (or whose ring
+    // failed) has nothing to end, and the leave simply says nothing.
+    await pushCall(context, dm.id, inviteId: inviteId);
     return;
   } on DmTargetNotFound {
     failure = "Couldn't reach $name for a call.";
@@ -167,13 +170,19 @@ void resetCallActionGuard() => _callActionInFlight = false;
 ///
 /// The body is [kCallInviteBody] and nothing else — room, caller and start time
 /// are already inside the signed envelope (channelId, signing key, signedAtMs).
-Future<bool> _ring(WidgetRef ref, String channelId) async {
+/// Returns the invitation's signed `clientMsgId`, or null if it did not send.
+///
+/// The id is the NAME OF THIS CALL, and the caller carries it into the call
+/// screen so that hanging up can say which call it is ending (see
+/// [kCallEndBody]). Null still means "they may not have been rung" — the caller
+/// reports that and the call proceeds, because the call is the capability and
+/// the ring is only its announcement.
+Future<String?> _ring(WidgetRef ref, String channelId) async {
   try {
     final repo = await ref.read(chatRepositoryProvider.future);
-    await repo.sendMessage(channelId, kCallInviteBody);
-    return true;
+    return await repo.sendMessage(channelId, kCallInviteBody);
   } catch (_) {
-    return false; // reported to the user by the caller; the call proceeds.
+    return null; // reported to the user by the caller; the call proceeds.
   }
 }
 

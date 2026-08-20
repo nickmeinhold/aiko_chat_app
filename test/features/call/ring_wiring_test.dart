@@ -53,21 +53,26 @@ void main() {
     String from = robinId,
     String body = kCallInviteBody,
     Duration age = const Duration(seconds: 1),
+    String clientMsgId = 'M1',
+    String? replyTo,
   }) async {
     final key = await SovereignKeyStore().loadOrCreate();
     final signedAt = DateTime.now().toUtc().subtract(age);
     final payload = SignedPayload(
       rawPublicKey: key.rawPublicKey,
       channelId: dmId,
-      clientMsgId: 'M1',
+      clientMsgId: clientMsgId,
       signedAtMs: signedAt.millisecondsSinceEpoch,
       body: body,
-      replyTo: null,
+      // Signed, not decorative: the end message names the call it ends here,
+      // and `replyTo` is inside signingBytes — so the binding cannot be forged
+      // or rewritten in transit.
+      replyTo: replyTo,
     );
     final sig = await sign(key, payload);
     return Message(
-      clientTempId: 'M1',
-      id: 'M1',
+      clientTempId: clientMsgId,
+      id: clientMsgId,
       channelId: dmId,
       sender: MessageSender(
         userId: from,
@@ -75,8 +80,9 @@ void main() {
         label: 'Robin',
       ),
       body: body,
+      replyToId: replyTo,
       createdAt: DateTime.now().toUtc(),
-      origin: OriginEnvelope.fromSignature(sig, clientMsgId: 'M1'),
+      origin: OriginEnvelope.fromSignature(sig, clientMsgId: clientMsgId),
       deliveryState: DeliveryState.sent,
     );
   }
@@ -298,6 +304,75 @@ void main() {
     expect(container.read(incomingRingProvider), isNotNull);
 
     container.read(incomingRingProvider.notifier).stopRinging();
+    expect(container.read(incomingRingProvider), isNull);
+  });
+
+  test(
+    'the caller hanging up STOPS the ring — the whole point of #3198',
+    () async {
+      // Without this the callee rings for the rest of kCallRingDuration for a call
+      // that is already over, and answering it joins an empty room. The ring
+      // self-terminating at 30s bounds the damage; this makes the stop PROMPT.
+      await warmDms();
+      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+      await pump();
+      transport.emitMessage(await inbound());
+      await pump();
+      expect(
+        container.read(incomingRingProvider),
+        isNotNull,
+        reason: 'precondition: it must be ringing before a hangup can stop it',
+      );
+
+      transport.emitMessage(
+        await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'M1'),
+      );
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNull);
+    },
+  );
+
+  test('an end naming a DIFFERENT call leaves this ring alone', () async {
+    // Hang up, ring again immediately, and the first end must not reach through
+    // and kill the second ring. The signed replyTo is what scopes it to ONE call.
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+    transport.emitMessage(await inbound());
+    await pump();
+
+    transport.emitMessage(
+      await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'OTHER'),
+    );
+    await pump();
+
+    expect(container.read(incomingRingProvider), isNotNull);
+  });
+
+  test('a hangup does not resurrect the ring on the invite replay', () async {
+    // At-least-once delivery: the INVITE can arrive again inside its freshness
+    // window, after the hangup. stopRinging settles the invitation, so the
+    // replay finds it already dealt with — the same memory that makes Ignore
+    // stick.
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+    transport.emitMessage(await inbound());
+    await pump();
+    transport.emitMessage(
+      await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'M1'),
+    );
+    await pump();
+    expect(
+      container.read(incomingRingProvider),
+      isNull,
+      reason: 'precondition',
+    );
+
+    transport.emitMessage(await inbound()); // the invite, delivered again
+    await pump();
+
     expect(container.read(incomingRingProvider), isNull);
   });
 }

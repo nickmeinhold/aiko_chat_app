@@ -899,19 +899,40 @@ class MessageTile extends ConsumerWidget {
     // register of a thing that happened rather than a thing someone said. Only
     // the RENDERING changes: [kCallInviteBody] is inside signatures already sent
     // to a live island and is a one-way door.
-    if (isCallInviteBody(message.body)) {
+    //
+    // THE HANGUP RENDERS THROUGH THE SAME ARM, and shipping it any other way
+    // would have undone this. `kCallEndBody` is worded the same way — machine
+    // anchor first so an old client degrades to a readable line — so a hangup
+    // that only touched the wire would have put `aiko:call/1 · 📞 ended the
+    // call` straight back into a speech bubble, which is the precise thing this
+    // block was added to stop. Two sentinels, one arm.
+    final isInvite = isCallInviteBody(message.body);
+    final isCallEnd = isCallEndBody(message.body);
+    if (isInvite || isCallEnd) {
       final scheme = Theme.of(context).colorScheme;
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.phone_in_talk_outlined, size: 15, color: scheme.primary),
+            Icon(
+              isInvite ? Icons.phone_in_talk_outlined : Icons.call_end_outlined,
+              size: 15,
+              // The end is a settled fact, not an invitation to act, so it does
+              // not take the accent the ring does.
+              color: isInvite ? scheme.primary : scheme.onSurfaceVariant,
+            ),
             const SizedBox(width: 7),
             Flexible(
               child: Text(
                 // "You" reads better than your own handle for your own act.
-                isMine ? 'You started a call' : '$senderName started a call',
+                isInvite
+                    ? (isMine
+                          ? 'You started a call'
+                          : '$senderName started a call')
+                    : (isMine
+                          ? 'You ended the call'
+                          : '$senderName ended the call'),
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
                   color: scheme.onSurfaceVariant,
