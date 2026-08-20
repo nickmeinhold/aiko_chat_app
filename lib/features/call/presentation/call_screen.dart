@@ -131,11 +131,27 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     String inviteId,
   ) async {
     try {
-      await (await repo).sendMessage(
-        channelId,
-        kCallEndBody,
-        replyToId: inviteId,
-      );
+      final r = await repo;
+      // TRANSLATE THE ID, because the two are not interchangeable on the wire.
+      // `inviteId` is the signed `clientMsgId` — the only id we minted and the
+      // one the callee knows the invitation by. But the gateway's `reply_to` is
+      // an FK onto `messages.id`, so it takes the SERVER ulid and refuses a
+      // client one outright with `no_reply_target`. Sending the wrong one would
+      // have had the whole frame rejected and the hangup silently never
+      // delivered — found by a live probe, not by a test, because both ids are
+      // opaque 26-character strings and every fake accepted either.
+      final serverId = await r.serverIdFor(inviteId);
+      if (serverId == null) {
+        // Unacked (sent offline, or still in flight). There is no id to name the
+        // call by, and a reply_to the island cannot resolve would sink the whole
+        // message — so say nothing and let the ring expire on its own clock.
+        debugPrint(
+          'CallScreen: invitation $inviteId is unacked — no hangup announced; '
+          'the ring will time out on its own.',
+        );
+        return;
+      }
+      await r.sendMessage(channelId, kCallEndBody, replyToId: serverId);
     } catch (e) {
       debugPrint('CallScreen: could not announce the hangup: $e');
     }

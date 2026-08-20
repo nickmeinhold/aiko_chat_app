@@ -1,0 +1,16 @@
+# Test-runner configuration.
+#
+# `live` marks the tests that talk to a REAL island with REAL credentials. They
+# are the only proof of the things a self-consistent suite structurally cannot
+# give — an independent implementation of the signing contract verifying here,
+# and a ring actually stopping over a live socket — so they are kept, not
+# deleted. But they need network and a second identity, so an ordinary
+# `flutter test` must not fail on them merely for being unconfigured.
+#
+# SKIPPED by default, which reports them honestly as "not run" rather than
+# silently passing. Run them deliberately:
+#
+#   flutter test test/live --run-skipped --tags live
+tags:
+  live:
+    skip: "needs a live island + credentials — flutter test test/live --run-skipped --tags live"

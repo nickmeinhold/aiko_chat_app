@@ -497,6 +497,23 @@ class ChatRepository {
     }
   }
 
+  /// The island's ULID for a message this client sent, once acked.
+  ///
+  /// The two ids are NOT interchangeable on the wire: `reply_to` is an FK onto
+  /// `messages.id` gateway-side, so it takes the SERVER id and rejects a
+  /// `client_msg_id` with `no_reply_target`. A caller that must REFER to
+  /// something it sent — the hangup naming the invitation it ends — has to
+  /// resolve one to the other, and only the ack can do that. Null means the
+  /// send has not been acked (offline, or still in flight).
+  Future<String?> serverIdFor(String clientTempId) async {
+    if (_disposed) return null;
+    try {
+      return await _cache.serverUlidFor(clientTempId);
+    } catch (_) {
+      return null; // teardown race; the caller degrades to sending nothing.
+    }
+  }
+
   /// W5 — manual retry of a failed row (preserves createdAt + localSeq;
   /// B-noteleport). Re-sends immediately if connected; otherwise the next drain
   /// picks it up from the outbox.

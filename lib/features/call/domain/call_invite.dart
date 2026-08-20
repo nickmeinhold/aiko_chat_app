@@ -143,18 +143,29 @@ bool admitCallEnd(
   if (origin == null) return false; // belt-and-braces: valid implies present.
   if (message.sender.userId != live.from.userId) return false;
   if (message.channelId != live.channelId) return false;
-  // The signed binding. `replyTo` is inside `signingBytes` (domainTag ‖ pubkey ‖
-  // channelId ‖ clientMsgId ‖ signedAtMs ‖ body ‖ replyTo), so naming the call
-  // costs no forgeable parameter — which is what lets the body stay a pure
-  // sentinel while still being about ONE call. Without it, a caller who hung up
-  // and immediately rang again would have their first end stop the second ring.
-  return message.replyToId == live.inviteId;
+  // The signed binding, on the SERVER id. `replyTo` is inside `signingBytes`
+  // (domainTag ‖ pubkey ‖ channelId ‖ clientMsgId ‖ signedAtMs ‖ body ‖ replyTo),
+  // so naming the call costs no forgeable parameter — which is what lets the
+  // body stay a pure sentinel while still being about ONE call. Without it, a
+  // caller who hung up and immediately rang again would have their first end
+  // stop the second ring.
+  //
+  // It compares the SERVER id, not [inviteId], and that is not a preference: a
+  // live probe against the island showed `reply_to` is an FK onto `messages.id`,
+  // so a frame carrying a `client_msg_id` there is REFUSED outright
+  // (`no_reply_target`) and the hangup would never leave the device — silently,
+  // since announcing it is best-effort. Comparing the client id here would have
+  // matched a message that can never exist.
+  final serverId = live.serverMsgId;
+  if (serverId == null) return false; // nothing a reply_to could have named
+  return message.replyToId == serverId;
 }
 
 /// An admitted, ringable invitation — the room to join and who is calling.
 class CallInvite {
   const CallInvite({
     required this.inviteId,
+    required this.serverMsgId,
     required this.channelId,
     required this.from,
     required this.startedAt,
@@ -170,6 +181,18 @@ class CallInvite {
   /// freshness window rang all over again (cage-match #139 R2, Carnot). A thing
   /// you must remember having dismissed needs a name, not a shape.
   final String inviteId;
+
+  /// The island's ULID for this invitation — what a hangup's `reply_to` names.
+  ///
+  /// A SECOND id, and the duplication is the wire's, not ours. [inviteId] is the
+  /// signed `clientMsgId`: content-bound, stable across deliveries, and the only
+  /// id either party can compute. But the gateway's `reply_to` is an FK onto
+  /// `messages.id`, so it resolves the SERVER id and refuses a client one with
+  /// `no_reply_target` — verified against the live island, which is the only
+  /// place that fact is written down. So identity uses one and the wire binding
+  /// uses the other. Null if the island did not name it (it always does for an
+  /// inbound message; the field is nullable because [Message.id] is).
+  final String? serverMsgId;
 
   /// The LiveKit room to join. The room IS the channel id (#2726).
   final String channelId;
@@ -289,6 +312,7 @@ CallInvite? admitRing(
   if (age.isNegative || age > kCallInviteFreshness) return null;
   return CallInvite(
     inviteId: origin.clientMsgId,
+    serverMsgId: message.id,
     channelId: message.channelId,
     from: message.sender,
     startedAt: signedAt,

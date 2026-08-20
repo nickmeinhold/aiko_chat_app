@@ -32,7 +32,10 @@ void main() {
     SenderKind kind = SenderKind.human,
   }) => Message(
     clientTempId: 'm1',
-    id: 'm1',
+    // DELIBERATELY DIFFERENT from clientTempId. The gateway's reply_to is an FK
+    // onto messages.id, so the end must name THIS one; a fixture that used the
+    // same string for both could not tell a correct binding from the wire bug.
+    id: 'SRV-m1',
     channelId: channelId,
     sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
     body: body,
@@ -232,7 +235,7 @@ void main() {
 
     Message end({
       String from = robin,
-      String? replyTo = 'm1',
+      String? replyTo = 'SRV-m1',
       String channelId = 'dm:aaa:bbb',
       String body = kCallEndBody,
       bool? cryptoValid = true,
@@ -301,6 +304,17 @@ void main() {
 
     test('my own end does not stop my own ring', () {
       expect(stops(end(from: me)), isFalse);
+    });
+
+    test('the end must name the SERVER id — a client_msg_id is a frame the '
+        'gateway REFUSES outright', () {
+      // Found live, not by review: `reply_to` is an FK onto `messages.id`, so a
+      // frame carrying a client_msg_id there comes back `no_reply_target` and
+      // the hangup never leaves the device — silently, because announcing it is
+      // best-effort. Both ids are opaque 26-char strings, so nothing but the
+      // real island could tell them apart.
+      expect(stops(end(replyTo: 'm1')), isFalse);
+      expect(stops(end(replyTo: 'SRV-m1')), isTrue);
     });
 
     test('an end for a DIFFERENT call does not stop this one', () {

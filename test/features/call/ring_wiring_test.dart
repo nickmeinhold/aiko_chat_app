@@ -72,7 +72,11 @@ void main() {
     final sig = await sign(key, payload);
     return Message(
       clientTempId: clientMsgId,
-      id: clientMsgId,
+      // The SERVER ulid, deliberately distinct from the client id: the
+      // gateway's reply_to is an FK onto messages.id, and a fixture reusing one
+      // string for both cannot tell a correct binding from the wire bug that a
+      // live probe had to catch.
+      id: 'SRV-$clientMsgId',
       channelId: dmId,
       sender: MessageSender(
         userId: from,
@@ -325,7 +329,7 @@ void main() {
       );
 
       transport.emitMessage(
-        await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'M1'),
+        await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'SRV-M1'),
       );
       await pump();
 
@@ -361,7 +365,7 @@ void main() {
     transport.emitMessage(await inbound());
     await pump();
     transport.emitMessage(
-      await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'M1'),
+      await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'SRV-M1'),
     );
     await pump();
     expect(

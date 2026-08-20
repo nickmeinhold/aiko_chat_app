@@ -20,6 +20,7 @@ void main() {
 
   final invite = CallInvite(
     inviteId: 'inv-1',
+    serverMsgId: 'srv-1',
     channelId: 'dm:aaa:bbb',
     from: const MessageSender(
       userId: 'robin-key',
@@ -118,6 +119,7 @@ void main() {
     (tester) async {
       final anon = CallInvite(
         inviteId: 'inv-2',
+        serverMsgId: 'srv-2',
         channelId: 'dm:aaa:bbb',
         from: const MessageSender(userId: 'k', kind: SenderKind.human),
         startedAt: DateTime.utc(2026, 8, 15, 13),
