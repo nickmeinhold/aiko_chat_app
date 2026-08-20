@@ -6,6 +6,7 @@ import 'app/font_licences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
 import 'features/call/presentation/ring_overlay.dart';
+import 'features/settings/application/island_manifest_provider.dart';
 import 'features/settings/application/theme_mode_controller.dart';
 import 'features/settings/application/theme_preset_controller.dart';
 
@@ -32,6 +33,9 @@ class AikoChatApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
+    // Ask the island who it is, once, and cache the answer. Fire-and-forget —
+    // the mark renders from its URL fallback meanwhile.
+    ref.watch(islandManifestFetcherProvider);
     // The chosen look supplies BOTH halves, so picking a preset never costs you
     // OS following: themeMode still decides how bright, the preset decides which
     // look, and the chosen typeface rides along in both. All three are set in

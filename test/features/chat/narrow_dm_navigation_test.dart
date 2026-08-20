@@ -305,14 +305,19 @@ void main() {
           .setUserMuted('u2', muted: true, expectUserId: null);
       await tester.pumpAndSettle();
       // Peer-aware: only a peer-aware read sees an ACCOUNT mute on this row.
+      // The control is the long-press menu now rather than an app-bar button,
+      // so the peer-awareness shows up in the menu's own words — which is where
+      // it has to be right, since that sentence is what tells you unmuting here
+      // would make this person audible everywhere.
+      await tester.longPress(find.byKey(const Key('mute-gesture-title')));
+      await tester.pumpAndSettle();
       expect(
-        tester
-            .widget<IconButton>(
-              find.byKey(const Key('appbar-mute-conversation')),
-            )
-            .tooltip,
-        'This person is muted everywhere',
+        find.textContaining('This person is muted everywhere'),
+        findsOneWidget,
       );
+      // Close the menu so it cannot leak into a later expectation.
+      Navigator.of(tester.element(find.text('Unmute').last)).pop();
+      await tester.pumpAndSettle();
     });
   }
 
@@ -401,7 +406,11 @@ void main() {
     // tap muted a conversation the user had never entered and the default was
     // about to leave (cage-match #136, Tesla).
     expect(find.text('alice'), findsNothing);
+    // The conversation control must not exist before the conversation it names
+    // is settled. That control is the title's long-press gesture now, so this
+    // asks for ITS absence rather than the retired button's.
     expect(find.byKey(const Key('appbar-mute-conversation')), findsNothing);
+    expect(find.byKey(const Key('mute-gesture-title')), findsNothing);
 
     channelGate.complete();
     await tester.runAsync(
@@ -644,7 +653,10 @@ void main() {
     // control that changes it. Two glyphs for one fact, one of them a decoy that
     // merely opens a menu.
     expect(find.byKey(const Key('muted-item-dm1')), findsNothing);
-    expect(find.byKey(const Key('appbar-mute-conversation')), findsOneWidget);
+    // The app-bar BELL is retired, but the state it carried is not: the title
+    // itself now wears the mute glyph, so a silenced conversation still cannot
+    // be mistaken for a quiet one on a phone.
+    expect(find.byKey(const Key('appbar-mute-conversation')), findsNothing);
     expect(find.byIcon(Icons.notifications_off), findsOneWidget);
   });
 

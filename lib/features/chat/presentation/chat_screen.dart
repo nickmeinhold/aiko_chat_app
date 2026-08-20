@@ -4,9 +4,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../call/domain/call_invite.dart';
+import '../../../core/widgets/island_mark.dart';
 import '../../../app/theme/maritime_theme.dart';
 import '../../../core/mark/mark_avatar.dart';
-import '../../auth/application/auth_controller.dart';
 import '../../moderation/presentation/message_actions.dart';
 import '../application/chat_providers.dart';
 import '../application/mute_controller.dart';
@@ -147,20 +148,27 @@ class ChatScreen extends ConsumerWidget {
               // conversation it names is settled.
               title: !ready
                   ? const Text('Chat')
-                  : navigable.length > 1 && active != null
-                  ? _ConversationSwitcher(
-                      rooms: rooms,
-                      dms: dms,
-                      activeId: active.id,
-                    )
-                  : _ConversationTitle(active: active),
+                  : active == null
+                  ? _ConversationTitle(active: active)
+                  // Long-press the title for the mute menu — the phone's
+                  // replacement for the sidebar row gesture it has no sidebar
+                  // to host.
+                  : ConversationTitleMuteGesture(
+                      conversation: active,
+                      child: navigable.length > 1
+                          ? _ConversationSwitcher(
+                              rooms: rooms,
+                              dms: dms,
+                              activeId: active.id,
+                            )
+                          : _ConversationTitle(active: active),
+                    ),
               actions: [
                 // Narrow has no sidebar, so the row long-press that mutes a
                 // conversation on wide does not exist here. Without this the
                 // capability would be wide-only — mutable on the desktop, invisible
                 // on the phone, which is where a noisy channel is actually felt.
-                if (ready && active != null)
-                  _MuteConversationAction(conversation: active),
+                // Mute moved OFF the strip: long-press the conversation title.
                 IconButton(
                   tooltip: 'Search',
                   icon: const Icon(Icons.search),
@@ -171,12 +179,9 @@ class ChatScreen extends ConsumerWidget {
                   icon: const Icon(Icons.settings),
                   onPressed: () => context.push('/settings'),
                 ),
-                IconButton(
-                  tooltip: 'Sign out',
-                  icon: const Icon(Icons.logout),
-                  onPressed: () =>
-                      ref.read(authControllerProvider.notifier).logout(),
-                ),
+                // Sign out lives in Settings now. It is a once-a-year action and
+                // it was holding a permanent seat in the four-icon strip you
+                // look at all day, one slip away from ending your session.
               ],
             ),
       // Option A — no state loss across the breakpoint. The body is ALWAYS a Row
@@ -203,19 +208,35 @@ class ChatScreen extends ConsumerWidget {
 /// action is instant, reversible, and entirely private, so a confirmation step
 /// would cost more than the mistake it prevents. The icon carries the state, so
 /// a muted conversation announces itself from the bar you are already looking at.
-class _MuteConversationAction extends ConsumerWidget {
-  const _MuteConversationAction({required this.conversation});
+// A long-press gesture on the dropdown ROWS lived here briefly. Removed at
+// Nick's call: pressing a row in an already-open menu to get a SECOND menu is a
+// menu inside a menu, and the interaction it replaced (long-press the title) is
+// both simpler and already working. The rows are for picking a conversation;
+// that is all they do.
+
+/// Long-press the conversation title to reach the same mute menu the sidebar
+/// rows offer.
+///
+/// This is what let mute leave the app-bar action strip. The gesture already
+/// existed for sidebar rows, but the phone has no sidebar — so the capability
+/// was wide-only and a button was added to compensate. Putting the gesture on
+/// the title makes "long-press a conversation" true on BOTH layouts and gives
+/// the crowded action strip a seat back.
+///
+/// The mute state is derived by the same peer-aware path the button used, so
+/// the two surfaces cannot disagree about the same conversation.
+class ConversationTitleMuteGesture extends ConsumerWidget {
+  const ConversationTitleMuteGesture({
+    super.key,
+    required this.conversation,
+    required this.child,
+  });
 
   final Channel conversation;
+  final Widget child;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Peer-aware, exactly like the sidebar row: a peer-muted DM resized onto a
-    // phone was showing "not muted" while its badge was already dead — two
-    // surfaces disagreeing about the same conversation, which is the drift this
-    // feature's own comments forbid (cage-match #135 round 3, Tesla).
-    // DM-ness by SOURCE, through the one door — not `conversation.kind`, which is
-    // the re-derivation conversationSectionsProvider exists to remove (#136).
     final isDm = ref.watch(dmConversationIdsProvider).contains(conversation.id);
     final mute = watchConversationMute(
       ref,
@@ -228,96 +249,46 @@ class _MuteConversationAction extends ConsumerWidget {
           : null,
       hasPeer: isDm,
     );
-    final muted = mute.isMuted;
-    // SCOPE DISCLOSURE. When the silence comes from the PERSON rather than this
-    // conversation, undoing it makes them audible in every room — a global
-    // preference change behind a control captioned "this conversation". The
-    // sidebar menu confesses that in its subtitle; this one-tap button had no
-    // room to, so it silently performed the bigger act (cage-match #135 round 4,
-    // Carnot MEDIUM + Tesla). Here it asks first: the tap surfaces the real scope
-    // and the user chooses.
-    // Confess whenever a PERSON is one of the causes — not only when they are
-    // the sole cause. Gating on `byPeer && !byConversation` left the both-muted
-    // case saying "Unmute this conversation" while also restoring that account in
-    // every room (cage-match #135 round 5, Tesla). Any unmute that would clear an
-    // account mute has to say so.
-    final clearsPerson = muted && mute.byPeer;
-    return IconButton(
-      key: const Key('appbar-mute-conversation'),
-      // Scoped to what we can actually speak for. With no nameable peer this is
-      // a CONVERSATION verb and says so, rather than "Mute (loading…)" — which
-      // lied in the indicative for the states that never resolve (a self-DM, a
-      // group-shaped DM, a departed member) — cage-match #135 round 9, Tesla.
-      tooltip: muted
-          ? (clearsPerson
-                ? 'This person is muted everywhere'
-                : 'Unmute this conversation')
-          : 'Mute this conversation',
-      // Bell, not speaker: this app ships 1:1 A/V calls, where a speaker glyph
-      // in the chrome reads as "mute the call", a different verb entirely
-      // (cage-match #135, Maxwell).
-      icon: Icon(muted ? Icons.notifications_off : Icons.notifications_none),
-      onPressed: () {
-        if (clearsPerson) {
-          // BIND BOTH BEFORE THE GAP — the container (not the autoDispose
-          // notifier) and the acting principal. This SnackBar lives on the
-          // messenger ABOVE the chat surface, so its action can be tapped after
-          // Settings, a sign-out, or a user switch. Reading the notifier or the
-          // user INSIDE the callback is the very mistake rounds 2-3 removed from
-          // the other two doors, reintroduced here when this control was added in
-          // round 4 (cage-match #135 round 5, Carnot + Tesla). Late-binding the
-          // principal is worse than useless: it compares the new user to the new
-          // user, passes, and then dumps the OLD in-memory map onto the NEW
-          // user's key.
-          final container = ProviderScope.containerOf(context, listen: false);
-          final actingUserId = container.read(currentUserProvider)?.userId;
-          // See message_actions.dart: a null principal here is "could not
-          // determine", not "no gap", and passing it across the SnackBar's
-          // lifetime would disable the guard rather than fail closed.
-          if (actingUserId == null) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              // Say what the button DOES, not the narrower thing it sounds like:
-              // unmuting clears every cause of this row's silence, which includes
-              // the account mute that applies in every conversation (cage-match
-              // #135 round 6, Carnot — the UI admitted one state change and
-              // performed two).
-              content: const Text(
-                'This person is muted in every conversation. Unmuting affects '
-                'all of them.',
-              ),
-              action: SnackBarAction(
-                label: 'Unmute',
-                onPressed: () => mute.apply(
-                  container.read(mutesProvider.notifier),
-                  muted: false,
-                  expectUserId: actingUserId,
+    return MuteGesture(
+      // A CONSTANT key, deliberately NOT keyed by conversation — the opposite of
+      // the sidebar rows, and for the opposite reason. Rows key by id because
+      // they have siblings that reorder, so slot-matching could hand a
+      // recognizer the wrong conversation. A title has exactly one slot and no
+      // siblings; keying it by id instead makes the key CHANGE whenever you
+      // switch conversation, remounting this subtree — including an open
+      // DropdownButton, whose overlay is holding the snapshot the user is
+      // currently choosing from. Same pattern, different structure, opposite
+      // correct answer.
+      key: const Key('mute-gesture-title'),
+      mute: mute,
+      // A muted conversation must still ANNOUNCE itself. The retired app-bar
+      // bell carried that state permanently; a long-press menu only says it once
+      // you have already opened the menu, so removing the button would have left
+      // a silent conversation on a phone looking exactly like a quiet one — the
+      // precise confusion the sidebar's own mute glyph exists to prevent.
+      child: mute.isMuted
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(child: child),
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.notifications_off,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
-              ),
-            ),
-          );
-          return;
-        }
-        // Otherwise synchronous — no async gap, so the write lands in the same
-        // frame as the tap. `null` is the explicit "nothing to bind" answer, not
-        // an omission (the parameter is required precisely so this is a decision).
-        mute.apply(
-          ref.read(mutesProvider.notifier),
-          muted: !muted,
-          expectUserId: null,
-        );
-      },
+              ],
+            )
+          : child,
     );
   }
 }
 
-/// The narrow-layout AppBar title for whatever conversation is active when the
-/// switcher is NOT shown — i.e. when there is nothing to switch BETWEEN (≤1
-/// navigable conversation, or none at all). A channel shows its name; a DM shows
-/// the peer's handle (roster-resolved, like the sidebar row), since a DM has no
-/// name. Its DM arm is no longer a fallback for an unreachable id — with DMs in
-/// the switcher this is only the one-conversation case, where a dropdown of one
-/// would be chrome.
+// The app-bar mute BUTTON lived here. It existed only because the long-press
+// menu had nowhere to live on a phone — no sidebar, no row to press. The title
+// carries that gesture now (see ConversationTitleMuteGesture), so the button is
+// gone and the action strip is one icon lighter.
+
 class _ConversationTitle extends ConsumerWidget {
   const _ConversationTitle({required this.active});
 
@@ -382,6 +353,12 @@ class _ConversationSwitcher extends ConsumerWidget {
 
     return Row(
       children: [
+        // The caret sits to the LEFT of the name, outside the DropdownButton.
+        // Drawing it here rather than as the button's own `icon` is what makes
+        // "on the left" a one-line change instead of a rebuild of how the
+        // collapsed state is composed.
+        const Icon(Icons.arrow_drop_down),
+        const SizedBox(width: 2),
         Expanded(
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -393,7 +370,17 @@ class _ConversationSwitcher extends ConsumerWidget {
               // cage-match #106, Tesla).
               isExpanded: true,
               borderRadius: BorderRadius.circular(8),
-              icon: const Icon(Icons.arrow_drop_down),
+              // NO trailing caret — the arrow is drawn to the LEFT of this
+              // button by the Row below.
+              //
+              // The first attempt moved it with `selectedItemBuilder`, which
+              // works but changes how the collapsed state is BUILT: it hands
+              // DropdownButton a parallel list of widgets for every item. A
+              // committed probe in narrow_dm_navigation_test proves only the
+              // ACTIVE row is built when collapsed — a property a phone's data
+              // budget depends on — and routing through selectedItemBuilder put
+              // that at risk to move a caret 40 pixels. Not a trade worth making.
+              icon: const SizedBox.shrink(),
               // M3 AppBar foreground is onSurface, and the menu opens on a
               // surface background — so the inherited onSurface text reads
               // correctly in both the collapsed bar and the open menu.
@@ -656,40 +643,13 @@ class _Waterline extends StatelessWidget {
   }
 }
 
-/// The signing seal beside the composer: the mark this app already uses for a
-/// verified signature, dim until there is something to sign.
-///
-/// Deliberately DECORATIVE to assistive tech ([ExcludeSemantics]). Signing is
-/// automatic and not a choice the user makes here, so announcing a state change
-/// on every first-and-last keystroke would be noise; the fact that messages are
-/// signed is stated where it can be read at leisure (Settings → Carried Record).
-class _SealMark extends StatelessWidget {
-  const _SealMark({required this.armed});
-
-  final bool armed;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return ExcludeSemantics(
-      child: Padding(
-        // Sits on the text baseline rather than the field's full height, so it
-        // reads as part of the line you are writing, not a button beside it.
-        padding: const EdgeInsets.only(bottom: 9),
-        child: TweenAnimationBuilder<double>(
-          duration: _fadeFor(context),
-          curve: Curves.easeOut,
-          tween: Tween(begin: 0, end: armed ? 1 : 0),
-          builder: (context, t, _) => Icon(
-            Icons.verified_outlined,
-            size: 18,
-            color: Color.lerp(scheme.outlineVariant, scheme.primary, t),
-          ),
-        ),
-      ),
-    );
-  }
-}
+// The signing seal that used to live here is gone: it announced "this will be
+// signed at birth" by animating on the first and last keystroke, which is an
+// automatic and non-actionable fact restated on a loop. Its slot in the composer
+// now carries the ISLAND MARK (`lib/core/widgets/island_mark.dart`), because in a
+// federated app "which island am I on" is the question that actually changes.
+// Signing is still stated where it can be read at leisure: Settings → Carried
+// Record.
 
 /// The send control as a signal lamp: greyed at rest, full accent once there is
 /// a message to send.
@@ -925,6 +885,53 @@ class MessageTile extends ConsumerWidget {
       roster: ref.watch(channelRosterProvider(channelId)).value,
     );
 
+    // A CALL INVITATION IS AN EVENT, NOT A REMARK.
+    //
+    // The wire body is `aiko:call/1 · 📞 started a call` — a signed, permanent
+    // row, worded so a client that predates the feature degrades to a readable
+    // line instead of breaking. This client never learned to render it, so it
+    // showed the machine anchor verbatim inside a normal speech bubble, with the
+    // caller's name floating on a separate line above the avatar. Nick, reading
+    // it: "the sender and 'started a call' being on separate lines with
+    // something in between is confusing."
+    //
+    // So it renders as one sentence — WHO did WHAT — centred, unbubbled, in the
+    // register of a thing that happened rather than a thing someone said. Only
+    // the RENDERING changes: [kCallInviteBody] is inside signatures already sent
+    // to a live island and is a one-way door.
+    if (isCallInviteBody(message.body)) {
+      final scheme = Theme.of(context).colorScheme;
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.phone_in_talk_outlined, size: 15, color: scheme.primary),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(
+                // "You" reads better than your own handle for your own act.
+                isMine ? 'You started a call' : '$senderName started a call',
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              _formatTime(message.createdAt),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                fontFamily: kMaritimeMono,
+                fontSize: 11,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     // Sender-action affordance: long-press ANOTHER human's message for the
     // action sheet — call them (#2758), report, or block (#7). Gated to a
     // non-mine message with a real account behind it — you can't call/block
@@ -1121,7 +1128,24 @@ class _DeliveryIndicator extends ConsumerWidget {
 /// The text composer. Sends through the repository's optimistic [sendMessage]
 /// (W1: the row is committed before the wire send), then clears the field.
 class Composer extends ConsumerStatefulWidget {
-  const Composer({super.key, required this.channelId});
+  const Composer({
+    super.key,
+    required this.channelId,
+    this.islandBaseUrl,
+    this.islandPubkey,
+  });
+
+  /// The island this composer is writing into, for the island mark.
+  ///
+  /// Passed DOWN rather than read from `configProvider` here. A composer that
+  /// reached for app-wide config would fail to build wherever that config is not
+  /// wired — which is most unit tests, and would make an 18px decoration a
+  /// precondition for the text field working at all. Null simply means no mark.
+  final String? islandBaseUrl;
+
+  /// The island's Ed25519 public key, when known — the mark's preferred
+  /// identity source. Null falls back to the base URL.
+  final String? islandPubkey;
 
   final String channelId;
 
@@ -1265,18 +1289,67 @@ class _ComposerState extends ConsumerState<Composer> {
         children: [
           if (_suggestions.isNotEmpty) _buildSuggestions(context),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 8, 8),
+            // Left padding is 0 because the ISLAND MARK now draws it, inside its
+            // tap target (see hitPadding below) — that is what lets a press land
+            // in the gutter right up to the screen edge. The bottom 8 stays: it
+            // spaces the whole row, including the text field.
+            padding: const EdgeInsets.fromLTRB(0, 4, 8, 8),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // The seal. Every message here is signed at birth, so the mark that
-                // means "signed" elsewhere in the app belongs at the moment you
-                // write one — and it is deliberately the SAME glyph and colour the
-                // Carried Record uses for a verified signature, not a new one.
-                // (`Icons.key_outlined` was the obvious pick and is wrong: Settings
-                // already spends it on passkeys, so a key here would read "sign-in".)
-                _SealMark(armed: _armed),
-                const SizedBox(width: 10),
+                // The island mark — WHICH ISLAND AM I ON, answered quietly and
+                // permanently, in the slot the signing seal used to occupy.
+                //
+                // The seal was replaced deliberately. It animated on every first and
+                // last keystroke to say "this will be signed", which is true of
+                // every message that has ever been sent from here: an automatic,
+                // non-actionable fact, restated on a loop. Signing is still stated
+                // where it can be read at leisure (Settings → Carried Record). In a
+                // FEDERATED app "where am I" is the live question, and it deserves
+                // the pixel more.
+                //
+                // Static by construction — it takes no composer state at all, so it
+                // cannot flicker while you type.
+                if (widget.islandBaseUrl != null)
+                  IslandMark(
+                    baseUrl: widget.islandBaseUrl!,
+                    islandPubkey: widget.islandPubkey,
+                    // Where am I → can I go elsewhere. The picker owns the
+                    // session-teardown ceremony a gateway switch requires, so
+                    // this only has to open it.
+                    onTap: () => context.push('/settings/gateway'),
+                    // THE MARK'S SURROUNDING SPACE IS THE TAP TARGET.
+                    //
+                    // These are not new pixels: the Row used to draw a 12px left
+                    // gutter and a 10px gap after the mark, and the mark sat 9px
+                    // off the bottom. All of that now lives INSIDE the gesture,
+                    // and the Row's own left/bottom padding drops to match — so
+                    // the glyph is in exactly the same place and the space
+                    // around it has simply started accepting presses, out to the
+                    // screen edge on the left.
+                    //
+                    // A previous attempt gave the mark a 44x44 box instead. It
+                    // was reachable and it MOVED THINGS: the box took real
+                    // layout width, so the composer shifted. Padding-inside-the
+                    // gesture is the version that costs nothing on screen.
+                    //
+                    // The 20px top is free: the Row is as tall as the text
+                    // field, and `crossAxisAlignment.end` bottom-aligns this, so
+                    // a taller-but-still-shorter-than-the-field box changes no
+                    // layout at all.
+                    hitPadding: const EdgeInsets.only(
+                      left: 12,
+                      top: 20,
+                      right: 10,
+                      bottom: 9,
+                    ),
+                  )
+                else
+                  // No island to mark (tests, and any caller that does not pass
+                  // one) — the Row's left gutter moved into the mark's tap
+                  // target, so without the mark it has to come back or the text
+                  // field sits flush against the screen edge.
+                  const SizedBox(width: 12),
                 Expanded(
                   child: Focus(
                     onFocusChange: (has) {

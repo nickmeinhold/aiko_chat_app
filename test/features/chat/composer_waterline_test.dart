@@ -7,6 +7,8 @@
 //   rest    — hairline waterline, dim seal, dim lamp
 //   focused — the waterline ignites in `colorScheme.primary`
 //   armed   — seal AND lamp light together (one fact, two readings)
+import 'package:aiko_chat_app/core/widgets/island_mark.dart';
+import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart';
 import 'package:aiko_chat_app/app/theme/maritime_theme.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
@@ -47,8 +49,17 @@ void main() {
     return Theme.of(tester.element(find.byType(TextField).first)).colorScheme;
   }
 
-  Color? sealColour(WidgetTester tester) =>
-      tester.widget<Icon>(find.byIcon(Icons.verified_outlined)).color;
+  /// The island mark's painter. Comparing painters across a rebuild is how we
+  /// prove the mark did NOT change: `shouldRepaint` is the widget's own answer
+  /// to "is this different from what was there before".
+  CustomPainter islandPainter(WidgetTester tester) => tester
+      .widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(IslandMark),
+          matching: find.byType(CustomPaint),
+        ),
+      )
+      .painter!;
 
   Color? lampColour(WidgetTester tester) => tester
       .widget<IconButton>(
@@ -59,31 +70,51 @@ void main() {
       )
       .color;
 
-  testWidgets('the seal and the lamp arm TOGETHER, and disarm together', (
-    tester,
-  ) async {
+  testWidgets('the lamp arms and disarms with the message', (tester) async {
     final scheme = await pumpComposer(tester);
 
-    // At rest both are dim, and they agree — literally the same ink, so the two
-    // marks bracketing the line read as one resting state rather than two greys.
-    expect(sealColour(tester), scheme.outlineVariant);
+    // The seal that used to sit beside the lamp is gone — its slot carries the
+    // island mark now, which says WHERE YOU ARE rather than restating that a
+    // message will be signed. So this pins the lamp alone.
     expect(lampColour(tester), scheme.outlineVariant);
 
     await tester.enterText(find.byType(TextField).first, 'hello');
     await tester.pumpAndSettle();
-
-    // Armed: the seal takes `primary` (the app's existing "verified signature"
-    // colour) and the lamp takes `secondary` (beacon amber). Two readings of one
-    // fact — "there is a message here to sign and send".
-    expect(sealColour(tester), scheme.primary);
     expect(lampColour(tester), scheme.secondary);
 
-    // Whitespace is not a message: `_send` trims, so the lights must too, or the
-    // lamp would invite a tap that does nothing.
+    // Whitespace is not a message: `_send` trims, so the lamp must too, or it
+    // would invite a tap that does nothing.
     await tester.enterText(find.byType(TextField).first, '   ');
     await tester.pumpAndSettle();
-    expect(sealColour(tester), scheme.outlineVariant);
     expect(lampColour(tester), scheme.outlineVariant);
+  });
+
+  testWidgets('the island mark does NOT change while you type', (tester) async {
+    await pumpComposer(tester);
+
+    // The requirement this pins is Nick's, and it is the reason the seal was
+    // replaced rather than merely re-coloured: the old mark animated on the
+    // first and last keystroke, so the one thing on screen answering "where am
+    // I" flickered every time you started a sentence. An identity mark that
+    // moves when you type is not an identity mark.
+    final before = islandPainter(tester);
+
+    await tester.enterText(find.byType(TextField).first, 'hello');
+    await tester.pumpAndSettle();
+    final armed = islandPainter(tester);
+    expect(
+      armed.shouldRepaint(before),
+      isFalse,
+      reason: 'the island mark repainted when the composer armed',
+    );
+
+    await tester.enterText(find.byType(TextField).first, '');
+    await tester.pumpAndSettle();
+    expect(
+      islandPainter(tester).shouldRepaint(armed),
+      isFalse,
+      reason: 'the island mark repainted when the composer disarmed',
+    );
   });
 
   testWidgets('arming INCREASES the lamp\'s contrast — in every theme', (
@@ -228,5 +259,53 @@ void main() {
           'painted (got $size)',
     );
     expect(size.width, greaterThan(0.0), reason: 'lit rule width (got $size)');
+  });
+
+  testWidgets('the island mark is REACHABLE without having moved anything', (
+    tester,
+  ) async {
+    // Nick, on the phone: the mark was hard to press, then the fix (a 44x44 box)
+    // pushed the composer around — "I want the padding back the way it was, but
+    // the pressable area should allow for taps right up to the edge".
+    //
+    // Both halves are asserted here because they pull against each other: a
+    // bigger target normally costs layout. The trick is that the target's
+    // padding is space the composer was ALREADY drawing, moved inside the
+    // gesture — so these numbers are the ORIGINAL geometry, and the tap area is
+    // the thing that changed.
+    await pumpComposer(tester);
+
+    final target = tester.getRect(find.byType(IslandMark));
+    final glyph = tester.getRect(
+      find.descendant(
+        of: find.byType(IslandMark),
+        matching: find.byType(CustomPaint),
+      ),
+    );
+    final field = tester.getRect(find.byType(TextField).first);
+
+    final composer = tester.getRect(find.byType(Composer));
+
+    // UNCHANGED, stated RELATIVELY so the numbers survive a sidebar or a
+    // different screen width: the glyph sits in a 12px gutter, is 18px, and the
+    // field starts 10px after it.
+    expect(glyph.left - composer.left, 12);
+    expect(glyph.width, 18);
+    expect(field.left - glyph.right, 10);
+    // ...and the glyph still rides its 9px above the composer's bottom padding
+    // (8), so 17 from the composer's own edge. Measured against the COMPOSER
+    // rather than the field: the field is stacked above the waterline, so its
+    // bottom is not the row's bottom.
+    expect(composer.bottom - glyph.bottom, 17);
+
+    // CHANGED: the target starts at the composer's own edge — a press in the
+    // gutter lands — and is far larger than the drawing.
+    expect(
+      target.left,
+      composer.left,
+      reason: 'a press in the left gutter must land on the mark',
+    );
+    expect(target.width, greaterThan(glyph.width * 2));
+    expect(target.height, greaterThan(40));
   });
 }
