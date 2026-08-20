@@ -36,6 +36,18 @@ class DeviceRegistrar {
   /// token the island never had and leaves the live one routing.
   String? _registered;
 
+  /// Bumped by every [stop]. A registration that was in flight when the session
+  /// ended carries the OLD value and knows not to record itself.
+  ///
+  /// Registration is deliberately fire-and-forget (reach must never gate
+  /// sign-in), which means a sign-in immediately followed by a sign-out can
+  /// interleave: `stop()` finds `_registered == null`, unregisters nothing, and
+  /// the in-flight POST then lands on a session that no longer exists. The
+  /// island is left holding a row written AFTER the unregister, routing to a
+  /// handset nobody is signed in on — the same silent residual the ordering in
+  /// [stop] exists to prevent, arriving from the other side.
+  int _generation = 0;
+
   /// Whether a token is currently registered — for tests and diagnostics.
   String? get registeredToken => _registered;
 
@@ -70,6 +82,7 @@ class DeviceRegistrar {
   /// on a network call, which is worse. The fix is a pending-unregister retried
   /// on next launch; filed rather than half-built here.
   Future<void> stop() async {
+    _generation++; // any in-flight registration is now stale — see [_generation]
     await _refreshes?.cancel();
     _refreshes = null;
 
@@ -90,8 +103,22 @@ class DeviceRegistrar {
     // keyed on the token) but it is a pointless round trip on every rotation
     // event that reports the same value.
     if (token == _registered) return;
+    final generation = _generation;
     try {
       await _api.registerDevice(platform: _source.platform, token: token);
+      if (generation != _generation) {
+        // A stop() landed while this was in flight. The island now holds a row
+        // written AFTER the unregister, so undo it rather than record it —
+        // returning without the POST would leave exactly the orphan the
+        // unregister was for. Best-effort: if this fails the row survives, which
+        // is no worse than not having tried.
+        try {
+          await _api.unregisterDevice(token);
+        } catch (e) {
+          debugPrint('DeviceRegistrar: late registration left a row: $e');
+        }
+        return;
+      }
       _registered = token;
     } on Unauthorized {
       // The session died underneath us. Not ours to handle — the auth

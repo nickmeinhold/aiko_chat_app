@@ -302,10 +302,13 @@ class AuthController extends AsyncNotifier<AppUser?> {
     //
     // The unpair goes with it, and BEFORE the clear: a ban ends the session like
     // any other terminal state, and a row left here is unclearable afterwards.
-    // Best-effort by nature — the credential may already be rejected, in which
-    // case `stop()` swallows and the row survives (a known residual, not a new
-    // one). Attempting it costs nothing and sometimes works.
-    await _unpairDevice();
+    // Best-effort — the credential may already be rejected, in which case
+    // `stop()` swallows and the row survives (a known residual, not a new one).
+    //
+    // Fenced for the same reason as the teardown: /suspended is a SOFT gate, so
+    // "try again" can reach /login and sign in while this await is in flight,
+    // and the trailing clear would stomp that new session's credential.
+    if (!await _unpairDeviceUnlessReborn()) return true;
     await _tokens.clearTokens();
     await _cachedUser.clear();
     return true;
@@ -492,7 +495,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// R3-B). Clearing first means any human-paced re-login's `setTokens` always
   /// lands after this clear, never before it.
   Future<void> _teardownResources() async {
-    await _unpairDevice();
+    if (!await _unpairDeviceUnlessReborn()) return;
     // Clear any half-finished identity provisioning so a teardown ALWAYS lands in
     // a clean logged-out state — otherwise an abandoned PendingHandle survives
     // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
@@ -510,34 +513,43 @@ class AuthController extends AsyncNotifier<AppUser?> {
 
   /// Tell the island to stop pushing to this handset, while we can still ask.
   ///
-  /// MUST PRECEDE THE CREDENTIAL CLEAR on every path that ends a session.
-  /// `DELETE /v1/devices` is authenticated: run it after the tokens are gone and
-  /// it 401s, the island's row survives, and this handset keeps receiving that
-  /// account's pushes with no way left to stop it. On a shared phone that is the
-  /// privacy-relevant residual, and it is entirely silent.
+  /// Must precede the credential clear: `DELETE /v1/devices` is authenticated,
+  /// so once the tokens are gone it 401s and the island's row survives — leaving
+  /// this handset receiving an account's pushes with nothing left that could
+  /// stop it.
   ///
-  /// IT IS CALLED FROM THREE PLACES, NOT ONE, and that is a fact about this
-  /// class rather than a missed refactor. `_teardownResources` describes itself
-  /// as the single owner of "end this session" and is the door for logout, the
-  /// signal-driven teardown and account deletion — but two other methods clear
-  /// tokens without going through it, each for a stated reason:
+  /// Called from THREE places, not one. `_teardownResources` covers logout, the
+  /// signal-driven teardown and account deletion; [switchGateway] and
+  /// [_settleSuspension] each clear tokens without going through it.
+  /// [_restoreSession] does too and is deliberately NOT a caller — nothing has
+  /// registered yet in that process.
+  Future<void> _unpairDevice() async =>
+      ref.read(deviceRegistrarProvider)?.stop();
+
+  /// [_unpairDevice], plus the fence that makes it safe to run before a clear.
   ///
-  ///   - [switchGateway] tears down BY HAND so its error-swallowing stays
-  ///     narrow. It also has an extra ordering constraint: the unpair has to
-  ///     happen before `configProvider` is invalidated, or the DELETE is
-  ///     addressed to the island the user is arriving at instead of the one they
-  ///     are leaving.
-  ///   - [_settleSuspension] clears the dead credential after parking the user
-  ///     on /suspended. A ban is still an ended session, and the row it leaves
-  ///     behind can never be cleared afterwards.
+  /// Returns false if the session was REBORN during the await, in which case the
+  /// caller must abandon its teardown entirely — the new session owns the
+  /// credential now.
   ///
-  /// [_restoreSession] also clears tokens on a dead cold-start session and is
-  /// deliberately NOT a caller: nothing has registered yet in this process, so
-  /// there is nothing to unpair. A row left by a PREVIOUS run is unreachable
-  /// there — the credential that could delete it is already invalid — which is
-  /// the gap a pending-unregister retried on next launch would close.
-  Future<void> _unpairDevice() =>
-      ref.read(deviceRegistrarProvider)?.stop() ?? Future.value();
+  /// The unpair is a network round-trip sitting ahead of `clearTokens()`, and
+  /// this class already documents (Carnot R3-B) why nothing slow may sit there:
+  /// `logout` publishes logged-out BEFORE awaiting, so the router is on /login
+  /// and a re-sign-in can `setTokens` a live session inside the window — which a
+  /// trailing `clearTokens()` then stomps, leaving a logged-in-but-tokenless app
+  /// whose next call 401s.
+  ///
+  /// The two constraints are genuinely opposed — the DELETE needs a live
+  /// credential, the clear must be immediate — so this is the commit-time fence
+  /// [refreshUser] already uses, not an ordering that satisfies one and breaks
+  /// the other. A changed access token proves somebody else owns the session:
+  /// `setTokens` updates the provider's cache synchronously, so the comparison
+  /// sees a re-login.
+  Future<bool> _unpairDeviceUnlessReborn() async {
+    final before = await _tokens.currentAccessToken();
+    await _unpairDevice();
+    return await _tokens.currentAccessToken() == before;
+  }
 
   /// Explicit, user-initiated logout.
   Future<void> logout() async {

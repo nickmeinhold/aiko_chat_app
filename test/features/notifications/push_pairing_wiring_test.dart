@@ -13,6 +13,7 @@
 // refuses to deliver to, or keeps one it should have forgotten.
 import 'dart:async';
 
+import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show AccountSuspended;
@@ -351,4 +352,94 @@ void main() {
       });
     },
   );
+
+  group('the cage-match round-1 findings', () {
+    test(
+      'a registration in flight when the session ends does NOT survive it',
+      () async {
+        // Carnot + Tesla + Maxwell converged here. start() is deliberately
+        // unawaited, so a sign-out can land between "POST issued" and "POST
+        // returned": stop() sees _registered == null, unregisters nothing, and
+        // the registration then completes on a dead session — the island keeps a
+        // row written AFTER the unregister.
+        final rest = FakeRestApi();
+        final gate = Completer<void>();
+        rest.registerDeviceGate = gate.future;
+        final source = _FakeSource(token: 'tok-1');
+        addTearDown(source.refreshes.close);
+        final registrar = DeviceRegistrar(source: source, api: rest);
+
+        final starting = registrar.start(); // will block inside registerDevice
+        await pumpEventQueue();
+        await registrar.stop(); // session ends mid-flight
+        gate.complete(); // the POST now lands
+        await starting;
+        await pumpEventQueue();
+
+        expect(rest.registeredDevices.map((d) => d.token), [
+          'tok-1',
+        ], reason: 'the POST did land — that is the premise, not the bug');
+        expect(
+          rest.unregisteredDevices,
+          ['tok-1'],
+          reason:
+              'the late registration must be undone; without the generation '
+              'guard the island keeps a routable row for an ended session',
+        );
+        expect(
+          registrar.registeredToken,
+          isNull,
+          reason: 'and it must not be recorded as live',
+        );
+      },
+    );
+
+    test(
+      'a re-login during the teardown await is NOT stomped (Carnot R3-B)',
+      () async {
+        // The unpair is a network round-trip placed ahead of clearTokens, and
+        // logout publishes logged-out BEFORE awaiting it — so the router is on
+        // /login and a re-sign-in can land inside the window. Without the fence
+        // the trailing clearTokens() erases the NEW session's credential and the
+        // app is logged-in-but-tokenless.
+        final rest = FakeRestApi();
+        final gate = Completer<void>();
+        rest.unregisterDeviceGate = gate.future;
+        final source = _FakeSource(token: 'tok-1');
+        addTearDown(source.refreshes.close);
+        final store = InMemoryTokenStore();
+        final container = await harness(
+          rest: rest,
+          source: source,
+          store: store,
+        );
+
+        final auth = container.read(authControllerProvider.notifier);
+        await auth.signInWithPasskey();
+        await pumpEventQueue();
+
+        final loggingOut = auth.logout(); // blocks inside the unpair
+        await pumpEventQueue();
+
+        // The user signs in again while the teardown is still awaiting.
+        await container
+            .read(tokenProviderProvider)
+            .setTokens(
+              const AuthTokens(accessToken: 'new', refreshToken: 'r2'),
+            );
+        gate.complete();
+        await loggingOut;
+        await pumpEventQueue();
+
+        expect(
+          await container.read(tokenProviderProvider).currentAccessToken(),
+          'new',
+          reason:
+              "the reborn session's credential must survive the teardown "
+              'that was already in flight — stomping it leaves the app '
+              'logged-in-but-tokenless and every later call 401s',
+        );
+      },
+    );
+  });
 }

@@ -25,10 +25,26 @@ final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
 });
 
 /// The registrar, or null where there is no token source to drive it.
+///
+/// IT IS REBUILT BY A GATEWAY SWITCH, which is not obvious from here: it watches
+/// [restApiProvider] → `backendProvider` → `configProvider`, and `switchGateway`
+/// invalidates that config. Without the dispose below, the outgoing registrar
+/// would be dropped while still holding a live `tokenRefreshes` subscription
+/// closed over the OLD island's REST client — so a token rotation after the
+/// switch would register the new token with the island the user just left.
+/// Silent, permanent, and the exact residual the unpair exists to prevent.
 final deviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
   final source = ref.watch(pushTokenSourceProvider);
   if (source == null) return null;
-  return DeviceRegistrar(source: source, api: ref.watch(restApiProvider));
+  final registrar = DeviceRegistrar(
+    source: source,
+    api: ref.watch(restApiProvider),
+  );
+  // Cancels the refresh subscription. The unregister inside stop() is a no-op
+  // here whenever the caller already unpaired explicitly (`_registered` is
+  // null), so this does not double-DELETE on a normal switch.
+  ref.onDispose(registrar.stop);
+  return registrar;
 });
 
 /// Starts the push pairing when a session begins.
@@ -53,6 +69,19 @@ final deviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
 /// Watched from `main()` so it is alive before the session restore completes;
 /// a listener created later would miss the transition it exists to observe.
 final pushPairingProvider = Provider<void>((ref) {
+  // WATCH, not read — this pins the registrar to this provider's lifetime, which
+  // main() holds for the life of the app.
+  //
+  // Everything else here only ever `read`s it, and a read neither keeps a
+  // provider alive nor guarantees the next read returns the same object. Left
+  // unpinned, `start()` could animate one registrar and `stop()` construct a
+  // silent twin whose memo has never held a token — so the DELETE never fires
+  // and the island's row survives, which is the failure the ordering test was
+  // written to prevent. Verifying instance identity in a plain unit test cannot
+  // refute this: with no widget scheduler running, the disposal it would catch
+  // never fires. The pin is cheap; the proof was not available.
+  ref.watch(deviceRegistrarProvider);
+
   ref.listen<AsyncValue<AppUser?>>(authControllerProvider, (previous, next) {
     final wasSignedIn = previous?.value != null;
     final isSignedIn = next.value != null;

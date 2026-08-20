@@ -199,17 +199,26 @@ class FakeRestApi implements ChatRestApi {
   final List<String> unregisteredDevices = [];
   Object? registerDeviceThrows;
 
+  /// If set, the call AWAITS this before recording — lets a test hold a
+  /// registration in flight and interleave a sign-out with it. The in-flight
+  /// window is the only place the start/stop race lives, and it is invisible to
+  /// any test that awaits each step to completion.
+  Future<void>? registerDeviceGate;
+  Future<void>? unregisterDeviceGate;
+
   @override
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
   }) async {
     if (registerDeviceThrows != null) throw registerDeviceThrows!;
+    if (registerDeviceGate != null) await registerDeviceGate;
     registeredDevices.add((platform: platform, token: token));
   }
 
   @override
   Future<void> unregisterDevice(String token) async {
+    if (unregisterDeviceGate != null) await unregisterDeviceGate;
     unregisteredDevices.add(token);
   }
 
