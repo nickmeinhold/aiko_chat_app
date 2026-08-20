@@ -48,11 +48,18 @@ void main() {
       'are refused, with a reason', (tester) async {
     await _pumpEditor(tester);
 
-    expect(find.bySemanticsLabel(RegExp('^Use this colour')), findsWidgets,
-        reason: 'an editor that offers nothing is not an editor');
-    expect(find.bySemanticsLabel(RegExp('^Unavailable')), findsWidgets,
-        reason: 'the default role is the signal colour on a light ground — '
-            'pale swatches MUST be refused, or the law is not being consulted');
+    expect(
+      find.bySemanticsLabel(RegExp('^Use this colour')),
+      findsWidgets,
+      reason: 'an editor that offers nothing is not an editor',
+    );
+    expect(
+      find.bySemanticsLabel(RegExp('^Unavailable')),
+      findsWidgets,
+      reason:
+          'the default role is the signal colour on a light ground — '
+          'pale swatches MUST be refused, or the law is not being consulted',
+    );
   });
 
   testWidgets('an illegal colour cannot be committed', (tester) async {
@@ -75,14 +82,20 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(container.read(skinSelectionProvider).isCustomised, isFalse,
-        reason: 'tapping a refused swatch must not record an override');
-    expect(container.read(skinSelectionProvider).lightOverrides,
-        before.lightOverrides);
+    expect(
+      container.read(skinSelectionProvider).isCustomised,
+      isFalse,
+      reason: 'tapping a refused swatch must not record an override',
+    );
+    expect(
+      container.read(skinSelectionProvider).lightOverrides,
+      before.lightOverrides,
+    );
   });
 
-  testWidgets('a legal colour CAN be committed, and lands in the live theme',
-      (tester) async {
+  testWidgets('a legal colour CAN be committed, and lands in the live theme', (
+    tester,
+  ) async {
     final container = await _pumpEditor(tester);
 
     await tester.tap(find.bySemanticsLabel(RegExp('^Use this colour')).first);
@@ -144,35 +157,52 @@ void main() {
       // Prove the commit ACTUALLY happened before asserting anything about the
       // result — otherwise a tap that lands on nothing makes every assertion
       // below true of a palette that was never edited.
-      expect(container.read(skinSelectionProvider).lightOverrides,
-          contains(role),
-          reason: 'the tap on a ${role.label} swatch did not commit');
+      expect(
+        container.read(skinSelectionProvider).lightOverrides,
+        contains(role),
+        reason: 'the tap on a ${role.label} swatch did not commit',
+      );
 
-      expect(checkPalette(container.read(themePresetProvider).light), isEmpty,
-          reason: 'after editing ${role.name} the light palette broke');
-      expect(checkPalette(container.read(themePresetProvider).dark), isEmpty,
-          reason: 'editing the light half must not disturb the dark one');
+      expect(
+        checkPalette(container.read(themePresetProvider).light),
+        isEmpty,
+        reason: 'after editing ${role.name} the light palette broke',
+      );
+      expect(
+        checkPalette(container.read(themePresetProvider).dark),
+        isEmpty,
+        reason: 'editing the light half must not disturb the dark one',
+      );
     }
   });
 
-  testWidgets('Reset appears only once something is customised, and clears it',
-      (tester) async {
-    final container = await _pumpEditor(tester);
-    expect(find.text('Reset'), findsNothing,
-        reason: 'nothing to reset yet — an always-present Reset is noise');
+  testWidgets(
+    'Reset appears only once something is customised, and clears it',
+    (tester) async {
+      final container = await _pumpEditor(tester);
+      expect(
+        find.text('Reset'),
+        findsNothing,
+        reason: 'nothing to reset yet — an always-present Reset is noise',
+      );
 
-    await tester.tap(find.bySemanticsLabel(RegExp('^Use this colour')).first);
-    await tester.pumpAndSettle();
-    expect(find.text('Reset'), findsOneWidget);
+      await tester.tap(find.bySemanticsLabel(RegExp('^Use this colour')).first);
+      await tester.pumpAndSettle();
+      expect(find.text('Reset'), findsOneWidget);
 
-    await tester.tap(find.text('Reset'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('Reset'));
+      await tester.pumpAndSettle();
 
-    final s = container.read(skinSelectionProvider);
-    expect(s.isCustomised, isFalse,
-        reason: 'a reset that leaves a stale override behind is the classic '
-            'half-reset bug');
-    expect(s.lightOverrides, isEmpty);
-    expect(s.darkOverrides, isEmpty);
-  });
+      final s = container.read(skinSelectionProvider);
+      expect(
+        s.isCustomised,
+        isFalse,
+        reason:
+            'a reset that leaves a stale override behind is the classic '
+            'half-reset bug',
+      );
+      expect(s.lightOverrides, isEmpty);
+      expect(s.darkOverrides, isEmpty);
+    },
+  );
 }

@@ -95,24 +95,27 @@ class GatewayTransport implements ChatTransport {
     void Function(String message)? log,
     bool Function()? carriesOrigin,
     Future<void> Function()? onConnected,
-  })  : _wsBaseUrl = wsBaseUrl,
-        _tokens = tokens,
-        _channelFactory = channelFactory ?? _defaultChannelFactory,
-        _log = log,
-        _carriesOrigin = carriesOrigin ?? (() => false),
-        _onConnected = onConnected;
+  }) : _wsBaseUrl = wsBaseUrl,
+       _tokens = tokens,
+       _channelFactory = channelFactory ?? _defaultChannelFactory,
+       _log = log,
+       _carriesOrigin = carriesOrigin ?? (() => false),
+       _onConnected = onConnected;
 
   @override
   Stream<ConnectionState> get connectionState => Stream.multi((c) {
-        // Seed the current state, then forward live changes. Both happen
-        // synchronously inside this callback and all state mutations are
-        // event-loop-serialized, so no emission slips between seed and
-        // subscription.
-        c.add(_lastConn);
-        final sub = _connState.stream
-            .listen(c.add, onError: c.addError, onDone: c.close);
-        c.onCancel = sub.cancel;
-      });
+    // Seed the current state, then forward live changes. Both happen
+    // synchronously inside this callback and all state mutations are
+    // event-loop-serialized, so no emission slips between seed and
+    // subscription.
+    c.add(_lastConn);
+    final sub = _connState.stream.listen(
+      c.add,
+      onError: c.addError,
+      onDone: c.close,
+    );
+    c.onCancel = sub.cancel;
+  });
   @override
   Stream<Message> get messages => _messages.stream;
   @override
@@ -144,10 +147,13 @@ class GatewayTransport implements ChatTransport {
       // failure while silently retaining the channels as desired state would be
       // a state/API mismatch (cage-match: Carnot). The reconcile engine
       // subscribes within a live epoch, so this is an error, not a silent hang.
-      completer.completeError(const TransportError(
+      completer.completeError(
+        const TransportError(
           code: 'not_connected',
           parsedCode: TransportErrorCode.other,
-          detail: 'subscribe before connect'));
+          detail: 'subscribe before connect',
+        ),
+      );
       return completer.future;
     }
     _subscribed.addAll(channelIds);
@@ -325,21 +331,34 @@ class GatewayTransport implements ChatTransport {
     final frame = ServerFrame.parse(text);
     switch (frame) {
       case AckFrame f:
-        _acks.add(AckResult(
-            clientMsgId: f.clientMsgId, msgId: f.msgId, createdAt: f.createdAt));
+        _acks.add(
+          AckResult(
+            clientMsgId: f.clientMsgId,
+            msgId: f.msgId,
+            createdAt: f.createdAt,
+          ),
+        );
       case MessageFrame f:
         _messages.add(Message.fromView(f.msg));
       case SubAckFrame f:
         _resolveSubAck(f.channelFences);
       case ErrorFrame f:
-        _errors.add(TransportError(
+        _errors.add(
+          TransportError(
             code: f.code,
             parsedCode: f.parsedCode,
             detail: f.detail,
-            refClientMsgId: f.refClientMsgId));
+            refClientMsgId: f.refClientMsgId,
+          ),
+        );
       case RetractionFrame f:
-        _retractions.add(Retraction(
-            channelId: f.channelId, id: f.id, targetMsgId: f.targetMsgId));
+        _retractions.add(
+          Retraction(
+            channelId: f.channelId,
+            id: f.id,
+            targetMsgId: f.targetMsgId,
+          ),
+        );
       case UnknownFrame f:
         _log?.call('dropped unknown frame: ${f.reason}');
     }
@@ -388,7 +407,9 @@ class GatewayTransport implements ChatTransport {
         return;
       }
     }
-    _log?.call('suback matched no pending subscribe (resubscribe ack): $fences');
+    _log?.call(
+      'suback matched no pending subscribe (resubscribe ack): $fences',
+    );
   }
 
   /// Reject every in-flight `subscribe` whose `suback` can no longer arrive (the
@@ -397,10 +418,13 @@ class GatewayTransport implements ChatTransport {
     while (_pendingSubacks.isNotEmpty) {
       final p = _pendingSubacks.removeFirst();
       if (!p.completer.isCompleted) {
-        p.completer.completeError(const TransportError(
+        p.completer.completeError(
+          const TransportError(
             code: 'disconnected',
             parsedCode: TransportErrorCode.other,
-            detail: 'socket dropped before suback'));
+            detail: 'socket dropped before suback',
+          ),
+        );
       }
     }
   }

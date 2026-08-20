@@ -34,9 +34,9 @@ class VideoToken {
   final bool canPublish;
 
   factory VideoToken.fromJson(Map<String, dynamic> json) => VideoToken(
-        token: json['token'] as String,
-        url: json['url'] as String,
-        room: json['room'] as String,
-        canPublish: json['can_publish'] as bool? ?? true,
-      );
+    token: json['token'] as String,
+    url: json['url'] as String,
+    room: json['room'] as String,
+    canPublish: json['can_publish'] as bool? ?? true,
+  );
 }

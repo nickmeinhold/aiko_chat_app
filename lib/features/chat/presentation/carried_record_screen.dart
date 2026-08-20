@@ -28,8 +28,9 @@ import '../domain/message.dart';
 ///
 /// Overridable in tests to inject a fixed message set (signed / tampered /
 /// unsigned / other-author) without driving the whole repo.
-final myCarriedMessagesProvider =
-    FutureProvider.autoDispose<List<Message>>((ref) async {
+final myCarriedMessagesProvider = FutureProvider.autoDispose<List<Message>>((
+  ref,
+) async {
   final me = ref.watch(currentUserProvider);
   if (me == null) return const [];
   final repo = await ref.watch(chatRepositoryProvider.future);
@@ -48,8 +49,9 @@ final myCarriedMessagesProvider =
 /// device's sovereign public key (so a valid signature under a foreign key is
 /// never claimed as yours). Fails closed to an empty record while logged out /
 /// before the user id is known.
-final carriedRecordProvider =
-    FutureProvider.autoDispose<CarriedRecord>((ref) async {
+final carriedRecordProvider = FutureProvider.autoDispose<CarriedRecord>((
+  ref,
+) async {
   final me = ref.watch(currentUserProvider);
   if (me == null || me.userId.isEmpty) return CarriedRecord.empty;
   // The subject is ME, and my device holds my sovereign key — bind ownership to
@@ -73,17 +75,17 @@ class CarriedRecordScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Your Carried Record')),
       body: ReadingColumn(
         child: recordAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not build your carried record.\n$e',
-              textAlign: TextAlign.center,
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Could not build your carried record.\n$e',
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
-        ),
-        data: (record) => _RecordBody(record),
+          data: (record) => _RecordBody(record),
         ),
       ),
     );
@@ -136,10 +138,7 @@ class _Header extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Your authored record',
-            style: theme.textTheme.titleMedium,
-          ),
+          Text('Your authored record', style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
             'Messages attributed to you in this device’s cache. Only rows '
@@ -157,8 +156,9 @@ class _Header extends StatelessWidget {
             'was carried (older or never-signed messages); that is not a sign of '
             'dishonesty. This is only your authorship: it is not a reputation, '
             'and not a record of anything anyone has said about you.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -175,25 +175,25 @@ class _EntryTile extends StatelessWidget {
     final theme = Theme.of(context);
     final (icon, color, label) = switch (entry.verdict) {
       CarriedRecordVerdict.verified => (
-          Icons.verified_outlined,
-          theme.colorScheme.primary,
-          'Verified — provably yours',
-        ),
+        Icons.verified_outlined,
+        theme.colorScheme.primary,
+        'Verified — provably yours',
+      ),
       CarriedRecordVerdict.invalid => (
-          Icons.warning_amber_outlined,
-          theme.colorScheme.error,
-          "Invalid — signature doesn't match",
-        ),
+        Icons.warning_amber_outlined,
+        theme.colorScheme.error,
+        "Invalid — signature doesn't match",
+      ),
       CarriedRecordVerdict.foreignKey => (
-          Icons.devices_other_outlined,
-          theme.colorScheme.tertiary,
-          'Signed by a different key — not this device',
-        ),
+        Icons.devices_other_outlined,
+        theme.colorScheme.tertiary,
+        'Signed by a different key — not this device',
+      ),
       CarriedRecordVerdict.unsigned => (
-          Icons.remove,
-          theme.colorScheme.onSurfaceVariant,
-          'Unsigned — no signature carried',
-        ),
+        Icons.remove,
+        theme.colorScheme.onSurfaceVariant,
+        'Unsigned — no signature carried',
+      ),
     };
     return ListTile(
       leading: Icon(icon, color: color),
@@ -205,8 +205,9 @@ class _EntryTile extends StatelessWidget {
           if (entry.signedAtMs != null)
             Text(
               _formatTimestamp(entry.signedAtMs!),
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
         ],
       ),

@@ -21,35 +21,35 @@ class BlockedUsersScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Blocked users')),
       body: ReadingColumn(
         child: blocksAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not load your blocked users.\n$e',
-              textAlign: TextAlign.center,
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Could not load your blocked users.\n$e',
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
-        ),
-        data: (blocks) {
-          if (blocks.isEmpty) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  "You haven't blocked anyone.\nLong-press a message to block its "
-                  'sender.',
-                  textAlign: TextAlign.center,
+          data: (blocks) {
+            if (blocks.isEmpty) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    "You haven't blocked anyone.\nLong-press a message to block its "
+                    'sender.',
+                    textAlign: TextAlign.center,
+                  ),
                 ),
-              ),
+              );
+            }
+            return ListView.separated(
+              itemCount: blocks.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (_, i) => _BlockedTile(blocks[i]),
             );
-          }
-          return ListView.separated(
-            itemCount: blocks.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (_, i) => _BlockedTile(blocks[i]),
-          );
-        },
+          },
         ),
       ),
     );

@@ -21,16 +21,27 @@ void main() {
     await initializeTestEnvironment();
   });
 
-  const generalChannel =
-      Channel(id: 'general', name: 'general', kind: ChannelKind.standard);
+  const generalChannel = Channel(
+    id: 'general',
+    name: 'general',
+    kind: ChannelKind.standard,
+  );
   const dm = Channel(id: 'dm:me:alice', name: '', kind: ChannelKind.dm);
   const roster = [
     ChannelMember(
-        userId: 'u1', role: 'member', canPost: true, handle: 'me',
-        displayName: 'Me'),
+      userId: 'u1',
+      role: 'member',
+      canPost: true,
+      handle: 'me',
+      displayName: 'Me',
+    ),
     ChannelMember(
-        userId: 'alice-key-opaque', role: 'member', canPost: true,
-        handle: 'alice', displayName: 'Alice'),
+      userId: 'alice-key-opaque',
+      role: 'member',
+      canPost: true,
+      handle: 'alice',
+      displayName: 'Alice',
+    ),
   ];
 
   final aliceMsg = Message(
@@ -38,7 +49,10 @@ void main() {
     id: 'm1',
     channelId: 'general',
     sender: const MessageSender(
-        userId: 'alice-key-opaque', kind: SenderKind.human, label: 'Alice'),
+      userId: 'alice-key-opaque',
+      kind: SenderKind.human,
+      label: 'Alice',
+    ),
     body: 'hey',
     createdAt: DateTime.utc(2026, 8, 12, 13),
     deliveryState: DeliveryState.sent,
@@ -52,55 +66,64 @@ void main() {
   }
 
   testWidgets(
-      'the conversation you SELECT is the conversation you are IN, even before '
-      'the DM list confirms it', (tester) async {
-    // Tesla round-2 MEDIUM: `seedOpenedDm` writes last-known and invalidates,
-    // but `navigableChannelsProvider` reads dmsProvider's LIVE value — which
-    // does not contain the new DM until the refetch settles. If `resolveActive`
-    // falls back to the first channel across that window, the composer targets
-    // `general` while the user believes they are in the DM. That is a
-    // wrong-conversation SEND, not a cosmetic flash — so it is worth wedging the
-    // fetch open and looking directly at the active conversation.
-    setWide(tester);
-    final rest = FakeRestApi(channels: const [generalChannel])
-      ..openDmReturns = dm;
-    rest.membersByChannel['dm:me:alice'] = roster;
-    final transport = FakeChatTransport();
-    final container = makeContainer(rest: rest, transport: transport);
-    addTearDown(container.dispose);
+    'the conversation you SELECT is the conversation you are IN, even before '
+    'the DM list confirms it',
+    (tester) async {
+      // Tesla round-2 MEDIUM: `seedOpenedDm` writes last-known and invalidates,
+      // but `navigableChannelsProvider` reads dmsProvider's LIVE value — which
+      // does not contain the new DM until the refetch settles. If `resolveActive`
+      // falls back to the first channel across that window, the composer targets
+      // `general` while the user believes they are in the DM. That is a
+      // wrong-conversation SEND, not a cosmetic flash — so it is worth wedging the
+      // fetch open and looking directly at the active conversation.
+      setWide(tester);
+      final rest = FakeRestApi(channels: const [generalChannel])
+        ..openDmReturns = dm;
+      rest.membersByChannel['dm:me:alice'] = roster;
+      final transport = FakeChatTransport();
+      final container = makeContainer(rest: rest, transport: transport);
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
-    transport.emitMessage(aliceMsg);
-    await tester.pumpAndSettle();
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
+      transport.emitMessage(aliceMsg);
+      await tester.pumpAndSettle();
 
-    // Wedge every SUBSEQUENT listDms open, so the post-seed refetch never
-    // settles and we can inspect the window itself.
-    final gate = Completer<void>();
-    rest.listDmsGate = gate;
+      // Wedge every SUBSEQUENT listDms open, so the post-seed refetch never
+      // settles and we can inspect the window itself.
+      final gate = Completer<void>();
+      rest.listDmsGate = gate;
 
-    await tester.longPress(find.text('hey'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Message Alice'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 16));
+      await tester.longPress(find.text('hey'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Message Alice'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
 
-    final selected = container.read(selectedChannelIdProvider);
-    final active = ChatScreen.resolveActive(
-        container.read(navigableChannelsProvider), selected);
+      final selected = container.read(selectedChannelIdProvider);
+      final active = ChatScreen.resolveActive(
+        container.read(navigableChannelsProvider),
+        selected,
+      );
 
-    gate.complete();
-    await tester.pumpAndSettle();
+      gate.complete();
+      await tester.pumpAndSettle();
 
-    expect(selected, 'dm:me:alice');
-    expect(active?.id, 'dm:me:alice',
-        reason: 'while the refetch is in flight the active conversation must be '
-            'the DM we opened, not a fallback channel the composer would send to');
-  });
+      expect(selected, 'dm:me:alice');
+      expect(
+        active?.id,
+        'dm:me:alice',
+        reason:
+            'while the refetch is in flight the active conversation must be '
+            'the DM we opened, not a fallback channel the composer would send to',
+      );
+    },
+  );
 
-  testWidgets('a SUPERSEDED in-flight DM fetch cannot publish its stale list',
-      (tester) async {
+  testWidgets('a SUPERSEDED in-flight DM fetch cannot publish its stale list', (
+    tester,
+  ) async {
     // Tesla round-2 HIGH. `dmsProvider` awaits `listDms()` and then
     // unconditionally `remember(userId, dms)`. Riverpod discards a superseded
     // run's RETURN value, but a Dart Future cannot be cancelled — so the older
@@ -137,8 +160,11 @@ void main() {
     gate.complete();
     await tester.pumpAndSettle();
 
-    expect(container.read(dmsProvider).value, contains(dm),
-        reason: 'the superseded run must not publish a list predating the DM');
+    expect(
+      container.read(dmsProvider).value,
+      contains(dm),
+      reason: 'the superseded run must not publish a list predating the DM',
+    );
     expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsOneWidget);
 
     // And it must not have poisoned last-known either: a LATER failure has to
@@ -148,12 +174,14 @@ void main() {
     container.invalidate(dmsProvider);
     await tester.pumpAndSettle();
 
-    expect(container.read(dmsProvider).value, contains(dm),
-        reason: 'a stale run must not have overwritten the fail-soft fallback');
+    expect(
+      container.read(dmsProvider).value,
+      contains(dm),
+      reason: 'a stale run must not have overwritten the fail-soft fallback',
+    );
   });
 
-  testWidgets(
-      'a FLAPPING source defers healing but does not starve it — the departed '
+  testWidgets('a FLAPPING source defers healing but does not starve it — the departed '
       'selection clears on the first settle', (tester) async {
     // The question Carnot asked in every round, answered by running it rather
     // than by argument: with the heal skipping whenever either source is
@@ -191,8 +219,11 @@ void main() {
 
     // Deferred, exactly as designed — and the DISPLAY is already healed even
     // though the notifier still holds the pick.
-    expect(container.read(selectedChannelIdProvider), 'dm:me:alice',
-        reason: 'the guard defers while a source is in flight');
+    expect(
+      container.read(selectedChannelIdProvider),
+      'dm:me:alice',
+      reason: 'the guard defers while a source is in flight',
+    );
 
     // The ether quiets: the flap ends and the sources settle.
     flap.complete();
@@ -200,13 +231,16 @@ void main() {
     container.invalidate(dmsProvider);
     await tester.pumpAndSettle();
 
-    expect(container.read(selectedChannelIdProvider), isNull,
-        reason: 'healing resumes on the first settle — deferred, never starved');
+    expect(
+      container.read(selectedChannelIdProvider),
+      isNull,
+      reason: 'healing resumes on the first settle — deferred, never starved',
+    );
   });
 
-  testWidgets(
-      'DMs-settle-first ordering still heals a departed selection (Tesla r3)',
-      (tester) async {
+  testWidgets('DMs-settle-first ordering still heals a departed selection (Tesla r3)', (
+    tester,
+  ) async {
     // Tesla's round-3 HIGH names completion ORDER as the decider: DM list
     // settles WITHOUT the selected DM while channels is still mid-refresh, the
     // heal skips, then channels settles to an element-equal roster — and if the
@@ -239,21 +273,28 @@ void main() {
 
     // DMs settle FIRST, while channels is still in flight → the heal must skip.
     await tester.pump(const Duration(milliseconds: 16));
-    expect(container.read(selectedChannelIdProvider), 'dm:me:alice',
-        reason: 'skipped while channels is mid-refresh, as designed');
+    expect(
+      container.read(selectedChannelIdProvider),
+      'dm:me:alice',
+      reason: 'skipped while channels is mid-refresh, as designed',
+    );
 
     // Now channels settles to the SAME roster — the claimed-silent transition.
     channelsGate.complete();
     await tester.pumpAndSettle();
 
-    expect(container.read(selectedChannelIdProvider), isNull,
-        reason: 'an element-equal channels settle must still re-notify, so the '
-            'departed DM pick clears rather than becoming a ghost');
+    expect(
+      container.read(selectedChannelIdProvider),
+      isNull,
+      reason:
+          'an element-equal channels settle must still re-notify, so the '
+          'departed DM pick clears rather than becoming a ghost',
+    );
   });
 
-  testWidgets(
-      'a post-mint fetch that OMITS the DM does not retire the seed (r4)',
-      (tester) async {
+  testWidgets('a post-mint fetch that OMITS the DM does not retire the seed (r4)', (
+    tester,
+  ) async {
     // Carnot round-4 HIGH. Retiring a seed because a fetch merely STARTED after
     // the mint assumes the island lists a DM the instant `POST /v1/dm` returns —
     // an assumption this PR has never verified (#2947 owns the island half). If
@@ -281,8 +322,11 @@ void main() {
     await tester.tap(find.text('Message Alice'));
     await tester.pumpAndSettle();
 
-    expect(container.read(selectedChannelIdProvider), 'dm:me:alice',
-        reason: 'a lagging list must not evict the conversation just opened');
+    expect(
+      container.read(selectedChannelIdProvider),
+      'dm:me:alice',
+      reason: 'a lagging list must not evict the conversation just opened',
+    );
     expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsOneWidget);
 
     // Several more successful, still-lagging fetches change nothing.
@@ -299,17 +343,19 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-        container
-            .read(navigableChannelsProvider)
-            .where((c) => c.id == 'dm:me:alice')
-            .length,
-        1,
-        reason: 'a confirmed seed retires rather than double-listing the DM');
+      container
+          .read(navigableChannelsProvider)
+          .where((c) => c.id == 'dm:me:alice')
+          .length,
+      1,
+      reason: 'a confirmed seed retires rather than double-listing the DM',
+    );
     expect(container.read(selectedChannelIdProvider), 'dm:me:alice');
   });
 
-  testWidgets('the sidebar and the message pane agree on which DMs exist',
-      (tester) async {
+  testWidgets('the sidebar and the message pane agree on which DMs exist', (
+    tester,
+  ) async {
     // Not a reviewer finding — found while checking one. The sidebar read
     // `dmsProvider` directly while the active-conversation resolver went through
     // `navigableChannelsProvider`, so across the post-mint refresh window the
@@ -339,18 +385,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 16));
 
     final active = ChatScreen.resolveActive(
-        container.read(navigableChannelsProvider),
-        container.read(selectedChannelIdProvider));
+      container.read(navigableChannelsProvider),
+      container.read(selectedChannelIdProvider),
+    );
     expect(active?.id, 'dm:me:alice');
-    expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsOneWidget,
-        reason: 'the sidebar must list the DM the pane is already showing');
+    expect(
+      find.byKey(const Key('sidebar-dm-dm:me:alice')),
+      findsOneWidget,
+      reason: 'the sidebar must list the DM the pane is already showing',
+    );
 
     gate.complete();
     await tester.pumpAndSettle();
   });
 
-  testWidgets('a superseded run completing LAST still cannot publish (r5)',
-      (tester) async {
+  testWidgets('a superseded run completing LAST still cannot publish (r5)', (
+    tester,
+  ) async {
     // Carnot round-5 HIGH: the earlier stale-run test let run A finish FIRST.
     // The untested axis is the reverse — run A (stale) resolving AFTER run B has
     // already published and retired the seed. If Riverpod's discard of a
@@ -389,8 +440,11 @@ void main() {
     gateA.complete();
     await tester.pumpAndSettle();
 
-    expect(container.read(visibleDmsProvider), contains(dm),
-        reason: 'a superseded run must not publish even when it finishes last');
+    expect(
+      container.read(visibleDmsProvider),
+      contains(dm),
+      reason: 'a superseded run must not publish even when it finishes last',
+    );
     expect(find.byKey(const Key('sidebar-dm-dm:me:alice')), findsOneWidget);
   });
 }

@@ -23,7 +23,9 @@ void main() {
   // under test is what's rendered. The wide layout has its own suite
   // (responsive_layout_test.dart).
   Future<void> pumpNarrow(
-      WidgetTester tester, ProviderContainer container) async {
+    WidgetTester tester,
+    ProviderContainer container,
+  ) async {
     tester.view.physicalSize = const Size(400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -31,7 +33,9 @@ void main() {
     await pumpApp(tester, container);
   }
 
-  testWidgets('passkey sign-in → chat screen shows the channel', (tester) async {
+  testWidgets('passkey sign-in → chat screen shows the channel', (
+    tester,
+  ) async {
     final rest = FakeRestApi();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
@@ -40,7 +44,10 @@ void main() {
     await signIn(tester);
 
     expect(rest.passkeyAuthFinishCalls, 1);
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget); // channel name
+    expect(
+      find.widgetWithText(AppBar, 'general'),
+      findsOneWidget,
+    ); // channel name
     expect(find.text('No messages yet. Say hello!'), findsOneWidget);
   });
 
@@ -56,7 +63,8 @@ void main() {
     await tester.enterText(find.byType(TextField).first, 'hello world');
     await tester.tap(find.byKey(const Key('composer-send')));
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     await tester.pumpAndSettle();
 
     expect(transport.sent.map((m) => m.body), contains('hello world'));
@@ -81,18 +89,23 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     await tester.pumpAndSettle();
     expect(transport.sent.map((m) => m.body), isNot(contains('stay')));
     final field = tester.widget<TextField>(find.byType(TextField).first);
-    expect(field.controller!.text, 'stay\n',
-        reason: 'Shift+Enter inserts a newline at the caret, not a no-op');
+    expect(
+      field.controller!.text,
+      'stay\n',
+      reason: 'Shift+Enter inserts a newline at the caret, not a no-op',
+    );
 
     // A bare Enter sends (physical-keyboard scoped via Focus.onKeyEvent).
     await tester.enterText(find.byType(TextField).first, 'via-enter');
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     await tester.pumpAndSettle();
     expect(transport.sent.map((m) => m.body), contains('via-enter'));
   });
@@ -109,8 +122,10 @@ void main() {
     transport.emitConn(ConnectionState.unauthenticated);
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(FilledButton, 'Create a passkey'),
-        findsOneWidget); // back at login
+    expect(
+      find.widgetWithText(FilledButton, 'Create a passkey'),
+      findsOneWidget,
+    ); // back at login
   });
 
   testWidgets('transient disconnected does NOT log out', (tester) async {
@@ -147,10 +162,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(transport.disconnectCalls, greaterThanOrEqualTo(1));
-    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
+    expect(
+      find.widgetWithText(FilledButton, 'Create a passkey'),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('logout → different user → no cross-session messages', (tester) async {
+  testWidgets('logout → different user → no cross-session messages', (
+    tester,
+  ) async {
     final rest = FakeRestApi();
     final transport = FakeChatTransport();
     final container = makeContainer(rest: rest, transport: transport);
@@ -163,22 +183,32 @@ void main() {
     await tester.enterText(find.byType(TextField).first, 'secret-from-A');
     await tester.tap(find.byKey(const Key('composer-send')));
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     await tester.pumpAndSettle();
     expect(find.text('secret-from-A'), findsOneWidget);
 
     // Log out, then a DIFFERENT user logs in on the same app instance.
     await tester.tap(find.byIcon(Icons.logout));
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(FilledButton, 'Create a passkey'), findsOneWidget);
+    expect(
+      find.widgetWithText(FilledButton, 'Create a passkey'),
+      findsOneWidget,
+    );
 
     rest.user = const AppUser(
-        userId: 'u2', username: 'bob', displayName: 'Bob', aikoUsername: 'bob');
+      userId: 'u2',
+      username: 'bob',
+      displayName: 'Bob',
+      aikoUsername: 'bob',
+    );
     await signIn(tester);
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     await tester.pumpAndSettle();
 
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
@@ -186,115 +216,134 @@ void main() {
   });
 
   testWidgets(
-      'channel switcher swaps the message surface and scopes sends per channel',
-      (tester) async {
-    final rest = FakeRestApi(channels: const [
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
-    ]);
-    final transport = FakeChatTransport();
-    final container = makeContainer(rest: rest, transport: transport);
-    addTearDown(container.dispose);
+    'channel switcher swaps the message surface and scopes sends per channel',
+    (tester) async {
+      final rest = FakeRestApi(
+        channels: const [
+          Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+          Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+        ],
+      );
+      final transport = FakeChatTransport();
+      final container = makeContainer(rest: rest, transport: transport);
+      addTearDown(container.dispose);
 
-    await pumpNarrow(tester, container);
-    await signIn(tester);
+      await pumpNarrow(tester, container);
+      await signIn(tester);
 
-    // The switcher opens on the default (first) channel.
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+      // The switcher opens on the default (first) channel.
+      expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
 
-    // A send lands in 'general'.
-    await tester.enterText(find.byType(TextField).first, 'in-general');
-    await tester.tap(find.byKey(const Key('composer-send')));
-    await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
-    await tester.pumpAndSettle();
-    expect(find.text('in-general'), findsOneWidget);
+      // A send lands in 'general'.
+      await tester.enterText(find.byType(TextField).first, 'in-general');
+      await tester.tap(find.byKey(const Key('composer-send')));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('in-general'), findsOneWidget);
 
-    // Switch to 'random' via the dropdown.
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('random').last);
-    await tester.pumpAndSettle();
+      // Switch to 'random' via the dropdown.
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('random').last);
+      await tester.pumpAndSettle();
 
-    // Now on 'random': general's message is off-screen, empty-state shows. No
-    // re-subscribe was needed — the repo already subscribed to both channels.
-    expect(find.text('in-general'), findsNothing);
-    expect(find.text('No messages yet. Say hello!'), findsOneWidget);
+      // Now on 'random': general's message is off-screen, empty-state shows. No
+      // re-subscribe was needed — the repo already subscribed to both channels.
+      expect(find.text('in-general'), findsNothing);
+      expect(find.text('No messages yet. Say hello!'), findsOneWidget);
 
-    // A send now targets 'random' (channelId threaded from the active channel).
-    await tester.enterText(find.byType(TextField).first, 'in-random');
-    await tester.tap(find.byKey(const Key('composer-send')));
-    await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
-    await tester.pumpAndSettle();
-    expect(find.text('in-random'), findsOneWidget);
-    expect(find.text('in-general'), findsNothing);
+      // A send now targets 'random' (channelId threaded from the active channel).
+      await tester.enterText(find.byType(TextField).first, 'in-random');
+      await tester.tap(find.byKey(const Key('composer-send')));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('in-random'), findsOneWidget);
+      expect(find.text('in-general'), findsNothing);
 
-    // Wire-level: each send carried the ACTIVE channel's id, not just landed in
-    // the right cache slice (pins "scopes sends" at the transport, not by proxy).
-    expect(transport.sent.firstWhere((m) => m.body == 'in-general').channelId, 'c1');
-    expect(transport.sent.firstWhere((m) => m.body == 'in-random').channelId, 'c2');
+      // Wire-level: each send carried the ACTIVE channel's id, not just landed in
+      // the right cache slice (pins "scopes sends" at the transport, not by proxy).
+      expect(
+        transport.sent.firstWhere((m) => m.body == 'in-general').channelId,
+        'c1',
+      );
+      expect(
+        transport.sent.firstWhere((m) => m.body == 'in-random').channelId,
+        'c2',
+      );
 
-    // Switch back to 'general': its message is still cached (round-trip).
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('general').last);
-    await tester.pumpAndSettle();
-    expect(find.text('in-general'), findsOneWidget);
-    expect(find.text('in-random'), findsNothing);
-  });
+      // Switch back to 'general': its message is still cached (round-trip).
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('general').last);
+      await tester.pumpAndSettle();
+      expect(find.text('in-general'), findsOneWidget);
+      expect(find.text('in-random'), findsNothing);
+    },
+  );
 
-  testWidgets('a picked channel that disappears clears the pick and never snaps back',
-      (tester) async {
-    final rest = FakeRestApi(channels: const [
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
-    ]);
-    final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
-    addTearDown(container.dispose);
+  testWidgets(
+    'a picked channel that disappears clears the pick and never snaps back',
+    (tester) async {
+      final rest = FakeRestApi(
+        channels: const [
+          Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+          Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+        ],
+      );
+      final container = makeContainer(
+        rest: rest,
+        transport: FakeChatTransport(),
+      );
+      addTearDown(container.dispose);
 
-    await pumpNarrow(tester, container);
-    await signIn(tester);
+      await pumpNarrow(tester, container);
+      await signIn(tester);
 
-    // Pick 'random'.
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('random').last);
-    await tester.pumpAndSettle();
-    expect(container.read(selectedChannelIdProvider), 'c2');
+      // Pick 'random'.
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('random').last);
+      await tester.pumpAndSettle();
+      expect(container.read(selectedChannelIdProvider), 'c2');
 
-    // 'random' leaves the roster; the channel list refetches.
-    rest.channels = const [
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-    ];
-    container.refresh(channelsProvider);
-    await tester.pumpAndSettle();
+      // 'random' leaves the roster; the channel list refetches.
+      rest.channels = const [
+        Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+      ];
+      container.refresh(channelsProvider);
+      await tester.pumpAndSettle();
 
-    // The stale pick was CLEARED (not merely display-masked by _resolveActive) —
-    // this is the ref.listen/clear() write-back under test.
-    expect(container.read(selectedChannelIdProvider), isNull);
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+      // The stale pick was CLEARED (not merely display-masked by _resolveActive) —
+      // this is the ref.listen/clear() write-back under test.
+      expect(container.read(selectedChannelIdProvider), isNull);
+      expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
 
-    // 'random' returns — the user must NOT be yanked back to a pick they never
-    // re-made. (Fails if clear() is a no-op: the stale 'c2' would re-resolve.)
-    rest.channels = const [
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
-    ];
-    container.refresh(channelsProvider);
-    await tester.pumpAndSettle();
-    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
-  });
+      // 'random' returns — the user must NOT be yanked back to a pick they never
+      // re-made. (Fails if clear() is a no-op: the stale 'c2' would re-resolve.)
+      rest.channels = const [
+        Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+        Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+      ];
+      container.refresh(channelsProvider);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    },
+  );
 
-  testWidgets('an unsent draft does not bleed across a channel switch',
-      (tester) async {
-    final rest = FakeRestApi(channels: const [
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
-    ]);
-    final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
+  testWidgets('an unsent draft does not bleed across a channel switch', (
+    tester,
+  ) async {
+    final rest = FakeRestApi(
+      channels: const [
+        Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+        Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+      ],
+    );
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpNarrow(tester, container);
@@ -315,14 +364,16 @@ void main() {
     expect(find.text('draft-for-general'), findsNothing);
   });
 
-  testWidgets('channel pick resets across logout (no cross-session selection leak)',
-      (tester) async {
-    final rest = FakeRestApi(channels: const [
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
-    ]);
-    final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
+  testWidgets('channel pick resets across logout (no cross-session selection leak)', (
+    tester,
+  ) async {
+    final rest = FakeRestApi(
+      channels: const [
+        Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+        Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+      ],
+    );
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpNarrow(tester, container);
@@ -338,7 +389,8 @@ void main() {
     // Log out (chat surface unmounts → selectedChannelIdProvider auto-disposes).
     await tester.tap(find.byIcon(Icons.logout));
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)));
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     await tester.pumpAndSettle();
 
     // Back in: a fresh session lands on the default channel, NOT the prior pick.
@@ -348,10 +400,14 @@ void main() {
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
   });
 
-  testWidgets('single channel shows a plain title, not a switcher', (tester) async {
+  testWidgets('single channel shows a plain title, not a switcher', (
+    tester,
+  ) async {
     // Default FakeRestApi has one channel → no dropdown affordance.
-    final container =
-        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: FakeRestApi(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpNarrow(tester, container);
@@ -361,8 +417,9 @@ void main() {
     expect(find.byType(DropdownButton<String>), findsNothing);
   });
 
-  testWidgets('new messages auto-scroll the list to the newest (#42)',
-      (tester) async {
+  testWidgets('new messages auto-scroll the list to the newest (#42)', (
+    tester,
+  ) async {
     final rest = FakeRestApi();
     final transport = FakeChatTransport();
     final container = makeContainer(rest: rest, transport: transport);
@@ -377,58 +434,76 @@ void main() {
       await tester.enterText(find.byType(TextField).first, 'msg-$i');
       await tester.tap(find.byKey(const Key('composer-send')));
       await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
       await tester.pumpAndSettle();
     }
 
     // The list must be sitting at the bottom (newest), not pinned at the top.
     final listFinder = find.descendant(
-        of: find.byType(ListView), matching: find.byType(Scrollable));
+      of: find.byType(ListView),
+      matching: find.byType(Scrollable),
+    );
     final position = tester.state<ScrollableState>(listFinder).position;
-    expect(position.maxScrollExtent, greaterThan(0),
-        reason: 'content should overflow the viewport');
-    expect(position.pixels, closeTo(position.maxScrollExtent, 1.0),
-        reason: 'should be auto-scrolled to the newest message');
+    expect(
+      position.maxScrollExtent,
+      greaterThan(0),
+      reason: 'content should overflow the viewport',
+    );
+    expect(
+      position.pixels,
+      closeTo(position.maxScrollExtent, 1.0),
+      reason: 'should be auto-scrolled to the newest message',
+    );
 
     // The newest bubble is rendered (and thus reachable without manual scroll).
     expect(find.text('msg-19'), findsOneWidget);
   });
 
-  testWidgets('scrolled-up reader is NOT yanked to the bottom on new data (#42)',
-      (tester) async {
-    final rest = FakeRestApi();
-    final transport = FakeChatTransport();
-    final container = makeContainer(rest: rest, transport: transport);
-    addTearDown(container.dispose);
+  testWidgets(
+    'scrolled-up reader is NOT yanked to the bottom on new data (#42)',
+    (tester) async {
+      final rest = FakeRestApi();
+      final transport = FakeChatTransport();
+      final container = makeContainer(rest: rest, transport: transport);
+      addTearDown(container.dispose);
 
-    await pumpNarrow(tester, container);
-    await signIn(tester);
+      await pumpNarrow(tester, container);
+      await signIn(tester);
 
-    for (var i = 0; i < 20; i++) {
-      await tester.enterText(find.byType(TextField).first, 'old-$i');
+      for (var i = 0; i < 20; i++) {
+        await tester.enterText(find.byType(TextField).first, 'old-$i');
+        await tester.tap(find.byKey(const Key('composer-send')));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      // Scroll UP into history (away from the tail).
+      final listFinder = find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      );
+      final position = tester.state<ScrollableState>(listFinder).position;
+      position.jumpTo(0);
+      await tester.pumpAndSettle();
+      expect(position.pixels, 0);
+
+      // A new message arrives while the user is reading history.
+      await tester.enterText(find.byType(TextField).first, 'fresh');
       await tester.tap(find.byKey(const Key('composer-send')));
       await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
       await tester.pumpAndSettle();
-    }
 
-    // Scroll UP into history (away from the tail).
-    final listFinder = find.descendant(
-        of: find.byType(ListView), matching: find.byType(Scrollable));
-    final position = tester.state<ScrollableState>(listFinder).position;
-    position.jumpTo(0);
-    await tester.pumpAndSettle();
-    expect(position.pixels, 0);
-
-    // A new message arrives while the user is reading history.
-    await tester.enterText(find.byType(TextField).first, 'fresh');
-    await tester.tap(find.byKey(const Key('composer-send')));
-    await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pumpAndSettle();
-
-    // They stay where they were — no yank to the bottom.
-    expect(position.pixels, 0,
-        reason: 'a reader scrolled up should keep their position');
-  });
+      // They stay where they were — no yank to the bottom.
+      expect(
+        position.pixels,
+        0,
+        reason: 'a reader scrolled up should keep their position',
+      );
+    },
+  );
 }

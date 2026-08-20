@@ -11,10 +11,14 @@ import '../../tool/check_swiftpm_lockfile.dart';
 void main() {
   group('normaliseIdentity', () {
     test('lowercases the repo basename and strips .git', () {
-      expect(normaliseIdentity('https://github.com/google/GoogleSignIn-iOS.git'),
-          'googlesignin-ios');
-      expect(normaliseIdentity('https://github.com/google/GoogleSignIn-iOS'),
-          'googlesignin-ios');
+      expect(
+        normaliseIdentity('https://github.com/google/GoogleSignIn-iOS.git'),
+        'googlesignin-ios',
+      );
+      expect(
+        normaliseIdentity('https://github.com/google/GoogleSignIn-iOS'),
+        'googlesignin-ios',
+      );
       expect(normaliseIdentity('GoogleSignIn-iOS'), 'googlesignin-ios');
     });
   });
@@ -31,13 +35,17 @@ void main() {
           repositoryURL = "https://github.com/openid/AppAuth-iOS.git";
         };
       ''';
-      expect(declaredIdentitiesFromPbxproj(pbxproj),
-          {'googlesignin-ios', 'appauth-ios'});
+      expect(declaredIdentitiesFromPbxproj(pbxproj), {
+        'googlesignin-ios',
+        'appauth-ios',
+      });
     });
 
     test('an all-local project (no remote refs) declares nothing', () {
-      expect(declaredIdentitiesFromPbxproj('isa = PBXNativeTarget; /* Runner */'),
-          isEmpty);
+      expect(
+        declaredIdentitiesFromPbxproj('isa = PBXNativeTarget; /* Runner */'),
+        isEmpty,
+      );
     });
   });
 
@@ -48,7 +56,10 @@ void main() {
             { "identity": "googlesignin-ios", "kind": "remoteSourceControl" },
             { "identity": "appauth-ios" }
           ], "version": 3 }''';
-      expect(pinnedIdentitiesFromResolved(v3), {'googlesignin-ios', 'appauth-ios'});
+      expect(pinnedIdentitiesFromResolved(v3), {
+        'googlesignin-ios',
+        'appauth-ios',
+      });
     });
 
     test('parses v1 nested object.pins by repositoryURL', () {
@@ -61,28 +72,38 @@ void main() {
     });
 
     test('an empty lockfile pins nothing', () {
-      expect(pinnedIdentitiesFromResolved('{ "pins": [], "version": 3 }'), isEmpty);
+      expect(
+        pinnedIdentitiesFromResolved('{ "pins": [], "version": 3 }'),
+        isEmpty,
+      );
       expect(pinnedIdentitiesFromResolved('{ "version": 3 }'), isEmpty);
     });
 
     test('malformed JSON throws (fails loud, never reads as empty)', () {
-      expect(() => pinnedIdentitiesFromResolved('{ not json'),
-          throwsFormatException);
+      expect(
+        () => pinnedIdentitiesFromResolved('{ not json'),
+        throwsFormatException,
+      );
     });
   });
 
   group('driftProblems — RULE 1 (no declared roots ⇒ no pins)', () {
-    test('the PR #69 disease: pins remain after every remote dep was removed', () {
-      final problems = driftProblems(
-        declaredByPlatform: {'ios': <String>{}},
-        lockfilesByPlatform: {
-          'ios': [(path: 'ios/…/Package.resolved', pins: {'googlesignin-ios'})],
-        },
-      );
-      expect(problems, hasLength(1));
-      expect(problems.single, contains('STALE'));
-      expect(problems.single, contains('googlesignin-ios'));
-    });
+    test(
+      'the PR #69 disease: pins remain after every remote dep was removed',
+      () {
+        final problems = driftProblems(
+          declaredByPlatform: {'ios': <String>{}},
+          lockfilesByPlatform: {
+            'ios': [
+              (path: 'ios/…/Package.resolved', pins: {'googlesignin-ios'}),
+            ],
+          },
+        );
+        expect(problems, hasLength(1));
+        expect(problems.single, contains('STALE'));
+        expect(problems.single, contains('googlesignin-ios'));
+      },
+    );
 
     test('all-local, no lockfiles at all: clean (the current repo state)', () {
       expect(
@@ -108,19 +129,28 @@ void main() {
   });
 
   group('driftProblems — RULE 2 (declared roots ⊆ pinned)', () {
-    test('a declared remote dep with no committed lockfile is not reproducible', () {
-      final problems = driftProblems(
-        declaredByPlatform: {'ios': {'googlesignin-ios'}},
-        lockfilesByPlatform: {},
-      );
-      expect(problems.single, contains('MISSING lockfile'));
-    });
+    test(
+      'a declared remote dep with no committed lockfile is not reproducible',
+      () {
+        final problems = driftProblems(
+          declaredByPlatform: {
+            'ios': {'googlesignin-ios'},
+          },
+          lockfilesByPlatform: {},
+        );
+        expect(problems.single, contains('MISSING lockfile'));
+      },
+    );
 
     test('a declared dep missing from the lockfile is unresolved', () {
       final problems = driftProblems(
-        declaredByPlatform: {'ios': {'googlesignin-ios', 'appauth-ios'}},
+        declaredByPlatform: {
+          'ios': {'googlesignin-ios', 'appauth-ios'},
+        },
         lockfilesByPlatform: {
-          'ios': [(path: 'ios/…/Package.resolved', pins: {'googlesignin-ios'})],
+          'ios': [
+            (path: 'ios/…/Package.resolved', pins: {'googlesignin-ios'}),
+          ],
         },
       );
       expect(problems.single, contains('UNRESOLVED'));
@@ -132,9 +162,16 @@ void main() {
       // gates must not false-positive on the transitive closure.
       expect(
         driftProblems(
-          declaredByPlatform: {'ios': {'alpha'}},
+          declaredByPlatform: {
+            'ios': {'alpha'},
+          },
           lockfilesByPlatform: {
-            'ios': [(path: 'ios/…/Package.resolved', pins: {'alpha', 'beta-transitive'})],
+            'ios': [
+              (
+                path: 'ios/…/Package.resolved',
+                pins: {'alpha', 'beta-transitive'},
+              ),
+            ],
           },
         ),
         isEmpty,
@@ -144,9 +181,13 @@ void main() {
     test('a fully-consistent declared+pinned platform is clean', () {
       expect(
         driftProblems(
-          declaredByPlatform: {'ios': {'alpha'}},
+          declaredByPlatform: {
+            'ios': {'alpha'},
+          },
           lockfilesByPlatform: {
-            'ios': [(path: 'ios/…/Package.resolved', pins: {'alpha'})],
+            'ios': [
+              (path: 'ios/…/Package.resolved', pins: {'alpha'}),
+            ],
           },
         ),
         isEmpty,
@@ -155,17 +196,27 @@ void main() {
   });
 
   group('driftProblems — cross-platform independence', () {
-    test('ios clean, macos stale → exactly one problem, attributed to macos', () {
-      final problems = driftProblems(
-        declaredByPlatform: {'ios': {'alpha'}, 'macos': <String>{}},
-        lockfilesByPlatform: {
-          'ios': [(path: 'ios/…/Package.resolved', pins: {'alpha'})],
-          'macos': [(path: 'macos/…/Package.resolved', pins: {'ghost'})],
-        },
-      );
-      expect(problems, hasLength(1));
-      expect(problems.single, contains('macos'));
-      expect(problems.single, contains('ghost'));
-    });
+    test(
+      'ios clean, macos stale → exactly one problem, attributed to macos',
+      () {
+        final problems = driftProblems(
+          declaredByPlatform: {
+            'ios': {'alpha'},
+            'macos': <String>{},
+          },
+          lockfilesByPlatform: {
+            'ios': [
+              (path: 'ios/…/Package.resolved', pins: {'alpha'}),
+            ],
+            'macos': [
+              (path: 'macos/…/Package.resolved', pins: {'ghost'}),
+            ],
+          },
+        );
+        expect(problems, hasLength(1));
+        expect(problems.single, contains('macos'));
+        expect(problems.single, contains('ghost'));
+      },
+    );
   });
 }

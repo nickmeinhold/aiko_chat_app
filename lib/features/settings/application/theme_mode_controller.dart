@@ -11,13 +11,16 @@ const themeModePrefKey = 'aiko_theme_mode';
 /// The app's appearance preference — System (follow the OS), Light, or Dark.
 /// Persisted so a choice survives a restart; defaults to System on a
 /// missing/garbage value (fail-soft, like the other prefs-backed stores).
-final themeModeProvider =
-    NotifierProvider<ThemeModeController, ThemeMode>(ThemeModeController.new);
+final themeModeProvider = NotifierProvider<ThemeModeController, ThemeMode>(
+  ThemeModeController.new,
+);
 
 class ThemeModeController extends Notifier<ThemeMode> {
   @override
   ThemeMode build() {
-    final raw = ref.watch(sharedPreferencesProvider).getString(themeModePrefKey);
+    final raw = ref
+        .watch(sharedPreferencesProvider)
+        .getString(themeModePrefKey);
     return switch (raw) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,

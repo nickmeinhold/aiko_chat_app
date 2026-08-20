@@ -27,8 +27,8 @@ const themePresetPrefKey = 'aiko_theme_preset';
 /// working under any preset or custom palette.
 final skinSelectionProvider =
     NotifierProvider<SkinSelectionController, SkinSelection>(
-  SkinSelectionController.new,
-);
+      SkinSelectionController.new,
+    );
 
 /// The look as actually rendered — the chosen preset with the reader's
 /// overrides applied (and any override that would break the design language
@@ -38,27 +38,34 @@ final themePresetProvider = Provider<ThemePreset>(
 );
 
 /// The reader's chosen body face.
-final appFontProvider =
-    Provider<AppFont>((ref) => ref.watch(skinSelectionProvider).font);
+final appFontProvider = Provider<AppFont>(
+  (ref) => ref.watch(skinSelectionProvider).font,
+);
 
 /// The two ThemeData objects the app actually renders with — palette, edits and
 /// typeface composed. This is the ONLY place the three preferences meet; every
 /// consumer takes a finished theme rather than reassembling the pieces (and
 /// risking a surface that gets the colours but not the font).
-final lightThemeProvider = Provider<ThemeData>((ref) => buildTheme(
-      ref.watch(themePresetProvider).light,
-      font: ref.watch(appFontProvider),
-    ));
+final lightThemeProvider = Provider<ThemeData>(
+  (ref) => buildTheme(
+    ref.watch(themePresetProvider).light,
+    font: ref.watch(appFontProvider),
+  ),
+);
 
-final darkThemeProvider = Provider<ThemeData>((ref) => buildTheme(
-      ref.watch(themePresetProvider).dark,
-      font: ref.watch(appFontProvider),
-    ));
+final darkThemeProvider = Provider<ThemeData>(
+  (ref) => buildTheme(
+    ref.watch(themePresetProvider).dark,
+    font: ref.watch(appFontProvider),
+  ),
+);
 
 class SkinSelectionController extends Notifier<SkinSelection> {
   @override
   SkinSelection build() {
-    final raw = ref.watch(sharedPreferencesProvider).getString(themePresetPrefKey);
+    final raw = ref
+        .watch(sharedPreferencesProvider)
+        .getString(themePresetPrefKey);
     return SkinSelection.decode(raw); // fail-soft: garbage/legacy → sane value
   }
 
@@ -76,12 +83,9 @@ class SkinSelectionController extends Notifier<SkinSelection> {
     required Brightness brightness,
     required PaletteRole role,
     required Color? colour,
-  }) =>
-      _write(state.withOverride(
-        brightness: brightness,
-        role: role,
-        colour: colour,
-      ));
+  }) => _write(
+    state.withOverride(brightness: brightness, role: role, colour: colour),
+  );
 
   /// Choose the body typeface.
   void selectFont(AppFont font) => _write(state.withFont(font.id));

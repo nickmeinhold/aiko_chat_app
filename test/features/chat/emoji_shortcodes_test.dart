@@ -18,10 +18,13 @@ void main() {
       expect(tok.query, 'fire');
     });
 
-    test('does NOT trigger inside a URL (colon not preceded by whitespace)', () {
-      const text = 'see http://x';
-      expect(activeShortcodeToken(text, text.length), isNull);
-    });
+    test(
+      'does NOT trigger inside a URL (colon not preceded by whitespace)',
+      () {
+        const text = 'see http://x';
+        expect(activeShortcodeToken(text, text.length), isNull);
+      },
+    );
 
     test('does NOT trigger inside a time like 12:30', () {
       const text = 'at 12:30';
@@ -72,12 +75,16 @@ void main() {
     });
 
     test('is case-insensitive', () {
-      expect(filterEmojiShortcodes('SMI').map((e) => e.key),
-          filterEmojiShortcodes('smi').map((e) => e.key));
+      expect(
+        filterEmojiShortcodes('SMI').map((e) => e.key),
+        filterEmojiShortcodes('smi').map((e) => e.key),
+      );
     });
 
     test('resolves an exact common shortcode to its emoji', () {
-      final fire = filterEmojiShortcodes('fire').firstWhere((e) => e.key == 'fire');
+      final fire = filterEmojiShortcodes(
+        'fire',
+      ).firstWhere((e) => e.key == 'fire');
       expect(fire.value, '🔥');
     });
 

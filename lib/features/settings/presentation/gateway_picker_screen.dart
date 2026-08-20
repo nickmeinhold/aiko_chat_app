@@ -46,7 +46,9 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
     // to the merged live directory once it loads. Loading/error all fall back to
     // the known set — a slow or absent directory never blocks the screen.
     final known = ref.watch(knownGatewaysProvider);
-    final servers = ref.watch(gatewayDirectoryProvider).maybeWhen(
+    final servers = ref
+        .watch(gatewayDirectoryProvider)
+        .maybeWhen(
           data: (directory) => mergeDirectory(
             directory,
             known,
@@ -59,61 +61,62 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
       appBar: AppBar(title: const Text('Server')),
       body: ReadingColumn(
         child: AbsorbPointer(
-        absorbing: _switching,
-        child: ListView(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(
-                'Choose which server Aiko Chat connects to. Switching signs you '
-                'out, because your sign-in only works on the server that issued '
-                'it.',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-              ),
-            ),
-            const _SectionHeader('Servers'),
-            for (final entry in servers)
-              _ServerTile(
-                label: entry.label,
-                url: entry.httpBaseUrl,
-                selected: _isCurrent(entry.httpBaseUrl, current),
-                onTap: () => _select(entry.httpBaseUrl, entry.label),
-              ),
-            const _SectionHeader('Custom'),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: TextField(
-                controller: _customController,
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-                enableSuggestions: false,
-                decoration: const InputDecoration(
-                  labelText: 'Server URL',
-                  hintText: 'https://chat.example.com',
-                  border: OutlineInputBorder(),
-                ),
-                onSubmitted: (_) => _selectCustom(),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton(
-                  onPressed: _selectCustom,
-                  child: const Text('Connect'),
+          absorbing: _switching,
+          child: ListView(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Choose which server Aiko Chat connects to. Switching signs you '
+                  'out, because your sign-in only works on the server that issued '
+                  'it.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
-            ),
-            if (_switching)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator()),
+              const _SectionHeader('Servers'),
+              for (final entry in servers)
+                _ServerTile(
+                  label: entry.label,
+                  url: entry.httpBaseUrl,
+                  selected: _isCurrent(entry.httpBaseUrl, current),
+                  onTap: () => _select(entry.httpBaseUrl, entry.label),
+                ),
+              const _SectionHeader('Custom'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: TextField(
+                  controller: _customController,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Server URL',
+                    hintText: 'https://chat.example.com',
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => _selectCustom(),
+                ),
               ),
-          ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton(
+                    onPressed: _selectCustom,
+                    child: const Text('Connect'),
+                  ),
+                ),
+              ),
+              if (_switching)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -127,8 +130,9 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
     final raw = _customController.text.trim();
     final error = _validate(raw);
     if (error != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(error)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
       return;
     }
     _select(raw, raw);
@@ -152,16 +156,15 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
   /// dialog, error copy, and post-switch `/login` landing — they can't drift.
   /// The picker owns only its local AbsorbPointer spinner, driven via
   /// [onSwitching].
-  Future<void> _select(String url, String label) =>
-      confirmAndSwitchGateway(
-        context,
-        ref,
-        url: url,
-        label: label,
-        onSwitching: (switching) {
-          if (mounted) setState(() => _switching = switching);
-        },
-      );
+  Future<void> _select(String url, String label) => confirmAndSwitchGateway(
+    context,
+    ref,
+    url: url,
+    label: label,
+    onSwitching: (switching) {
+      if (mounted) setState(() => _switching = switching);
+    },
+  );
 }
 
 class _ServerTile extends StatelessWidget {
@@ -188,9 +191,12 @@ class _ServerTile extends StatelessWidget {
       title: Text(label),
       subtitle: Text(url),
       trailing: selected
-          ? Text('Connected',
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: theme.colorScheme.primary))
+          ? Text(
+              'Connected',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
+            )
           : null,
       onTap: selected ? null : onTap,
     );
@@ -206,9 +212,12 @@ class _SectionHeader extends StatelessWidget {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(title,
-          style: theme.textTheme.labelMedium
-              ?.copyWith(color: theme.colorScheme.primary)),
+      child: Text(
+        title,
+        style: theme.textTheme.labelMedium?.copyWith(
+          color: theme.colorScheme.primary,
+        ),
+      ),
     );
   }
 }

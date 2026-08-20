@@ -51,8 +51,10 @@ class ChatMessagePane extends ConsumerWidget {
     final repoAsync = ref.watch(chatRepositoryProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
     // Active over channels ∪ DMs so a selected DM renders (#2798).
-    final active =
-        ChatScreen.resolveActive(ref.watch(navigableChannelsProvider), selectedId);
+    final active = ChatScreen.resolveActive(
+      ref.watch(navigableChannelsProvider),
+      selectedId,
+    );
 
     return Column(
       children: [
@@ -74,38 +76,40 @@ class ChatMessagePane extends ConsumerWidget {
           // put.
           child: repoAsync.hasValue
               ? (active == null
-                  ? const Center(child: Text('No conversations yet.'))
-                  : Column(
-                    children: [
-                      // No channel header in the wide layout (the sidebar already
-                      // names + switches channels) nor the narrow layout (its
-                      // AppBar does). The redundant per-pane bar is gone; the A/V
-                      // call affordance lives on the message long-press action
-                      // sheet (message_actions.dart → "Call <name>", #2758).
-                      // Key by channel id so a switch gives MessageList a FRESH
-                      // State (dispose→recreate) — otherwise the old channel's
-                      // ScrollController carries over and lands the new channel at
-                      // a stale offset (cage-match #106).
-                      Expanded(
-                        child: MessageList(
-                          key: ValueKey(active.id),
-                          channelId: active.id,
-                        ),
-                      ),
-                      // Keyed like MessageList so each channel gets its OWN
-                      // composer state — without this a draft typed in one channel
-                      // rides into the next (and sends there) (cage-match #106).
-                      Composer(
-                        key: ValueKey('composer-${active.id}'),
-                        channelId: active.id,
-                      ),
-                    ],
-                  ))
+                    ? const Center(child: Text('No conversations yet.'))
+                    : Column(
+                        children: [
+                          // No channel header in the wide layout (the sidebar already
+                          // names + switches channels) nor the narrow layout (its
+                          // AppBar does). The redundant per-pane bar is gone; the A/V
+                          // call affordance lives on the message long-press action
+                          // sheet (message_actions.dart → "Call <name>", #2758).
+                          // Key by channel id so a switch gives MessageList a FRESH
+                          // State (dispose→recreate) — otherwise the old channel's
+                          // ScrollController carries over and lands the new channel at
+                          // a stale offset (cage-match #106).
+                          Expanded(
+                            child: MessageList(
+                              key: ValueKey(active.id),
+                              channelId: active.id,
+                            ),
+                          ),
+                          // Keyed like MessageList so each channel gets its OWN
+                          // composer state — without this a draft typed in one channel
+                          // rides into the next (and sends there) (cage-match #106).
+                          Composer(
+                            key: ValueKey('composer-${active.id}'),
+                            channelId: active.id,
+                          ),
+                        ],
+                      ))
               : repoAsync.hasError
-                  ? Center(
-                      child: Text(
-                          'Could not load conversations.\n${repoAsync.error}'))
-                  : const Center(child: CircularProgressIndicator()),
+              ? Center(
+                  child: Text(
+                    'Could not load conversations.\n${repoAsync.error}',
+                  ),
+                )
+              : const Center(child: CircularProgressIndicator()),
         ),
       ],
     );

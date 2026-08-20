@@ -36,8 +36,10 @@ void main() {
   ];
 
   Future<ColorScheme> pumpComposer(WidgetTester tester) async {
-    final container =
-        makeContainer(rest: FakeRestApi(channels: channels), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: FakeRestApi(channels: channels),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
     await pumpApp(tester, container);
     await signIn(tester);
@@ -49,14 +51,17 @@ void main() {
       tester.widget<Icon>(find.byIcon(Icons.verified_outlined)).color;
 
   Color? lampColour(WidgetTester tester) => tester
-      .widget<IconButton>(find.descendant(
-        of: find.byKey(const Key('composer-send')),
-        matching: find.byType(IconButton),
-      ))
+      .widget<IconButton>(
+        find.descendant(
+          of: find.byKey(const Key('composer-send')),
+          matching: find.byType(IconButton),
+        ),
+      )
       .color;
 
-  testWidgets('the seal and the lamp arm TOGETHER, and disarm together',
-      (tester) async {
+  testWidgets('the seal and the lamp arm TOGETHER, and disarm together', (
+    tester,
+  ) async {
     final scheme = await pumpComposer(tester);
 
     // At rest both are dim, and they agree — literally the same ink, so the two
@@ -81,8 +86,9 @@ void main() {
     expect(lampColour(tester), scheme.outlineVariant);
   });
 
-  testWidgets('arming INCREASES the lamp\'s contrast — in every theme',
-      (tester) async {
+  testWidgets('arming INCREASES the lamp\'s contrast — in every theme', (
+    tester,
+  ) async {
     // The invariant, stated so it cannot silently invert again. The first cut
     // read `onSurfaceVariant` → `secondary`, which is dim → amber in maritime
     // but dark-charcoal → LIGHTER-purple in the light theme: the lamp went out
@@ -100,19 +106,27 @@ void main() {
       final restContrast = _contrast(rest, scheme.surface);
       final armedContrast = _contrast(armed, scheme.surface);
 
-      expect(armedContrast, greaterThan(restContrast),
-          reason: 'armed must be MORE present than rest '
-              '(rest ${restContrast.toStringAsFixed(2)}:1, '
-              'armed ${armedContrast.toStringAsFixed(2)}:1)');
+      expect(
+        armedContrast,
+        greaterThan(restContrast),
+        reason:
+            'armed must be MORE present than rest '
+            '(rest ${restContrast.toStringAsFixed(2)}:1, '
+            'armed ${armedContrast.toStringAsFixed(2)}:1)',
+      );
       // The floor belongs on ARMED, not on rest. An earlier version guarded the
       // resting state on the theory that an enabled control must always be
       // visible — but rest is precisely the state where there is nothing to
       // send, and the return key sends anyway. The moment there IS something,
       // the lamp has to be findable, so that is where the bar goes: WCAG 1.4.11
       // for a non-text UI component.
-      expect(armedContrast, greaterThanOrEqualTo(3.0),
-          reason: 'the ARMED lamp is the state that must be found '
-              '(${armedContrast.toStringAsFixed(2)}:1)');
+      expect(
+        armedContrast,
+        greaterThanOrEqualTo(3.0),
+        reason:
+            'the ARMED lamp is the state that must be found '
+            '(${armedContrast.toStringAsFixed(2)}:1)',
+      );
     }
   });
 
@@ -120,10 +134,12 @@ void main() {
       'not a gate', (tester) async {
     await pumpComposer(tester);
 
-    final button = tester.widget<IconButton>(find.descendant(
-      of: find.byKey(const Key('composer-send')),
-      matching: find.byType(IconButton),
-    ));
+    final button = tester.widget<IconButton>(
+      find.descendant(
+        of: find.byKey(const Key('composer-send')),
+        matching: find.byType(IconButton),
+      ),
+    );
     // Disabling on empty would drop the control out of the accessibility tree
     // between keystrokes, which is worse than a no-op tap. `_send` already
     // returns early on an empty body.
@@ -134,8 +150,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('the field has NO container — the waterline is the only edge',
-      (tester) async {
+  testWidgets('the field has NO container — the waterline is the only edge', (
+    tester,
+  ) async {
     await pumpComposer(tester);
 
     final field = tester.widget<TextField>(find.byType(TextField).first);
@@ -151,12 +168,14 @@ void main() {
     expect(d.hintText, 'Write a message…');
   });
 
-  testWidgets('the waterline ignites on focus and goes out on blur',
-      (tester) async {
+  testWidgets('the waterline ignites on focus and goes out on blur', (
+    tester,
+  ) async {
     await pumpComposer(tester);
     double factor() => tester
         .widget<AnimatedFractionallySizedBox>(
-            find.byType(AnimatedFractionallySizedBox))
+          find.byType(AnimatedFractionallySizedBox),
+        )
         .widthFactor!;
 
     // The lit rule grows over the base hairline from the left. Written as a
@@ -177,8 +196,9 @@ void main() {
     expect(factor(), 0.0);
   });
 
-  testWidgets('the lit rule occupies actual PIXELS, not just a widthFactor',
-      (tester) async {
+  testWidgets('the lit rule occupies actual PIXELS, not just a widthFactor', (
+    tester,
+  ) async {
     // The test above asserts the widthFactor animates 0 → 1, which was true for
     // three PRs and a cage-match while the lit rule laid out 431px wide and 0px
     // TALL — it had never once been visible, in either theme, since it shipped.
@@ -200,9 +220,13 @@ void main() {
     await tester.pumpAndSettle();
 
     final size = tester.getSize(box);
-    expect(size.height, greaterThan(0.0),
-        reason: 'the lit waterline has zero height — it is laid out but never '
-            'painted (got $size)');
+    expect(
+      size.height,
+      greaterThan(0.0),
+      reason:
+          'the lit waterline has zero height — it is laid out but never '
+          'painted (got $size)',
+    );
     expect(size.width, greaterThan(0.0), reason: 'lit rule width (got $size)');
   });
 }

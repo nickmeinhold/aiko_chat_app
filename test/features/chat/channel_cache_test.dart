@@ -12,10 +12,17 @@ void main() {
   setUp(() => cache = DriftCache(NativeDatabase.memory()));
   tearDown(() => cache.close());
 
-  const general =
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard);
+  const general = Channel(
+    id: 'c1',
+    name: 'general',
+    kind: ChannelKind.standard,
+  );
   const llm = Channel(
-      id: 'c2', name: 'aiko', kind: ChannelKind.llm, aikoChannel: 'bus/aiko');
+    id: 'c2',
+    name: 'aiko',
+    kind: ChannelKind.llm,
+    aikoChannel: 'bus/aiko',
+  );
 
   test('empty cache reads back as an empty list', () async {
     expect(await cache.readChannels(), isEmpty);
@@ -36,17 +43,25 @@ void main() {
     const b = Channel(id: 'aaa', name: 'second', kind: ChannelKind.standard);
     const c = Channel(id: 'mmm', name: 'third', kind: ChannelKind.standard);
     await cache.saveChannels([a, b, c]);
-    expect(await cache.readChannels(), [a, b, c],
-        reason: 'not sorted by id/name — the server list order is preserved');
+    expect(await cache.readChannels(), [
+      a,
+      b,
+      c,
+    ], reason: 'not sorted by id/name — the server list order is preserved');
   });
 
-  test('save is an AUTHORITATIVE full replace (dropped channels vanish)',
-      () async {
-    await cache.saveChannels([general, llm]);
-    await cache.saveChannels([general]); // llm no longer visible server-side
-    final read = await cache.readChannels();
-    expect(read, [general]);
-    expect(read.contains(llm), isFalse,
-        reason: 'a gone channel must not linger as a stale local row');
-  });
+  test(
+    'save is an AUTHORITATIVE full replace (dropped channels vanish)',
+    () async {
+      await cache.saveChannels([general, llm]);
+      await cache.saveChannels([general]); // llm no longer visible server-side
+      final read = await cache.readChannels();
+      expect(read, [general]);
+      expect(
+        read.contains(llm),
+        isFalse,
+        reason: 'a gone channel must not linger as a stale local row',
+      );
+    },
+  );
 }

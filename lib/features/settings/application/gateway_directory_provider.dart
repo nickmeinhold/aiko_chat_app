@@ -32,10 +32,12 @@ String _normalizeUrl(String url) => GatewayConfig.normalized(url).httpBaseUrl;
 /// public). Tests override this with a fake to drive entries/errors without a
 /// network. The Dio is disposed with the provider scope.
 final gatewayDirectoryClientProvider = Provider<GatewayDirectoryClient>((ref) {
-  final dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 8),
-    receiveTimeout: const Duration(seconds: 8),
-  ));
+  final dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 8),
+      receiveTimeout: const Duration(seconds: 8),
+    ),
+  );
   ref.onDispose(dio.close);
   return GatewayDirectoryClient(dio: dio);
 });
@@ -56,7 +58,8 @@ final gatewaySeedStoreProvider = Provider<GatewaySeedStore>((ref) {
 /// persists it, growing the set for next launch.
 final knownGatewaysProvider =
     NotifierProvider<KnownGatewaysNotifier, List<ServerEntry>>(
-        KnownGatewaysNotifier.new);
+      KnownGatewaysNotifier.new,
+    );
 
 class KnownGatewaysNotifier extends Notifier<List<ServerEntry>> {
   @override
@@ -112,7 +115,9 @@ final gatewayDirectoryProvider = FutureProvider<List<ServerEntry>>((ref) async {
   final override = kGatewayDirectoryUrl.trim();
   final url = override.isNotEmpty ? override : '$base/v1/gateways';
 
-  final entries = await ref.watch(gatewayDirectoryClientProvider).fetchFrom(url);
+  final entries = await ref
+      .watch(gatewayDirectoryClientProvider)
+      .fetchFrom(url);
 
   // Fold the discovery into the persisted set (fire-and-forget: a persistence
   // hiccup must not fail discovery — the live entries still render this session).

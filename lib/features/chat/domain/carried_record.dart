@@ -117,11 +117,13 @@ Future<CarriedRecord> carriedRecord(
   for (final m in mine) {
     final origin = m.origin;
     if (origin == null) {
-      entries.add(CarriedRecordEntry(
-        id: m.clientTempId,
-        body: m.body,
-        verdict: CarriedRecordVerdict.unsigned,
-      ));
+      entries.add(
+        CarriedRecordEntry(
+          id: m.clientTempId,
+          body: m.body,
+          verdict: CarriedRecordVerdict.unsigned,
+        ),
+      );
       unsigned++;
       continue;
     }
@@ -163,12 +165,14 @@ Future<CarriedRecord> carriedRecord(
       verified++;
     }
 
-    entries.add(CarriedRecordEntry(
-      id: m.clientTempId,
-      body: m.body,
-      verdict: verdict,
-      signedAtMs: origin.signedAtMs,
-    ));
+    entries.add(
+      CarriedRecordEntry(
+        id: m.clientTempId,
+        body: m.body,
+        verdict: verdict,
+        signedAtMs: origin.signedAtMs,
+      ),
+    );
   }
 
   return CarriedRecord(

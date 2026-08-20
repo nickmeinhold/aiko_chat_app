@@ -24,8 +24,8 @@ final eulaTextProvider = FutureProvider<String>(
 /// this and gates every route behind acceptance.
 final eulaAcceptanceProvider =
     AsyncNotifierProvider<EulaAcceptanceController, bool>(
-  EulaAcceptanceController.new,
-);
+      EulaAcceptanceController.new,
+    );
 
 class EulaAcceptanceController extends AsyncNotifier<bool> {
   @override

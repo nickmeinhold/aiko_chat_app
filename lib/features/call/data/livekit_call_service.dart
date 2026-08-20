@@ -128,6 +128,7 @@ class LiveKitCallService {
       void bump(dynamic _) {
         if (!_disposed) tracksRevision.value++;
       }
+
       _listener!
         ..on<RoomDisconnectedEvent>((e) {
           // Only a drop AFTER a good connect is a "lost" event worth
@@ -253,7 +254,8 @@ class LiveKitCallService {
   /// Permanently dispose the service (call on leave). Idempotent.
   Future<void> dispose() async {
     if (_disposed) return;
-    _disposed = true; // set FIRST: in-flight media awaits now skip notifier writes.
+    _disposed =
+        true; // set FIRST: in-flight media awaits now skip notifier writes.
     await disconnect();
     cameraEnabled.dispose();
     micEnabled.dispose();

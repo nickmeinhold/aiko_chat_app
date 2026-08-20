@@ -20,20 +20,30 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/fake_chat_transport.dart';
 
 const _me = AppUser(
-    userId: 'me', username: 'me', displayName: 'Me', aikoUsername: 'me');
+  userId: 'me',
+  username: 'me',
+  displayName: 'Me',
+  aikoUsername: 'me',
+);
 const _chan = 'chan';
 
-Message _server(String ulid, String body, {String at = '2026-01-01T12:00:01Z'}) =>
-    Message(
-      clientTempId: ulid,
-      id: ulid,
-      channelId: _chan,
-      sender: const MessageSender(
-          userId: 'u2', kind: SenderKind.human, label: 'Alice'),
-      body: body,
-      createdAt: DateTime.parse(at).toUtc(),
-      deliveryState: DeliveryState.sent,
-    );
+Message _server(
+  String ulid,
+  String body, {
+  String at = '2026-01-01T12:00:01Z',
+}) => Message(
+  clientTempId: ulid,
+  id: ulid,
+  channelId: _chan,
+  sender: const MessageSender(
+    userId: 'u2',
+    kind: SenderKind.human,
+    label: 'Alice',
+  ),
+  body: body,
+  createdAt: DateTime.parse(at).toUtc(),
+  deliveryState: DeliveryState.sent,
+);
 
 void main() {
   // The orphan test runs an isolated second in-memory cache concurrently with
@@ -81,41 +91,58 @@ void main() {
   Future<List<Message>> rows() => cache.watchChannel(_chan).first;
 
   group('W1 — optimistic send', () {
-    test('commits one sending row + records a send + enters the outbox',
-        () async {
-      await repo.sendMessage(_chan, 'hi');
-      final r = await rows();
-      expect(r, hasLength(1));
-      expect(r.single.deliveryState, DeliveryState.sending);
-      expect(r.single.id, isNull);
-      expect(transport.sent.single.body, 'hi');
-      expect(await cache.outbox(), hasLength(1));
-    });
+    test(
+      'commits one sending row + records a send + enters the outbox',
+      () async {
+        await repo.sendMessage(_chan, 'hi');
+        final r = await rows();
+        expect(r, hasLength(1));
+        expect(r.single.deliveryState, DeliveryState.sending);
+        expect(r.single.id, isNull);
+        expect(transport.sent.single.body, 'hi');
+        expect(await cache.outbox(), hasLength(1));
+      },
+    );
 
-    test('commits the optimistic row BEFORE the wire send (B-optimistic)',
-        () async {
-      final atSend = Completer<List<Message>>();
-      transport.onSend = (_) => cache.watchChannel(_chan).first.then(atSend.complete);
-      await repo.sendMessage(_chan, 'hi');
-      final atSendRows = await atSend.future;
-      expect(atSendRows, hasLength(1),
-          reason: 'row must be committed by dispatch time');
-    });
+    test(
+      'commits the optimistic row BEFORE the wire send (B-optimistic)',
+      () async {
+        final atSend = Completer<List<Message>>();
+        transport.onSend = (_) =>
+            cache.watchChannel(_chan).first.then(atSend.complete);
+        await repo.sendMessage(_chan, 'hi');
+        final atSendRows = await atSend.future;
+        expect(
+          atSendRows,
+          hasLength(1),
+          reason: 'row must be committed by dispatch time',
+        );
+      },
+    );
   });
 
   group('W2 — ack reconcile + self-echo', () {
-    test('happy path: ack stamps the server ULID + sent + server time',
-        () async {
-      await repo.sendMessage(_chan, 'hi');
-      final om = transport.sent.single;
-      transport.emitAck(om.clientTempId, '01U', createdAt: '2026-01-01T12:00:05Z');
-      await pump();
-      final r = await rows();
-      expect(r, hasLength(1));
-      expect(r.single.id, '01U');
-      expect(r.single.deliveryState, DeliveryState.sent);
-      expect(r.single.createdAt, DateTime.parse('2026-01-01T12:00:05Z').toUtc());
-    });
+    test(
+      'happy path: ack stamps the server ULID + sent + server time',
+      () async {
+        await repo.sendMessage(_chan, 'hi');
+        final om = transport.sent.single;
+        transport.emitAck(
+          om.clientTempId,
+          '01U',
+          createdAt: '2026-01-01T12:00:05Z',
+        );
+        await pump();
+        final r = await rows();
+        expect(r, hasLength(1));
+        expect(r.single.id, '01U');
+        expect(r.single.deliveryState, DeliveryState.sent);
+        expect(
+          r.single.createdAt,
+          DateTime.parse('2026-01-01T12:00:05Z').toUtc(),
+        );
+      },
+    );
 
     test('self-echo A — ack THEN self-echo → exactly one row', () async {
       await repo.sendMessage(_chan, 'hi');
@@ -127,103 +154,137 @@ void main() {
       expect(await rows(), hasLength(1));
     });
 
-    test('self-echo B — self-echo THEN ack → exactly one row (collapse)',
-        () async {
-      await repo.sendMessage(_chan, 'hi');
-      final om = transport.sent.single;
-      transport.emitMessage(_server('01U', 'hi')); // echo arrives first (W3)
-      await pump();
-      transport.emitAck(om.clientTempId, '01U'); // ack collapses
-      await pump();
-      final r = await rows();
-      expect(r, hasLength(1));
-      expect(r.single.clientTempId, om.clientTempId); // optimistic row survives
-      expect(r.single.id, '01U');
-      expect(r.single.deliveryState, DeliveryState.sent);
-    });
+    test(
+      'self-echo B — self-echo THEN ack → exactly one row (collapse)',
+      () async {
+        await repo.sendMessage(_chan, 'hi');
+        final om = transport.sent.single;
+        transport.emitMessage(_server('01U', 'hi')); // echo arrives first (W3)
+        await pump();
+        transport.emitAck(om.clientTempId, '01U'); // ack collapses
+        await pump();
+        final r = await rows();
+        expect(r, hasLength(1));
+        expect(
+          r.single.clientTempId,
+          om.clientTempId,
+        ); // optimistic row survives
+        expect(r.single.id, '01U');
+        expect(r.single.deliveryState, DeliveryState.sent);
+      },
+    );
   });
 
   group('reconnect choreography', () {
-    test('CRUX — send → disconnect → reconnect → ack → exactly one row',
-        () async {
-      await repo.sendMessage(_chan, 'hi');
-      final om = transport.sent.single;
-      expect(await cache.outbox(), hasLength(1));
+    test(
+      'CRUX — send → disconnect → reconnect → ack → exactly one row',
+      () async {
+        await repo.sendMessage(_chan, 'hi');
+        final om = transport.sent.single;
+        expect(await cache.outbox(), hasLength(1));
 
-      transport.emitConn(ConnectionState.disconnected);
-      await pump();
+        transport.emitConn(ConnectionState.disconnected);
+        await pump();
 
-      // On reconnect the gateway fences at the message's ULID, and history
-      // returns the same message (the lost-ack scenario's backstop).
-      transport.fences = {_chan: '01U'};
-      rest.pagesByAfter[''] =
-          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+        // On reconnect the gateway fences at the message's ULID, and history
+        // returns the same message (the lost-ack scenario's backstop).
+        transport.fences = {_chan: '01U'};
+        rest.pagesByAfter[''] = HistoryPage.ofMessages(
+          channelId: _chan,
+          messages: [_server('01U', 'hi')],
+          nextAfter: '01U',
+        );
 
-      transport.emitConn(ConnectionState.connected);
-      await pump();
-      expect(transport.sent.length, 2, reason: 'pending row re-sent on drain');
+        transport.emitConn(ConnectionState.connected);
+        await pump();
+        expect(
+          transport.sent.length,
+          2,
+          reason: 'pending row re-sent on drain',
+        );
 
-      transport.emitAck(om.clientTempId, '01U'); // the re-send's ack lands
-      await pump();
+        transport.emitAck(om.clientTempId, '01U'); // the re-send's ack lands
+        await pump();
 
-      final r = await rows();
-      expect(r, hasLength(1), reason: 'no duplicate across the lifecycle');
-      expect(r.single.id, '01U');
-      expect(r.single.deliveryState, DeliveryState.sent);
-      // Watermark advanced to the fence (single-writer pager).
-      expect(await cache.historyContiguousThrough(_chan), '01U');
-    });
+        final r = await rows();
+        expect(r, hasLength(1), reason: 'no duplicate across the lifecycle');
+        expect(r.single.id, '01U');
+        expect(r.single.deliveryState, DeliveryState.sent);
+        // Watermark advanced to the fence (single-writer pager).
+        expect(await cache.historyContiguousThrough(_chan), '01U');
+      },
+    );
 
-    test('drain-first — re-send is dispatched before history is fetched (B-order)',
-        () async {
-      await repo.sendMessage(_chan, 'hi');
-      final order = <String>[];
-      transport.onSend = (_) => order.add('send');
-      rest.getHistoryCalls.clear();
-      transport.fences = {_chan: '01U'};
-      rest.pagesByAfter[''] =
-          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+    test(
+      'drain-first — re-send is dispatched before history is fetched (B-order)',
+      () async {
+        await repo.sendMessage(_chan, 'hi');
+        final order = <String>[];
+        transport.onSend = (_) => order.add('send');
+        rest.getHistoryCalls.clear();
+        transport.fences = {_chan: '01U'};
+        rest.pagesByAfter[''] = HistoryPage.ofMessages(
+          channelId: _chan,
+          messages: [_server('01U', 'hi')],
+          nextAfter: '01U',
+        );
 
-      transport.emitConn(ConnectionState.connected);
-      await pump();
-      // The re-send (drain) happened; history fetch happens after the ack/timeout.
-      expect(order, contains('send'));
-      transport.emitAck('tmp0', '01U');
-      await pump();
-      expect(rest.getHistoryCalls, isNotEmpty);
-    });
+        transport.emitConn(ConnectionState.connected);
+        await pump();
+        // The re-send (drain) happened; history fetch happens after the ack/timeout.
+        expect(order, contains('send'));
+        transport.emitAck('tmp0', '01U');
+        await pump();
+        expect(rest.getHistoryCalls, isNotEmpty);
+      },
+    );
 
     test('lost-ack — only the re-send acks (same ULID) → one row', () async {
       await repo.sendMessage(_chan, 'hi'); // first send, ack NEVER arrives
       transport.emitConn(ConnectionState.disconnected);
       await pump();
       transport.fences = {_chan: '01U'};
-      rest.pagesByAfter[''] =
-          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
+        channelId: _chan,
+        messages: [_server('01U', 'hi')],
+        nextAfter: '01U',
+      );
       transport.emitConn(ConnectionState.connected);
       await pump();
-      transport.emitAck('tmp0', '01U'); // the re-send's ack (gateway idempotent)
+      transport.emitAck(
+        'tmp0',
+        '01U',
+      ); // the re-send's ack (gateway idempotent)
       await pump();
       expect(await rows(), hasLength(1));
     });
 
-    test('ack-timeout — drain does not hang; history still runs; late ack collapses',
-        () async {
-      await repo.sendMessage(_chan, 'hi');
-      transport.emitConn(ConnectionState.disconnected);
-      await pump();
-      transport.fences = {_chan: '01U'};
-      rest.pagesByAfter[''] =
-          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
-      transport.emitConn(ConnectionState.connected);
-      // No ack during the drain window → timeout (80ms) → history runs anyway.
-      await Future<void>.delayed(const Duration(milliseconds: 150));
-      expect(rest.getHistoryCalls, isNotEmpty, reason: 'reconnect did not hang');
-      // History inserted 01U; the late ack collapses onto the optimistic row.
-      transport.emitAck('tmp0', '01U');
-      await pump();
-      expect(await rows(), hasLength(1));
-    });
+    test(
+      'ack-timeout — drain does not hang; history still runs; late ack collapses',
+      () async {
+        await repo.sendMessage(_chan, 'hi');
+        transport.emitConn(ConnectionState.disconnected);
+        await pump();
+        transport.fences = {_chan: '01U'};
+        rest.pagesByAfter[''] = HistoryPage.ofMessages(
+          channelId: _chan,
+          messages: [_server('01U', 'hi')],
+          nextAfter: '01U',
+        );
+        transport.emitConn(ConnectionState.connected);
+        // No ack during the drain window → timeout (80ms) → history runs anyway.
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        expect(
+          rest.getHistoryCalls,
+          isNotEmpty,
+          reason: 'reconnect did not hang',
+        );
+        // History inserted 01U; the late ack collapses onto the optimistic row.
+        transport.emitAck('tmp0', '01U');
+        await pump();
+        expect(await rows(), hasLength(1));
+      },
+    );
   });
 
   group('empty channel', () {
@@ -240,13 +301,15 @@ void main() {
         'refills with no gap', () async {
       transport.fences = {_chan: '01D'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan,
-          messages: [_server('01A', 'a'), _server('01B', 'b')],
-          nextAfter: '01B');
+        channelId: _chan,
+        messages: [_server('01A', 'a'), _server('01B', 'b')],
+        nextAfter: '01B',
+      );
       rest.pagesByAfter['01B'] = HistoryPage.ofMessages(
-          channelId: _chan,
-          messages: [_server('01C', 'c'), _server('01D', 'd')],
-          nextAfter: '01D');
+        channelId: _chan,
+        messages: [_server('01C', 'c'), _server('01D', 'd')],
+        nextAfter: '01D',
+      );
       // First sync crashes mid-paging (page 2 fails).
       rest.throwOnAfter.add('01B');
       transport.emitConn(ConnectionState.connected);
@@ -267,10 +330,15 @@ void main() {
       transport.emitConn(ConnectionState.connected);
       await pump();
 
-      expect(rest.getHistoryCalls.first, '',
-          reason: 'resume from the contiguous boundary, not the live edge');
-      expect((await rows()).map((m) => m.id),
-          containsAll(['01A', '01B', '01C', '01D'])); // no gap
+      expect(
+        rest.getHistoryCalls.first,
+        '',
+        reason: 'resume from the contiguous boundary, not the live edge',
+      );
+      expect(
+        (await rows()).map((m) => m.id),
+        containsAll(['01A', '01B', '01C', '01D']),
+      ); // no gap
       expect(await cache.historyContiguousThrough(_chan), '01D');
     });
 
@@ -279,9 +347,10 @@ void main() {
       // Sync 1 completes: watermark = 01B.
       transport.fences = {_chan: '01B'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan,
-          messages: [_server('01A', 'a'), _server('01B', 'b')],
-          nextAfter: '01B');
+        channelId: _chan,
+        messages: [_server('01A', 'a'), _server('01B', 'b')],
+        nextAfter: '01B',
+      );
       transport.emitConn(ConnectionState.connected);
       await pump();
       expect(await cache.historyContiguousThrough(_chan), '01B');
@@ -295,17 +364,21 @@ void main() {
       // watermark (01B), NOT MAX (01Z) — else 01C,01D are skipped forever.
       transport.fences = {_chan: '01D'};
       rest.pagesByAfter['01B'] = HistoryPage.ofMessages(
-          channelId: _chan,
-          messages: [_server('01C', 'c'), _server('01D', 'd')],
-          nextAfter: '01D');
+        channelId: _chan,
+        messages: [_server('01C', 'c'), _server('01D', 'd')],
+        nextAfter: '01D',
+      );
       rest.getHistoryCalls.clear();
       transport.emitConn(ConnectionState.disconnected);
       await pump();
       transport.emitConn(ConnectionState.connected);
       await pump();
 
-      expect(rest.getHistoryCalls.first, '01B',
-          reason: 'resume from the single-writer watermark, not MAX=01Z');
+      expect(
+        rest.getHistoryCalls.first,
+        '01B',
+        reason: 'resume from the single-writer watermark, not MAX=01Z',
+      );
       final ids = (await rows()).map((m) => m.id).toSet();
       expect(ids.containsAll({'01A', '01B', '01C', '01D', '01Z'}), isTrue);
     });
@@ -325,11 +398,18 @@ void main() {
       await pump();
 
       // Observability kept: the gap was surfaced.
-      expect(spy.historyGaps, isNotEmpty,
-          reason: 'the unreachable fence is still surfaced via telemetry');
+      expect(
+        spy.historyGaps,
+        isNotEmpty,
+        reason: 'the unreachable fence is still surfaced via telemetry',
+      );
       // The fix: NO assert fired, so the reconnect did not fail.
-      expect(spy.reconnectErrors, isEmpty,
-          reason: 'empty-page-before-fence must not assert (visibility can shrink)');
+      expect(
+        spy.reconnectErrors,
+        isEmpty,
+        reason:
+            'empty-page-before-fence must not assert (visibility can shrink)',
+      );
       // Watermark NOT advanced — we never claim coverage we don't have, so the
       // next reconnect (with a fresh, reachable fence) re-attempts and converges.
       expect(await cache.historyContiguousThrough(_chan), isNull);
@@ -361,24 +441,43 @@ void main() {
       // The first two are benign one-off visibility-shrink gaps.
       await reconnectCycle();
       await reconnectCycle();
-      expect(spy.historyGaps, hasLength(2),
-          reason: 'below threshold — each is a benign gap, not yet a fault');
-      expect(spy.historySyncFaults, isEmpty,
-          reason: 'not stuck long enough to be a real gap');
+      expect(
+        spy.historyGaps,
+        hasLength(2),
+        reason: 'below threshold — each is a benign gap, not yet a fault',
+      );
+      expect(
+        spy.historySyncFaults,
+        isEmpty,
+        reason: 'not stuck long enough to be a real gap',
+      );
 
       // The third reconnect at the same unchanged watermark crosses the
       // threshold → escalate to a loud sync fault.
       await reconnectCycle();
-      expect(spy.historySyncFaults, hasLength(1),
-          reason: 'stuck at one watermark across 3 reconnects = genuinely '
-              'unreachable fence, not a transient shrink');
+      expect(
+        spy.historySyncFaults,
+        hasLength(1),
+        reason:
+            'stuck at one watermark across 3 reconnects = genuinely '
+            'unreachable fence, not a transient shrink',
+      );
       final (_, _, _, faultStreak) = spy.historySyncFaults.single;
-      expect(faultStreak, 3,
-          reason: 'the streak count is surfaced for diagnosis');
-      expect(spy.historyGaps, hasLength(2),
-          reason: 'escalation REPLACES the benign signal on that reconnect');
-      expect(await cache.historyContiguousThrough(_chan), isNull,
-          reason: 'still never claim coverage we lack');
+      expect(
+        faultStreak,
+        3,
+        reason: 'the streak count is surfaced for diagnosis',
+      );
+      expect(
+        spy.historyGaps,
+        hasLength(2),
+        reason: 'escalation REPLACES the benign signal on that reconnect',
+      );
+      expect(
+        await cache.historyContiguousThrough(_chan),
+        isNull,
+        reason: 'still never claim coverage we lack',
+      );
     });
 
     test('a gap whose stall watermark MOVES does not escalate — only an '
@@ -394,55 +493,83 @@ void main() {
       // stall watermark MOVED, so the streak restarts at 1 — NOT 3 — even though
       // it is the third consecutive gap overall.
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+        channelId: _chan,
+        messages: [_server('01A', 'a')],
+        nextAfter: '01A',
+      );
       await reconnectCycle();
 
-      expect(spy.historySyncFaults, isEmpty,
-          reason: 'the stall watermark moved (null → 01A): a fresh gap, not a '
-              'stuck one — the streak is keyed on the watermark, not raw count');
-      expect(spy.historyGaps, hasLength(3),
-          reason: 'still a benign gap at the new cursor');
+      expect(
+        spy.historySyncFaults,
+        isEmpty,
+        reason:
+            'the stall watermark moved (null → 01A): a fresh gap, not a '
+            'stuck one — the streak is keyed on the watermark, not raw count',
+      );
+      expect(
+        spy.historyGaps,
+        hasLength(3),
+        reason: 'still a benign gap at the new cursor',
+      );
     });
   });
 
   group('outbox lifecycle', () {
-    test('no-teleport — retry preserves createdAt + timeline position', () async {
-      await repo.sendMessage(_chan, 'first');
-      await repo.sendMessage(_chan, 'second');
-      transport.emitErrorCode('no_channel', detail: 'x', refClientMsgId: 'tmp0');
-      await pump();
-      final failed = (await rows()).firstWhere((m) => m.clientTempId == 'tmp0');
-      expect(failed.deliveryState, DeliveryState.failed);
-      final origAt = failed.createdAt;
+    test(
+      'no-teleport — retry preserves createdAt + timeline position',
+      () async {
+        await repo.sendMessage(_chan, 'first');
+        await repo.sendMessage(_chan, 'second');
+        transport.emitErrorCode(
+          'no_channel',
+          detail: 'x',
+          refClientMsgId: 'tmp0',
+        );
+        await pump();
+        final failed = (await rows()).firstWhere(
+          (m) => m.clientTempId == 'tmp0',
+        );
+        expect(failed.deliveryState, DeliveryState.failed);
+        final origAt = failed.createdAt;
 
-      await repo.retry('tmp0');
-      await pump();
-      final retried = (await rows()).firstWhere((m) => m.clientTempId == 'tmp0');
-      expect(retried.deliveryState, DeliveryState.sending);
-      expect(retried.createdAt, origAt, reason: 'retry must not teleport');
-      // Still before 'second' in the timeline (position preserved).
-      final ordered = (await rows()).map((m) => m.clientTempId).toList();
-      expect(ordered.indexOf('tmp0'), lessThan(ordered.indexOf('tmp1')));
-      // Re-sent on retry.
-      expect(transport.sent.where((m) => m.clientTempId == 'tmp0').length,
-          greaterThanOrEqualTo(2));
-    });
+        await repo.retry('tmp0');
+        await pump();
+        final retried = (await rows()).firstWhere(
+          (m) => m.clientTempId == 'tmp0',
+        );
+        expect(retried.deliveryState, DeliveryState.sending);
+        expect(retried.createdAt, origAt, reason: 'retry must not teleport');
+        // Still before 'second' in the timeline (position preserved).
+        final ordered = (await rows()).map((m) => m.clientTempId).toList();
+        expect(ordered.indexOf('tmp0'), lessThan(ordered.indexOf('tmp1')));
+        // Re-sent on retry.
+        expect(
+          transport.sent.where((m) => m.clientTempId == 'tmp0').length,
+          greaterThanOrEqualTo(2),
+        );
+      },
+    );
 
-    test('offline-send — stays sending (never failed) + drains on reconnect',
-        () async {
-      transport.emitConn(ConnectionState.disconnected);
-      await pump();
-      await repo.sendMessage(_chan, 'offline');
-      expect((await rows()).single.deliveryState, DeliveryState.sending);
-      expect(await cache.outbox(), hasLength(1));
+    test(
+      'offline-send — stays sending (never failed) + drains on reconnect',
+      () async {
+        transport.emitConn(ConnectionState.disconnected);
+        await pump();
+        await repo.sendMessage(_chan, 'offline');
+        expect((await rows()).single.deliveryState, DeliveryState.sending);
+        expect(await cache.outbox(), hasLength(1));
 
-      transport.fences = {_chan: ''};
-      final before = transport.sent.length;
-      transport.emitConn(ConnectionState.connected);
-      await pump();
-      expect(transport.sent.length, greaterThan(before),
-          reason: 'reconnect drains the offline row');
-    });
+        transport.fences = {_chan: ''};
+        final before = transport.sent.length;
+        transport.emitConn(ConnectionState.connected);
+        await pump();
+        expect(
+          transport.sent.length,
+          greaterThan(before),
+          reason: 'reconnect drains the offline row',
+        );
+      },
+    );
 
     test('already-acked row is not re-drained on reconnect', () async {
       await repo.sendMessage(_chan, 'hi');
@@ -454,35 +581,48 @@ void main() {
       transport.fences = {_chan: ''};
       transport.emitConn(ConnectionState.connected);
       await pump();
-      expect(transport.sent.where((m) => m.clientTempId == 'tmp0').length, 1,
-          reason: 'acked row left the outbox; never re-sent');
+      expect(
+        transport.sent.where((m) => m.clientTempId == 'tmp0').length,
+        1,
+        reason: 'acked row left the outbox; never re-sent',
+      );
     });
   });
 
   group('terminal cancellation', () {
-    test('unauthenticated mid-choreography aborts: no history, rows stay sending',
-        () async {
-      await repo.sendMessage(_chan, 'hi');
-      transport.emitConn(ConnectionState.disconnected);
-      await pump();
+    test(
+      'unauthenticated mid-choreography aborts: no history, rows stay sending',
+      () async {
+        await repo.sendMessage(_chan, 'hi');
+        transport.emitConn(ConnectionState.disconnected);
+        await pump();
 
-      // Wedge subscribe so the terminal event lands mid-choreography.
-      transport.subscribeGate = Completer<void>();
-      transport.fences = {_chan: '01U'};
-      rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
-      transport.emitConn(ConnectionState.connected);
-      await pump(); // started, wedged on subscribe
+        // Wedge subscribe so the terminal event lands mid-choreography.
+        transport.subscribeGate = Completer<void>();
+        transport.fences = {_chan: '01U'};
+        rest.pagesByAfter[''] = HistoryPage.ofMessages(
+          channelId: _chan,
+          messages: [_server('01U', 'hi')],
+          nextAfter: '01U',
+        );
+        transport.emitConn(ConnectionState.connected);
+        await pump(); // started, wedged on subscribe
 
-      transport.emitConn(ConnectionState.unauthenticated); // terminal mid-flight
-      await pump();
-      transport.subscribeGate!.complete(); // release; post-await abort fires
-      await pump();
+        transport.emitConn(
+          ConnectionState.unauthenticated,
+        ); // terminal mid-flight
+        await pump();
+        transport.subscribeGate!.complete(); // release; post-await abort fires
+        await pump();
 
-      expect(rest.getHistoryCalls, isEmpty, reason: 'aborted before history');
-      expect((await rows()).single.deliveryState, DeliveryState.sending,
-          reason: 'pending row untouched; resumes after re-auth');
-    });
+        expect(rest.getHistoryCalls, isEmpty, reason: 'aborted before history');
+        expect(
+          (await rows()).single.deliveryState,
+          DeliveryState.sending,
+          reason: 'pending row untouched; resumes after re-auth',
+        );
+      },
+    );
   });
 
   group('reconnect concurrency (round 2/3/4 fixes)', () {
@@ -490,7 +630,10 @@ void main() {
         'ONE coalesced re-run', () async {
       transport.fences = {_chan: '01A'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+        channelId: _chan,
+        messages: [_server('01A', 'a')],
+        nextAfter: '01A',
+      );
       rest.getHistoryGate = Completer<void>(); // wedge the first paging
 
       transport.emitConn(ConnectionState.connected);
@@ -500,22 +643,34 @@ void main() {
 
       transport.emitConn(ConnectionState.connected); // coalesces, no 2nd run
       await pump();
-      expect(transport.subscribeCalls, hasLength(1),
-          reason: 'second connected coalesced; no concurrent choreography');
-      expect(rest.getHistoryCalls, hasLength(1),
-          reason: 'no concurrent getHistory');
+      expect(
+        transport.subscribeCalls,
+        hasLength(1),
+        reason: 'second connected coalesced; no concurrent choreography',
+      );
+      expect(
+        rest.getHistoryCalls,
+        hasLength(1),
+        reason: 'no concurrent getHistory',
+      );
 
       rest.getHistoryGate!.complete(); // release first; the re-run fires
       await pump();
-      expect(transport.subscribeCalls, hasLength(2),
-          reason: 'exactly ONE coalesced re-run, not N');
+      expect(
+        transport.subscribeCalls,
+        hasLength(2),
+        reason: 'exactly ONE coalesced re-run, not N',
+      );
     });
 
     test('epoch-rerun — a disconnect between two connected events does NOT '
         'suppress the legit reconnect', () async {
       transport.fences = {_chan: '01A'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+        channelId: _chan,
+        messages: [_server('01A', 'a')],
+        nextAfter: '01A',
+      );
       rest.getHistoryGate = Completer<void>();
 
       transport.emitConn(ConnectionState.connected);
@@ -527,17 +682,21 @@ void main() {
 
       rest.getHistoryGate!.complete(); // release the dead run
       await pump();
-      expect(transport.subscribeCalls.length, greaterThanOrEqualTo(2),
-          reason: 'the fresh reconnect ran despite the mid-flight disconnect');
+      expect(
+        transport.subscribeCalls.length,
+        greaterThanOrEqualTo(2),
+        reason: 'the fresh reconnect ran despite the mid-flight disconnect',
+      );
     });
 
     test('history-TOCTOU — a disconnect during getHistory drops the resolved '
         'page (no write, no watermark advance)', () async {
       transport.fences = {_chan: '01B'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan,
-          messages: [_server('01A', 'a'), _server('01B', 'b')],
-          nextAfter: '01B');
+        channelId: _chan,
+        messages: [_server('01A', 'a'), _server('01B', 'b')],
+        nextAfter: '01B',
+      );
       rest.getHistoryGate = Completer<void>();
 
       transport.emitConn(ConnectionState.connected);
@@ -547,10 +706,16 @@ void main() {
       rest.getHistoryGate!.complete(); // the await now resolves with a page
       await pump();
 
-      expect(await rows(), isEmpty,
-          reason: 'post-await abort: the resolved page must NOT be upserted');
-      expect(await cache.historyContiguousThrough(_chan), isNull,
-          reason: 'watermark must NOT advance on an aborted sync');
+      expect(
+        await rows(),
+        isEmpty,
+        reason: 'post-await abort: the resolved page must NOT be upserted',
+      );
+      expect(
+        await cache.historyContiguousThrough(_chan),
+        isNull,
+        reason: 'watermark must NOT advance on an aborted sync',
+      );
     });
 
     test('completer-race — disconnect + ack for the same drained row → no '
@@ -580,13 +745,19 @@ void main() {
 
       transport.emitConn(ConnectionState.connected);
       await pump();
-      expect(spy.reconnectErrors, isNotEmpty,
-          reason: 'the error is observed, not an unobserved async throw');
+      expect(
+        spy.reconnectErrors,
+        isNotEmpty,
+        reason: 'the error is observed, not an unobserved async throw',
+      );
 
       // Guard cleared: a later reconnect (with history working) runs to success.
       rest.throwOnGetHistory = null;
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+        channelId: _chan,
+        messages: [_server('01A', 'a')],
+        nextAfter: '01A',
+      );
       transport.emitConn(ConnectionState.disconnected);
       await pump();
       transport.emitConn(ConnectionState.connected);
@@ -599,8 +770,11 @@ void main() {
       await repo.sendMessage(_chan, 'hi');
       transport.emitErrorCode('rate_limited', detail: 'slow down');
       await pump();
-      expect((await rows()).single.deliveryState, DeliveryState.sending,
-          reason: 'transient systemic error must not fail the row');
+      expect(
+        (await rows()).single.deliveryState,
+        DeliveryState.sending,
+        reason: 'transient systemic error must not fail the row',
+      );
       expect(await cache.outbox(), hasLength(1));
     });
 
@@ -612,7 +786,10 @@ void main() {
       // justifying it. A genuine reconnect later would emit a fresh `connected`.
       transport.fences = {_chan: '01A'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan, messages: [_server('01A', 'a')], nextAfter: '01A');
+        channelId: _chan,
+        messages: [_server('01A', 'a')],
+        nextAfter: '01A',
+      );
       rest.getHistoryGate = Completer<void>();
 
       transport.emitConn(ConnectionState.connected);
@@ -627,9 +804,13 @@ void main() {
       rest.getHistoryGate!.complete(); // dead run resolves (aborted by epoch)
       await pump();
 
-      expect(transport.subscribeCalls, hasLength(1),
-          reason: 'the queued rerun was cancelled by the disconnect — no '
-              'subscribe/drain/history against a disconnected transport');
+      expect(
+        transport.subscribeCalls,
+        hasLength(1),
+        reason:
+            'the queued rerun was cancelled by the disconnect — no '
+            'subscribe/drain/history against a disconnected transport',
+      );
     });
 
     test('handoff-fence — a message ≤ fence is pulled by history even if the '
@@ -637,20 +818,24 @@ void main() {
       // Z (01E) committed in the REST-vs-subscribe window, ≤ fence; no live emit.
       transport.fences = {_chan: '01F'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan,
-          messages: [
-            _server('01C', 'c'),
-            _server('01E', 'z'), // the quiet-channel message
-            _server('01F', 'f'),
-          ],
-          nextAfter: '01F');
+        channelId: _chan,
+        messages: [
+          _server('01C', 'c'),
+          _server('01E', 'z'), // the quiet-channel message
+          _server('01F', 'f'),
+        ],
+        nextAfter: '01F',
+      );
 
       transport.emitConn(ConnectionState.connected);
       await pump();
       // No further live messages, no reconnect — the channel is silent.
       final ids = (await rows()).map((m) => m.id).toSet();
-      expect(ids.contains('01E'), isTrue,
-          reason: 'history paged up to the fence, capturing Z');
+      expect(
+        ids.contains('01E'),
+        isTrue,
+        reason: 'history paged up to the fence, capturing Z',
+      );
       expect(await cache.historyContiguousThrough(_chan), '01F');
     });
   });
@@ -675,10 +860,16 @@ void main() {
       final r = (await rows()).single;
       expect(r.id, '01U');
       expect(r.deliveryState, DeliveryState.sent);
-      expect(r.createdAt, DateTime.parse(serverIso).toUtc(),
-          reason: 'server time wins — even though it moves the row upward');
-      expect(r.createdAt.isBefore(optimisticAt), isTrue,
-          reason: 'the named tradeoff: the row settles upward at ack');
+      expect(
+        r.createdAt,
+        DateTime.parse(serverIso).toUtc(),
+        reason: 'server time wins — even though it moves the row upward',
+      );
+      expect(
+        r.createdAt.isBefore(optimisticAt),
+        isTrue,
+        reason: 'the named tradeoff: the row settles upward at ack',
+      );
     });
   });
 
@@ -693,16 +884,22 @@ void main() {
       expect(await cache.outbox(), isEmpty);
 
       transport.fences = {_chan: '01U'};
-      rest.pagesByAfter[''] =
-          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
+        channelId: _chan,
+        messages: [_server('01U', 'hi')],
+        nextAfter: '01U',
+      );
       rest.getHistoryCalls.clear();
 
       transport.emitConn(ConnectionState.connected);
       // A probe SHORTER than the ackTimeout (80ms): if the drain wrongly waited
       // on the already-settled row, history would not have run yet.
       await Future<void>.delayed(const Duration(milliseconds: 25));
-      expect(rest.getHistoryCalls, isNotEmpty,
-          reason: 'already-acked row left the outbox → drain did not wait');
+      expect(
+        rest.getHistoryCalls,
+        isNotEmpty,
+        reason: 'already-acked row left the outbox → drain did not wait',
+      );
     });
 
     test('counter-case — a self-echo alone does NOT early-complete the waiter '
@@ -714,25 +911,37 @@ void main() {
       await repo.sendMessage(_chan, 'hi');
       transport.emitMessage(_server('01U', 'hi')); // echo only, no ack
       await pump();
-      expect(await cache.outbox(), hasLength(1),
-          reason: 'optimistic row stays pending until the ACK collapse');
+      expect(
+        await cache.outbox(),
+        hasLength(1),
+        reason: 'optimistic row stays pending until the ACK collapse',
+      );
 
       transport.emitConn(ConnectionState.disconnected);
       await pump();
       transport.fences = {_chan: '01U'};
-      rest.pagesByAfter[''] =
-          HistoryPage.ofMessages(channelId: _chan, messages: [_server('01U', 'hi')], nextAfter: '01U');
+      rest.pagesByAfter[''] = HistoryPage.ofMessages(
+        channelId: _chan,
+        messages: [_server('01U', 'hi')],
+        nextAfter: '01U',
+      );
       rest.getHistoryCalls.clear();
 
       transport.emitConn(ConnectionState.connected);
       // SHORT probe (< 80ms): the drain is still awaiting the ack, so no history.
       await Future<void>.delayed(const Duration(milliseconds: 25));
-      expect(rest.getHistoryCalls, isEmpty,
-          reason: 'self-echo did not settle the row → drain waits for the ack');
+      expect(
+        rest.getHistoryCalls,
+        isEmpty,
+        reason: 'self-echo did not settle the row → drain waits for the ack',
+      );
       // After the timeout elapses, history runs anyway (drain does not hang).
       await Future<void>.delayed(const Duration(milliseconds: 80));
-      expect(rest.getHistoryCalls, isNotEmpty,
-          reason: 'past the ackTimeout, history proceeds');
+      expect(
+        rest.getHistoryCalls,
+        isNotEmpty,
+        reason: 'past the ackTimeout, history proceeds',
+      );
     });
   });
 
@@ -751,8 +960,11 @@ void main() {
       // A leaked/doubled connection-state listener would re-run the choreography
       // and subscribe MORE than once per reconnect. Exactly one per cycle proves
       // the streams were wired ONCE and outlive every reconnect (invariant B-live).
-      expect(transport.subscribeCalls, hasLength(3),
-          reason: 'one suback per reconnect — no doubled connection listener');
+      expect(
+        transport.subscribeCalls,
+        hasLength(3),
+        reason: 'one suback per reconnect — no doubled connection listener',
+      );
 
       transport.emitAck('tmp0', '01U');
       await pump();
@@ -766,8 +978,11 @@ void main() {
       await repo.dispose();
       transport.emitMessage(_server('02Z', 'after dispose'));
       await pump();
-      expect((await rows()).any((m) => m.id == '02Z'), isFalse,
-          reason: 'no handler fires after dispose (subscriptions cancelled)');
+      expect(
+        (await rows()).any((m) => m.id == '02Z'),
+        isFalse,
+        reason: 'no handler fires after dispose (subscriptions cancelled)',
+      );
     });
   });
 
@@ -781,11 +996,18 @@ void main() {
       transport.emitConn(ConnectionState.connected);
       await pump();
 
-      expect(spy.reconnectErrors, isNotEmpty,
-          reason: 'the auth failure is observed, not an unobserved async throw');
+      expect(
+        spy.reconnectErrors,
+        isNotEmpty,
+        reason: 'the auth failure is observed, not an unobserved async throw',
+      );
       expect(spy.reconnectErrors.last, isA<Unauthorized>());
-      expect(transport.disconnectCalls, 1,
-          reason: 'terminal auth → route to unauthenticated, not a transient redrain');
+      expect(
+        transport.disconnectCalls,
+        1,
+        reason:
+            'terminal auth → route to unauthenticated, not a transient redrain',
+      );
     });
   });
 
@@ -793,18 +1015,26 @@ void main() {
     // Each terminal-auth wire code must route to disconnect (unauthenticated)
     // via the TYPED classification — NOT a raw-string compare a typo could break.
     for (final code in ['unauthorized', 'token_expired', 'forbidden']) {
-      test('an auth-coded ($code) systemic error disconnects; rows stay sending',
-          () async {
-        await repo.sendMessage(_chan, 'hi'); // tmp0, pending
-        transport.emitErrorCode(code, detail: 'auth');
-        await pump();
+      test(
+        'an auth-coded ($code) systemic error disconnects; rows stay sending',
+        () async {
+          await repo.sendMessage(_chan, 'hi'); // tmp0, pending
+          transport.emitErrorCode(code, detail: 'auth');
+          await pump();
 
-        expect(transport.disconnectCalls, 1,
-            reason: 'auth-coded systemic error routes to unauthenticated');
-        expect((await rows()).single.deliveryState, DeliveryState.sending,
-            reason: 'pending row untouched; it resumes after re-auth');
-        expect(await cache.outbox(), hasLength(1));
-      });
+          expect(
+            transport.disconnectCalls,
+            1,
+            reason: 'auth-coded systemic error routes to unauthenticated',
+          );
+          expect(
+            (await rows()).single.deliveryState,
+            DeliveryState.sending,
+            reason: 'pending row untouched; it resumes after re-auth',
+          );
+          expect(await cache.outbox(), hasLength(1));
+        },
+      );
     }
 
     test('an UNKNOWN systemic code does NOT route to disconnect (not silently '
@@ -816,31 +1046,49 @@ void main() {
       transport.emitErrorCode('unauthorised_typo', detail: 'oops');
       await pump();
 
-      expect(transport.disconnectCalls, 0,
-          reason: 'an unknown code must NOT be classified as auth-terminal');
-      expect((await rows()).single.deliveryState, DeliveryState.sending,
-          reason: 'unknown systemic code leaves the row sending (transient-safe)');
+      expect(
+        transport.disconnectCalls,
+        0,
+        reason: 'an unknown code must NOT be classified as auth-terminal',
+      );
+      expect(
+        (await rows()).single.deliveryState,
+        DeliveryState.sending,
+        reason: 'unknown systemic code leaves the row sending (transient-safe)',
+      );
       expect(await cache.outbox(), hasLength(1));
     });
 
     test('TransportErrorCode.fromWire — known codes map; everything else is '
         'unknown (NOT other, NOT auth-terminal)', () {
-      expect(TransportErrorCode.fromWire('unauthorized'),
-          TransportErrorCode.unauthorized);
-      expect(TransportErrorCode.fromWire('token_expired'),
-          TransportErrorCode.tokenExpired);
       expect(
-          TransportErrorCode.fromWire('forbidden'), TransportErrorCode.forbidden);
+        TransportErrorCode.fromWire('unauthorized'),
+        TransportErrorCode.unauthorized,
+      );
       expect(
-          TransportErrorCode.fromWire('rate_limited'), TransportErrorCode.other);
+        TransportErrorCode.fromWire('token_expired'),
+        TransportErrorCode.tokenExpired,
+      );
+      expect(
+        TransportErrorCode.fromWire('forbidden'),
+        TransportErrorCode.forbidden,
+      );
+      expect(
+        TransportErrorCode.fromWire('rate_limited'),
+        TransportErrorCode.other,
+      );
       // The load-bearing assertion: a typo/additive code is `unknown`, and
       // `unknown` is NOT auth-terminal (so it can't downgrade a terminal auth
       // rejection into a logout, and can't masquerade as a known transient).
-      expect(TransportErrorCode.fromWire('Unauthorized'),
-          TransportErrorCode.unknown,
-          reason: 'case-sensitive: canonical wire codes are lowercase');
       expect(
-          TransportErrorCode.fromWire('totally_new'), TransportErrorCode.unknown);
+        TransportErrorCode.fromWire('Unauthorized'),
+        TransportErrorCode.unknown,
+        reason: 'case-sensitive: canonical wire codes are lowercase',
+      );
+      expect(
+        TransportErrorCode.fromWire('totally_new'),
+        TransportErrorCode.unknown,
+      );
       expect(TransportErrorCode.unknown.isAuthTerminal, isFalse);
       expect(TransportErrorCode.other.isAuthTerminal, isFalse);
       expect(TransportErrorCode.unauthorized.isAuthTerminal, isTrue);
@@ -860,20 +1108,28 @@ void main() {
       // A message with a null serverUlid violates the cache contract
       // (upsertInbound requires id != null) → it throws. The handler must catch
       // it and surface it, leaving the stream alive.
-      transport.emitMessage(Message(
-        clientTempId: 'noid',
-        id: null, // <- invalid for an inbound row; upsertInbound throws
-        channelId: _chan,
-        sender: const MessageSender(
-            userId: 'u2', kind: SenderKind.human, label: 'Alice'),
-        body: 'bad',
-        createdAt: DateTime.parse('2026-01-01T12:00:00Z').toUtc(),
-        deliveryState: DeliveryState.sent,
-      ));
+      transport.emitMessage(
+        Message(
+          clientTempId: 'noid',
+          id: null, // <- invalid for an inbound row; upsertInbound throws
+          channelId: _chan,
+          sender: const MessageSender(
+            userId: 'u2',
+            kind: SenderKind.human,
+            label: 'Alice',
+          ),
+          body: 'bad',
+          createdAt: DateTime.parse('2026-01-01T12:00:00Z').toUtc(),
+          deliveryState: DeliveryState.sent,
+        ),
+      );
       await pump();
 
-      expect(spy.inboundWriteErrors, hasLength(1),
-          reason: 'the failed inbound write is observed, not an unowned throw');
+      expect(
+        spy.inboundWriteErrors,
+        hasLength(1),
+        reason: 'the failed inbound write is observed, not an unowned throw',
+      );
       // The stream is still alive: a subsequent valid message lands fine.
       transport.emitMessage(_server('01U', 'ok'));
       await pump();
@@ -928,8 +1184,11 @@ void main() {
       }, (e, _) => caught.add(e));
 
       // The production-observable contract: telemetry surfaced the orphan.
-      expect(localSpy.orphans, hasLength(1),
-          reason: 'the orphan ack is surfaced to telemetry');
+      expect(
+        localSpy.orphans,
+        hasLength(1),
+        reason: 'the orphan ack is surfaced to telemetry',
+      );
       expect(localSpy.orphans.single, ('ghost', '01U'));
       // The dev tripwire: the debug assert tripped (captured, not crashing).
       expect(caught, hasLength(1));
@@ -950,8 +1209,11 @@ void main() {
       // can freeze message-A mid-write and prove the later ack waits behind it.
       final gate = Completer<void>();
       final order = <String>[];
-      final gatedCache = _GatedCache(NativeDatabase.memory(),
-          firstUpsertGate: gate, log: order);
+      final gatedCache = _GatedCache(
+        NativeDatabase.memory(),
+        firstUpsertGate: gate,
+        log: order,
+      );
       final t = FakeChatTransport();
       final r = ChatRepository(
         cache: gatedCache,
@@ -975,15 +1237,19 @@ void main() {
       await pump();
 
       // The message upsert started and is STILL blocked; the ack has NOT run.
-      expect(order, ['upsert:01B-start'],
-          reason: 'ack must wait behind the in-flight message (FIFO)');
+      expect(order, [
+        'upsert:01B-start',
+      ], reason: 'ack must wait behind the in-flight message (FIFO)');
 
       gate.complete(); // release message-A
       await pump();
 
       // Now both ran, in arrival order: message fully applied, THEN ack.
-      expect(order, ['upsert:01B-start', 'upsert:01B-done', 'ack:tmp'],
-          reason: 'mutations applied strictly in arrival order');
+      expect(order, [
+        'upsert:01B-start',
+        'upsert:01B-done',
+        'ack:tmp',
+      ], reason: 'mutations applied strictly in arrival order');
 
       await r.dispose();
       await t.dispose();
@@ -998,8 +1264,11 @@ void main() {
       // wait: the test only asserts dispose COMPLETES, not the wall-clock bound.
       final neverReleased = Completer<void>(); // intentionally never completed
       final order = <String>[];
-      final gatedCache = _GatedCache(NativeDatabase.memory(),
-          firstUpsertGate: neverReleased, log: order);
+      final gatedCache = _GatedCache(
+        NativeDatabase.memory(),
+        firstUpsertGate: neverReleased,
+        log: order,
+      );
       final t = FakeChatTransport();
       final r = ChatRepository(
         cache: gatedCache,
@@ -1013,13 +1282,17 @@ void main() {
       r.start();
       t.emitMessage(_server('01B', 'wedged')); // upsert blocks forever
       await pump();
-      expect(order, ['upsert:01B-start'], reason: 'the unit is wedged mid-write');
+      expect(order, [
+        'upsert:01B-start',
+      ], reason: 'the unit is wedged mid-write');
 
       // dispose() must complete despite the wedged unit, bounded by the
       // injected fail-safe (50ms here). `completes` would time the whole test
       // out if dispose hung.
-      await expectLater(r.dispose().timeout(const Duration(seconds: 2)),
-          completes);
+      await expectLater(
+        r.dispose().timeout(const Duration(seconds: 2)),
+        completes,
+      );
 
       await t.dispose();
       await gatedCache.close();
@@ -1030,8 +1303,11 @@ void main() {
       // gate the two units still run in enqueue order. Emit ack THEN message and
       // assert the recorded order matches arrival.
       final order = <String>[];
-      final gatedCache = _GatedCache(NativeDatabase.memory(),
-          firstUpsertGate: Completer<void>()..complete(), log: order);
+      final gatedCache = _GatedCache(
+        NativeDatabase.memory(),
+        firstUpsertGate: Completer<void>()..complete(),
+        log: order,
+      );
       final t = FakeChatTransport();
       final r = ChatRepository(
         cache: gatedCache,
@@ -1046,8 +1322,11 @@ void main() {
       t.emitAck('tmp', '01A'); // ack first
       t.emitMessage(_server('01B', 'theirs')); // then a message
       await pump();
-      expect(order, ['ack:tmp', 'upsert:01B-start', 'upsert:01B-done'],
-          reason: 'ack enqueued first → runs first, then the message');
+      expect(order, [
+        'ack:tmp',
+        'upsert:01B-start',
+        'upsert:01B-done',
+      ], reason: 'ack enqueued first → runs first, then the message');
 
       await r.dispose();
       await t.dispose();
@@ -1056,41 +1335,55 @@ void main() {
   });
 
   group('ULID canonical-case discipline (PR#7 finding 4)', () {
-    test('isCanonicalUlidCase — uppercase Crockford passes, any lowercase fails',
-        () {
-      expect(isCanonicalUlidCase('01ARZ3NDEKTSV4RRFFQ69G5FAV'), isTrue);
-      expect(isCanonicalUlidCase(''), isTrue); // empty fence sentinel
-      expect(isCanonicalUlidCase('01arz3ndektsv4rrffq69g5fav'), isFalse);
-      expect(isCanonicalUlidCase('01ARZ3NDEKTSV4RRFFQ69G5FAv'), isFalse,
-          reason: 'a single lowercase char breaks compareTo monotonicity');
-    });
+    test(
+      'isCanonicalUlidCase — uppercase Crockford passes, any lowercase fails',
+      () {
+        expect(isCanonicalUlidCase('01ARZ3NDEKTSV4RRFFQ69G5FAV'), isTrue);
+        expect(isCanonicalUlidCase(''), isTrue); // empty fence sentinel
+        expect(isCanonicalUlidCase('01arz3ndektsv4rrffq69g5fav'), isFalse);
+        expect(
+          isCanonicalUlidCase('01ARZ3NDEKTSV4RRFFQ69G5FAv'),
+          isFalse,
+          reason: 'a single lowercase char breaks compareTo monotonicity',
+        );
+      },
+    );
 
     test('advanceHistoryContiguous asserts canonical case — a lowercase ULID '
         'fails LOUDLY, not silently', () async {
       // Canonical advances fine.
       await cache.advanceHistoryContiguous(_chan, '01ARZ3NDEKTSV4RRFFQ69G5FAV');
-      expect(await cache.historyContiguousThrough(_chan),
-          '01ARZ3NDEKTSV4RRFFQ69G5FAV');
+      expect(
+        await cache.historyContiguousThrough(_chan),
+        '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      );
       // A non-canonical (lowercase) watermark would sort wrongly — it must trip
       // the debug assert rather than silently corrupt the monotonic compare.
       expect(
-        () => cache.advanceHistoryContiguous(_chan, '01arz3ndektsv4rrffq69g5fz'),
+        () =>
+            cache.advanceHistoryContiguous(_chan, '01arz3ndektsv4rrffq69g5fz'),
         throwsA(isA<AssertionError>()),
       );
     });
   });
 
   group('retraction consumer (C-app, island #104)', () {
-    test('live retraction (WS frame) removes the target message from the view',
-        () async {
-      transport.emitMessage(_server('01A', 'objectionable'));
-      await pump();
-      expect((await rows()).map((m) => m.id), contains('01A'));
+    test(
+      'live retraction (WS frame) removes the target message from the view',
+      () async {
+        transport.emitMessage(_server('01A', 'objectionable'));
+        await pump();
+        expect((await rows()).map((m) => m.id), contains('01A'));
 
-      transport.emitRetraction(_chan, '01Z', '01A');
-      await pump();
-      expect(await rows(), isEmpty, reason: 'the taken-down message disappears');
-    });
+        transport.emitRetraction(_chan, '01Z', '01A');
+        await pump();
+        expect(
+          await rows(),
+          isEmpty,
+          reason: 'the taken-down message disappears',
+        );
+      },
+    );
 
     test('a retraction arriving BEFORE the message it retracts still suppresses '
         'it (presence-independent dead id)', () async {
@@ -1100,8 +1393,11 @@ void main() {
       await pump();
       transport.emitMessage(_server('01A', 'late arrival'));
       await pump();
-      expect(await rows(), isEmpty,
-          reason: 'presence-independent suppression, either arrival order');
+      expect(
+        await rows(),
+        isEmpty,
+        reason: 'presence-independent suppression, either arrival order',
+      );
     });
 
     test('live retraction is SUPPRESS-ONLY — it never advances the history '
@@ -1109,7 +1405,10 @@ void main() {
       // Establish a watermark via a clean history sync.
       transport.fences = {_chan: '01M'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
-          channelId: _chan, messages: [_server('01M', 'hi')], nextAfter: '01M');
+        channelId: _chan,
+        messages: [_server('01M', 'hi')],
+        nextAfter: '01M',
+      );
       transport.emitConn(ConnectionState.connected);
       await pump();
       expect(await cache.historyContiguousThrough(_chan), '01M');
@@ -1119,50 +1418,78 @@ void main() {
       // un-fetched span (the round-4 message-loss regression the design rejects).
       transport.emitRetraction(_chan, '01Z', '01M');
       await pump();
-      expect(await cache.historyContiguousThrough(_chan), '01M',
-          reason: 'watermark unchanged — retraction is suppress-only');
+      expect(
+        await cache.historyContiguousThrough(_chan),
+        '01M',
+        reason: 'watermark unchanged — retraction is suppress-only',
+      );
       expect(await rows(), isEmpty, reason: 'the retracted 01M is gone');
     });
 
-    test('heterogeneous history page: an in-page retraction suppresses its '
-        'target while OTHER messages persist, and the watermark advances to fence',
-        () async {
-      transport.fences = {_chan: '01Z'};
-      rest.pagesByAfter[''] = HistoryPage(channelId: _chan, items: [
-        MessageHistoryItem(_server('01A', 'objectionable')),
-        MessageHistoryItem(_server('01B', 'fine')),
-        RetractionHistoryItem(
-            const Retraction(channelId: _chan, id: '01Z', targetMsgId: '01A')),
-      ], nextAfter: '01Z');
-      transport.emitConn(ConnectionState.connected);
-      await pump();
+    test(
+      'heterogeneous history page: an in-page retraction suppresses its '
+      'target while OTHER messages persist, and the watermark advances to fence',
+      () async {
+        transport.fences = {_chan: '01Z'};
+        rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan,
+          items: [
+            MessageHistoryItem(_server('01A', 'objectionable')),
+            MessageHistoryItem(_server('01B', 'fine')),
+            RetractionHistoryItem(
+              const Retraction(channelId: _chan, id: '01Z', targetMsgId: '01A'),
+            ),
+          ],
+          nextAfter: '01Z',
+        );
+        transport.emitConn(ConnectionState.connected);
+        await pump();
 
-      expect((await rows()).map((m) => m.id).toList(), ['01B'],
-          reason: '01A suppressed by the in-page retraction; 01B kept');
-      expect(await cache.historyContiguousThrough(_chan), '01Z',
-          reason: 'the pager advances the watermark to fence over the whole page');
-    });
+        expect((await rows()).map((m) => m.id).toList(), [
+          '01B',
+        ], reason: '01A suppressed by the in-page retraction; 01B kept');
+        expect(
+          await cache.historyContiguousThrough(_chan),
+          '01Z',
+          reason:
+              'the pager advances the watermark to fence over the whole page',
+        );
+      },
+    );
 
-    test('a history page whose TRAILING item is an UNKNOWN future type still '
-        'advances the watermark to fence — no wedge (cage-match Carnot HIGH)',
-        () async {
-      // The wedge Carnot found: a new island event type lands as the NEWEST row
-      // (at the fence). If the parser dropped it, `items.last.id` would be the
-      // known 01A, the cursor would never reach the 01D fence, and catch-up would
-      // refetch forever. Carried inertly, the cursor advances THROUGH it.
-      transport.fences = {_chan: '01D'};
-      rest.pagesByAfter[''] = HistoryPage(channelId: _chan, items: [
-        MessageHistoryItem(_server('01A', 'hi')),
-        UnknownHistoryItem('01D'), // a future event type, newest, at the fence
-      ], nextAfter: '01D');
-      transport.emitConn(ConnectionState.connected);
-      await pump();
+    test(
+      'a history page whose TRAILING item is an UNKNOWN future type still '
+      'advances the watermark to fence — no wedge (cage-match Carnot HIGH)',
+      () async {
+        // The wedge Carnot found: a new island event type lands as the NEWEST row
+        // (at the fence). If the parser dropped it, `items.last.id` would be the
+        // known 01A, the cursor would never reach the 01D fence, and catch-up would
+        // refetch forever. Carried inertly, the cursor advances THROUGH it.
+        transport.fences = {_chan: '01D'};
+        rest.pagesByAfter[''] = HistoryPage(
+          channelId: _chan,
+          items: [
+            MessageHistoryItem(_server('01A', 'hi')),
+            UnknownHistoryItem(
+              '01D',
+            ), // a future event type, newest, at the fence
+          ],
+          nextAfter: '01D',
+        );
+        transport.emitConn(ConnectionState.connected);
+        await pump();
 
-      expect((await rows()).map((m) => m.id).toList(), ['01A'],
-          reason: 'the known message persists; the unknown is inert');
-      expect(await cache.historyContiguousThrough(_chan), '01D',
-          reason: 'the cursor advances THROUGH the trailing unknown to the fence');
-    });
+        expect((await rows()).map((m) => m.id).toList(), [
+          '01A',
+        ], reason: 'the known message persists; the unknown is inert');
+        expect(
+          await cache.historyContiguousThrough(_chan),
+          '01D',
+          reason:
+              'the cursor advances THROUGH the trailing unknown to the fence',
+        );
+      },
+    );
   });
 }
 
@@ -1178,7 +1505,9 @@ class _GatedCache extends DriftCache {
   bool _gated = false;
 
   @override
-  Future<({bool inserted, bool newlyInvalid})> upsertInbound(Message serverMsg) async {
+  Future<({bool inserted, bool newlyInvalid})> upsertInbound(
+    Message serverMsg,
+  ) async {
     log.add('upsert:${serverMsg.id}-start');
     if (!_gated) {
       _gated = true;
@@ -1191,7 +1520,10 @@ class _GatedCache extends DriftCache {
 
   @override
   Future<AckOutcome> reconcileAck(
-      String clientTempId, String serverUlid, DateTime serverCreatedAt) {
+    String clientTempId,
+    String serverUlid,
+    DateTime serverCreatedAt,
+  ) {
     log.add('ack:$clientTempId');
     return super.reconcileAck(clientTempId, serverUlid, serverCreatedAt);
   }

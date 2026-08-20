@@ -33,80 +33,117 @@ void main() {
   // creates-account path that can legitimately return either shape).
   group('passkey finish → _resolveOutcome routing', () {
     test('a full token response → Authenticated', () async {
-      final api = apiWith((_) => jsonBody(200,
-          '{"access_token":"a","refresh_token":"r","user":{"user_id":"u1","username":"nick","display_name":"Nick","aiko_username":"nick"}}'));
+      final api = apiWith(
+        (_) => jsonBody(
+          200,
+          '{"access_token":"a","refresh_token":"r","user":{"user_id":"u1","username":"nick","display_name":"Nick","aiko_username":"nick"}}',
+        ),
+      );
       final out = await api.finishPasskeyRegistration('st', '{"id":"cred"}');
       expect(out, isA<Authenticated>());
       expect((out as Authenticated).session.user.username, 'nick');
     });
 
-    test('a status:pending response → PendingHandle (new-account claim)',
-        () async {
-      final api = apiWith((_) => jsonBody(200,
-          '{"status":"pending","provisioning_token":"ptok","suggested_name":"Robin","email":"r@x.com"}'));
-      final out = await api.finishPasskeyRegistration('st', '{"id":"cred"}');
-      expect(out, isA<PendingHandle>());
-      final p = out as PendingHandle;
-      expect(p.provisioningToken, 'ptok');
-      expect(p.suggestedName, 'Robin');
-      expect(p.email, 'r@x.com');
-    });
-
-    test('no access_token (even without a status field) → PendingHandle',
-        () async {
-      final api = apiWith((_) => jsonBody(200, '{"provisioning_token":"ptok"}'));
-      final out =
-          await api.finishPasskeyAuthentication('st', '{"id":"cred"}');
-      expect(out, isA<PendingHandle>());
-    });
+    test(
+      'a status:pending response → PendingHandle (new-account claim)',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(
+            200,
+            '{"status":"pending","provisioning_token":"ptok","suggested_name":"Robin","email":"r@x.com"}',
+          ),
+        );
+        final out = await api.finishPasskeyRegistration('st', '{"id":"cred"}');
+        expect(out, isA<PendingHandle>());
+        final p = out as PendingHandle;
+        expect(p.provisioningToken, 'ptok');
+        expect(p.suggestedName, 'Robin');
+        expect(p.email, 'r@x.com');
+      },
+    );
 
     test(
-        'a malformed identity response (neither token nor provisioning) fails '
-        'LOUDLY, not as a null-cast (cage-match: Maxwell/Kelvin/Carnot)',
-        () async {
-      final api = apiWith((_) => jsonBody(200, '{"unexpected":"shape"}'));
-      expect(() => api.finishPasskeyRegistration('st', '{"id":"cred"}'),
-          throwsA(isA<FormatException>()));
-    });
+      'no access_token (even without a status field) → PendingHandle',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(200, '{"provisioning_token":"ptok"}'),
+        );
+        final out = await api.finishPasskeyAuthentication(
+          'st',
+          '{"id":"cred"}',
+        );
+        expect(out, isA<PendingHandle>());
+      },
+    );
 
-    test('a pending response missing its provisioning_token type → FormatException',
-        () async {
-      final api = apiWith((_) => jsonBody(200, '{"status":"pending"}'));
-      expect(() => api.finishPasskeyRegistration('st', '{"id":"cred"}'),
-          throwsA(isA<FormatException>()));
-    });
+    test(
+      'a malformed identity response (neither token nor provisioning) fails '
+      'LOUDLY, not as a null-cast (cage-match: Maxwell/Kelvin/Carnot)',
+      () async {
+        final api = apiWith((_) => jsonBody(200, '{"unexpected":"shape"}'));
+        expect(
+          () => api.finishPasskeyRegistration('st', '{"id":"cred"}'),
+          throwsA(isA<FormatException>()),
+        );
+      },
+    );
+
+    test(
+      'a pending response missing its provisioning_token type → FormatException',
+      () async {
+        final api = apiWith((_) => jsonBody(200, '{"status":"pending"}'));
+        expect(
+          () => api.finishPasskeyRegistration('st', '{"id":"cred"}'),
+          throwsA(isA<FormatException>()),
+        );
+      },
+    );
 
     test('posts state + decoded credential to the finish endpoint', () async {
       RequestOptions? captured;
       final api = apiWith((opts) {
         captured = opts;
-        return jsonBody(200,
-            '{"access_token":"a","refresh_token":"r","user":{"user_id":"u","username":"x","display_name":"X","aiko_username":"x"}}');
+        return jsonBody(
+          200,
+          '{"access_token":"a","refresh_token":"r","user":{"user_id":"u","username":"x","display_name":"X","aiko_username":"x"}}',
+        );
       });
       await api.finishPasskeyRegistration('st8', '{"id":"cred-1"}');
       expect(captured!.path, '/v1/auth/passkey/register/finish');
       final body = captured!.data as Map;
       expect(body['state'], 'st8');
-      expect(body['credential'], {'id': 'cred-1'},
-          reason: 'the authenticator JSON is decoded, not double-encoded');
+      expect(body['credential'], {
+        'id': 'cred-1',
+      }, reason: 'the authenticator JSON is decoded, not double-encoded');
     });
 
-    test('malformed authenticator JSON → FormatException (client plumbing)',
-        () async {
-      final api = apiWith((_) => jsonBody(200, '{"access_token":"a"}'));
-      expect(() => api.finishPasskeyRegistration('st', 'not-json'),
-          throwsA(isA<FormatException>()));
-    });
+    test(
+      'malformed authenticator JSON → FormatException (client plumbing)',
+      () async {
+        final api = apiWith((_) => jsonBody(200, '{"access_token":"a"}'));
+        expect(
+          () => api.finishPasskeyRegistration('st', 'not-json'),
+          throwsA(isA<FormatException>()),
+        );
+      },
+    );
   });
 
   // Retained from social_rest_test.dart: claimHandle serves the first-passkey-
   // creates-account handle claim (the gateway-owned /v1/auth/social/claim path).
   group('claimHandle', () {
     test('200 → AuthSession', () async {
-      final api = apiWith((_) => jsonBody(200,
-          '{"access_token":"a","refresh_token":"r","user":{"user_id":"u2","username":"robin","display_name":"Robin","aiko_username":"robin"}}'));
+      final api = apiWith(
+        (_) => jsonBody(
+          200,
+          '{"access_token":"a","refresh_token":"r","user":{"user_id":"u2","username":"robin","display_name":"Robin","aiko_username":"robin"}}',
+        ),
+      );
       final s = await api.claimHandle(
-          provisioningToken: 'p', handle: 'robin', displayName: 'Robin');
+        provisioningToken: 'p',
+        handle: 'robin',
+        displayName: 'Robin',
+      );
       expect(s.user.username, 'robin');
       expect(s.tokens.accessToken, 'a');
     });
@@ -115,7 +152,10 @@ void main() {
       final api = apiWith((_) => jsonBody(409, '{"detail":"handle taken"}'));
       expect(
         () => api.claimHandle(
-            provisioningToken: 'p', handle: 'taken', displayName: 'x'),
+          provisioningToken: 'p',
+          handle: 'taken',
+          displayName: 'x',
+        ),
         throwsA(isA<HandleTaken>()),
       );
     });
@@ -128,53 +168,73 @@ void main() {
     // access_token/provisioning_token. If addPasskey routed through the shared
     // `_resolveOutcome` (like the other finishes), this would throw
     // "neither access_token nor provisioning_token". It must parse an AppUser.
-    test('a bare user response (no tokens) → AppUser, not a resolver throw',
-        () async {
-      final api = apiWith((_) => jsonBody(200,
-          '{"user_id":"u9","username":"nick","display_name":"Nick","aiko_username":"nick"}'));
-      final u = await api.addPasskey('st8', '{"id":"cred"}');
-      expect(u.userId, 'u9');
-      expect(u.username, 'nick');
-    });
+    test(
+      'a bare user response (no tokens) → AppUser, not a resolver throw',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(
+            200,
+            '{"user_id":"u9","username":"nick","display_name":"Nick","aiko_username":"nick"}',
+          ),
+        );
+        final u = await api.addPasskey('st8', '{"id":"cred"}');
+        expect(u.userId, 'u9');
+        expect(u.username, 'nick');
+      },
+    );
 
-    test('posts state + decoded credential to /v1/auth/passkey/add/finish',
-        () async {
-      RequestOptions? captured;
-      final api = apiWith((opts) {
-        captured = opts;
-        return jsonBody(200,
-            '{"user_id":"u","username":"x","display_name":"X","aiko_username":"x"}');
-      });
-      await api.addPasskey('st8', '{"id":"cred-1"}');
-      expect(captured!.path, '/v1/auth/passkey/add/finish');
-      final body = captured!.data as Map;
-      expect(body['state'], 'st8');
-      expect(body['credential'], {'id': 'cred-1'},
-          reason: 'the authenticator JSON is decoded, not double-encoded');
-    });
+    test(
+      'posts state + decoded credential to /v1/auth/passkey/add/finish',
+      () async {
+        RequestOptions? captured;
+        final api = apiWith((opts) {
+          captured = opts;
+          return jsonBody(
+            200,
+            '{"user_id":"u","username":"x","display_name":"X","aiko_username":"x"}',
+          );
+        });
+        await api.addPasskey('st8', '{"id":"cred-1"}');
+        expect(captured!.path, '/v1/auth/passkey/add/finish');
+        final body = captured!.data as Map;
+        expect(body['state'], 'st8');
+        expect(body['credential'], {
+          'id': 'cred-1',
+        }, reason: 'the authenticator JSON is decoded, not double-encoded');
+      },
+    );
 
     test('409 → PasskeyAlreadyRegistered', () async {
-      final api =
-          apiWith((_) => jsonBody(409, '{"detail":"passkey already registered"}'));
+      final api = apiWith(
+        (_) => jsonBody(409, '{"detail":"passkey already registered"}'),
+      );
       expect(
         () => api.addPasskey('st', '{"id":"c"}'),
         throwsA(isA<PasskeyAlreadyRegistered>()),
       );
     });
 
-    test('terminal 401 → Unauthorized (shares the authed-call mapping)',
-        () async {
-      final api = apiWith((_) => jsonBody(401, '{"detail":"nope"}'));
-      expect(() => api.addPasskey('st', '{"id":"c"}'),
-          throwsA(isA<Unauthorized>()));
-    });
+    test(
+      'terminal 401 → Unauthorized (shares the authed-call mapping)',
+      () async {
+        final api = apiWith((_) => jsonBody(401, '{"detail":"nope"}'));
+        expect(
+          () => api.addPasskey('st', '{"id":"c"}'),
+          throwsA(isA<Unauthorized>()),
+        );
+      },
+    );
 
-    test('malformed authenticator JSON → FormatException (client plumbing)',
-        () async {
-      final api = apiWith((_) => jsonBody(200, '{"user_id":"u"}'));
-      expect(() => api.addPasskey('st', 'not-json'),
-          throwsA(isA<FormatException>()));
-    });
+    test(
+      'malformed authenticator JSON → FormatException (client plumbing)',
+      () async {
+        final api = apiWith((_) => jsonBody(200, '{"user_id":"u"}'));
+        expect(
+          () => api.addPasskey('st', 'not-json'),
+          throwsA(isA<FormatException>()),
+        );
+      },
+    );
   });
 
   // The island's per-island BAN — `403 {"detail":"account suspended"}` at every
@@ -190,47 +250,61 @@ void main() {
   //   - bare login door → `_throwIfAuthTerminal` (via finishPasskeyRegistration,
   //     the passkey-finish path that surfaces a revoked/expired provisioning 403)
   group('account-ban 403 → AccountSuspended', () {
-    test('authed route (_authedCall): 403 account suspended → AccountSuspended',
-        () async {
-      final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
-      await expectLater(api.listBlocks(), throwsA(isA<AccountSuspended>()));
-    });
-
-    test('AccountSuspended IS an Unauthorized (routers on the base type hold)',
-        () async {
-      final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
-      await expectLater(api.listBlocks(), throwsA(isA<Unauthorized>()));
-    });
-
-    test('login door (_throwIfAuthTerminal): 403 suspended → AccountSuspended',
-        () async {
-      // finishPasskeyRegistration posts on the token-less _bare client, so its
-      // terminal 401/403 maps via _throwIfAuthTerminal — the login/claim door,
-      // NOT _authedCall. This is where a banned user's re-auth attempt lands.
-      final api = apiWith((_) => jsonBody(403, '{"detail":"account suspended"}'));
-      await expectLater(api.finishPasskeyRegistration('st', '{"id":"c"}'),
-          throwsA(isA<AccountSuspended>()));
-    });
+    test(
+      'authed route (_authedCall): 403 account suspended → AccountSuspended',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(403, '{"detail":"account suspended"}'),
+        );
+        await expectLater(api.listBlocks(), throwsA(isA<AccountSuspended>()));
+      },
+    );
 
     test(
-        'login door (_throwIfAuthTerminal): a plain (non-suspended) 403 stays '
-        'terminal Unauthorized, NOT Forbidden (A3 door asymmetry is frozen)',
-        () async {
-      // The A3 unbundle is DOOR-DEPENDENT on purpose: a plain 403 on the AUTHED
-      // door is authZ → Forbidden, but on the token-less login/claim door it is a
-      // rejected/expired provisioning token = an authN failure → terminal
-      // Unauthorized. This test freezes that asymmetry so a future "make it
-      // consistent" edit can't collapse provisioning rejection into a
-      // non-terminal Forbidden the auth UI wouldn't treat as session death.
-      final api = apiWith((_) => jsonBody(403, '{"detail":"forbidden"}'));
-      await expectLater(
-        api.finishPasskeyRegistration('st', '{"id":"c"}'),
-        throwsA(allOf(isA<Unauthorized>(), isNot(isA<Forbidden>()))),
-      );
-    });
+      'AccountSuspended IS an Unauthorized (routers on the base type hold)',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(403, '{"detail":"account suspended"}'),
+        );
+        await expectLater(api.listBlocks(), throwsA(isA<Unauthorized>()));
+      },
+    );
 
     test(
-        'a NON-suspended 403 (authZ denial) → Forbidden, NOT Unauthorized '
+      'login door (_throwIfAuthTerminal): 403 suspended → AccountSuspended',
+      () async {
+        // finishPasskeyRegistration posts on the token-less _bare client, so its
+        // terminal 401/403 maps via _throwIfAuthTerminal — the login/claim door,
+        // NOT _authedCall. This is where a banned user's re-auth attempt lands.
+        final api = apiWith(
+          (_) => jsonBody(403, '{"detail":"account suspended"}'),
+        );
+        await expectLater(
+          api.finishPasskeyRegistration('st', '{"id":"c"}'),
+          throwsA(isA<AccountSuspended>()),
+        );
+      },
+    );
+
+    test(
+      'login door (_throwIfAuthTerminal): a plain (non-suspended) 403 stays '
+      'terminal Unauthorized, NOT Forbidden (A3 door asymmetry is frozen)',
+      () async {
+        // The A3 unbundle is DOOR-DEPENDENT on purpose: a plain 403 on the AUTHED
+        // door is authZ → Forbidden, but on the token-less login/claim door it is a
+        // rejected/expired provisioning token = an authN failure → terminal
+        // Unauthorized. This test freezes that asymmetry so a future "make it
+        // consistent" edit can't collapse provisioning rejection into a
+        // non-terminal Forbidden the auth UI wouldn't treat as session death.
+        final api = apiWith((_) => jsonBody(403, '{"detail":"forbidden"}'));
+        await expectLater(
+          api.finishPasskeyRegistration('st', '{"id":"c"}'),
+          throwsA(allOf(isA<Unauthorized>(), isNot(isA<Forbidden>()))),
+        );
+      },
+    );
+
+    test('a NON-suspended 403 (authZ denial) → Forbidden, NOT Unauthorized '
         '(A3: authZ ≠ authN, no logout)', () async {
       // e.g. a moderator-only endpoint's forbidden. It must be neither a ban nor
       // a terminal Unauthorized — the session is valid, only THIS action is
@@ -242,17 +316,20 @@ void main() {
       );
     });
 
-    test('a 403 that merely mentions "suspend" is NOT a ban (exact-phrase key)',
-        () async {
-      // Tesla P2: the body key matches the island's phrase, not any "suspend".
-      // A near-miss body falls through to the plain-403 → Forbidden branch
-      // (A3), never to the ban's AccountSuspended.
-      final api =
-          apiWith((_) => jsonBody(403, '{"detail":"cannot suspend operation"}'));
-      await expectLater(
-        api.listBlocks(),
-        throwsA(allOf(isA<Forbidden>(), isNot(isA<AccountSuspended>()))),
-      );
-    });
+    test(
+      'a 403 that merely mentions "suspend" is NOT a ban (exact-phrase key)',
+      () async {
+        // Tesla P2: the body key matches the island's phrase, not any "suspend".
+        // A near-miss body falls through to the plain-403 → Forbidden branch
+        // (A3), never to the ban's AccountSuspended.
+        final api = apiWith(
+          (_) => jsonBody(403, '{"detail":"cannot suspend operation"}'),
+        );
+        await expectLater(
+          api.listBlocks(),
+          throwsA(allOf(isA<Forbidden>(), isNot(isA<AccountSuspended>()))),
+        );
+      },
+    );
   });
 }

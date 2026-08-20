@@ -38,24 +38,30 @@ void main() {
     await initializeTestEnvironment();
   });
 
-  testWidgets('a NON-moderator does not see the Reports tile in Settings',
-      (tester) async {
-    final container =
-        makeContainer(rest: FakeRestApi(), transport: FakeChatTransport());
+  testWidgets('a NON-moderator does not see the Reports tile in Settings', (
+    tester,
+  ) async {
+    final container = makeContainer(
+      rest: FakeRestApi(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
     await pumpApp(tester, container);
     await signIn(tester);
     await _openSettings(tester);
 
-    expect(find.text('Blocked users'), findsOneWidget); // sanity: settings loaded
+    expect(
+      find.text('Blocked users'),
+      findsOneWidget,
+    ); // sanity: settings loaded
     expect(find.text('Reports'), findsNothing);
   });
 
-  testWidgets('a moderator sees the Reports tile and opens the queue',
-      (tester) async {
+  testWidgets('a moderator sees the Reports tile and opens the queue', (
+    tester,
+  ) async {
     final rest = FakeRestApi(user: _modUser)..pendingReports = [_report('r1')];
-    final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
     await pumpApp(tester, container);
     await signIn(tester);
@@ -69,12 +75,12 @@ void main() {
     expect(find.text('body of r1'), findsOneWidget);
   });
 
-  testWidgets('taking a message down calls resolve and removes the tile',
-      (tester) async {
+  testWidgets('taking a message down calls resolve and removes the tile', (
+    tester,
+  ) async {
     final rest = FakeRestApi(user: _modUser)
       ..pendingReports = [_report('r1'), _report('r2')];
-    final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
     await pumpApp(tester, container);
     await signIn(tester);

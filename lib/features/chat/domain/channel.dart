@@ -45,11 +45,11 @@ class Channel {
   });
 
   factory Channel.fromJson(Map<String, dynamic> j) => Channel(
-        id: j['id'] as String,
-        name: (j['name'] as String?) ?? '',
-        kind: ChannelKind.fromWire(j['kind'] as String?),
-        aikoChannel: j['aiko_channel'] as String?,
-      );
+    id: j['id'] as String,
+    name: (j['name'] as String?) ?? '',
+    kind: ChannelKind.fromWire(j['kind'] as String?),
+    aikoChannel: j['aiko_channel'] as String?,
+  );
 
   /// Build from the `POST /v1/dm` find-or-create response, whose shape differs
   /// from `GET /v1/channels`: `{channel_id, kind, members[], created_at}` — the
@@ -77,7 +77,10 @@ class Channel {
     // a bad kind rather than a bare TypeError from a raw cast.
     final id = j['channel_id'];
     if (id is! String || id.isEmpty) {
-      throw FormatException('POST /v1/dm response missing a string channel_id', j);
+      throw FormatException(
+        'POST /v1/dm response missing a string channel_id',
+        j,
+      );
     }
     return Channel(id: id, name: '', kind: kind);
   }

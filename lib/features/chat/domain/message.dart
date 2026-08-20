@@ -108,16 +108,20 @@ class MessageSender {
   const MessageSender({this.userId, required this.kind, this.label});
 
   factory MessageSender.fromJson(Map<String, dynamic> j) => MessageSender(
-        userId: j['user_id'] as String?,
-        kind: SenderKind.fromWire(j['kind'] as String?),
-        label: j['label'] as String?,
-      );
+    userId: j['user_id'] as String?,
+    kind: SenderKind.fromWire(j['kind'] as String?),
+    label: j['label'] as String?,
+  );
 
-  Map<String, dynamic> toJson() =>
-      {'user_id': userId, 'kind': kind.wire, 'label': label};
+  Map<String, dynamic> toJson() => {
+    'user_id': userId,
+    'kind': kind.wire,
+    'label': label,
+  };
 
   /// Best-effort display name: explicit label, else the kind's name.
-  String get displayLabel => (label != null && label!.isNotEmpty) ? label! : kind.name;
+  String get displayLabel =>
+      (label != null && label!.isNotEmpty) ? label! : kind.name;
 
   @override
   bool operator ==(Object other) =>
@@ -194,7 +198,8 @@ class Message {
       id: msgId,
       channelId: v['channel_id'] as String,
       sender: MessageSender.fromJson(
-          (v['sender'] as Map?)?.cast<String, dynamic>() ?? const {}),
+        (v['sender'] as Map?)?.cast<String, dynamic>() ?? const {},
+      ),
       kind: MessageKind.fromWire(v['kind'] as String?),
       body: (v['body'] as String?) ?? '',
       replyToId: v['reply_to'] as String?,
@@ -236,20 +241,19 @@ class Message {
     DeliveryState? deliveryState,
     OriginEnvelope? origin,
     bool? originCryptoValid,
-  }) =>
-      Message(
-        clientTempId: clientTempId,
-        id: id ?? this.id,
-        channelId: channelId,
-        sender: sender ?? this.sender,
-        kind: kind,
-        body: body ?? this.body,
-        replyToId: replyToId,
-        createdAt: createdAt ?? this.createdAt,
-        deliveryState: deliveryState ?? this.deliveryState,
-        origin: origin ?? this.origin,
-        originCryptoValid: originCryptoValid ?? this.originCryptoValid,
-      );
+  }) => Message(
+    clientTempId: clientTempId,
+    id: id ?? this.id,
+    channelId: channelId,
+    sender: sender ?? this.sender,
+    kind: kind,
+    body: body ?? this.body,
+    replyToId: replyToId,
+    createdAt: createdAt ?? this.createdAt,
+    deliveryState: deliveryState ?? this.deliveryState,
+    origin: origin ?? this.origin,
+    originCryptoValid: originCryptoValid ?? this.originCryptoValid,
+  );
 
   static DateTime _parseTime(String? iso) {
     if (iso == null) return DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
@@ -271,8 +275,17 @@ class Message {
       other.deliveryState == deliveryState;
 
   @override
-  int get hashCode => Object.hash(clientTempId, id, channelId, sender, kind,
-      body, replyToId, createdAt, deliveryState);
+  int get hashCode => Object.hash(
+    clientTempId,
+    id,
+    channelId,
+    sender,
+    kind,
+    body,
+    replyToId,
+    createdAt,
+    deliveryState,
+  );
 }
 
 /// What the composer hands to the transport/outbox: the durable temp id (which

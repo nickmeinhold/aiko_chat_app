@@ -61,21 +61,23 @@ class _FixedAuthController extends AuthController {
 /// connect), REST, and an in-memory cache. Telemetry is left to the real
 /// `chatTelemetryProvider` unless [telemetryOverride] is supplied.
 ProviderContainer _repoGraphContainer({ChatTelemetry? telemetryOverride}) {
-  return ProviderContainer(overrides: [
-    authControllerProvider.overrideWith(() => _FixedAuthController(_me)),
-    channelsProvider.overrideWith((ref) async => const <Channel>[]),
-    // The repo also derives its subscription set from dmsProvider; stub it empty
-    // (FakeChatRestApi.listDms throws UnimplementedError — this test wires
-    // telemetry/signing, not DMs).
-    dmsProvider.overrideWith((ref) async => const <Channel>[]),
-    // FakeChatTransport.connect() is a no-op, so the production body's
-    // `await transport.connect()` never opens a socket.
-    transportProvider.overrideWithValue(FakeChatTransport()),
-    restApiProvider.overrideWithValue(FakeChatRestApi()),
-    cacheProvider.overrideWith((ref) => DriftCache(openUserCache(null))),
-    if (telemetryOverride != null)
-      chatTelemetryProvider.overrideWithValue(telemetryOverride),
-  ]);
+  return ProviderContainer(
+    overrides: [
+      authControllerProvider.overrideWith(() => _FixedAuthController(_me)),
+      channelsProvider.overrideWith((ref) async => const <Channel>[]),
+      // The repo also derives its subscription set from dmsProvider; stub it empty
+      // (FakeChatRestApi.listDms throws UnimplementedError — this test wires
+      // telemetry/signing, not DMs).
+      dmsProvider.overrideWith((ref) async => const <Channel>[]),
+      // FakeChatTransport.connect() is a no-op, so the production body's
+      // `await transport.connect()` never opens a socket.
+      transportProvider.overrideWithValue(FakeChatTransport()),
+      restApiProvider.overrideWithValue(FakeChatRestApi()),
+      cacheProvider.overrideWith((ref) => DriftCache(openUserCache(null))),
+      if (telemetryOverride != null)
+        chatTelemetryProvider.overrideWithValue(telemetryOverride),
+    ],
+  );
 }
 
 void main() {
@@ -86,8 +88,7 @@ void main() {
   setUpAll(installSecureStorageMock);
 
   group('chatRepositoryProvider telemetry wiring (#16 regression class)', () {
-    test(
-        'injects the sink from chatTelemetryProvider — the CONSUMPTION edge, not '
+    test('injects the sink from chatTelemetryProvider — the CONSUMPTION edge, not '
         'just the provider default', () async {
       // A distinct (non-const) sentinel: `same()` against it proves the repo read
       // chatTelemetryProvider AND injected its value. A const LoggingChatTelemetry
@@ -108,8 +109,7 @@ void main() {
       expect(repo.debugTelemetry, same(sentinel));
     });
 
-    test(
-        'resolves a real LoggingChatTelemetry by default, never the silent '
+    test('resolves a real LoggingChatTelemetry by default, never the silent '
         '_NoopTelemetry', () async {
       final container = _repoGraphContainer();
       addTearDown(container.dispose);
@@ -124,8 +124,7 @@ void main() {
       expect(repo.debugTelemetry, same(container.read(chatTelemetryProvider)));
     });
 
-    test(
-        'wires a REAL sovereign signing key — the same DI-no-op class as '
+    test('wires a REAL sovereign signing key — the same DI-no-op class as '
         'telemetry (sovereign-message-signing)', () async {
       // RED-prove: delete `signingKey: signingKey` from chat_providers.dart and
       // the repo's nullable _signingKey stays null → messages silently never get
@@ -154,11 +153,13 @@ void main() {
       prefs = await SharedPreferences.getInstance();
     });
 
-    ProviderContainer leafContainer() => ProviderContainer(overrides: [
-          sharedPreferencesProvider.overrideWithValue(prefs),
-          authControllerProvider.overrideWith(() => _FixedAuthController(null)),
-          secureTokenStoreProvider.overrideWithValue(InMemoryTokenStore()),
-        ]);
+    ProviderContainer leafContainer() => ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        authControllerProvider.overrideWith(() => _FixedAuthController(null)),
+        secureTokenStoreProvider.overrideWithValue(InMemoryTokenStore()),
+      ],
+    );
 
     test('transportProvider resolves a real GatewayTransport', () {
       final c = leafContainer();

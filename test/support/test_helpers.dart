@@ -18,7 +18,8 @@ import 'ui_fakes.dart';
 export 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 export 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 export 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
-export 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart' show HandleTaken, SoleAdminDeletionBlocked;
+export 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
+    show HandleTaken, SoleAdminDeletionBlocked;
 export 'fake_chat_transport.dart';
 export 'fakes.dart';
 export 'ui_fakes.dart';
@@ -49,25 +50,25 @@ void installSecureStorageMock() {
   final backing = <String, String>{};
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(channel, (call) async {
-    final args = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
-    switch (call.method) {
-      case 'write':
-        backing[args['key'] as String] = args['value'] as String;
-        return null;
-      case 'read':
-        return backing[args['key'] as String];
-      case 'delete':
-        backing.remove(args['key'] as String);
-        return null;
-      case 'readAll':
-        return backing;
-      case 'deleteAll':
-        backing.clear();
-        return null;
-      default:
-        return null;
-    }
-  });
+        final args = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
+        switch (call.method) {
+          case 'write':
+            backing[args['key'] as String] = args['value'] as String;
+            return null;
+          case 'read':
+            return backing[args['key'] as String];
+          case 'delete':
+            backing.remove(args['key'] as String);
+            return null;
+          case 'readAll':
+            return backing;
+          case 'deleteAll':
+            backing.clear();
+            return null;
+          default:
+            return null;
+        }
+      });
 }
 
 /// Build a container wiring the real graph to faked seams. The token provider
@@ -84,71 +85,75 @@ ProviderContainer makeContainer({
 }) {
   final tokenStore = store ?? InMemoryTokenStore();
   late final ProviderContainer container;
-  container = ProviderContainer(overrides: [
-    // The Settings Server tile + the config layer read SharedPreferences; inject
-    // the in-memory instance loaded in setUpAll so configProvider resolves.
-    sharedPreferencesProvider.overrideWithValue(testPrefs),
-    restApiProvider.overrideWithValue(rest),
-    transportProvider.overrideWithValue(transport),
-    // The real passkey client hits the platform authenticator — a
-    // FakePasskeyAuthClient drives the ceremony without a platform channel.
-    // Tests inject a throwing/gated one to exercise cancel/failure paths.
-    passkeyAuthClientProvider.overrideWithValue(passkey ?? FakePasskeyAuthClient()),
-    // EULA acceptance is faked at its store seam. Default ACCEPTED so existing
-    // tests reach login/chat unchanged; gate-specific tests pass accepted:false.
-    eulaStoreProvider.overrideWithValue(eula ?? FakeEulaStore(accepted: true)),
-    // Inject the (real) Terms text synchronously so no async asset read races
-    // pumpAndSettle. Loaded once from the bundled asset in setUpAll; a test can
-    // pass a short string to exercise the no-scroll path.
-    eulaTextProvider.overrideWith((ref) => eulaText ?? realEula),
-    tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
-      store: tokenStore,
-      remoteRefresh: (_) async => 'access2',
-      onUnauthenticated: () => container.read(authEventsProvider).add(null),
-    )),
-    // Offline-first restore reads/writes the cached user; use an in-memory store
-    // so tests neither touch a platform channel nor leak the cached user across
-    // tests via the shared testPrefs.
-    cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
-    // The NetworkStatusBanner (login + chat) reads connectivity + reachability;
-    // fake both so widget tests never touch the connectivity_plus platform
-    // channel or the network. Default online + reachable → no banner, behaviour
-    // unchanged for existing tests.
-    connectivityServiceProvider
-        .overrideWithValue(FakeConnectivityService()),
-    reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
-    // The real gatewayReachableProvider polls on a 5s Timer loop; stub it with a
-    // one-shot reachable stream so widget tests don't trip "pending timer" at
-    // teardown. (Its derived logic is covered in network_status_test.)
-    gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
-    // The real cacheProvider is now file-backed via path_provider, which has no
-    // platform channel under flutter_test. Widget tests get an in-memory cache
-    // that, like the real provider, is disposed and recreated across auth
-    // sessions — ensuring no state leaks between tests.
-    // A test may inject a PRE-SEEDED cache (e.g. to stage channel history that
-    // exists before the app first observes it, for first-sight/unread tests); the
-    // test owns its lifecycle. Otherwise a fresh in-memory cache per session.
-    cacheProvider.overrideWith((ref) {
-      if (cache != null) return cache;
-      final db = DriftCache(NativeDatabase.memory());
-      ref.onDispose(db.close);
-      return db;
-    }),
-    // The gateway picker discovers from the live gateway (#36). App-shell tests
-    // exercise navigation/UI, not discovery — stub it empty so no real network
-    // fires (which would leak a pending timer past widget disposal). The picker
-    // then renders the bundled seed set.
-    gatewayDirectoryProvider.overrideWith((ref) async => const []),
-  ]);
+  container = ProviderContainer(
+    overrides: [
+      // The Settings Server tile + the config layer read SharedPreferences; inject
+      // the in-memory instance loaded in setUpAll so configProvider resolves.
+      sharedPreferencesProvider.overrideWithValue(testPrefs),
+      restApiProvider.overrideWithValue(rest),
+      transportProvider.overrideWithValue(transport),
+      // The real passkey client hits the platform authenticator — a
+      // FakePasskeyAuthClient drives the ceremony without a platform channel.
+      // Tests inject a throwing/gated one to exercise cancel/failure paths.
+      passkeyAuthClientProvider.overrideWithValue(
+        passkey ?? FakePasskeyAuthClient(),
+      ),
+      // EULA acceptance is faked at its store seam. Default ACCEPTED so existing
+      // tests reach login/chat unchanged; gate-specific tests pass accepted:false.
+      eulaStoreProvider.overrideWithValue(
+        eula ?? FakeEulaStore(accepted: true),
+      ),
+      // Inject the (real) Terms text synchronously so no async asset read races
+      // pumpAndSettle. Loaded once from the bundled asset in setUpAll; a test can
+      // pass a short string to exercise the no-scroll path.
+      eulaTextProvider.overrideWith((ref) => eulaText ?? realEula),
+      tokenProviderProvider.overrideWithValue(
+        DefaultTokenProvider(
+          store: tokenStore,
+          remoteRefresh: (_) async => 'access2',
+          onUnauthenticated: () => container.read(authEventsProvider).add(null),
+        ),
+      ),
+      // Offline-first restore reads/writes the cached user; use an in-memory store
+      // so tests neither touch a platform channel nor leak the cached user across
+      // tests via the shared testPrefs.
+      cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
+      // The NetworkStatusBanner (login + chat) reads connectivity + reachability;
+      // fake both so widget tests never touch the connectivity_plus platform
+      // channel or the network. Default online + reachable → no banner, behaviour
+      // unchanged for existing tests.
+      connectivityServiceProvider.overrideWithValue(FakeConnectivityService()),
+      reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
+      // The real gatewayReachableProvider polls on a 5s Timer loop; stub it with a
+      // one-shot reachable stream so widget tests don't trip "pending timer" at
+      // teardown. (Its derived logic is covered in network_status_test.)
+      gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
+      // The real cacheProvider is now file-backed via path_provider, which has no
+      // platform channel under flutter_test. Widget tests get an in-memory cache
+      // that, like the real provider, is disposed and recreated across auth
+      // sessions — ensuring no state leaks between tests.
+      // A test may inject a PRE-SEEDED cache (e.g. to stage channel history that
+      // exists before the app first observes it, for first-sight/unread tests); the
+      // test owns its lifecycle. Otherwise a fresh in-memory cache per session.
+      cacheProvider.overrideWith((ref) {
+        if (cache != null) return cache;
+        final db = DriftCache(NativeDatabase.memory());
+        ref.onDispose(db.close);
+        return db;
+      }),
+      // The gateway picker discovers from the live gateway (#36). App-shell tests
+      // exercise navigation/UI, not discovery — stub it empty so no real network
+      // fires (which would leak a pending timer past widget disposal). The picker
+      // then renders the bundled seed set.
+      gatewayDirectoryProvider.overrideWith((ref) async => const []),
+    ],
+  );
   return container;
 }
 
 Future<void> pumpApp(WidgetTester tester, ProviderContainer container) async {
   await tester.pumpWidget(
-    UncontrolledProviderScope(
-      container: container,
-      child: const AikoChatApp(),
-    ),
+    UncontrolledProviderScope(container: container, child: const AikoChatApp()),
   );
   await tester.pumpAndSettle();
 }

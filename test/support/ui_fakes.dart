@@ -15,12 +15,9 @@ import 'package:aiko_chat_app/features/moderation/domain/moderation_models.dart'
 /// `FakeChatRestApi` only implements the B4 history slice). Each endpoint is
 /// programmable; defaults are the happy path.
 class FakeRestApi implements ChatRestApi {
-  FakeRestApi({
-    AppUser? user,
-    List<Channel>? channels,
-    this.meThrows,
-  })  : user = user ?? defaultUser,
-        channels = channels ?? const [defaultChannel];
+  FakeRestApi({AppUser? user, List<Channel>? channels, this.meThrows})
+    : user = user ?? defaultUser,
+      channels = channels ?? const [defaultChannel];
 
   static const defaultUser = AppUser(
     userId: 'u1',
@@ -28,8 +25,11 @@ class FakeRestApi implements ChatRestApi {
     displayName: 'Nick',
     aikoUsername: 'nick',
   );
-  static const defaultChannel =
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard);
+  static const defaultChannel = Channel(
+    id: 'c1',
+    name: 'general',
+    kind: ChannelKind.standard,
+  );
 
   AppUser user;
   List<Channel> channels;
@@ -70,9 +70,9 @@ class FakeRestApi implements ChatRestApi {
   int listChannelsCalls = 0;
 
   AuthSession _session() => AuthSession(
-        user: user,
-        tokens: const AuthTokens(accessToken: 'access', refreshToken: 'refresh'),
-      );
+    user: user,
+    tokens: const AuthTokens(accessToken: 'access', refreshToken: 'refresh'),
+  );
 
   @override
   Future<String> refresh(String refreshToken) async => 'access2';
@@ -111,13 +111,17 @@ class FakeRestApi implements ChatRestApi {
 
   @override
   Future<IdentityOutcome> finishPasskeyRegistration(
-      String state, String credentialJson) async {
+    String state,
+    String credentialJson,
+  ) async {
     passkeyRegisterFinishCalls++;
     lastPasskeyRegisterState = state;
     lastPasskeyRegisterCredential = credentialJson;
     return passkeyRegisterOutcome ??
         const PendingHandle(
-            provisioningToken: 'passkey-prov', suggestedName: null);
+          provisioningToken: 'passkey-prov',
+          suggestedName: null,
+        );
   }
 
   @override
@@ -128,7 +132,9 @@ class FakeRestApi implements ChatRestApi {
 
   @override
   Future<IdentityOutcome> finishPasskeyAuthentication(
-      String state, String credentialJson) async {
+    String state,
+    String credentialJson,
+  ) async {
     passkeyAuthFinishCalls++;
     lastPasskeyAuthState = state;
     lastPasskeyAuthCredential = credentialJson;
@@ -276,7 +282,10 @@ class FakeRestApi implements ChatRestApi {
 
   /// The token [requestVideoToken] returns when not throwing.
   VideoToken videoToken = const VideoToken(
-      token: 'fake-jwt', url: 'wss://livekit.test', room: 'fake-room');
+    token: 'fake-jwt',
+    url: 'wss://livekit.test',
+    room: 'fake-room',
+  );
 
   int requestVideoTokenCalls = 0;
 
@@ -293,7 +302,10 @@ class FakeRestApi implements ChatRestApi {
   /// The DM channel [openDm] returns when not throwing. Defaults to a `kind: dm`
   /// channel so the call-affordance gate (kind == dm) lights up in tests.
   Channel openDmReturns = const Channel(
-      id: 'dm:me:peer', name: '', kind: ChannelKind.dm);
+    id: 'dm:me:peer',
+    name: '',
+    kind: ChannelKind.dm,
+  );
 
   int openDmCalls = 0;
 
@@ -310,9 +322,12 @@ class FakeRestApi implements ChatRestApi {
   }
 
   @override
-  Future<HistoryPage> getHistory(String channelId,
-          {String? before, String? after, int limit = 50}) async =>
-      HistoryPage.ofMessages(channelId: channelId, messages: const []);
+  Future<HistoryPage> getHistory(
+    String channelId, {
+    String? before,
+    String? after,
+    int limit = 50,
+  }) async => HistoryPage.ofMessages(channelId: channelId, messages: const []);
 
   // --- moderation (#7) — functional fakes so widget tests can drive block/report.
 
@@ -331,11 +346,13 @@ class FakeRestApi implements ChatRestApi {
     if (moderationThrows != null) throw moderationThrows!;
     if (blocks.any((b) => b.userId == userId)) return;
     blocks.insert(
-        0,
-        BlockedUser(
-            userId: userId,
-            displayName: 'User $userId',
-            createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)));
+      0,
+      BlockedUser(
+        userId: userId,
+        displayName: 'User $userId',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      ),
+    );
   }
 
   @override

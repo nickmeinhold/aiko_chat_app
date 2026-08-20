@@ -27,27 +27,38 @@ void main() {
   final connReq = RequestOptions(path: '/v1/me');
 
   test('connection-class failure (no response) → NetworkUnavailable', () async {
-    final api = apiThatThrows(DioException(
-      requestOptions: connReq,
-      type: DioExceptionType.connectionError,
-      error: 'Failed host lookup',
-    ));
+    final api = apiThatThrows(
+      DioException(
+        requestOptions: connReq,
+        type: DioExceptionType.connectionError,
+        error: 'Failed host lookup',
+      ),
+    );
     await expectLater(api.me(), throwsA(isA<NetworkUnavailable>()));
   });
 
   test('connection timeout (no response) → NetworkUnavailable', () async {
-    final api = apiThatThrows(DioException(
-      requestOptions: connReq,
-      type: DioExceptionType.connectionTimeout,
-    ));
+    final api = apiThatThrows(
+      DioException(
+        requestOptions: connReq,
+        type: DioExceptionType.connectionTimeout,
+      ),
+    );
     await expectLater(api.me(), throwsA(isA<NetworkUnavailable>()));
   });
 
   test('server ANSWERED 500 → NOT NetworkUnavailable (fail closed)', () async {
     final api = apiThatAnswers(500, '{"error":"boom"}');
     await expectLater(
-        api.me(), throwsA(isA<Object>().having((e) => e is NetworkUnavailable,
-            'is NetworkUnavailable', isFalse)));
+      api.me(),
+      throwsA(
+        isA<Object>().having(
+          (e) => e is NetworkUnavailable,
+          'is NetworkUnavailable',
+          isFalse,
+        ),
+      ),
+    );
   });
 
   test('terminal 401 → Unauthorized (not NetworkUnavailable)', () async {

@@ -18,20 +18,20 @@ class LoggingChatTelemetry extends ChatTelemetry {
 
   @override
   void orphanAck(String clientMsgId, String serverUlid) => developer.log(
-        'orphan ack (unreachable in Phase 1): client=$clientMsgId '
-        'server=$serverUlid',
-        name: _name,
-        level: 900,
-      );
+    'orphan ack (unreachable in Phase 1): client=$clientMsgId '
+    'server=$serverUlid',
+    name: _name,
+    level: 900,
+  );
 
   @override
   void reconnectFailed(Object error, StackTrace stack) => developer.log(
-        'reconnect choreography failed',
-        name: _name,
-        level: 1000,
-        error: error,
-        stackTrace: stack,
-      );
+    'reconnect choreography failed',
+    name: _name,
+    level: 1000,
+    error: error,
+    stackTrace: stack,
+  );
 
   @override
   void historyGapBeforeFence(String channelId, String? cursor, String fence) =>
@@ -44,7 +44,11 @@ class LoggingChatTelemetry extends ChatTelemetry {
 
   @override
   void historySyncFault(
-          String channelId, String? cursor, String fence, int streak) =>
+    String channelId,
+    String? cursor,
+    String fence,
+    int streak,
+  ) =>
       // The loud #16 signal: a fence unreachable across [streak] sync attempts
       // is no longer a benign shrink. Logged at SEVERE so it surfaces distinctly
       // from the INFO-level benign gap. NOTE: fires once per sync attempt WHILE
@@ -60,12 +64,12 @@ class LoggingChatTelemetry extends ChatTelemetry {
 
   @override
   void inboundWriteFailed(Object error, StackTrace stack) => developer.log(
-        'inbound (W3) cache write failed',
-        name: _name,
-        level: 1000,
-        error: error,
-        stackTrace: stack,
-      );
+    'inbound (W3) cache write failed',
+    name: _name,
+    level: 1000,
+    error: error,
+    stackTrace: stack,
+  );
 
   @override
   void inboundBackpressure({required bool engaged, required int depth}) =>
@@ -75,7 +79,7 @@ class LoggingChatTelemetry extends ChatTelemetry {
       developer.log(
         engaged
             ? 'inbound backpressure ENGAGED at depth=$depth (inbound paused — '
-                'throughput outran the cache writer)'
+                  'throughput outran the cache writer)'
             : 'inbound backpressure released at depth=$depth (inbound resumed)',
         name: _name,
         level: engaged ? 900 : 800,

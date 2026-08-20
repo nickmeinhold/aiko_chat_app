@@ -1,0 +1,13 @@
+# Commits that changed formatting only, and should not show up as the author of
+# a line in `git blame`. GitHub's blame view honours this file automatically.
+#
+# Locally, opt in once per clone:
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Only ever add a commit here that provably changed no behaviour.
+
+# style: dart format the tree — whitespace only, no behaviour
+# 147 files reflowed under Dart 3.13's formatter, having last been formatted by an
+# older SDK. Verified: every changed file is byte-identical once whitespace and
+# commas are stripped; analyze infos unchanged; 919 tests passing.
+c927e4ec6ef77412fd63b0e8e88c44caa3616efa

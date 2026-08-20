@@ -58,11 +58,13 @@ Future<void> confirmAndSwitchGateway(
       ),
       actions: [
         TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel')),
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Cancel'),
+        ),
         FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Switch')),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Switch'),
+        ),
       ],
     ),
   );
@@ -77,9 +79,9 @@ Future<void> confirmAndSwitchGateway(
   } catch (e) {
     if (!context.mounted) return;
     onSwitching?.call(false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_switchError(e))),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(_switchError(e))));
     return;
   }
   // Land deterministically on the new gateway's /login. Since #35 made

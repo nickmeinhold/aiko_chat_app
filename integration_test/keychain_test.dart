@@ -43,10 +43,7 @@ void main() {
     });
 
     testWidgets('clear removes the persisted pair', (tester) async {
-      await store.write(const AuthTokens(
-        accessToken: 'a',
-        refreshToken: 'r',
-      ));
+      await store.write(const AuthTokens(accessToken: 'a', refreshToken: 'r'));
       await store.clear();
       expect(await store.read(), isNull);
     });

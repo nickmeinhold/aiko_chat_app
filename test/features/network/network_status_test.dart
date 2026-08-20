@@ -13,7 +13,11 @@ import 'package:flutter_test/flutter_test.dart';
 /// shows only on trouble.
 void main() {
   const user = AppUser(
-      userId: 'u', username: 'n', displayName: 'N', aikoUsername: 'n');
+    userId: 'u',
+    username: 'n',
+    displayName: 'N',
+    aikoUsername: 'n',
+  );
 
   // Minimal auth override: skip the real build()'s listeners, just publish a
   // fixed logged-in/out value so networkStatusProvider can branch on it.
@@ -23,13 +27,18 @@ void main() {
     ConnectionState? socket,
     bool gatewayReachable = true,
   }) {
-    return ProviderContainer(overrides: [
-      deviceOnlineProvider.overrideWith((ref) => Stream.value(deviceOnline)),
-      connectionStateProvider.overrideWith(
-          (ref) => Stream.value(socket ?? ConnectionState.disconnected)),
-      gatewayReachableProvider.overrideWith((ref) => Stream.value(gatewayReachable)),
-      authControllerProvider.overrideWith(() => _FixedAuth(loggedInUser)),
-    ]);
+    return ProviderContainer(
+      overrides: [
+        deviceOnlineProvider.overrideWith((ref) => Stream.value(deviceOnline)),
+        connectionStateProvider.overrideWith(
+          (ref) => Stream.value(socket ?? ConnectionState.disconnected),
+        ),
+        gatewayReachableProvider.overrideWith(
+          (ref) => Stream.value(gatewayReachable),
+        ),
+        authControllerProvider.overrideWith(() => _FixedAuth(loggedInUser)),
+      ],
+    );
   }
 
   Future<NetworkStatus> status(ProviderContainer c) async {
@@ -54,44 +63,55 @@ void main() {
 
   test('logged in + socket connected → online', () async {
     final c = container(
-        deviceOnline: true,
-        loggedInUser: user,
-        socket: ConnectionState.connected);
+      deviceOnline: true,
+      loggedInUser: user,
+      socket: ConnectionState.connected,
+    );
     addTearDown(c.dispose);
     expect(await status(c), NetworkStatus.online);
   });
 
   test('logged in + socket DISCONNECTED → serverUnreachable', () async {
     final c = container(
-        deviceOnline: true,
-        loggedInUser: user,
-        socket: ConnectionState.disconnected);
+      deviceOnline: true,
+      loggedInUser: user,
+      socket: ConnectionState.disconnected,
+    );
     addTearDown(c.dispose);
     expect(await status(c), NetworkStatus.serverUnreachable);
   });
 
-  test('logged in + socket CONNECTING → online (no false-alarm flash)',
-      () async {
-    // The normal connect/revalidate window must NOT paint "can't reach" — that
-    // was the PR #72 cage-match false-alarm hole (Tesla).
-    final c = container(
+  test(
+    'logged in + socket CONNECTING → online (no false-alarm flash)',
+    () async {
+      // The normal connect/revalidate window must NOT paint "can't reach" — that
+      // was the PR #72 cage-match false-alarm hole (Tesla).
+      final c = container(
         deviceOnline: true,
         loggedInUser: user,
-        socket: ConnectionState.connecting);
-    addTearDown(c.dispose);
-    expect(await status(c), NetworkStatus.online);
-  });
+        socket: ConnectionState.connecting,
+      );
+      addTearDown(c.dispose);
+      expect(await status(c), NetworkStatus.online);
+    },
+  );
 
-  test('logged in + socket UNAUTHENTICATED → online (auth signal, not network)',
-      () async {
-    final c = container(
+  test(
+    'logged in + socket UNAUTHENTICATED → online (auth signal, not network)',
+    () async {
+      final c = container(
         deviceOnline: true,
         loggedInUser: user,
-        socket: ConnectionState.unauthenticated);
-    addTearDown(c.dispose);
-    expect(await status(c), NetworkStatus.online,
-        reason: 'unauthenticated is a logout signal, not a network banner');
-  });
+        socket: ConnectionState.unauthenticated,
+      );
+      addTearDown(c.dispose);
+      expect(
+        await status(c),
+        NetworkStatus.online,
+        reason: 'unauthenticated is a logout signal, not a network banner',
+      );
+    },
+  );
 
   test('logged out + gateway reachable → online', () async {
     final c = container(deviceOnline: true, gatewayReachable: true);
@@ -99,20 +119,22 @@ void main() {
     expect(await status(c), NetworkStatus.online);
   });
 
-  test('logged out + gateway unreachable → serverUnreachable (the DNS case)',
-      () async {
-    final c = container(deviceOnline: true, gatewayReachable: false);
-    addTearDown(c.dispose);
-    expect(await status(c), NetworkStatus.serverUnreachable);
-  });
+  test(
+    'logged out + gateway unreachable → serverUnreachable (the DNS case)',
+    () async {
+      final c = container(deviceOnline: true, gatewayReachable: false);
+      addTearDown(c.dispose);
+      expect(await status(c), NetworkStatus.serverUnreachable);
+    },
+  );
 
   group('banner', () {
     Future<void> pump(WidgetTester t, NetworkStatus s) => t.pumpWidget(
-          ProviderScope(
-            overrides: [networkStatusProvider.overrideWithValue(s)],
-            child: const MaterialApp(home: Scaffold(body: NetworkStatusBanner())),
-          ),
-        );
+      ProviderScope(
+        overrides: [networkStatusProvider.overrideWithValue(s)],
+        child: const MaterialApp(home: Scaffold(body: NetworkStatusBanner())),
+      ),
+    );
 
     testWidgets('online → nothing rendered', (t) async {
       await pump(t, NetworkStatus.online);

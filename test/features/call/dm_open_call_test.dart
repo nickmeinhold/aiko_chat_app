@@ -27,7 +27,10 @@ void main() {
     id: 'm1',
     channelId: 'general',
     sender: const MessageSender(
-        userId: 'robin-key-opaque', kind: SenderKind.human, label: 'Robin'),
+      userId: 'robin-key-opaque',
+      kind: SenderKind.human,
+      label: 'Robin',
+    ),
     body: 'hey',
     createdAt: DateTime.utc(2026, 8, 10, 13),
     deliveryState: DeliveryState.sent,
@@ -57,10 +60,12 @@ void main() {
       ],
     );
     return UncontrolledProviderScope(
-      container: ProviderContainer(overrides: [
-        restApiProvider.overrideWithValue(fake),
-        blockedUserIdsProvider.overrideWithValue(blocked),
-      ]),
+      container: ProviderContainer(
+        overrides: [
+          restApiProvider.overrideWithValue(fake),
+          blockedUserIdsProvider.overrideWithValue(blocked),
+        ],
+      ),
       child: MaterialApp.router(routerConfig: router),
     );
   }
@@ -73,25 +78,37 @@ void main() {
     resetCallActionGuard();
   });
 
-  testWidgets('Call opens the DM with the sender key and pushes the call route',
-      (tester) async {
-    final fake = FakeRestApi()
-      ..openDmReturns =
-          const Channel(id: 'dm:me:robin', name: '', kind: ChannelKind.dm);
-    await tester.pumpWidget(harness(fake));
+  testWidgets(
+    'Call opens the DM with the sender key and pushes the call route',
+    (tester) async {
+      final fake = FakeRestApi()
+        ..openDmReturns = const Channel(
+          id: 'dm:me:robin',
+          name: '',
+          kind: ChannelKind.dm,
+        );
+      await tester.pumpWidget(harness(fake));
 
-    await tester.tap(find.text('open-actions'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Call Robin'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('open-actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Call Robin'));
+      await tester.pumpAndSettle();
 
-    expect(fake.openDmCalls, 1);
-    expect(fake.lastOpenDmTarget, 'robin-key-opaque'); // the opaque key, not 'Robin'
-    expect(find.text('CALL:dm:me:robin'), findsOneWidget); // room == DM channel id
-  });
+      expect(fake.openDmCalls, 1);
+      expect(
+        fake.lastOpenDmTarget,
+        'robin-key-opaque',
+      ); // the opaque key, not 'Robin'
+      expect(
+        find.text('CALL:dm:me:robin'),
+        findsOneWidget,
+      ); // room == DM channel id
+    },
+  );
 
-  testWidgets('a failed open shows a SnackBar and does not navigate',
-      (tester) async {
+  testWidgets('a failed open shows a SnackBar and does not navigate', (
+    tester,
+  ) async {
     final fake = FakeRestApi()..openDmThrows = const DmTargetNotFound();
     await tester.pumpWidget(harness(fake));
 
@@ -104,18 +121,23 @@ void main() {
     expect(find.textContaining('CALL:'), findsNothing); // never entered a call
   });
 
-  testWidgets('Call fails closed on a blocked target — no openDm, no navigation',
-      (tester) async {
-    final fake = FakeRestApi();
-    await tester.pumpWidget(harness(fake, blocked: {'robin-key-opaque'}));
+  testWidgets(
+    'Call fails closed on a blocked target — no openDm, no navigation',
+    (tester) async {
+      final fake = FakeRestApi();
+      await tester.pumpWidget(harness(fake, blocked: {'robin-key-opaque'}));
 
-    await tester.tap(find.text('open-actions'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Call Robin'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('open-actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Call Robin'));
+      await tester.pumpAndSettle();
 
-    expect(fake.openDmCalls, 0); // never even requested a room (defence-in-depth)
-    expect(find.textContaining("You've blocked Robin"), findsOneWidget);
-    expect(find.textContaining('CALL:'), findsNothing);
-  });
+      expect(
+        fake.openDmCalls,
+        0,
+      ); // never even requested a room (defence-in-depth)
+      expect(find.textContaining("You've blocked Robin"), findsOneWidget);
+      expect(find.textContaining('CALL:'), findsNothing);
+    },
+  );
 }

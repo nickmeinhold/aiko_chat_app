@@ -17,10 +17,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// send would throw (unhandled provider), which the Enter test relies on to prove
 /// Enter did NOT send.
 Widget _harness() => const ProviderScope(
-      child: MaterialApp(
-        home: Scaffold(body: Composer(channelId: 'c1')),
-      ),
-    );
+  child: MaterialApp(
+    home: Scaffold(body: Composer(channelId: 'c1')),
+  ),
+);
 
 void main() {
   testWidgets('typing ":smi" opens the suggestion panel', (tester) async {
@@ -32,8 +32,9 @@ void main() {
     expect(find.text(':smile:'), findsOneWidget);
   });
 
-  testWidgets('tapping a suggestion inserts the emoji and removes the token',
-      (tester) async {
+  testWidgets('tapping a suggestion inserts the emoji and removes the token', (
+    tester,
+  ) async {
     await tester.pumpWidget(_harness());
     await tester.enterText(find.byType(TextField), ':smi');
     await tester.pumpAndSettle();
@@ -48,8 +49,9 @@ void main() {
     expect(text, isNot(contains(':smi')));
   });
 
-  testWidgets('Enter while the panel is open commits the suggestion, not a send',
-      (tester) async {
+  testWidgets('Enter while the panel is open commits the suggestion, not a send', (
+    tester,
+  ) async {
     await tester.pumpWidget(_harness());
     // enterText focuses the field and puts the caret at the end.
     await tester.enterText(find.byType(TextField), ':smi');

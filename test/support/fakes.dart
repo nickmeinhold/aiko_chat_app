@@ -38,9 +38,7 @@ class InMemoryCachedUserStore extends CachedUserStore {
   /// When true, `write` returns `false` (SharedPreferences persistence-failure
   /// semantics — no throw) so a test can exercise the caller's fallback.
   bool failWrites = false;
-  InMemoryCachedUserStore([AppUser? initial])
-      : _user = initial,
-        super(null);
+  InMemoryCachedUserStore([AppUser? initial]) : _user = initial, super(null);
 
   @override
   AppUser? read() => _user;
@@ -114,21 +112,23 @@ class FakeHttpAdapter implements HttpClientAdapter {
   FakeHttpAdapter(this.handler);
 
   @override
-  Future<ResponseBody> fetch(RequestOptions options,
-          Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async =>
-      handler(options);
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => handler(options);
 
   @override
   void close({bool force = false}) {}
 }
 
 ResponseBody jsonBody(int status, String body) => ResponseBody.fromString(
-      body,
-      status,
-      headers: {
-        Headers.contentTypeHeader: ['application/json'],
-      },
-    );
+  body,
+  status,
+  headers: {
+    Headers.contentTypeHeader: ['application/json'],
+  },
+);
 
 /// A controllable fake WebSocketChannel for transport tests.
 class FakeWebSocketChannel implements WebSocketChannel {

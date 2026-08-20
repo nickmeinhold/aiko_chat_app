@@ -33,12 +33,19 @@ void main() {
         darkOverrides: {PaletteRole.beacon: Color(0xFFF0B649)},
       );
       final back = SkinSelection.decode(s.encode());
-      expect(back.lightOverrides[PaletteRole.signal]?.toARGB32(),
-          _legalTeal.toARGB32());
-      expect(back.darkOverrides[PaletteRole.beacon]?.toARGB32(),
-          const Color(0xFFF0B649).toARGB32());
-      expect(back.lightOverrides.containsKey(PaletteRole.beacon), isFalse,
-          reason: 'a light edit must not leak into dark');
+      expect(
+        back.lightOverrides[PaletteRole.signal]?.toARGB32(),
+        _legalTeal.toARGB32(),
+      );
+      expect(
+        back.darkOverrides[PaletteRole.beacon]?.toARGB32(),
+        const Color(0xFFF0B649).toARGB32(),
+      );
+      expect(
+        back.lightOverrides.containsKey(PaletteRole.beacon),
+        isFalse,
+        reason: 'a light edit must not leak into dark',
+      );
     });
   });
 
@@ -109,14 +116,17 @@ void main() {
       expect(checkPalette(s.resolve().light), isEmpty);
     });
 
-    test('identity is preserved: id, label and blurb survive customisation', () {
-      const s = SkinSelection(
-        presetId: 'blueprint',
-        lightOverrides: {PaletteRole.signal: _legalTeal},
-      );
-      expect(s.resolve().id, 'blueprint');
-      expect(s.resolve().label, presetById('blueprint').label);
-    });
+    test(
+      'identity is preserved: id, label and blurb survive customisation',
+      () {
+        const s = SkinSelection(
+          presetId: 'blueprint',
+          lightOverrides: {PaletteRole.signal: _legalTeal},
+        );
+        expect(s.resolve().id, 'blueprint');
+        expect(s.resolve().label, presetById('blueprint').label);
+      },
+    );
   });
 
   group('SELF-HEALING — an edit that became illegal drops, alone', () {
@@ -126,10 +136,16 @@ void main() {
         lightOverrides: {PaletteRole.signal: _illegalMint},
       );
       final resolved = s.resolve().light;
-      expect(resolved.signal, presetById('maritime').light.signal,
-          reason: 'the illegal edit should have fallen back to the preset');
-      expect(checkPalette(resolved), isEmpty,
-          reason: 'a reader must never be handed an unreadable app');
+      expect(
+        resolved.signal,
+        presetById('maritime').light.signal,
+        reason: 'the illegal edit should have fallen back to the preset',
+      );
+      expect(
+        checkPalette(resolved),
+        isEmpty,
+        reason: 'a reader must never be handed an unreadable app',
+      );
     });
 
     test('a GOOD edit beside a bad one SURVIVES — losing all of someone\'s '
@@ -155,17 +171,19 @@ void main() {
       expect(checkPalette(resolved), isEmpty);
     });
 
-    test('even an all-garbage override set terminates and yields the preset',
-        () {
-      const junk = Color(0xFF808080);
-      final s = SkinSelection(
-        presetId: 'maritime',
-        lightOverrides: {for (final r in PaletteRole.values) r: junk},
-      );
-      final resolved = s.resolve().light;
-      expect(checkPalette(resolved), isEmpty);
-      expect(resolved.ground, presetById('maritime').light.ground);
-    });
+    test(
+      'even an all-garbage override set terminates and yields the preset',
+      () {
+        const junk = Color(0xFF808080);
+        final s = SkinSelection(
+          presetId: 'maritime',
+          lightOverrides: {for (final r in PaletteRole.values) r: junk},
+        );
+        final resolved = s.resolve().light;
+        expect(checkPalette(resolved), isEmpty);
+        expect(resolved.ground, presetById('maritime').light.ground);
+      },
+    );
   });
 
   group('editing operations', () {
@@ -183,9 +201,13 @@ void main() {
         role: PaletteRole.signal,
         colour: null,
       );
-      expect(s.lightOverrides.containsKey(PaletteRole.signal), isFalse,
-          reason: 'a revert must delete the delta — storing the preset\'s own '
-              'colour would freeze it against future revisions');
+      expect(
+        s.lightOverrides.containsKey(PaletteRole.signal),
+        isFalse,
+        reason:
+            'a revert must delete the delta — storing the preset\'s own '
+            'colour would freeze it against future revisions',
+      );
       expect(s.isCustomised, isFalse);
     });
 

@@ -201,8 +201,10 @@ CallInvite? admitRing(
   if (!isDm) return null;
   if (blockedUserIds.contains(message.sender.userId)) return null;
   if (conversationMuted) return null;
-  final signedAt =
-      DateTime.fromMillisecondsSinceEpoch(origin.signedAtMs, isUtc: true);
+  final signedAt = DateTime.fromMillisecondsSinceEpoch(
+    origin.signedAtMs,
+    isUtc: true,
+  );
   final age = now.difference(signedAt);
   // Negative age (signed in the future by a skewed clock) is not fresh — it is
   // unreadable, and admitting it would let a bad clock ring forever.

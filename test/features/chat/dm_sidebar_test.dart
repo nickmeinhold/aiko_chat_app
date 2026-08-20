@@ -31,19 +31,27 @@ void main() {
     await initializeTestEnvironment();
   });
 
-  const channels = [Channel(id: 'c1', name: 'general', kind: ChannelKind.standard)];
+  const channels = [
+    Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+  ];
   const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
 
   // The DM's roster: me (u1, the default signed-in user) + the peer Alice (u2).
   const roster = [
     ChannelMember(
-        userId: 'u1', role: 'member', canPost: true, handle: 'me', displayName: 'Me'),
+      userId: 'u1',
+      role: 'member',
+      canPost: true,
+      handle: 'me',
+      displayName: 'Me',
+    ),
     ChannelMember(
-        userId: 'u2',
-        role: 'member',
-        canPost: true,
-        handle: 'alice',
-        displayName: 'Alice'),
+      userId: 'u2',
+      role: 'member',
+      canPost: true,
+      handle: 'alice',
+      displayName: 'Alice',
+    ),
   ];
 
   FakeRestApi restWithDm() {
@@ -60,11 +68,14 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
   }
 
-  testWidgets('wide sidebar shows a DM section labelled with the peer handle',
-      (tester) async {
+  testWidgets('wide sidebar shows a DM section labelled with the peer handle', (
+    tester,
+  ) async {
     setWide(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -77,37 +88,42 @@ void main() {
     expect(find.text('alice'), findsOneWidget);
   });
 
-  testWidgets('tapping a DM selects it AND it stays selected (self-heal knows DMs)',
-      (tester) async {
-    setWide(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
-    addTearDown(container.dispose);
+  testWidgets(
+    'tapping a DM selects it AND it stays selected (self-heal knows DMs)',
+    (tester) async {
+      setWide(tester);
+      final container = makeContainer(
+        rest: restWithDm(),
+        transport: FakeChatTransport(),
+      );
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('sidebar-dm-dm1')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('sidebar-dm-dm1')));
+      await tester.pumpAndSettle();
 
-    // Selected through the same mutator as a channel tile...
-    expect(container.read(selectedChannelIdProvider), 'dm1');
-    // ...and NOT cleared by the self-heal (a DM id is absent from channelsProvider;
-    // healing against channels alone — the pre-#2798 bug — would clear it here).
-    expect(
-      tester.widget<ListTile>(find.byKey(const Key('sidebar-dm-dm1'))).selected,
-      isTrue,
-    );
-  });
+      // Selected through the same mutator as a channel tile...
+      expect(container.read(selectedChannelIdProvider), 'dm1');
+      // ...and NOT cleared by the self-heal (a DM id is absent from channelsProvider;
+      // healing against channels alone — the pre-#2798 bug — would clear it here).
+      expect(
+        tester
+            .widget<ListTile>(find.byKey(const Key('sidebar-dm-dm1')))
+            .selected,
+        isTrue,
+      );
+    },
+  );
 
   testWidgets('dmsProvider fails SOFT — a DM-list failure degrades to [], not an '
       'error that takes the chat surface down', (tester) async {
     setWide(tester);
     final rest = FakeRestApi(channels: channels)
       ..listDmsThrows = const NetworkUnavailable();
-    final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -122,16 +138,20 @@ void main() {
 
   testWidgets('navigableChannelsProvider is channels ∪ DMs', (tester) async {
     setWide(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    final ids =
-        container.read(navigableChannelsProvider).map((c) => c.id).toSet();
+    final ids = container
+        .read(navigableChannelsProvider)
+        .map((c) => c.id)
+        .toSet();
     expect(ids, containsAll(<String>{'c1', 'dm1'}));
   });
 
@@ -142,10 +162,12 @@ void main() {
     // asserted, and the fix was a gate that hid the switcher entirely. The gate
     // is gone (#2798 task #12): the DM is now IN the item list, so `value` has its
     // match and the user keeps a way out of the conversation.
-    final rest = FakeRestApi(channels: const [
-      Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
-      Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
-    ]);
+    final rest = FakeRestApi(
+      channels: const [
+        Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
+        Channel(id: 'c2', name: 'random', kind: ChannelKind.standard),
+      ],
+    );
     rest.dms = [dm];
     rest.membersByChannel['dm1'] = roster;
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
@@ -176,56 +198,64 @@ void main() {
   });
 
   testWidgets(
-      'first-load DM failure (no last-known) degrades to [] — repo survives',
-      (tester) async {
-    setWide(tester);
-    final rest = FakeRestApi(channels: channels)
-      ..listDmsThrows = StateError('boom'); // a 5xx / poisoned-row class, not offline
-    final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
-    addTearDown(container.dispose);
+    'first-load DM failure (no last-known) degrades to [] — repo survives',
+    (tester) async {
+      setWide(tester);
+      final rest = FakeRestApi(channels: channels)
+        ..listDmsThrows = StateError(
+          'boom',
+        ); // a 5xx / poisoned-row class, not offline
+      final container = makeContainer(
+        rest: rest,
+        transport: FakeChatTransport(),
+      );
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
 
-    // Nothing was ever fetched, so there is no last-known list → []. Crucially the
-    // channel chat is fully intact (the repo, which awaits dmsProvider.future, did
-    // not die on the non-network throw).
-    expect(await container.read(dmsProvider.future), isEmpty);
-    expect(tester.takeException(), isNull);
-    expect(find.byKey(const Key('sidebar-channel-c1')), findsOneWidget);
-    expect(find.text('Direct messages'), findsNothing);
-  });
+      // Nothing was ever fetched, so there is no last-known list → []. Crucially the
+      // channel chat is fully intact (the repo, which awaits dmsProvider.future, did
+      // not die on the non-network throw).
+      expect(await container.read(dmsProvider.future), isEmpty);
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('sidebar-channel-c1')), findsOneWidget);
+      expect(find.text('Direct messages'), findsNothing);
+    },
+  );
 
   testWidgets(
-      'a transient failure AFTER a good fetch keeps the selected DM (last-known)',
-      (tester) async {
-    setWide(tester);
-    final rest = restWithDm(); // listDms succeeds → [dm1]
-    final container =
-        makeContainer(rest: rest, transport: FakeChatTransport());
-    addTearDown(container.dispose);
+    'a transient failure AFTER a good fetch keeps the selected DM (last-known)',
+    (tester) async {
+      setWide(tester);
+      final rest = restWithDm(); // listDms succeeds → [dm1]
+      final container = makeContainer(
+        rest: rest,
+        transport: FakeChatTransport(),
+      );
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sidebar-dm-dm1')));
-    await tester.pumpAndSettle();
-    expect(container.read(selectedChannelIdProvider), 'dm1');
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('sidebar-dm-dm1')));
+      await tester.pumpAndSettle();
+      expect(container.read(selectedChannelIdProvider), 'dm1');
 
-    // A transient DM-list failure now hits a refetch.
-    rest.listDmsThrows = StateError('boom');
-    container.invalidate(dmsProvider);
-    await tester.pumpAndSettle();
+      // A transient DM-list failure now hits a refetch.
+      rest.listDmsThrows = StateError('boom');
+      container.invalidate(dmsProvider);
+      await tester.pumpAndSettle();
 
-    // Degrades to STALE (last-known [dm1]), NOT [] — so the DM stays present and
-    // the self-heal does NOT eject the selection (the degraded-empty resonance the
-    // cage-match flagged: soft-empty must not read as "conversation deleted").
-    expect(await container.read(dmsProvider.future), isNotEmpty);
-    expect(container.read(selectedChannelIdProvider), 'dm1');
-    expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
-  });
+      // Degrades to STALE (last-known [dm1]), NOT [] — so the DM stays present and
+      // the self-heal does NOT eject the selection (the degraded-empty resonance the
+      // cage-match flagged: soft-empty must not read as "conversation deleted").
+      expect(await container.read(dmsProvider.future), isNotEmpty);
+      expect(container.read(selectedChannelIdProvider), 'dm1');
+      expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
+    },
+  );
 
   // ── Inc 2: unread badges on DM rows + a VISIBLE selection highlight ─────────
 
@@ -233,7 +263,8 @@ void main() {
   /// the deferred first-sight baseline flush (mirrors channel_unread_test).
   Future<void> settle(WidgetTester tester) async {
     await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pumpAndSettle();
   }
 
@@ -245,7 +276,10 @@ void main() {
         id: id,
         channelId: channelId,
         sender: MessageSender(
-            userId: userId, kind: SenderKind.human, label: 'User $userId'),
+          userId: userId,
+          kind: SenderKind.human,
+          label: 'User $userId',
+        ),
         body: body,
         createdAt: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
         deliveryState: DeliveryState.sent,
@@ -255,14 +289,17 @@ void main() {
   /// conversation's fence settles — that fence is what unblocks first-sight
   /// baselining, without which unread stays 0 (never floods) by design.
   Future<void> signInConnected(
-      WidgetTester tester, FakeChatTransport transport) async {
+    WidgetTester tester,
+    FakeChatTransport transport,
+  ) async {
     await signIn(tester);
     transport.emitConn(ConnectionState.connected);
     await settle(tester);
   }
 
-  testWidgets('a DM row badges unread from the peer while a channel is active',
-      (tester) async {
+  testWidgets('a DM row badges unread from the peer while a channel is active', (
+    tester,
+  ) async {
     setWide(tester);
     final transport = FakeChatTransport();
     final container = makeContainer(rest: restWithDm(), transport: transport);
@@ -290,8 +327,9 @@ void main() {
     expect(tester.widget<UnreadBadge>(badge).count, 1);
   });
 
-  testWidgets('my own DM message is never unread, and opening the DM clears it',
-      (tester) async {
+  testWidgets('my own DM message is never unread, and opening the DM clears it', (
+    tester,
+  ) async {
     setWide(tester);
     final transport = FakeChatTransport();
     final container = makeContainer(rest: restWithDm(), transport: transport);
@@ -318,14 +356,17 @@ void main() {
     expect(container.read(channelUnreadCountProvider('dm1')), 0);
   });
 
-  testWidgets('the selected row is VISIBLY distinct from the rail behind it',
-      (tester) async {
+  testWidgets('the selected row is VISIBLY distinct from the rail behind it', (
+    tester,
+  ) async {
     // The regression this locks: the theme's selectedTileColor was the same
     // colour as the rail's own surface, so `selected: true` changed the label
     // colour but left the row indistinguishable from its background.
     setWide(tester);
-    final container =
-        makeContainer(rest: restWithDm(), transport: FakeChatTransport());
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
@@ -333,18 +374,33 @@ void main() {
     await tester.pumpAndSettle();
 
     final railColor = tester
-        .widget<Material>(find
-            .descendant(of: find.byType(ChatSidebar), matching: find.byType(Material))
-            .first)
+        .widget<Material>(
+          find
+              .descendant(
+                of: find.byType(ChatSidebar),
+                matching: find.byType(Material),
+              )
+              .first,
+        )
         .color;
-    for (final key in const [Key('sidebar-channel-c1'), Key('sidebar-dm-dm1')]) {
+    for (final key in const [
+      Key('sidebar-channel-c1'),
+      Key('sidebar-dm-dm1'),
+    ]) {
       final tileContext = tester.element(find.byKey(key));
-      final selectedTileColor = tester.widget<ListTile>(find.byKey(key)).selectedTileColor ??
+      final selectedTileColor =
+          tester.widget<ListTile>(find.byKey(key)).selectedTileColor ??
           ListTileTheme.of(tileContext).selectedTileColor;
-      expect(selectedTileColor, isNotNull,
-          reason: '$key has no selected background at all');
-      expect(selectedTileColor, isNot(railColor),
-          reason: '$key selected background is invisible against the rail');
+      expect(
+        selectedTileColor,
+        isNotNull,
+        reason: '$key has no selected background at all',
+      );
+      expect(
+        selectedTileColor,
+        isNot(railColor),
+        reason: '$key selected background is invisible against the rail',
+      );
     }
   });
 }

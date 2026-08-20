@@ -32,20 +32,26 @@ void main() {
     FakeChatTransport? transport,
   }) {
     late final ProviderContainer container;
-    container = ProviderContainer(overrides: [
-      restApiProvider.overrideWithValue(rest),
-      transportProvider.overrideWithValue(transport ?? FakeChatTransport()),
-      cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
-      connectivityServiceProvider
-          .overrideWithValue(connectivity ?? FakeConnectivityService()),
-      reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
-      cacheProvider.overrideWith((ref) => cache),
-      tokenProviderProvider.overrideWithValue(DefaultTokenProvider(
-        store: InMemoryTokenStore(seededTokens),
-        remoteRefresh: (_) async => 'access2',
-        onUnauthenticated: () => container.read(authEventsProvider).add(null),
-      )),
-    ]);
+    container = ProviderContainer(
+      overrides: [
+        restApiProvider.overrideWithValue(rest),
+        transportProvider.overrideWithValue(transport ?? FakeChatTransport()),
+        cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
+        connectivityServiceProvider.overrideWithValue(
+          connectivity ?? FakeConnectivityService(),
+        ),
+        reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
+        cacheProvider.overrideWith((ref) => cache),
+        tokenProviderProvider.overrideWithValue(
+          DefaultTokenProvider(
+            store: InMemoryTokenStore(seededTokens),
+            remoteRefresh: (_) async => 'access2',
+            onUnauthenticated: () =>
+                container.read(authEventsProvider).add(null),
+          ),
+        ),
+      ],
+    );
     return container;
   }
 
@@ -60,8 +66,9 @@ void main() {
     final channels = await c.read(channelsProvider.future);
 
     expect(channels, [c1]);
-    expect(await cache.readChannels(), [c1],
-        reason: 'a successful fetch writes through to the offline cache');
+    expect(await cache.readChannels(), [
+      c1,
+    ], reason: 'a successful fetch writes through to the offline cache');
   });
 
   test('offline: falls back to the cached channel list', () async {
@@ -75,21 +82,25 @@ void main() {
 
     final channels = await c.read(channelsProvider.future);
 
-    expect(channels, [c1],
-        reason: 'unreachable gateway → cached chat, not an error');
+    expect(channels, [
+      c1,
+    ], reason: 'unreachable gateway → cached chat, not an error');
   });
 
-  test('offline with an empty cache: an empty list, never a raw error',
-      () async {
-    final cache = DriftCache(NativeDatabase.memory());
-    addTearDown(cache.close);
-    final rest = FakeRestApi()..listChannelsThrows = const NetworkUnavailable();
-    final c = makeContainer(rest: rest, cache: cache);
-    addTearDown(c.dispose);
-    await c.read(authControllerProvider.future);
+  test(
+    'offline with an empty cache: an empty list, never a raw error',
+    () async {
+      final cache = DriftCache(NativeDatabase.memory());
+      addTearDown(cache.close);
+      final rest = FakeRestApi()
+        ..listChannelsThrows = const NetworkUnavailable();
+      final c = makeContainer(rest: rest, cache: cache);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
 
-    expect(await c.read(channelsProvider.future), isEmpty);
-  });
+      expect(await c.read(channelsProvider.future), isEmpty);
+    },
+  );
 
   test('the offline fallback is NOT sticky — recovery refetches', () async {
     // First-ever offline launch → []. When connectivity returns, channelsProvider
@@ -101,13 +112,20 @@ void main() {
     final connectivity = FakeConnectivityService(online: true);
     final rest = FakeRestApi(channels: const [c1])
       ..listChannelsThrows = const NetworkUnavailable(); // offline at first
-    final c = makeContainer(rest: rest, cache: cache, connectivity: connectivity);
+    final c = makeContainer(
+      rest: rest,
+      cache: cache,
+      connectivity: connectivity,
+    );
     addTearDown(c.dispose);
     await c.read(authControllerProvider.future);
     c.listen(channelsProvider, (_, _) {}, fireImmediately: true);
 
-    expect(await c.read(channelsProvider.future), isEmpty,
-        reason: 'first-ever offline launch: empty');
+    expect(
+      await c.read(channelsProvider.future),
+      isEmpty,
+      reason: 'first-ever offline launch: empty',
+    );
 
     // Network recovers: gateway answers now, and connectivity emits a change.
     rest.listChannelsThrows = null;
@@ -115,12 +133,12 @@ void main() {
     connectivity.emit(true); //  → online edge rebuilds channelsProvider
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
-    expect(await c.read(channelsProvider.future), [c1],
-        reason: 'recovery refetched — not stuck on the empty offline result');
+    expect(await c.read(channelsProvider.future), [
+      c1,
+    ], reason: 'recovery refetched — not stuck on the empty offline result');
   });
 
-  test(
-      'gateway recovery with NO device-online edge refetches the channel list '
+  test('gateway recovery with NO device-online edge refetches the channel list '
       '(Tesla, PR #72 residual)', () async {
     // A server restart / DNS heal produces no connectivity edge — the device
     // was "online" throughout. The socket reconnecting (disconnected →
@@ -138,16 +156,19 @@ void main() {
     await c.read(authControllerProvider.future);
     c.listen(channelsProvider, (_, _) {}, fireImmediately: true);
 
-    expect(await c.read(channelsProvider.future), [c1],
-        reason: 'gateway down → cached fallback');
+    expect(await c.read(channelsProvider.future), [
+      c1,
+    ], reason: 'gateway down → cached fallback');
 
     // Gateway recovers: REST heals and the socket reconnects. No device edge.
     rest.listChannelsThrows = null;
     transport.emitConn(ConnectionState.connected);
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
-    expect(await c.read(channelsProvider.future), [c1, c2],
-        reason: 'the connected edge refetched the live list');
+    expect(await c.read(channelsProvider.future), [
+      c1,
+      c2,
+    ], reason: 'the connected edge refetched the live list');
   });
 
   test('a healthy (fetched) list does NOT refetch on socket blips', () async {
@@ -174,12 +195,14 @@ void main() {
     transport.emitConn(ConnectionState.connected);
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
-    expect(rest.listChannelsCalls, baseline,
-        reason: 'no fallback in play — a blip must not refetch the list');
+    expect(
+      rest.listChannelsCalls,
+      baseline,
+      reason: 'no fallback in play — a blip must not refetch the list',
+    );
   });
 
-  test(
-      'fallback armed while the socket is ALREADY connected retries once '
+  test('fallback armed while the socket is ALREADY connected retries once '
       '(Tesla round 2: no edge is ever coming)', () async {
     // A TRANSIENT REST fault while the WSS never dropped: fails once, healed
     // by the time the retry lands. The listener arms into a steady `connected`
@@ -206,16 +229,23 @@ void main() {
     c.listen(channelsProvider, (_, _) {}, fireImmediately: true);
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
-    expect(await c.read(channelsProvider.future), [c1],
-        reason: 'the latched retry picked up the healed REST — with no socket '
-            'edge and no device edge (the fault is invisible to the reader)');
-    expect(rest.listChannelsCalls, inExclusiveRange(1, 4),
-        reason: 'the failed fetch + the one latched retry (+ at most the '
-            'deviceOnline first-emission settle rebuild) — never a hot loop');
+    expect(
+      await c.read(channelsProvider.future),
+      [c1],
+      reason:
+          'the latched retry picked up the healed REST — with no socket '
+          'edge and no device edge (the fault is invisible to the reader)',
+    );
+    expect(
+      rest.listChannelsCalls,
+      inExclusiveRange(1, 4),
+      reason:
+          'the failed fetch + the one latched retry (+ at most the '
+          'deviceOnline first-emission settle rebuild) — never a hot loop',
+    );
   });
 
-  test(
-      'REST persistently down + socket connected does NOT refetch-loop '
+  test('REST persistently down + socket connected does NOT refetch-loop '
       '(the latch holds)', () async {
     final cache = DriftCache(NativeDatabase.memory());
     addTearDown(cache.close);
@@ -235,11 +265,19 @@ void main() {
     final settled = rest.listChannelsCalls;
 
     await Future<void>.delayed(const Duration(milliseconds: 100));
-    expect(rest.listChannelsCalls, settled,
-        reason: 'after the single latched retry, a down REST must not be '
-            'hammered — the loop is broken by the latch');
-    expect(settled, lessThanOrEqualTo(3),
-        reason: 'initial fetch + at most one latched retry (+ at most one '
-            'init-transition rebuild) — never a hot loop');
+    expect(
+      rest.listChannelsCalls,
+      settled,
+      reason:
+          'after the single latched retry, a down REST must not be '
+          'hammered — the loop is broken by the latch',
+    );
+    expect(
+      settled,
+      lessThanOrEqualTo(3),
+      reason:
+          'initial fetch + at most one latched retry (+ at most one '
+          'init-transition rebuild) — never a hot loop',
+    );
   });
 }

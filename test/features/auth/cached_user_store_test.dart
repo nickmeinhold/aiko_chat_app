@@ -37,20 +37,26 @@ void main() {
     expect(AppUser.fromJson(j).isModerator, isFalse);
   });
 
-  test('is_moderator=true round-trips through the real persistence path',
-      () async {
-    const mod = AppUser(
-      userId: 'uid-2',
-      username: 'mod',
-      displayName: 'Mod',
-      aikoUsername: 'mod.aiko',
-      isModerator: true,
-    );
-    await store.write(mod);
-    final restored = store.read();
-    expect(restored, mod, reason: 'the moderator flag survives serialization');
-    expect(restored!.isModerator, isTrue);
-  });
+  test(
+    'is_moderator=true round-trips through the real persistence path',
+    () async {
+      const mod = AppUser(
+        userId: 'uid-2',
+        username: 'mod',
+        displayName: 'Mod',
+        aikoUsername: 'mod.aiko',
+        isModerator: true,
+      );
+      await store.write(mod);
+      final restored = store.read();
+      expect(
+        restored,
+        mod,
+        reason: 'the moderator flag survives serialization',
+      );
+      expect(restored!.isModerator, isTrue);
+    },
+  );
 
   test('write then read round-trips through real SharedPreferences', () async {
     expect(store.read(), isNull, reason: 'nothing persisted yet');

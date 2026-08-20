@@ -36,16 +36,22 @@ void main() {
 
   group('MessageSender.fromJson', () {
     test('full sender', () {
-      final s = MessageSender.fromJson(
-          {'user_id': 'u1', 'kind': 'human', 'label': 'Alice'});
+      final s = MessageSender.fromJson({
+        'user_id': 'u1',
+        'kind': 'human',
+        'label': 'Alice',
+      });
       expect(s.userId, 'u1');
       expect(s.kind, SenderKind.human);
       expect(s.label, 'Alice');
       expect(s.displayLabel, 'Alice');
     });
     test('null label does NOT throw (review finding #4)', () {
-      final s = MessageSender.fromJson(
-          {'user_id': null, 'kind': 'actor', 'label': null});
+      final s = MessageSender.fromJson({
+        'user_id': null,
+        'kind': 'actor',
+        'label': null,
+      });
       expect(s.label, isNull);
       expect(s.userId, isNull);
       expect(s.displayLabel, 'actor'); // falls back to kind
@@ -134,7 +140,8 @@ void main() {
   group('ServerFrame.parse (never throws)', () {
     test('ack', () {
       final f = ServerFrame.parse(
-          '{"type":"ack","client_msg_id":"tmp-1","msg_id":"01J","created_at":"2026-06-21T00:00:00Z"}');
+        '{"type":"ack","client_msg_id":"tmp-1","msg_id":"01J","created_at":"2026-06-21T00:00:00Z"}',
+      );
       expect(f, isA<AckFrame>());
       f as AckFrame;
       expect(f.clientMsgId, 'tmp-1');
@@ -143,7 +150,8 @@ void main() {
 
     test('message', () {
       final f = ServerFrame.parse(
-          '{"type":"message","msg":{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}}');
+        '{"type":"message","msg":{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}}',
+      );
       expect(f, isA<MessageFrame>());
       f as MessageFrame;
       expect(f.msgId, '01J');
@@ -153,7 +161,8 @@ void main() {
 
     test('error', () {
       final f = ServerFrame.parse(
-          '{"type":"error","code":"bad","detail":"nope","ref_client_msg_id":"tmp-9"}');
+        '{"type":"error","code":"bad","detail":"nope","ref_client_msg_id":"tmp-9"}',
+      );
       expect(f, isA<ErrorFrame>());
       f as ErrorFrame;
       expect(f.code, 'bad');
@@ -171,12 +180,15 @@ void main() {
       expect(f, isA<UnknownFrame>());
     });
     test('ack missing ids -> UnknownFrame', () {
-      expect(ServerFrame.parse('{"type":"ack","client_msg_id":"x"}'),
-          isA<UnknownFrame>());
+      expect(
+        ServerFrame.parse('{"type":"ack","client_msg_id":"x"}'),
+        isA<UnknownFrame>(),
+      );
     });
     test('retraction -> RetractionFrame with all three ids (island #104)', () {
       final f = ServerFrame.parse(
-          '{"type":"retraction","channel_id":"c1","id":"01Z","target_msg_id":"01A"}');
+        '{"type":"retraction","channel_id":"c1","id":"01Z","target_msg_id":"01A"}',
+      );
       expect(f, isA<RetractionFrame>());
       final r = f as RetractionFrame;
       expect(r.channelId, 'c1');
@@ -184,16 +196,20 @@ void main() {
       expect(r.targetMsgId, '01A');
     });
     test('retraction missing target_msg_id -> UnknownFrame (never throws)', () {
-      expect(ServerFrame.parse('{"type":"retraction","channel_id":"c1","id":"01Z"}'),
-          isA<UnknownFrame>());
+      expect(
+        ServerFrame.parse('{"type":"retraction","channel_id":"c1","id":"01Z"}'),
+        isA<UnknownFrame>(),
+      );
     });
   });
 
   group('outbound frames', () {
     test('SendFrame omits reply_to when null, has no sender (I5)', () {
       final j = const SendFrame(
-              clientMsgId: 'tmp-1', channelId: 'c1', body: 'hi')
-          .toJson();
+        clientMsgId: 'tmp-1',
+        channelId: 'c1',
+        body: 'hi',
+      ).toJson();
       expect(j['type'], 'send');
       expect(j['client_msg_id'], 'tmp-1');
       expect(j.containsKey('reply_to'), false);
@@ -201,8 +217,11 @@ void main() {
     });
     test('SendFrame includes reply_to when set', () {
       final j = const SendFrame(
-              clientMsgId: 'tmp-1', channelId: 'c1', body: 'hi', replyTo: 'r1')
-          .toJson();
+        clientMsgId: 'tmp-1',
+        channelId: 'c1',
+        body: 'hi',
+        replyTo: 'r1',
+      ).toJson();
       expect(j['reply_to'], 'r1');
     });
     test('SubscribeFrame', () {
@@ -235,15 +254,22 @@ void main() {
       expect(t2.refreshToken, 'r');
     });
     test('Channel.fromJson tolerates missing aiko_channel', () {
-      final c = Channel.fromJson({'id': 'c1', 'name': 'general', 'kind': 'standard'});
+      final c = Channel.fromJson({
+        'id': 'c1',
+        'name': 'general',
+        'kind': 'standard',
+      });
       expect(c.aikoChannel, isNull);
       expect(c.kind, ChannelKind.standard);
     });
   });
 
   group('VideoToken.fromJson can_publish', () {
-    Map<String, dynamic> base() =>
-        {'token': 't', 'url': 'wss://x', 'room': 'g:c1'};
+    Map<String, dynamic> base() => {
+      'token': 't',
+      'url': 'wss://x',
+      'room': 'g:c1',
+    };
 
     test('can_publish:true → canPublish true', () {
       final v = VideoToken.fromJson(base()..['can_publish'] = true);

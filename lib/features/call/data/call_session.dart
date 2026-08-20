@@ -23,9 +23,9 @@ class CallSession {
     required this.channelId,
     LiveKitCallService? service,
     List<Duration>? reconnectDelays,
-  })  : _api = api,
-        service = service ?? LiveKitCallService(),
-        _reconnectDelays = reconnectDelays ?? _defaultReconnectDelays;
+  }) : _api = api,
+       service = service ?? LiveKitCallService(),
+       _reconnectDelays = reconnectDelays ?? _defaultReconnectDelays;
 
   final ChatRestApi _api;
   final String channelId;
@@ -125,7 +125,8 @@ class CallSession {
     try {
       final maxAttempts = _reconnectDelays.length;
       for (var attempt = 0; attempt < maxAttempts; attempt++) {
-        message.value = 'Connection lost — reconnecting '
+        message.value =
+            'Connection lost — reconnecting '
             '(${attempt + 1}/$maxAttempts)…';
 
         await Future.delayed(_reconnectDelays[attempt]);
@@ -188,16 +189,13 @@ class CallSession {
   }
 
   static String _messageFor(ConnectionResult result) => switch (result) {
-        ConnectionResult.tokenAuthError =>
-          'Session expired — please sign in again',
-        ConnectionResult.accountSuspended =>
-          'This account is suspended',
-        ConnectionResult.tokenNetworkError =>
-          'Could not reach the server — check your connection',
-        ConnectionResult.videoUnavailable =>
-          "Video calling isn't available here yet",
-        ConnectionResult.channelUnavailable =>
-          'This call is unavailable',
-        _ => 'Call connection failed — try again',
-      };
+    ConnectionResult.tokenAuthError => 'Session expired — please sign in again',
+    ConnectionResult.accountSuspended => 'This account is suspended',
+    ConnectionResult.tokenNetworkError =>
+      'Could not reach the server — check your connection',
+    ConnectionResult.videoUnavailable =>
+      "Video calling isn't available here yet",
+    ConnectionResult.channelUnavailable => 'This call is unavailable',
+    _ => 'Call connection failed — try again',
+  };
 }

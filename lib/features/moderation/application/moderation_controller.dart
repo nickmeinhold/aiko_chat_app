@@ -62,7 +62,9 @@ class BlockedUsersController extends AsyncNotifier<List<BlockedUser>> {
   Future<void> block(String userId, {String? displayName}) async {
     try {
       await future;
-    } catch (_) {/* initial load failed; proceed from current state */}
+    } catch (_) {
+      /* initial load failed; proceed from current state */
+    }
     await ref.read(restApiProvider).blockUser(userId);
     final current = state.value ?? const <BlockedUser>[];
     if (current.any((b) => b.userId == userId)) return; // already present
@@ -80,7 +82,9 @@ class BlockedUsersController extends AsyncNotifier<List<BlockedUser>> {
   Future<void> unblock(String userId) async {
     try {
       await future;
-    } catch (_) {/* initial load failed; proceed from current state */}
+    } catch (_) {
+      /* initial load failed; proceed from current state */
+    }
     await ref.read(restApiProvider).unblockUser(userId);
     final current = state.value ?? const <BlockedUser>[];
     state = AsyncData(current.where((b) => b.userId != userId).toList());
@@ -164,7 +168,8 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
   /// Ban [userId] from the island. Does NOT remove any report tile — a ban is a
   /// distinct action from resolving the triggering report (the island keeps the
   /// report pending); the moderator still resolves/dismisses it explicitly.
-  Future<void> ban(String userId) => _reconcileAuthThenRethrow(() => _rest.banUser(userId));
+  Future<void> ban(String userId) =>
+      _reconcileAuthThenRethrow(() => _rest.banUser(userId));
 
   ChatRestApi get _rest => ref.read(restApiProvider);
 
@@ -176,7 +181,9 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
       _reconcileAuthThenRethrow(() async {
         try {
           await future;
-        } catch (_) {/* initial load failed; proceed from current state */}
+        } catch (_) {
+          /* initial load failed; proceed from current state */
+        }
         await act();
         final current = state.value ?? const <PendingReport>[];
         state = AsyncData(
@@ -197,8 +204,7 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
   /// runs first so the router/gate already reflect the settled world. A plain
   /// [Unauthorized] (terminal authN) is left to propagate — the REST interceptor's
   /// onUnauthenticated path is its reaper.
-  Future<void> _reconcileAuthThenRethrow(
-      Future<void> Function() action) async {
+  Future<void> _reconcileAuthThenRethrow(Future<void> Function() action) async {
     try {
       await action();
     } on Forbidden {

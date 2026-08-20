@@ -47,58 +47,58 @@ class ReportQueueScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Reports')),
       body: ReadingColumn(
         child: RefreshIndicator(
-        onRefresh: () => ref.refresh(pendingReportsProvider.future),
-        child: reportsAsync.when(
-          // Scrollable so the RefreshIndicator's pull works on every branch, not
-          // just error/empty (completes the loading/error/empty/data triad —
-          // cage-match Tesla round 5).
-          loading: () => ListView(
-            children: const [
-              Padding(
-                padding: EdgeInsets.symmetric(vertical: 48),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-            ],
-          ),
-          error: (e, _) => ListView(
-            // ListView so the RefreshIndicator still pulls on an error.
-            children: const [
-              Padding(
-                padding: EdgeInsets.all(24),
-                // Fixed operator-facing copy — never interpolate the raw
-                // exception (a DioException / Forbidden(context: /v1/...) leaks
-                // endpoint + backend body into the UI; keep diagnostics in
-                // telemetry only — cage-match Tesla + Carnot round 3). Pull to
-                // retry.
-                child: Text(
-                  "Could not load the report queue. Pull to retry.",
-                  textAlign: TextAlign.center,
+          onRefresh: () => ref.refresh(pendingReportsProvider.future),
+          child: reportsAsync.when(
+            // Scrollable so the RefreshIndicator's pull works on every branch, not
+            // just error/empty (completes the loading/error/empty/data triad —
+            // cage-match Tesla round 5).
+            loading: () => ListView(
+              children: const [
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: 48),
+                  child: Center(child: CircularProgressIndicator()),
                 ),
-              ),
-            ],
-          ),
-          data: (reports) {
-            if (reports.isEmpty) {
-              return ListView(
-                children: const [
-                  Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text(
-                      'No pending reports. The queue is clear.',
-                      textAlign: TextAlign.center,
-                    ),
+              ],
+            ),
+            error: (e, _) => ListView(
+              // ListView so the RefreshIndicator still pulls on an error.
+              children: const [
+                Padding(
+                  padding: EdgeInsets.all(24),
+                  // Fixed operator-facing copy — never interpolate the raw
+                  // exception (a DioException / Forbidden(context: /v1/...) leaks
+                  // endpoint + backend body into the UI; keep diagnostics in
+                  // telemetry only — cage-match Tesla + Carnot round 3). Pull to
+                  // retry.
+                  child: Text(
+                    "Could not load the report queue. Pull to retry.",
+                    textAlign: TextAlign.center,
                   ),
-                ],
+                ),
+              ],
+            ),
+            data: (reports) {
+              if (reports.isEmpty) {
+                return ListView(
+                  children: const [
+                    Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'No pending reports. The queue is clear.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
+                );
+              }
+              return ListView.separated(
+                itemCount: reports.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (_, i) => _ReportTile(reports[i]),
               );
-            }
-            return ListView.separated(
-              itemCount: reports.length,
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (_, i) => _ReportTile(reports[i]),
-            );
-          },
+            },
+          ),
         ),
-      ),
       ),
     );
   }
@@ -124,7 +124,10 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
       isThreeLine: true,
       leading: CircleAvatar(
         backgroundColor: theme.colorScheme.errorContainer,
-        child: Icon(Icons.flag_outlined, color: theme.colorScheme.onErrorContainer),
+        child: Icon(
+          Icons.flag_outlined,
+          color: theme.colorScheme.onErrorContainer,
+        ),
       ),
       title: Text(
         // Bounded line budget so the fixed-height ListTile (isThreeLine) doesn't
@@ -295,9 +298,11 @@ class _ReportTileState extends ConsumerState<_ReportTile> {
       final demoted = !mounted || !ref.read(isModeratorProvider);
       messenger.showSnackBar(
         SnackBar(
-          content: Text(demoted
-              ? 'You no longer have moderator access.'
-              : 'Action denied. Please try again.'),
+          content: Text(
+            demoted
+                ? 'You no longer have moderator access.'
+                : 'Action denied. Please try again.',
+          ),
         ),
       );
       if (mounted) setState(() => _busy = false);
