@@ -335,18 +335,25 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    final action = find.byKey(const Key('appbar-mute-conversation'));
-    expect(action, findsOneWidget);
+    // The dedicated app-bar button is gone — muting on a phone is now the SAME
+    // long-press gesture the sidebar rows use, moved onto the conversation
+    // title. The capability is what this test defends, so it follows the
+    // gesture rather than the button.
+    expect(find.byKey(const Key('appbar-mute-conversation')), findsNothing);
     expect(container.read(mutedChannelIdsProvider), isEmpty);
 
-    await tester.tap(action);
+    await tester.longPress(find.byKey(const Key('mute-gesture-title')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mute'));
     await settle(tester);
     // c1 is the active conversation (nothing picked → first channel resolves).
     expect(container.read(mutedChannelIdsProvider), contains('c1'));
 
-    // The same control unmutes — the icon carries the state, so it is never a
-    // one-way door.
-    await tester.tap(action);
+    // The same gesture unmutes — never a one-way door. The menu item flips its
+    // own label, which is what makes the state legible from the control itself.
+    await tester.longPress(find.byKey(const Key('mute-gesture-title')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Unmute'));
     await settle(tester);
     expect(container.read(mutedChannelIdsProvider), isEmpty);
   });
@@ -575,14 +582,19 @@ void main() {
         .setUserMuted('u2', muted: true, expectUserId: null);
     await settle(tester);
 
-    await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
+    // The dedicated button is gone; the long-press menu is the control now. The
+    // DISCLOSURE is what this test defends, and it survived the move — the menu
+    // carries it as a subtitle, where the one-tap button had no room for it and
+    // had to raise a dialog instead.
+    await tester.longPress(find.byKey(const Key('mute-gesture-title')));
     await tester.pumpAndSettle();
 
     // The tap DISCLOSES rather than acts: the account mute is still in place...
     expect(container.read(mutedUserIdsProvider), contains('u2'));
     expect(
-      find.textContaining('This person is muted in every conversation'),
+      find.textContaining('This person is muted everywhere'),
       findsOneWidget,
+      reason: 'the menu must say WHICH silence unmuting would undo',
     );
 
     // ...and only the explicit choice clears it.
@@ -591,63 +603,63 @@ void main() {
     expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
   });
 
-  testWidgets(
-    'the disclosure fires when BOTH causes are muted, not just peer-only',
-    (tester) async {
-      // Gating the confession on "peer AND NOT conversation" left the both-muted
-      // case saying "unmute this conversation" while also restoring that account
-      // everywhere — the silent global act the disclosure exists to prevent, hiding
-      // one flag away (cage-match #135 round 5, Tesla).
-      tester.view.physicalSize = const Size(400, 900);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets('the disclosure fires when BOTH causes are muted, not just peer-only', (
+    tester,
+  ) async {
+    // Gating the confession on "peer AND NOT conversation" left the both-muted
+    // case saying "unmute this conversation" while also restoring that account
+    // everywhere — the silent global act the disclosure exists to prevent, hiding
+    // one flag away (cage-match #135 round 5, Tesla).
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-      const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
-      final rest = FakeRestApi(channels: twoChannels);
-      rest.dms = [dm];
-      rest.membersByChannel['dm1'] = const [
-        ChannelMember(
-          userId: 'u1',
-          role: 'member',
-          canPost: true,
-          handle: 'me',
-          displayName: 'Me',
-        ),
-        ChannelMember(
-          userId: 'u2',
-          role: 'member',
-          canPost: true,
-          handle: 'alice',
-          displayName: 'Alice',
-        ),
-      ];
-      final container = makeContainer(
-        rest: rest,
-        transport: FakeChatTransport(),
-      );
-      addTearDown(container.dispose);
+    const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
+    final rest = FakeRestApi(channels: twoChannels);
+    rest.dms = [dm];
+    rest.membersByChannel['dm1'] = const [
+      ChannelMember(
+        userId: 'u1',
+        role: 'member',
+        canPost: true,
+        handle: 'me',
+        displayName: 'Me',
+      ),
+      ChannelMember(
+        userId: 'u2',
+        role: 'member',
+        canPost: true,
+        handle: 'alice',
+        displayName: 'Alice',
+      ),
+    ];
+    final container = makeContainer(rest: rest, transport: FakeChatTransport());
+    addTearDown(container.dispose);
 
-      await pumpApp(tester, container);
-      await signIn(tester);
-      await tester.pumpAndSettle();
-      container.read(selectedChannelIdProvider.notifier).select('dm1');
-      container.read(mutesProvider.notifier)
-        ..setUserMuted('u2', muted: true, expectUserId: null)
-        ..setConversationMuted('dm1', muted: true, expectUserId: null);
-      await settle(tester);
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    container.read(selectedChannelIdProvider.notifier).select('dm1');
+    container.read(mutesProvider.notifier)
+      ..setUserMuted('u2', muted: true, expectUserId: null)
+      ..setConversationMuted('dm1', muted: true, expectUserId: null);
+    await settle(tester);
 
-      await tester.tap(find.byKey(const Key('appbar-mute-conversation')));
-      await tester.pumpAndSettle();
+    // The dedicated button is gone; the long-press menu is the control now. The
+    // DISCLOSURE is what this test defends, and it survived the move — the menu
+    // carries it as a subtitle, where the one-tap button had no room for it and
+    // had to raise a dialog instead.
+    await tester.longPress(find.byKey(const Key('mute-gesture-title')));
+    await tester.pumpAndSettle();
 
-      expect(
-        find.textContaining('This person is muted in every conversation'),
-        findsOneWidget,
-        reason: 'both causes muted must still disclose the account-wide effect',
-      );
-      expect(container.read(mutedUserIdsProvider), contains('u2'));
-    },
-  );
+    expect(
+      find.textContaining('This person is muted everywhere'),
+      findsOneWidget,
+      reason: 'both causes muted must still disclose the account-wide effect',
+    );
+    expect(container.read(mutedUserIdsProvider), contains('u2'));
+  });
 
   testWidgets('a redundant set still persists, so an undo cannot be overwritten '
       'by a write it raced', (tester) async {

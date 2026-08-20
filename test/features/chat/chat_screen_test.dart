@@ -189,7 +189,28 @@ void main() {
     expect(find.text('secret-from-A'), findsOneWidget);
 
     // Log out, then a DIFFERENT user logs in on the same app instance.
-    await tester.tap(find.byIcon(Icons.logout));
+    // Sign out moved from the chat app bar into Settings (the bar was crowded
+    // enough that a once-a-year action sat beside Search). These tests are about
+    // SESSION TEARDOWN, not about where the button lives, so they open Settings
+    // and press it there — still the real user path, just the current one.
+    await tester.tap(find.byIcon(Icons.settings));
+    await tester.pumpAndSettle();
+    // Settings is a long list and Account sits near the bottom, so the tile is
+    // genuinely not built until scrolled to. Scroll to the BOTTOM rather than
+    // just far enough: stopping at the first visible pixel parks the tile under
+    // the app bar, where it is findable but cannot receive a tap — a miss that
+    // reads as "the button did nothing".
+    await tester.drag(
+      find
+          .byWidgetPredicate(
+            (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+          )
+          .first,
+      const Offset(0, -3000),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sign out'));
+
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
@@ -387,7 +408,27 @@ void main() {
     expect(find.widgetWithText(AppBar, 'random'), findsOneWidget);
 
     // Log out (chat surface unmounts → selectedChannelIdProvider auto-disposes).
-    await tester.tap(find.byIcon(Icons.logout));
+    // Sign out moved from the chat app bar into Settings (the bar was crowded
+    // enough that a once-a-year action sat beside Search). These tests are about
+    // SESSION TEARDOWN, not about where the button lives, so they open Settings
+    // and press it there — still the real user path, just the current one.
+    await tester.tap(find.byIcon(Icons.settings));
+    await tester.pumpAndSettle();
+    // Settings is a long list and Account sits near the bottom, so the tile is
+    // genuinely not built until scrolled to. Scroll to the BOTTOM rather than
+    // just far enough: stopping at the first visible pixel parks the tile under
+    // the app bar, where it is findable but cannot receive a tap — a miss that
+    // reads as "the button did nothing".
+    await tester.drag(
+      find
+          .byWidgetPredicate(
+            (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+          )
+          .first,
+      const Offset(0, -3000),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sign out'));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
