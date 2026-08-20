@@ -6,6 +6,7 @@ import 'app/font_licences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
 import 'features/call/presentation/ring_overlay.dart';
+import 'features/notifications/application/push_providers.dart';
 import 'features/settings/application/island_manifest_provider.dart';
 import 'features/settings/application/theme_mode_controller.dart';
 import 'features/settings/application/theme_preset_controller.dart';
@@ -36,6 +37,11 @@ class AikoChatApp extends ConsumerWidget {
     // Ask the island who it is, once, and cache the answer. Fire-and-forget —
     // the mark renders from its URL fallback meanwhile.
     ref.watch(islandManifestFetcherProvider);
+    // Keep the push pairing current for whoever is signed in. Watched HERE, at
+    // the root, because it must be listening before the session restore
+    // publishes a user — a listener created any later misses the very
+    // transition it exists to observe, and the failure is silence.
+    ref.watch(pushPairingProvider);
     // The chosen look supplies BOTH halves, so picking a preset never costs you
     // OS following: themeMode still decides how bright, the preset decides which
     // look, and the chosen typeface rides along in both. All three are set in

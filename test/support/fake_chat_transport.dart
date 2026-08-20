@@ -195,7 +195,8 @@ class FakeChatRestApi implements ChatRestApi {
     required String token,
   }) => throw UnimplementedError();
   @override
-  Future<void> unregisterDevice(String token) => throw UnimplementedError();
+  Future<void> unregisterDevice(String token, {String? credential}) =>
+      throw UnimplementedError();
   @override
   Future<List<Channel>> listChannels() => throw UnimplementedError();
 

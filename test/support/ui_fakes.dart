@@ -199,18 +199,52 @@ class FakeRestApi implements ChatRestApi {
   final List<String> unregisteredDevices = [];
   Object? registerDeviceThrows;
 
+  /// If set, the call AWAITS this before recording — lets a test hold a
+  /// registration in flight and interleave a sign-out with it. The in-flight
+  /// window is the only place the start/stop race lives, and it is invisible to
+  /// any test that awaits each step to completion.
+  Future<void>? registerDeviceGate;
+  Future<void>? unregisterDeviceGate;
+
   @override
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
   }) async {
     if (registerDeviceThrows != null) throw registerDeviceThrows!;
+    if (registerDeviceGate != null) await registerDeviceGate;
     registeredDevices.add((platform: platform, token: token));
   }
 
+  /// Fails the next [unregisterDevice] — for proving a failed attempt KEEPS the
+  /// durable debt rather than silently discharging it.
+  Object? unregisterDeviceThrows;
+
+  /// The credential each unregister carried, positionally paired with
+  /// [unregisteredDevices]. `null` means "resolved by the auth interceptor" —
+  /// the drain path — and a non-null value means it was carried BY VALUE from a
+  /// session being torn down, which is the property that lets the credential
+  /// clear run first.
+  final List<String?> unregisterCredentials = [];
+
+  /// Per-call hook — lets a test fail SOME unregisters and not others (a
+  /// partially-failing drain), which a single `unregisterDeviceThrows` cannot
+  /// express.
+  void Function(String token)? onUnregister;
+
   @override
-  Future<void> unregisterDevice(String token) async {
+  Future<void> unregisterDevice(String token, {String? credential}) async {
+    // YIELD FIRST, always. Without this the fake records the call in the SAME
+    // microtask it is invoked in — something no HTTP request can do — which made
+    // it more aggressive than the real API and inverted every ordering assertion
+    // about "did the credential clear get delayed by the network". A fake that
+    // is faster-than-possible is as misleading as one that is more forgiving.
+    await Future<void>.delayed(Duration.zero);
+    if (unregisterDeviceGate != null) await unregisterDeviceGate;
+    if (unregisterDeviceThrows != null) throw unregisterDeviceThrows!;
+    onUnregister?.call(token);
     unregisteredDevices.add(token);
+    unregisterCredentials.add(credential);
   }
 
   /// Roster returned by [listMembers], keyed per channel id.

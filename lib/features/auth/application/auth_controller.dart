@@ -18,6 +18,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/config.dart';
@@ -25,6 +26,7 @@ import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../../chat/data/transport/chat_transport.dart';
+import '../../notifications/application/push_providers.dart';
 import '../data/auth_exceptions.dart';
 import '../data/cached_user_store.dart';
 import '../data/passkey_auth_client.dart';
@@ -298,7 +300,16 @@ class AuthController extends AsyncNotifier<AppUser?> {
     state = const AsyncValue.data(null);
     // The dead credential/cache drain is routing-irrelevant, so it runs AFTER —
     // the user is already parked on /suspended and can take no authed action.
-    await _tokens.clearTokens();
+    //
+    // The unpair goes with it: a ban ends the session like any other terminal
+    // state, and a row left here is unclearable afterwards. It rides in
+    // `_clearCredentialAndUnpair` rather than sitting ahead of the clear, which
+    // matters especially here — /suspended is a SOFT gate, so "try again" can
+    // reach /login and sign in at any moment, and this path must therefore not
+    // hold a window open at all. Best-effort as to the DELETE itself: a banned
+    // account's credential may already be rejected, in which case the debt
+    // record carries it to the next sign-in.
+    await _clearCredentialAndUnpair();
     await _cachedUser.clear();
     return true;
   }
@@ -494,9 +505,72 @@ class AuthController extends AsyncNotifier<AppUser?> {
     // over an honest /login (cage-match Tesla). Safe re the cold-start flag: a
     // ban sets state=data(null), so _becomeUnauthenticated's guard early-returns
     // and never reaches this teardown to clobber a just-set flag.
-    await _tokens.clearTokens();
+    await _clearCredentialAndUnpair();
     await _cachedUser.clear(); // lifecycle-symmetric with the tokens
     await ref.read(transportProvider).disconnect();
+  }
+
+  /// Destroy this session's credential and hand the device pairing over to the
+  /// debt record. THE SINGLE DOOR for both — every session-ending path uses it.
+  ///
+  /// The two statements are adjacent awaits on the same token store with nothing
+  /// between them, and that adjacency is the property, not a coincidence. An
+  /// earlier version awaited `DELETE /v1/devices` ahead of the clear, because
+  /// that call is authenticated and needs a live credential; but this class
+  /// already documents (Carnot R3-B) why nothing slow may sit there — `logout`
+  /// publishes logged-out BEFORE awaiting, so a re-sign-in inside the window
+  /// writes fresh tokens the trailing clear then stomps, leaving a logged-in-
+  /// but-tokenless app. Fencing that window with a token comparison only moved
+  /// the problem: an ordinary 401 refresh changes the access token too, so the
+  /// fence mis-read a live session as a reborn one and abandoned the whole
+  /// teardown — the user parked on /login still holding a working credential,
+  /// which the next cold start restored.
+  ///
+  /// So the round trip is gone from this path entirely. [DeviceRegistrar.unpair]
+  /// returns without awaiting anything: it records a durable debt and fires a
+  /// best-effort DELETE out of band, carrying [credential] BY VALUE so it does
+  /// not need the store we just emptied. Nothing is racing for an instant, so
+  /// there is no window left to guard — and the offline-sign-out residual the
+  /// old comment named as an accepted tradeoff closes on the way past.
+  ///
+  /// Called from THREE places. `_teardownResources` covers logout, the signal-
+  /// driven teardown and account deletion; [switchGateway] and
+  /// [_settleSuspension] each end a session without going through it.
+  /// [_restoreSession] also clears tokens and is deliberately NOT a caller —
+  /// nothing has registered yet in that process, so there is no debt to record.
+  /// ORDER AND ISOLATION, and neither alone is enough — both orderings have a
+  /// hole and the `try` is what closes the remaining one (cage-match round 3):
+  ///
+  ///   - clear-then-unpair loses the unpair whenever the clear THROWS, and in
+  ///     [switchGateway] a throwing clear is an anticipated, documented outcome
+  ///     ("a clear failure propagates to the picker's error UI"). The island
+  ///     being left would keep a live routable row forever — the exact residual
+  ///     this whole change exists to close.
+  ///   - unpair-then-clear loses the CLEAR whenever building the registrar
+  ///     throws, leaving a live credential on a logged-out app. Strictly worse —
+  ///     and reachable: this change widened that provider graph
+  ///     (`deviceRegistrarProvider` → `pendingUnregisterStoreProvider` →
+  ///     `sharedPreferencesProvider`, which throws by design when unoverridden),
+  ///     and two test fixtures started throwing on exactly that path.
+  ///
+  /// So the debt is recorded FIRST — it is a local write, not a round trip, so
+  /// it opens no window — inside a `try` that makes the best-effort half
+  /// structurally unable to skip the security-critical one. The clear then runs
+  /// unconditionally, whatever the pairing did.
+  Future<void> _clearCredentialAndUnpair() async {
+    final credential = await _tokens.currentAccessToken();
+    try {
+      // AWAITED, and only as far as the debt being durable — a local
+      // preferences write, not the authenticated round trip, which stays out of
+      // band. Returning before that write lands meant a process kill between
+      // logout and the microtask lost the only retry record while the credential
+      // was already gone (cage-match round 4, Carnot).
+      await ref.read(deviceRegistrarProvider)?.unpair(credential: credential);
+    } catch (e) {
+      // Reach degrades; the session still ends. Never the other way round.
+      debugPrint('AuthController: could not unpair the device: $e');
+    }
+    await _tokens.clearTokens();
   }
 
   /// Explicit, user-initiated logout.
@@ -676,8 +750,14 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // error UI. Only the disconnect is best-effort.
       ref.read(pendingHandleProvider.notifier).clear();
       _clearSuspended(); // a different island may not have banned this account
-      await _tokens
-          .clearTokens(); // security-critical: old credential gone first
+      // Security-critical: old credential gone first. The unpair rides inside,
+      // and must stay BEFORE the `invalidate(configProvider)` in the `finally` —
+      // that invalidate rebuilds both the REST client and the registrar against
+      // the NEW island, so a debt recorded after it would be keyed to the island
+      // the user switched TO and its DELETE addressed there. Switching islands
+      // is an ordinary thing to do, and without this the island being left keeps
+      // a live, routable token for an account no longer signed in on it.
+      await _clearCredentialAndUnpair();
       await _cachedUser.clear(); // old identity gone with the old credential
       try {
         await ref.read(transportProvider).disconnect(); // best-effort cleanup
