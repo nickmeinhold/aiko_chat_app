@@ -14,6 +14,8 @@
 import 'dart:async';
 
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
+    show AccountSuspended;
 import 'package:aiko_chat_app/features/notifications/application/device_registrar.dart';
 import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
@@ -257,4 +259,96 @@ void main() {
       },
     );
   });
+
+  group(
+    'the OTHER session-ending paths — found by self-review, not by tests',
+    () {
+      test('switching island unpairs from the island being LEFT', () async {
+        final log = <String>[];
+        final rest = _RecordingRestApi(log);
+        final source = _FakeSource(token: 'tok-1');
+        final container = await harness(
+          rest: rest,
+          source: source,
+          store: _RecordingTokenStore(log),
+        );
+        addTearDown(source.refreshes.close);
+
+        final auth = container.read(authControllerProvider.notifier);
+        await auth.signInWithPasskey();
+        await pumpEventQueue();
+        expect(rest.registeredDevices, isNotEmpty, reason: 'precondition');
+
+        await auth.switchGateway('https://other.example');
+        await pumpEventQueue();
+
+        expect(
+          log,
+          ['unregisterDevice(tok-1)', 'clearTokens'],
+          reason:
+              'switchGateway tears down BY HAND rather than through '
+              '_teardownResources, so it needs its own unpair. Without it the '
+              'island you just left keeps a live routable token forever — the '
+              'credential that could delete it is destroyed on the next line',
+        );
+      });
+
+      test('a ban unpairs the device too', () async {
+        final log = <String>[];
+        final rest = _RecordingRestApi(log);
+        final source = _FakeSource(token: 'tok-1');
+        final container = await harness(
+          rest: rest,
+          source: source,
+          store: _RecordingTokenStore(log),
+        );
+        addTearDown(source.refreshes.close);
+
+        final auth = container.read(authControllerProvider.notifier);
+        await auth.signInWithPasskey();
+        await pumpEventQueue();
+
+        rest.meThrows = const AccountSuspended();
+        await auth.refreshUser();
+        await pumpEventQueue();
+
+        expect(
+          log.contains('unregisterDevice(tok-1)'),
+          isTrue,
+          reason:
+              'a ban ends the session like any other terminal state; the row '
+              'it leaves behind can never be cleared afterwards',
+        );
+        expect(
+          log.indexOf('unregisterDevice(tok-1)') < log.indexOf('clearTokens'),
+          isTrue,
+          reason: 'still before the credential dies',
+        );
+      });
+
+      test('signing in again after a logout re-pairs the handset', () async {
+        final rest = FakeRestApi();
+        final source = _FakeSource(token: 'tok-1');
+        final container = await harness(rest: rest, source: source);
+        addTearDown(source.refreshes.close);
+
+        final auth = container.read(authControllerProvider.notifier);
+        await auth.signInWithPasskey();
+        await pumpEventQueue();
+        await auth.logout();
+        await pumpEventQueue();
+        await auth.signInWithPasskey();
+        await pumpEventQueue();
+
+        expect(
+          rest.registeredDevices.map((d) => d.token),
+          ['tok-1', 'tok-1'],
+          reason:
+              'the second session must re-register: stop() cleared the '
+              'registrar memo, so this is not a no-op de-dupe',
+        );
+        expect(rest.unregisteredDevices, ['tok-1']);
+      });
+    },
+  );
 }

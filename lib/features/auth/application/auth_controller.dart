@@ -299,6 +299,13 @@ class AuthController extends AsyncNotifier<AppUser?> {
     state = const AsyncValue.data(null);
     // The dead credential/cache drain is routing-irrelevant, so it runs AFTER —
     // the user is already parked on /suspended and can take no authed action.
+    //
+    // The unpair goes with it, and BEFORE the clear: a ban ends the session like
+    // any other terminal state, and a row left here is unclearable afterwards.
+    // Best-effort by nature — the credential may already be rejected, in which
+    // case `stop()` swallows and the row survives (a known residual, not a new
+    // one). Attempting it costs nothing and sometimes works.
+    await _unpairDevice();
     await _tokens.clearTokens();
     await _cachedUser.clear();
     return true;
@@ -485,15 +492,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// R3-B). Clearing first means any human-paced re-login's `setTokens` always
   /// lands after this clear, never before it.
   Future<void> _teardownResources() async {
-    // FIRST, and awaited, because `DELETE /v1/devices` is AUTHENTICATED. Run
-    // after the token clear below it 401s, the island's row survives, and this
-    // handset keeps receiving the previous account's pushes — on a shared phone
-    // that is the privacy-relevant residual, and it is silent. Placed here
-    // rather than in `logout()` because this method is the single door EVERY
-    // session-ending path goes through, so a device is unpaired on a signal-
-    // driven teardown and an account deletion too, not just a deliberate
-    // sign-out. See `DeviceRegistrar.stop`, which owns the failure semantics.
-    await ref.read(deviceRegistrarProvider)?.stop();
+    await _unpairDevice();
     // Clear any half-finished identity provisioning so a teardown ALWAYS lands in
     // a clean logged-out state — otherwise an abandoned PendingHandle survives
     // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
@@ -508,6 +507,37 @@ class AuthController extends AsyncNotifier<AppUser?> {
     await _cachedUser.clear(); // lifecycle-symmetric with the tokens
     await ref.read(transportProvider).disconnect();
   }
+
+  /// Tell the island to stop pushing to this handset, while we can still ask.
+  ///
+  /// MUST PRECEDE THE CREDENTIAL CLEAR on every path that ends a session.
+  /// `DELETE /v1/devices` is authenticated: run it after the tokens are gone and
+  /// it 401s, the island's row survives, and this handset keeps receiving that
+  /// account's pushes with no way left to stop it. On a shared phone that is the
+  /// privacy-relevant residual, and it is entirely silent.
+  ///
+  /// IT IS CALLED FROM THREE PLACES, NOT ONE, and that is a fact about this
+  /// class rather than a missed refactor. `_teardownResources` describes itself
+  /// as the single owner of "end this session" and is the door for logout, the
+  /// signal-driven teardown and account deletion — but two other methods clear
+  /// tokens without going through it, each for a stated reason:
+  ///
+  ///   - [switchGateway] tears down BY HAND so its error-swallowing stays
+  ///     narrow. It also has an extra ordering constraint: the unpair has to
+  ///     happen before `configProvider` is invalidated, or the DELETE is
+  ///     addressed to the island the user is arriving at instead of the one they
+  ///     are leaving.
+  ///   - [_settleSuspension] clears the dead credential after parking the user
+  ///     on /suspended. A ban is still an ended session, and the row it leaves
+  ///     behind can never be cleared afterwards.
+  ///
+  /// [_restoreSession] also clears tokens on a dead cold-start session and is
+  /// deliberately NOT a caller: nothing has registered yet in this process, so
+  /// there is nothing to unpair. A row left by a PREVIOUS run is unreachable
+  /// there — the credential that could delete it is already invalid — which is
+  /// the gap a pending-unregister retried on next launch would close.
+  Future<void> _unpairDevice() =>
+      ref.read(deviceRegistrarProvider)?.stop() ?? Future.value();
 
   /// Explicit, user-initiated logout.
   Future<void> logout() async {
@@ -684,6 +714,14 @@ class AuthController extends AsyncNotifier<AppUser?> {
       // NARROW: clearing the old credentials is security-critical and must NOT be
       // silently absorbed (Carnot) — a clear failure propagates to the picker's
       // error UI. Only the disconnect is best-effort.
+      // Before BOTH the credential clear and the config flip below. Switching
+      // islands is an ordinary thing to do, and without this the island being
+      // left keeps a live, routable token for an account that is no longer
+      // signed in on it — permanently, since the credential that could delete it
+      // is about to be destroyed. The config-flip half of the ordering matters
+      // just as much: after `invalidate(configProvider)` the REST client points
+      // at the NEW island, so the DELETE would be addressed to the wrong one.
+      await _unpairDevice();
       ref.read(pendingHandleProvider.notifier).clear();
       _clearSuspended(); // a different island may not have banned this account
       await _tokens
