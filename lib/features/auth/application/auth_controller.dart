@@ -18,6 +18,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/config.dart';
@@ -537,14 +538,34 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// [_settleSuspension] each end a session without going through it.
   /// [_restoreSession] also clears tokens and is deliberately NOT a caller —
   /// nothing has registered yet in that process, so there is no debt to record.
-  /// The order also makes this FAIL SAFE: building the registrar reads the
-  /// provider graph, and a graph that fails to build would throw here — after
-  /// the credential is already gone. The security-critical half can never be
-  /// skipped by a failure in the best-effort half.
+  /// ORDER AND ISOLATION, and neither alone is enough — both orderings have a
+  /// hole and the `try` is what closes the remaining one (cage-match round 3):
+  ///
+  ///   - clear-then-unpair loses the unpair whenever the clear THROWS, and in
+  ///     [switchGateway] a throwing clear is an anticipated, documented outcome
+  ///     ("a clear failure propagates to the picker's error UI"). The island
+  ///     being left would keep a live routable row forever — the exact residual
+  ///     this whole change exists to close.
+  ///   - unpair-then-clear loses the CLEAR whenever building the registrar
+  ///     throws, leaving a live credential on a logged-out app. Strictly worse —
+  ///     and reachable: this change widened that provider graph
+  ///     (`deviceRegistrarProvider` → `pendingUnregisterStoreProvider` →
+  ///     `sharedPreferencesProvider`, which throws by design when unoverridden),
+  ///     and two test fixtures started throwing on exactly that path.
+  ///
+  /// So the debt is recorded FIRST — it is a local write, not a round trip, so
+  /// it opens no window — inside a `try` that makes the best-effort half
+  /// structurally unable to skip the security-critical one. The clear then runs
+  /// unconditionally, whatever the pairing did.
   Future<void> _clearCredentialAndUnpair() async {
     final credential = await _tokens.currentAccessToken();
+    try {
+      ref.read(deviceRegistrarProvider)?.unpair(credential: credential);
+    } catch (e) {
+      // Reach degrades; the session still ends. Never the other way round.
+      debugPrint('AuthController: could not unpair the device: $e');
+    }
     await _tokens.clearTokens();
-    ref.read(deviceRegistrarProvider)?.unpair(credential: credential);
   }
 
   /// Explicit, user-initiated logout.

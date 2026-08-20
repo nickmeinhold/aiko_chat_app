@@ -59,6 +59,19 @@ class _RecordingTokenStore extends InMemoryTokenStore {
   }
 }
 
+/// A token store whose `clear()` can be made to THROW — which `switchGateway`
+/// documents as an anticipated outcome ("a clear failure propagates to the
+/// picker's error UI"), not a theoretical one.
+class _ThrowingClearTokenStore extends InMemoryTokenStore {
+  bool failClears = false;
+
+  @override
+  Future<void> clear() async {
+    if (failClears) throw Exception('keychain unavailable');
+    return super.clear();
+  }
+}
+
 class _RecordingRestApi extends FakeRestApi {
   _RecordingRestApi(this.log);
   final List<String> log;
@@ -478,6 +491,40 @@ void main() {
       },
     );
 
+    test('a THROWING credential clear still leaves the debt recorded', () async {
+      // Cage-match round 3, Maxwell. The unpair used to run AFTER clearTokens,
+      // and switchGateway deliberately does not swallow a clear failure ("a
+      // clear failure propagates to the picker's error UI"). So a throwing clear
+      // skipped the unpair entirely and the island being left kept a live
+      // routable row forever — the exact residual this change exists to close.
+      // The debt is now recorded FIRST (a local write, so no window) inside a
+      // try, and the clear runs unconditionally after it.
+      final rest = FakeRestApi();
+      rest.unregisterDeviceThrows = Exception('offline');
+      final source = _FakeSource(token: 'tok-1');
+      final store = _ThrowingClearTokenStore();
+      final container = await harness(rest: rest, source: source, store: store);
+      addTearDown(source.refreshes.close);
+
+      final auth = container.read(authControllerProvider.notifier);
+      await auth.signInWithPasskey();
+      await pumpEventQueue();
+      expect(rest.registeredDevices, isNotEmpty, reason: 'precondition');
+
+      store.failClears = true;
+      await expectLater(auth.logout(), throwsA(isA<Exception>()));
+      await pumpEventQueue();
+
+      expect(
+        testPrefs.getString('aiko_pending_device_unregisters'),
+        contains('tok-1'),
+        reason:
+            'the pairing debt must survive a teardown that failed downstream of '
+            'it — otherwise the one path where the clear is documented to throw '
+            'is the one path that leaks a routable device row',
+      );
+    });
+
     test('the next sign-in DRAINS the debt before registering — the ordering '
         'that makes a cross-user drain safe', () async {
       final rest = FakeRestApi();
@@ -505,7 +552,7 @@ void main() {
       // match, and the drain would destroy the live pairing it just created.
       expect(
         container.read(pendingUnregisterStoreProvider).read(island),
-        isNull,
+        isEmpty,
       );
     });
   });

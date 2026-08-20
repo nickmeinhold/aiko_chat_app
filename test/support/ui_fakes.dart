@@ -227,10 +227,16 @@ class FakeRestApi implements ChatRestApi {
   /// clear run first.
   final List<String?> unregisterCredentials = [];
 
+  /// Per-call hook — lets a test fail SOME unregisters and not others (a
+  /// partially-failing drain), which a single `unregisterDeviceThrows` cannot
+  /// express.
+  void Function(String token)? onUnregister;
+
   @override
   Future<void> unregisterDevice(String token, {String? credential}) async {
     if (unregisterDeviceGate != null) await unregisterDeviceGate;
     if (unregisterDeviceThrows != null) throw unregisterDeviceThrows!;
+    onUnregister?.call(token);
     unregisteredDevices.add(token);
     unregisterCredentials.add(credential);
   }

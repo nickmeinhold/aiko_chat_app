@@ -45,8 +45,9 @@ import '../domain/push_token_source.dart';
 ///
 /// ## Why the debt can be paid by a different user, and why ORDER is the proof
 ///
-/// The debt records only an island and a device token — never a credential, and
-/// never a user. It does not need one, and the reason is a property of the
+/// The debt records only an island and its owed device tokens — never a
+/// credential, and never a user. (A SET of tokens, not one: they rotate, so two
+/// offline sign-outs can leave two live rows — cage-match round 3, Carnot.) It does not need one, and the reason is a property of the
 /// island rather than a guess about ours:
 ///
 ///   - `unregister_device` matches on `(user_id, token)`. Draining a debt while
@@ -123,14 +124,22 @@ class DeviceRegistrar {
   /// Ordering relative to [start] is load-bearing — see the class doc. Failure
   /// KEEPS the debt: an unreachable island now is an island we still owe, and
   /// the record is the only thing that will remember at the next opportunity.
+  /// Pays off EVERY token owed, not just the newest — the ledger is a set,
+  /// because tokens rotate and two offline sign-outs can leave two live rows.
+  /// One failure does not abandon the rest.
   Future<void> drainPending() async {
-    final token = _pending.read(_islandBaseUrl);
-    if (token == null) return;
-    try {
-      await _api.unregisterDevice(token);
-      await _pending.forget(_islandBaseUrl, token);
-    } catch (e) {
-      debugPrint('DeviceRegistrar: pending unregister still owed: $e');
+    for (final token in _pending.read(_islandBaseUrl)) {
+      try {
+        await _api.unregisterDevice(token);
+        if (!await _pending.forget(_islandBaseUrl, token)) {
+          debugPrint(
+            'DeviceRegistrar: PAID the debt for $token but could not clear the '
+            'record — it will be re-attempted, which is a harmless 204 no-op.',
+          );
+        }
+      } catch (e) {
+        debugPrint('DeviceRegistrar: pending unregister still owed: $e');
+      }
     }
   }
 
@@ -148,7 +157,17 @@ class DeviceRegistrar {
       (t) => _register(t, _generation),
     );
 
-    if (!await _source.requestPermission()) return;
+    if (!await _source.requestPermission()) {
+      // RELEASE the subscription on a denial (cage-match round 3, Carnot). A
+      // denial left `_refreshes` non-null, so `start`'s idempotency guard made
+      // every later call a no-op — and push permission changes OUT OF BAND, in
+      // system settings. A user who declined, then turned notifications on, was
+      // permanently unreachable with nothing reporting a problem. There is still
+      // no retry and no nag; the next SESSION EDGE simply gets to ask again.
+      unawaited(_refreshes?.cancel().catchError((_) {}));
+      _refreshes = null;
+      return;
+    }
     if (generation != _generation) return; // unpaired while the sheet was up
     final token = await _source.currentToken();
     if (generation != _generation) return;
@@ -165,7 +184,10 @@ class DeviceRegistrar {
   /// fine — the debt is still recorded, and [drainPending] settles it later.
   void unpair({String? credential}) {
     _generation++; // any in-flight registration is now stale
-    unawaited(_refreshes?.cancel());
+    // `.catchError` because an unawaited cancel() can complete with an error
+    // from an upstream onCancel — unhandled, that surfaces as a zone error
+    // rather than a log line, on the session-teardown path of all places.
+    unawaited(_refreshes?.cancel().catchError((_) {}));
     _refreshes = null;
 
     final token = _registered;
@@ -183,7 +205,7 @@ class DeviceRegistrar {
   /// session path is [unpair], and `switchGateway` calls it explicitly before
   /// invalidating the config that disposes this.
   void dispose() {
-    unawaited(_refreshes?.cancel());
+    unawaited(_refreshes?.cancel().catchError((_) {}));
     _refreshes = null;
   }
 
@@ -191,7 +213,20 @@ class DeviceRegistrar {
     // DURABLE FIRST, always, and never "on failure". The failures this has to
     // survive — an offline sign-out, the process being killed mid-flight — are
     // exactly the ones that never reach a line placed after the attempt.
-    await _pending.remember(_islandBaseUrl, token);
+    //
+    // The write's RESULT is checked, not discarded (cage-match round 3, Maxwell).
+    // SharedPreferences reports a persistence failure by returning false rather
+    // than throwing, and a debt that did not persist is a backstop that does not
+    // exist — indistinguishable from a working one unless somebody looks. This
+    // repo already treats that flag as load-bearing (`CachedUserStore.write`,
+    // `switchGateway`'s `setString` check).
+    if (!await _pending.remember(_islandBaseUrl, token)) {
+      debugPrint(
+        'DeviceRegistrar: COULD NOT RECORD the unregister debt for $token — if '
+        'the attempt below also fails, this island keeps a routable row and '
+        'nothing will retry it.',
+      );
+    }
     if (credential == null) return;
     try {
       await _api.unregisterDevice(token, credential: credential);
