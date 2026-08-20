@@ -25,6 +25,7 @@ import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../../chat/data/transport/chat_transport.dart';
+import '../../notifications/application/push_providers.dart';
 import '../data/auth_exceptions.dart';
 import '../data/cached_user_store.dart';
 import '../data/passkey_auth_client.dart';
@@ -484,6 +485,15 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// R3-B). Clearing first means any human-paced re-login's `setTokens` always
   /// lands after this clear, never before it.
   Future<void> _teardownResources() async {
+    // FIRST, and awaited, because `DELETE /v1/devices` is AUTHENTICATED. Run
+    // after the token clear below it 401s, the island's row survives, and this
+    // handset keeps receiving the previous account's pushes — on a shared phone
+    // that is the privacy-relevant residual, and it is silent. Placed here
+    // rather than in `logout()` because this method is the single door EVERY
+    // session-ending path goes through, so a device is unpaired on a signal-
+    // driven teardown and an account deletion too, not just a deliberate
+    // sign-out. See `DeviceRegistrar.stop`, which owns the failure semantics.
+    await ref.read(deviceRegistrarProvider)?.stop();
     // Clear any half-finished identity provisioning so a teardown ALWAYS lands in
     // a clean logged-out state — otherwise an abandoned PendingHandle survives
     // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
