@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform;
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
@@ -23,6 +23,15 @@ import 'device_registrar.dart';
 /// stopgap on Apple is the specific mistake [FcmTokenSource]'s constructor
 /// assertion exists to stop, so this returns null rather than "something".
 final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
+  // kIsWeb FIRST, before any platform test (cage-match round 3, Tesla). On
+  // Flutter web `defaultTargetPlatform` reports the BROWSER'S HOST OS, not
+  // "web" — so Chrome on an Android handset answers `TargetPlatform.android`,
+  // and this would construct an `FcmTokenSource` inside a renderer with no FCM
+  // plugin behind it. The doc above already promised a web build takes no
+  // token; the code did not, and only the prose would ever have told you.
+  // LATENT rather than live today — this project has no `web/` target — which
+  // is precisely why it would have shipped unnoticed the day somebody adds one.
+  if (kIsWeb) return null;
   if (defaultTargetPlatform == TargetPlatform.android) return FcmTokenSource();
   return null;
 });

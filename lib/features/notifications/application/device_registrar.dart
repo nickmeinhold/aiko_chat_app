@@ -80,7 +80,9 @@ class DeviceRegistrar {
     required ChatRestApi api,
     required PendingUnregisterStore pending,
     required String islandBaseUrl,
-  }) : _source = source,
+    Duration settleWait = const Duration(seconds: 10),
+  }) : _settleWait = settleWait,
+       _source = source,
        _api = api,
        _pending = pending,
        _islandBaseUrl = islandBaseUrl;
@@ -88,6 +90,11 @@ class DeviceRegistrar {
   final PushTokenSource _source;
   final ChatRestApi _api;
   final PendingUnregisterStore _pending;
+
+  /// How long a new pairing waits for the previous unpair to settle before
+  /// registering anyway. Injectable ONLY so a test can drive the timeout path
+  /// without ten real seconds — it is the same code path, not a stand-in.
+  final Duration _settleWait;
 
   /// Which island this registrar speaks for. A debt is keyed by it, so a token
   /// registered here is never deleted at the island the user switched TO.
@@ -244,13 +251,26 @@ class DeviceRegistrar {
     // would land and delete the row we had just created — leaving the handset
     // silently unreachable, the exact failure class this whole change is for.
     //
-    // Awaiting it is a happens-before edge, not a race guard: no timeout to
-    // tune, no window to size. `_settleUnpair` swallows its own failures, so
-    // this always completes, and it is bounded by the REST call underneath —
-    // which, if it is hanging, means the network is down and the registration
-    // was going to fail anyway. On a fresh launch there is no outstanding settle
-    // at all; the debt record is the only path and the drain already ran.
-    await _settling;
+    // Awaiting it is a happens-before edge rather than a race guard. But the
+    // edge must be BOUNDED (cage-match round 3, Tesla): the gateway's Dio is
+    // built as `BaseOptions(baseUrl: ...)` with no receiveTimeout, so a server
+    // that accepts the connection and never answers leaves this future pending
+    // until the process dies — and a hot re-login after a TCP stall would then
+    // never register, silently, forever. "Bounded by the REST call underneath"
+    // was the claim; the REST call has no bound.
+    //
+    // THE NUMBER IS SAFE TO BE WRONG ABOUT, which is what makes it a bound and
+    // not a tuning knob. Timing out here only means we stop WAITING for the
+    // straggler — the debt record still holds the token, so the worst case is
+    // the same DELETE being paid at the next sign-in as a 204 no-op. Erring
+    // short costs a redundant round trip; erring long costs reach. So: short.
+    await _settling?.timeout(
+      _settleWait,
+      onTimeout: () => debugPrint(
+        'DeviceRegistrar: previous unpair still in flight after $_settleWait — '
+        'registering anyway; the debt record will settle it.',
+      ),
+    );
     if (generation != _generation) return;
     // Re-registering an unchanged token is harmless island-side (the upsert is
     // keyed on the token) but it is a pointless round trip on every rotation

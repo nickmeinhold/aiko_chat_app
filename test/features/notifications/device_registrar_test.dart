@@ -57,11 +57,15 @@ void main() {
   late PendingUnregisterStore pending;
   late DeviceRegistrar registrar;
 
-  DeviceRegistrar build({String island = _island}) => DeviceRegistrar(
+  DeviceRegistrar build({
+    String island = _island,
+    Duration settleWait = const Duration(seconds: 10),
+  }) => DeviceRegistrar(
     source: source,
     api: api,
     pending: pending,
     islandBaseUrl: island,
+    settleWait: settleWait,
   );
 
   setUp(() async {
@@ -381,6 +385,31 @@ void main() {
       );
       expect(registrar.registeredToken, 'tok-1');
     });
+
+    test(
+      'a re-register is not held hostage by an unpair that never returns',
+      () async {
+        // Cage-match round 3, Tesla. The happens-before edge was real but
+        // UNBOUNDED: the gateway Dio sets no receiveTimeout, so a server that
+        // accepts and never answers left the future pending until the process
+        // died — and a hot re-login after a TCP stall then never registered,
+        // silently, forever. The bound is safe to be wrong about because the debt
+        // record still holds the token.
+        registrar = build(settleWait: const Duration(milliseconds: 20));
+        await registrar.start();
+        api.unregisterDeviceGate = Completer<void>().future; // never completes
+        registrar.unpair(credential: 'cred-a');
+        await pumpEventQueue();
+
+        await registrar.start();
+
+        expect(
+          api.registeredDevices,
+          hasLength(2),
+          reason: 'the second session pairs despite the wedged straggler',
+        );
+      },
+    );
 
     test('drain with nothing owed sends nothing', () async {
       await registrar.drainPending();
