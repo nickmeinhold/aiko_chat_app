@@ -70,7 +70,7 @@ class RingController extends Notifier<CallInvite?> {
   /// rings for a corpse. Push makes it likelier rather than rarer: the island
   /// wakes a handset on the INVITE body only, so a cold start processes the
   /// invitation first by construction and the end is an ordinary afterthought.
-  final Map<String, DateTime> _ended = {};
+  final Map<String, ({CallEnd end, DateTime at})> _ended = {};
 
   /// The user this ring state belongs to; see the identity guard in [build].
   String? _identity;
@@ -87,7 +87,7 @@ class RingController extends Notifier<CallInvite?> {
     // admission is capped by freshness. Same bound, same reason: this can only
     // ever hold the last few seconds of calls.
     _ended.removeWhere(
-      (_, at) => now.difference(at) > kCallInviteFreshness * 2,
+      (_, e) => now.difference(e.at) > kCallInviteFreshness * 2,
     );
   }
 
@@ -180,23 +180,23 @@ class RingController extends Notifier<CallInvite?> {
     // ahead of `admitRing` costs nothing (the two sentinels are disjoint) and
     // keeps the ordering obvious: an end can only ever be about a call that is
     // already ringing.
-    // REMEMBER IT EITHER WAY. The gate answers "does this stop the ring that is
-    // ringing NOW", which is a different question from "has this call ended" —
-    // and only the second one survives an end that overtakes its own invite.
-    if (isCallEndBody(m.body) &&
-        m.originCryptoValid == true &&
-        m.sender.userId != me &&
-        m.replyToId != null) {
-      _ended[m.replyToId!] = DateTime.now().toUtc();
-    }
-    if (admitCallEnd(m, live: _live, meUserId: me)) {
-      // `stopRinging` SETTLES the invitation, so the caller's at-least-once
-      // replay of the invite cannot resurrect the ring after the hangup — the
-      // same memory that makes Ignore stick.
-      stopRinging();
+    final now = DateTime.now().toUtc();
+    // PRUNE ON EVERY MESSAGE, not only after an invitation is admitted. Ends
+    // never prune it otherwise, so a flood of signed stops with unique targets
+    // would grow forever waiting for some future ring to remember to forget
+    // (cage-match round 2, Tesla).
+    _forget(now);
+    // ONE DOOR. `admitCallEnd` judges the message; `endsInvite` matches it to a
+    // ring. Both consumers below run the SAME clauses — the first version gave
+    // the memory a weaker key than the live path, so a third party or another
+    // channel could pre-poison a ring the live path would have refused.
+    final end = admitCallEnd(m, meUserId: me);
+    if (end != null) {
+      _ended[end.targetServerMsgId] = (end: end, at: now);
+      final live = _live;
+      if (live != null && endsInvite(end, live)) stopRinging();
       return;
     }
-    final now = DateTime.now().toUtc();
     final invite = admitRing(
       m,
       meUserId: me,
@@ -206,10 +206,12 @@ class RingController extends Notifier<CallInvite?> {
       now: now,
     );
     if (invite == null) return;
-    _forget(now);
     // Already dead on arrival: its hangup got here first. Settle rather than
-    // ring, so an at-least-once replay of the invitation cannot ring either.
-    if (invite.serverMsgId != null && _ended.containsKey(invite.serverMsgId)) {
+    // ring, so an at-least-once replay cannot ring either. Matched through the
+    // SAME predicate the live path uses, so a remembered end can never suppress
+    // a ring that an in-order end would not have.
+    final owed = _ended[invite.serverMsgId];
+    if (owed != null && endsInvite(owed.end, invite)) {
       _settle(invite);
       return;
     }
@@ -219,8 +221,21 @@ class RingController extends Notifier<CallInvite?> {
     // echo rather than the first (Tesla), and a replay after the user pressed
     // Ignore would ring again (Carnot). Both are answered by remembering the
     // signed invite id, not by comparing against whatever is ringing now.
-    if (invite == _live) return;
     if (_settled.containsKey(invite.inviteId)) return;
+    // UPGRADE rather than early-return when a replay carries the island's id and
+    // the first sighting did not (cage-match round 2, Tesla). Equality is
+    // `inviteId` only, so `invite == _live` used to discard the replay as "the
+    // same invitation" — freezing `serverMsgId` at whatever the FIRST frame had.
+    // `Message.id` is nullable and this field is nullable because of it, so a
+    // first frame without a ULID produced a ring no hangup could ever still.
+    // An identity that cannot be upgraded is a latch, not a name.
+    if (invite == _live) {
+      if (_live!.serverMsgId == null && invite.serverMsgId != null) {
+        _live = invite;
+        state = invite;
+      }
+      return;
+    }
     // A DIFFERENT invite while already ringing REPLACES the first (last-wins) —
     // the most recent caller is the live one, and stacking rings has no sane UI.
     // The DISPLACED invitation is settled on the way out: replacement is a third

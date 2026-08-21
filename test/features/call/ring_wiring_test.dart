@@ -434,4 +434,41 @@ void main() {
           'here is the exact bug this PR exists to remove, just reordered',
     );
   });
+
+  test('a THIRD PARTY cannot pre-poison the overtake memory', () async {
+    // Cage-match round 2 (Carnot + Tesla, independently). The out-of-order
+    // memory used to record any verified, non-self end with a reply target and
+    // then suppress an invitation by its server id ALONE — skipping the caller
+    // and channel binding the live path enforces. So an end the in-order path
+    // would have refused could silence a genuine ring, provided its author could
+    // name the invitation's server id. `isDmChannelId` was deleted partly
+    // BECAUSE channel-wide calls are a real future feature, and that feature
+    // makes those ids visible in the room.
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+
+    // Someone who is not the caller sends a signed stop naming the invitation.
+    transport.emitMessage(
+      await inbound(
+        from: 'mallory-key',
+        body: kCallEndBody,
+        clientMsgId: 'M9',
+        replyTo: serverIdFor('M1'),
+      ),
+    );
+    await pump();
+
+    transport.emitMessage(await inbound()); // the genuine invitation
+    await pump();
+
+    expect(
+      container.read(incomingRingProvider),
+      isNotNull,
+      reason:
+          'only the caller may end their own call — the remembered end must be '
+          'matched by the SAME clauses the live path applies, or the memory is '
+          'a weaker second gate',
+    );
+  });
 }

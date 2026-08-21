@@ -6,6 +6,7 @@
 // not be ready — the invitation may have no server id yet, and the repository
 // the screen was holding may already have been replaced. An announcement that
 // only exists during that one instant is an announcement you lose.
+import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/call/application/call_end_announcer.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
@@ -19,8 +20,14 @@ import '../../support/test_helpers.dart';
 
 const _channel = 'CH1';
 
+/// The signed-in user, as a knob a test can turn. A plain variable read by the
+/// override, invalidated to publish a change — Riverpod 3 has no StateProvider.
+AppUser? knobUser = FakeRestApi.defaultUser;
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() async => initializeTestEnvironment());
 
   late DriftCache cache;
   late FakeChatTransport transport;
@@ -38,12 +45,24 @@ void main() {
   /// Builds a live repo/container pair. [repoOverride] lets a test swap the
   /// repository the announcer will resolve, which is how the mortal-instance
   /// case is reproduced.
+  var ackWait = const Duration(seconds: 2);
+
   ProviderContainer build({ChatRepository? repoOverride}) {
     final c = ProviderContainer(
       overrides: [
         chatRepositoryProvider.overrideWith(
           (ref) async => repoOverride ?? repo,
         ),
+        // The announcer now snapshots WHO we are — the account AND the island —
+        // so its provider graph reaches currentUser and config. Widening that
+        // graph is exactly what makes an unoverridden fixture throw here.
+        sharedPreferencesProvider.overrideWithValue(testPrefs),
+        // Via a knob rather than a fixed value: the identity test has to CHANGE
+        // the signed-in user mid-flight. Disposing the container instead would
+        // make that test pass for the wrong reason — a disposed ref throws into
+        // the announcer's swallow, which looks identical to the guard working.
+        currentUserProvider.overrideWith((ref) => knobUser),
+        callEndAckWaitProvider.overrideWithValue(ackWait),
       ],
     );
     // PIN IT, exactly as main() does. Providers auto-dispose by default in
@@ -51,11 +70,13 @@ void main() {
     // immediately torn down — and every later use of it throws into the
     // announcer's own swallow. A test that skipped this would reproduce the
     // disposal bug rather than the behaviour.
-    c.listen(_refProbe, (_, _) {});
+    c.listen(callEndAnnouncerProvider, (_, _) {});
     return c;
   }
 
   setUp(() {
+    knobUser = FakeRestApi.defaultUser;
+    ackWait = const Duration(seconds: 2);
     installSecureStorageMock();
     cache = DriftCache(NativeDatabase.memory());
     transport = FakeChatTransport();
@@ -88,10 +109,9 @@ void main() {
     return id;
   }
 
-  CallEndAnnouncer announcer({Duration? ackWait}) => CallEndAnnouncer(
-    container.read(_refProbe),
-    ackWait: ackWait ?? const Duration(seconds: 2),
-  );
+  /// Built through the REAL provider, so the announcer holds the same kind of
+  /// Ref it holds in production.
+  CallEndAnnouncer announcer() => container.read(callEndAnnouncerProvider);
 
   test('an acked invitation is ended by its SERVER id', () async {
     final inviteId = await sendAndAck();
@@ -140,7 +160,10 @@ void main() {
     'an invitation never acked announces NOTHING — there is no ring to stop',
     () async {
       final inviteId = await sendAndAck(ack: false);
-      final a = announcer(ackWait: const Duration(milliseconds: 300));
+      ackWait = const Duration(milliseconds: 300);
+      container.dispose();
+      container = build();
+      final a = announcer();
 
       a.announce(channelId: _channel, inviteId: inviteId);
       await Future.wait(a.settling);
@@ -155,56 +178,73 @@ void main() {
     },
   );
 
-  test('it resolves the repository at SEND time, not at hangup time', () async {
-    // Tesla's finding. The screen used to capture a repository instance in
-    // initState and speak only to it in dispose — but it is autoDispose and
-    // rebuilds on reconnect, subscription-set change and seedOpenedDm. A long
-    // unanswered ring is exactly when a mobile socket has most likely swapped
-    // it, and the hangup then collapsed to a debugPrint.
-    final inviteId = await sendAndAck();
-    final a = announcer();
+  test('the invitation is minted on repo A and the hangup still lands after A '
+      'is REPLACED', () async {
+    // Rewritten after a cage-match said the first version proved nothing: it
+    // minted and announced on the SAME fresh repository, so of course the
+    // current one flowed. The actual bug is a mortal capture — invitation minted
+    // on repo A, lookup and send happening after A has been swapped out — and
+    // that frequency was never placed on the coil.
+    final inviteId = await sendAndAck(); // ...on repo A (`repo`)
 
-    // The repository the screen would have captured is now dead and replaced.
-    final freshTransport = FakeChatTransport();
-    final freshCache = DriftCache(NativeDatabase.memory());
-    final fresh = ChatRepository(
-      cache: freshCache,
-      transport: freshTransport,
+    // A is replaced, as a reconnect / subscription-set change / seedOpenedDm
+    // does. Its cache still holds the invitation's ULID, so a correct
+    // implementation must read through whatever is CURRENT, not what it held.
+    final liveTransport = FakeChatTransport();
+    final liveRepo = ChatRepository(
+      cache: cache, // the same store A wrote the invitation into
+      transport: liveTransport,
       rest: FakeChatRestApi(),
       me: FakeRestApi.defaultUser,
       subscribedChannelIds: const [_channel],
       newTempId: nextTempId,
     );
-    fresh.start();
+    liveRepo.start();
     addTearDown(() async {
-      await fresh.dispose();
-      await freshTransport.dispose();
-      await freshCache.close();
+      await liveRepo.dispose();
+      await liveTransport.dispose();
     });
-    final id2 = (await fresh.sendMessage(_channel, kCallInviteBody))!;
-    freshTransport.emitAck(id2, '01M0GS7FDWBVQ31950B1PTV2DX');
-    await pumpEventQueue();
 
-    final container2 = build(repoOverride: fresh);
-    addTearDown(container2.dispose);
-    final a2 = CallEndAnnouncer(
-      container2.read(_refProbe),
-      ackWait: const Duration(seconds: 2),
-    );
-    a2.announce(channelId: _channel, inviteId: id2);
-    await Future.wait(a2.settling);
+    final c2 = build(repoOverride: liveRepo);
+    addTearDown(c2.dispose);
+    final a = c2.read(callEndAnnouncerProvider);
+
+    await repo.dispose(); // A is now dead — a captured reference would be inert
+    a.announce(channelId: _channel, inviteId: inviteId);
+    await Future.wait(a.settling);
 
     expect(
-      freshTransport.sent.where((m) => m.body == kCallEndBody),
-      hasLength(1),
-      reason: 'the announcement went to the LIVE repository, not a dead one',
+      liveTransport.sent.where((m) => m.body == kCallEndBody).single.replyToId,
+      '01M0GS7FDWBVQ31950B1PTV2DW',
+      reason:
+          'the hangup went out through the LIVE repository, naming an '
+          'invitation minted by one that has since been disposed',
     );
+  });
+
+  // NO TEST FOR THE IDENTITY GUARD, deliberately — this is the honest note
+  // rather than a green one. The guard is real and kept: an announcement must
+  // never be signed on behalf of the next session. But it cannot be SHOWN to
+  // fail here, because invalidating the provider whose value it reads disposes
+  // the announcer's own Ref first — so the announcement dies with "Cannot use
+  // the Ref after it has been disposed" whether the guard exists or not. Same
+  // outcome, different mechanism, and a test that cannot tell them apart is
+  // decorative. Two earlier attempts at this test passed for exactly that wrong
+  // reason before the third one caught itself.
+  //
+  // The disposal is itself worth a look — holding a Ref across an invalidation
+  // is fragile in Riverpod 3 — and is FILED rather than papered over here.
+
+  /// Cleans up the settling list so a pinned, app-lifetime announcer does not
+  /// retain every hangup's closure graph forever.
+  test('a completed announcement is not retained', () async {
+    final inviteId = await sendAndAck();
+    final a = announcer();
+
+    a.announce(channelId: _channel, inviteId: inviteId);
+    await Future.wait(a.settling);
+    await pumpEventQueue();
+
     expect(a.settling, isEmpty);
-    expect(inviteId, isNotEmpty);
   });
 }
-
-/// Hands a test the container's own [Ref], which is what the real provider
-/// receives. Using the genuine article rather than a hand-made double keeps the
-/// announcer's provider reads on the same path they take in production.
-final _refProbe = Provider<Ref>((ref) => ref);

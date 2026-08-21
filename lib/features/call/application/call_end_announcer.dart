@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/providers.dart';
 import '../../chat/application/chat_providers.dart';
 import '../domain/call_invite.dart';
 
@@ -58,12 +59,51 @@ class CallEndAnnouncer {
   /// Returns immediately. Safe to call from `dispose()` — it captures nothing
   /// that is being torn down.
   void announce({required String channelId, required String inviteId}) {
-    settling.add(_announce(channelId, inviteId));
+    // SNAPSHOT WHO WE ARE, not just what we are ending (cage-match round 2,
+    // Tesla). This object was built to outlive the screen and therefore outlives
+    // the USER: /call/:channelId is not a logged-out zone, so when the session
+    // ends the router ejects the route, dispose hands over the obligation, and
+    // the pinned announcer would discharge it under whoever is next. The human
+    // path is not exotic — misdial, hang up, switch island because the call felt
+    // wrong — and that is well inside a 30s ack wait. RingController already
+    // treats identity as a non-reversible key and clears on swap; this is its
+    // sending-side twin and needs the same rule.
+    final identity = _identity();
+    late final Future<void> f;
+    f = _announce(channelId, inviteId, identity).whenComplete(() {
+      // Completed obligations must not accumulate: this object is pinned for the
+      // app's lifetime, so an ever-growing list would retain every hangup's
+      // closure graph forever (cage-match round 2, Carnot).
+      settling.remove(f);
+    });
+    settling.add(f);
   }
 
-  Future<void> _announce(String channelId, String inviteId) async {
+  /// Who this device is, right now, as far as an announcement is concerned: the
+  /// signed-in account AND the island it is signed in to. Either changing makes
+  /// a pending hangup somebody else's business.
+  (String?, String) _identity() => (
+    _ref.read(currentUserProvider)?.userId,
+    _ref.read(configProvider).httpBaseUrl,
+  );
+
+  Future<void> _announce(
+    String channelId,
+    String inviteId,
+    (String?, String) identity,
+  ) async {
     try {
       final serverId = await _awaitServerId(inviteId);
+      if (_identity() != identity) {
+        // The session or the island changed while we waited. The invitation
+        // belonged to a user we are no longer, on a gateway we may no longer be
+        // talking to — announcing now would sign a hangup as somebody else.
+        debugPrint(
+          'CallEndAnnouncer: identity changed while waiting for the ack — '
+          'abandoning the hangup for $inviteId.',
+        );
+        return;
+      }
       if (serverId == null) {
         // The invitation was never acked within the whole ring window, so it
         // almost certainly never reached the peer either — there is no ring to
@@ -112,5 +152,14 @@ class CallEndAnnouncer {
 /// mortal is not a fix. `main()` watches it for the app's lifetime, the same way
 /// it pins `pushPairingProvider`.
 final callEndAnnouncerProvider = Provider<CallEndAnnouncer>(
-  CallEndAnnouncer.new,
+  (ref) => CallEndAnnouncer(ref, ackWait: ref.read(callEndAckWaitProvider)),
 );
+
+/// How long an announcement waits for the invitation's ack.
+///
+/// A provider ONLY so tests can shorten it and still build the announcer through
+/// its real wiring. Standing up a hand-made `Ref` instead was worse than
+/// inconvenient: it was a shim that got disposed by an ordinary invalidate, so
+/// the announcement failed through the class's own swallow and the test passed
+/// for the wrong reason (cage-match round 2 — twice, in fact).
+final callEndAckWaitProvider = Provider<Duration>((_) => kCallRingDuration);

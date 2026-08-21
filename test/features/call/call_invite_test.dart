@@ -260,8 +260,14 @@ void main() {
       deliveryState: DeliveryState.sent,
     );
 
-    bool stops(Message m, {CallInvite? ringing}) =>
-        admitCallEnd(m, live: ringing ?? live, meUserId: me);
+    /// The two doors together, which is how production uses them: judge the
+    /// message, then match it to a ring. A test that only exercised one would
+    /// miss the class the round-2 finding lived in — a memory whose key was
+    /// weaker than the live path's.
+    bool stops(Message m, {CallInvite? ringing}) {
+      final end = admitCallEnd(m, meUserId: me);
+      return end != null && endsInvite(end, ringing ?? live);
+    }
 
     test('the END sentinel is pinned — it is signed, permanent history', () {
       // A golden, for the same reason the invite has one: this string is inside
@@ -285,8 +291,52 @@ void main() {
       },
     );
 
-    test('nothing ringing, nothing to stop', () {
-      expect(admitCallEnd(end(), live: null, meUserId: me), isFalse);
+    test(
+      'an end is judged WITHOUT reference to what is ringing — so one that '
+      'overtakes its invitation can be remembered under the same clauses',
+      () {
+        // The round-2 shape: the gate used to take `live` and answer a single
+        // fused question, so the out-of-order memory had to invent its own,
+        // weaker, key. Split, both consumers run identical clauses.
+        final judged = admitCallEnd(end(), meUserId: me);
+        expect(judged, isNotNull);
+        expect(judged!.targetServerMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
+        expect(judged.fromUserId, robin);
+        expect(judged.channelId, 'dm:aaa:bbb');
+      },
+    );
+
+    test('an end with NO AUTHOR is refused — "only the caller may end it" is '
+        'unanswerable without one', () {
+      final anon = Message(
+        clientTempId: 'e1',
+        id: 'e1',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(kind: SenderKind.human, label: 'ghost'),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: now,
+        origin: signedAt(now),
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(admitCallEnd(anon, meUserId: me), isNull);
+    });
+
+    test('a NON-HUMAN end is refused, mirroring admitRing', () {
+      final robot = Message(
+        clientTempId: 'e1',
+        id: 'e1',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(userId: robin, kind: SenderKind.robot),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: now,
+        origin: signedAt(now),
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(admitCallEnd(robot, meUserId: me), isNull);
     });
 
     test(
