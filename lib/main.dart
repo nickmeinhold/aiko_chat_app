@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app/font_licences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
+import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
 import 'features/settings/application/island_manifest_provider.dart';
 import 'features/settings/application/theme_mode_controller.dart';
@@ -36,6 +37,14 @@ class AikoChatApp extends ConsumerWidget {
     // Ask the island who it is, once, and cache the answer. Fire-and-forget —
     // the mark renders from its URL fallback meanwhile.
     ref.watch(islandManifestFetcherProvider);
+    // PINNED HERE FOR THE APP'S LIFETIME, and that is load-bearing rather than
+    // tidy. Providers auto-dispose by default in Riverpod 3, so an announcer
+    // read only by CallScreen would be created by that screen and disposed with
+    // it — taking any in-flight hangup down with the widget that handed it over.
+    // The whole point of the announcer is to outlive that screen (see
+    // CallEndAnnouncer), so the fix for a mortal capture would have been mortal
+    // itself. Same reason pushPairingProvider is watched here.
+    ref.watch(callEndAnnouncerProvider);
     // The chosen look supplies BOTH halves, so picking a preset never costs you
     // OS following: themeMode still decides how bright, the preset decides which
     // look, and the chosen typeface rides along in both. All three are set in

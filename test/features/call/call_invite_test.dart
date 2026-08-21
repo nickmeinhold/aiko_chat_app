@@ -32,10 +32,13 @@ void main() {
     SenderKind kind = SenderKind.human,
   }) => Message(
     clientTempId: 'm1',
-    // DELIBERATELY DIFFERENT from clientTempId. The gateway's reply_to is an FK
-    // onto messages.id, so the end must name THIS one; a fixture that used the
-    // same string for both could not tell a correct binding from the wire bug.
-    id: 'SRV-m1',
+    // DELIBERATELY DIFFERENT from clientTempId, and a REAL canonical ULID. The
+    // gateway's reply_to is an FK onto messages.id, so the end must name this
+    // one — and a fixture using the same string for both could not tell a
+    // correct binding from the wire bug. `SRV-m1` did force them apart but is a
+    // value no island could mint, so it proved the binding while exercising an
+    // impossible id (this repo asserts canonical ULID case elsewhere).
+    id: '01M0GS7FDWBVQ31950B1PTV2DW',
     channelId: channelId,
     sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
     body: body,
@@ -235,7 +238,7 @@ void main() {
 
     Message end({
       String from = robin,
-      String? replyTo = 'SRV-m1',
+      String? replyTo = '01M0GS7FDWBVQ31950B1PTV2DW',
       String channelId = 'dm:aaa:bbb',
       String body = kCallEndBody,
       bool? cryptoValid = true,
@@ -314,7 +317,7 @@ void main() {
       // best-effort. Both ids are opaque 26-char strings, so nothing but the
       // real island could tell them apart.
       expect(stops(end(replyTo: 'm1')), isFalse);
-      expect(stops(end(replyTo: 'SRV-m1')), isTrue);
+      expect(stops(end(replyTo: '01M0GS7FDWBVQ31950B1PTV2DW')), isTrue);
     });
 
     test('an end for a DIFFERENT call does not stop this one', () {

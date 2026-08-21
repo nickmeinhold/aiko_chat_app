@@ -17,7 +17,11 @@ library;
 //
 //   RING_HOST=chat.enspyr.co RING_CHANNEL=... RING_B_USER=... RING_B_PASS=... \
 //   RING_PROBE=/abs/path/ring_probe.py RING_A_USER=... RING_A_PASS=... \
-//   RING_KEY_SEED=... flutter test test/live/ring_live_test.dart --tags live
+//   RING_KEY_SEED=... flutter test test/live --run-skipped --tags live
+//
+// `--run-skipped` is REQUIRED (dart_test.yaml marks this tag skipped). Without
+// it the run reports a skip and exits 0 — which looks like verification while
+// measuring nothing at all.
 import 'dart:convert';
 import 'dart:io';
 

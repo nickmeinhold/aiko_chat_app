@@ -7,10 +7,8 @@ import 'package:livekit_client/livekit_client.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/theme/maritime_theme.dart';
-import '../../chat/application/chat_providers.dart';
-import '../../chat/data/chat_repository.dart';
+import '../application/call_end_announcer.dart';
 import '../data/call_session.dart';
-import '../domain/call_invite.dart' show kCallEndBody;
 import '../domain/call_connection_state.dart';
 
 /// Single door for opening a call (#18). Rapid double-taps — or a tap while a
@@ -84,11 +82,11 @@ class CallScreen extends ConsumerStatefulWidget {
 class _CallScreenState extends ConsumerState<CallScreen> {
   late final CallSession _session;
 
-  /// Captured in [initState] because [dispose] must not touch `ref` — the
-  /// element is being torn down, and reading a provider there is exactly the
-  /// post-dispose ref use this repo sweeps for. The FUTURE is captured, not the
-  /// repository, so nothing is awaited on the build path.
-  late final Future<ChatRepository> _repo;
+  /// The announcer, captured in [initState] because [dispose] must not touch
+  /// `ref`. Capturing THIS is safe where capturing a repository was not: it is
+  /// app-scoped, so it outlives both this screen and any number of repository
+  /// rebuilds, and it resolves the live repository itself at send time.
+  late final CallEndAnnouncer _endAnnouncer;
 
   @override
   void initState() {
@@ -97,7 +95,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       api: ref.read(restApiProvider),
       channelId: widget.channelId,
     );
-    _repo = ref.read(chatRepositoryProvider.future);
+    _endAnnouncer = ref.read(callEndAnnouncerProvider);
     unawaited(_session.connect());
   }
 
@@ -107,54 +105,17 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // notifiers. The child ValueListenableBuilders unsubscribe first (children
     // unmount before this parent), so disposing the notifiers here is safe.
     unawaited(_session.leave());
-    // ANNOUNCE THE HANGUP, from the one place that reliably knows it happened.
-    // Every exit lands here — the leave button, a system back, a pop from
-    // anywhere — which is the same reason `leave()` lives here rather than on
-    // the button. A ring already self-terminates after kCallRingDuration, so
-    // this does not stop an eternal ring; it stops the 30 seconds during which
-    // the other phone rings for a call that is already over and answering it
-    // would join an empty room.
+    // HAND OVER THE OBLIGATION; do not try to discharge it here. Every exit
+    // lands in dispose — the leave button, a system back, a pop from anywhere —
+    // which is why the announcement belongs here and the ANNOUNCING does not.
+    // The screen is the wrong owner for work that may have to outlive it: the
+    // invitation may not be acked yet (so it has no id the wire can name) and
+    // this widget's repository may be replaced mid-ring. See CallEndAnnouncer.
     final inviteId = widget.inviteId;
     if (inviteId != null) {
-      unawaited(_announceEnd(_repo, widget.channelId, inviteId));
+      _endAnnouncer.announce(channelId: widget.channelId, inviteId: inviteId);
     }
     super.dispose();
-  }
-
-  /// STATIC, and that is the point: it closes over nothing that is being
-  /// disposed. Best-effort by design — a failed end message costs the peer a
-  /// ring that stops on its own 30 seconds later, which must never be worth
-  /// throwing out of a widget teardown.
-  static Future<void> _announceEnd(
-    Future<ChatRepository> repo,
-    String channelId,
-    String inviteId,
-  ) async {
-    try {
-      final r = await repo;
-      // TRANSLATE THE ID, because the two are not interchangeable on the wire.
-      // `inviteId` is the signed `clientMsgId` — the only id we minted and the
-      // one the callee knows the invitation by. But the gateway's `reply_to` is
-      // an FK onto `messages.id`, so it takes the SERVER ulid and refuses a
-      // client one outright with `no_reply_target`. Sending the wrong one would
-      // have had the whole frame rejected and the hangup silently never
-      // delivered — found by a live probe, not by a test, because both ids are
-      // opaque 26-character strings and every fake accepted either.
-      final serverId = await r.serverIdFor(inviteId);
-      if (serverId == null) {
-        // Unacked (sent offline, or still in flight). There is no id to name the
-        // call by, and a reply_to the island cannot resolve would sink the whole
-        // message — so say nothing and let the ring expire on its own clock.
-        debugPrint(
-          'CallScreen: invitation $inviteId is unacked — no hangup announced; '
-          'the ring will time out on its own.',
-        );
-        return;
-      }
-      await r.sendMessage(channelId, kCallEndBody, replyToId: serverId);
-    } catch (e) {
-      debugPrint('CallScreen: could not announce the hangup: $e');
-    }
   }
 
   /// The first available (unmuted) video track on [p], or null.

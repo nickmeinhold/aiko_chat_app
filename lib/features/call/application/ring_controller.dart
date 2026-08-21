@@ -57,6 +57,21 @@ class RingController extends Notifier<CallInvite?> {
   /// therefore only hold the invitations of the last few seconds.
   final Map<String, DateTime> _settled = {};
 
+  /// Calls whose END we have seen, keyed on the signed server id the hangup
+  /// named. Value is when we saw it, for the same bounded forgetting as
+  /// [_settled].
+  ///
+  /// AN END CAN ARRIVE BEFORE ITS OWN INVITE, and without this it was discarded
+  /// (cage-match, Tesla + Maxwell). Delivery here is at-least-once and locally
+  /// out of order — this file already says so, and `_settled` exists because
+  /// `_live` was not memory enough. An unmatched end is that same bug inverted:
+  /// a signed "this call is dead" with nowhere to live until the invitation is
+  /// admitted, by which point the stop has already been thrown away and the bell
+  /// rings for a corpse. Push makes it likelier rather than rarer: the island
+  /// wakes a handset on the INVITE body only, so a cold start processes the
+  /// invitation first by construction and the end is an ordinary afterthought.
+  final Map<String, DateTime> _ended = {};
+
   /// The user this ring state belongs to; see the identity guard in [build].
   String? _identity;
 
@@ -64,9 +79,17 @@ class RingController extends Notifier<CallInvite?> {
   /// build from the watched provider — see [build].
   Set<String> _dmIds = const {};
 
-  void _forget(DateTime now) => _settled.removeWhere(
-    (_, at) => now.difference(at) > kCallInviteFreshness * 2,
-  );
+  void _forget(DateTime now) {
+    _settled.removeWhere(
+      (_, at) => now.difference(at) > kCallInviteFreshness * 2,
+    );
+    // An end is only useful while its invitation could still be ADMITTED, and
+    // admission is capped by freshness. Same bound, same reason: this can only
+    // ever hold the last few seconds of calls.
+    _ended.removeWhere(
+      (_, at) => now.difference(at) > kCallInviteFreshness * 2,
+    );
+  }
 
   /// Re-publish the live invitation after a rebuild, re-arming its expiry with
   /// the time it has LEFT.
@@ -115,6 +138,7 @@ class RingController extends Notifier<CallInvite?> {
       _identity = me;
       _live = null;
       _settled.clear();
+      _ended.clear();
       _expiry?.cancel();
       _expiry = null;
     }
@@ -156,6 +180,15 @@ class RingController extends Notifier<CallInvite?> {
     // ahead of `admitRing` costs nothing (the two sentinels are disjoint) and
     // keeps the ordering obvious: an end can only ever be about a call that is
     // already ringing.
+    // REMEMBER IT EITHER WAY. The gate answers "does this stop the ring that is
+    // ringing NOW", which is a different question from "has this call ended" —
+    // and only the second one survives an end that overtakes its own invite.
+    if (isCallEndBody(m.body) &&
+        m.originCryptoValid == true &&
+        m.sender.userId != me &&
+        m.replyToId != null) {
+      _ended[m.replyToId!] = DateTime.now().toUtc();
+    }
     if (admitCallEnd(m, live: _live, meUserId: me)) {
       // `stopRinging` SETTLES the invitation, so the caller's at-least-once
       // replay of the invite cannot resurrect the ring after the hangup — the
@@ -173,6 +206,13 @@ class RingController extends Notifier<CallInvite?> {
       now: now,
     );
     if (invite == null) return;
+    _forget(now);
+    // Already dead on arrival: its hangup got here first. Settle rather than
+    // ring, so an at-least-once replay of the invitation cannot ring either.
+    if (invite.serverMsgId != null && _ended.containsKey(invite.serverMsgId)) {
+      _settle(invite);
+      return;
+    }
     // At-least-once delivery means the SAME invitation can arrive again (live +
     // history dual delivery, reconnect replay). Two distinct failures if this is
     // not suppressed: re-arming the timer would extend the ring from the LAST
@@ -180,7 +220,6 @@ class RingController extends Notifier<CallInvite?> {
     // Ignore would ring again (Carnot). Both are answered by remembering the
     // signed invite id, not by comparing against whatever is ringing now.
     if (invite == _live) return;
-    _forget(now);
     if (_settled.containsKey(invite.inviteId)) return;
     // A DIFFERENT invite while already ringing REPLACES the first (last-wins) —
     // the most recent caller is the live one, and stacking rings has no sane UI.

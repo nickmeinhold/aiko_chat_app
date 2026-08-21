@@ -24,6 +24,10 @@ import '../../support/test_helpers.dart';
 /// This is the "code-correct is not works" half. `call_invite_test.dart` proves
 /// the decision; this proves the plumbing that carries a message to it.
 void main() {
+  /// A canonical-case ULID per client id — real shape, deterministic mapping.
+  String serverIdFor(String clientMsgId) =>
+      '01M0GS7FDWBVQ31950B1PTV2D${clientMsgId.hashCode.abs() % 10}';
+
   TestWidgetsFlutterBinding.ensureInitialized();
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
@@ -72,11 +76,12 @@ void main() {
     final sig = await sign(key, payload);
     return Message(
       clientTempId: clientMsgId,
-      // The SERVER ulid, deliberately distinct from the client id: the
-      // gateway's reply_to is an FK onto messages.id, and a fixture reusing one
-      // string for both cannot tell a correct binding from the wire bug that a
-      // live probe had to catch.
-      id: 'SRV-$clientMsgId',
+      // The SERVER ulid — distinct from the client id (the gateway's reply_to
+      // is an FK onto messages.id, and a fixture reusing one string for both
+      // cannot tell a correct binding from the wire bug a live probe caught),
+      // and canonical ULID SHAPE, because a value no island could mint proves
+      // the binding against an id that cannot occur.
+      id: serverIdFor(clientMsgId),
       channelId: dmId,
       sender: MessageSender(
         userId: from,
@@ -329,7 +334,11 @@ void main() {
       );
 
       transport.emitMessage(
-        await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'SRV-M1'),
+        await inbound(
+          body: kCallEndBody,
+          clientMsgId: 'M2',
+          replyTo: serverIdFor('M1'),
+        ),
       );
       await pump();
 
@@ -365,7 +374,11 @@ void main() {
     transport.emitMessage(await inbound());
     await pump();
     transport.emitMessage(
-      await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'SRV-M1'),
+      await inbound(
+        body: kCallEndBody,
+        clientMsgId: 'M2',
+        replyTo: serverIdFor('M1'),
+      ),
     );
     await pump();
     expect(
@@ -378,5 +391,47 @@ void main() {
     await pump();
 
     expect(container.read(incomingRingProvider), isNull);
+  });
+
+  test('an end that OVERTAKES its own invite still stops the ring', () async {
+    // Cage-match round 1 (Tesla + Maxwell). Delivery here is at-least-once and
+    // locally out of order — live + history dual delivery, reconnect drain — and
+    // `_settled` exists because `_live` was not memory enough. An unmatched end
+    // was the inverted twin: a signed "this call is dead" thrown away because
+    // nothing was ringing YET, after which the invitation arrived inside its
+    // freshness window and the bell rang for a corpse, for the full 30 seconds.
+    //
+    // Push makes this likelier rather than rarer: the island wakes a handset on
+    // the INVITE body only, so a cold start processes the invitation first by
+    // construction and the end is an ordinary afterthought.
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+
+    // The hangup lands FIRST, naming an invitation this client has not seen.
+    transport.emitMessage(
+      await inbound(
+        body: kCallEndBody,
+        clientMsgId: 'M2',
+        replyTo: serverIdFor('M1'),
+      ),
+    );
+    await pump();
+    expect(
+      container.read(incomingRingProvider),
+      isNull,
+      reason: 'precondition',
+    );
+
+    transport.emitMessage(await inbound()); // ...and now the invitation
+    await pump();
+
+    expect(
+      container.read(incomingRingProvider),
+      isNull,
+      reason:
+          'the call was already over before its invitation arrived — ringing '
+          'here is the exact bug this PR exists to remove, just reordered',
+    );
   });
 }
