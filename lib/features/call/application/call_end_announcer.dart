@@ -170,96 +170,76 @@ class CallEndAnnouncer {
           _claimed.remove(inviteId);
           return;
         }
-        final left = deadline.difference(DateTime.now());
-        if (left <= Duration.zero) break;
-        // EVERY FAILURE INSIDE THIS PASS IS A RETRY, and that is the invariant
-        // three rounds kept re-discovering one hole at a time: round 5 found a
-        // `null` send treated as spoken, round 6 found a repository ERROR ending
-        // the obligation with time still on the clock. `_repositoryWithin`
-        // rethrew everything that was not a `TimeoutException`, so the outer
-        // catch unclaimed and the peer rang out — and reconnect, `seedOpenedDm`
-        // and a subscription rebuild, the three deaths this class exists to
-        // survive, surface as errors at least as often as they do as hangs.
+        if (!DateTime.now().isBefore(deadline)) break;
+        // ONE TRY AROUND THE WHOLE PASS, and the shape is the point. Three
+        // rounds enumerated these exits in a COMMENT and then left one await
+        // outside the guard each time: round 5 found a null send treated as
+        // spoken, round 6 found a repository error fatal where a null retried,
+        // round 7 found `sendMessage` itself outside the catch — so a live send
+        // that THREW was a funeral while the same failure as a null was a
+        // shrug. Prose enumerating exits does not enumerate exits. Every await
+        // in the pass is inside this block, so the fatal paths are the ones
+        // written below and there is nowhere else to fall out.
         //
-        // So the exits are enumerated here rather than discovered:
+        // EXITS, and there are exactly three:
         //   1. the send returns an id   -> spoken, done
         //   2. identity changed         -> abandon; it is not ours to say
         //   3. the deadline passed      -> abandon; the peer's ring expired
-        // Anything else — an error, a null, a timeout, no server id yet — is
-        // "not this millisecond", never "not this universe".
-        // BOUNDED. The deadline used to sit on the `while` while the read inside
-        // it was unbounded, so a repository stuck in `AsyncLoading` (a reconnect,
-        // exactly what this class exists to outlive) meant the clock was never
-        // consulted again — an uncancellable wait inside a poll chosen because
-        // polling needs no cancellation. `timeout` does not cancel the original;
-        // it stops US waiting, which is all a bounded retry needs.
-        final ChatRepository? repo;
-        final String? serverId;
         try {
-          repo = await _repositoryWithin(left);
-          serverId = repo == null ? null : await repo.serverIdFor(inviteId);
+          // A SLICE, not the whole budget (cage-match round 7, Tesla). Bounding
+          // the read by all remaining time meant one hung
+          // `chatRepositoryProvider.future` consumed the entire obligation:
+          // `timeout` does not cancel the original, so we stopped waiting on a
+          // corpse and then left the graveyard instead of re-reading the
+          // CURRENT provider a moment later. Reconnect, `seedOpenedDm` and a
+          // subscription rebuild — the three deaths this object exists to
+          // outlive — are exactly the cases that resolve on the next read.
+          final left = deadline.difference(DateTime.now());
+          final slice = left < _attemptSlice ? left : _attemptSlice;
+          final repo = await _repositoryWithin(slice);
+          if (repo != null) {
+            final serverId = await repo.serverIdFor(inviteId);
+            if (serverId != null) {
+              // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
+              // identity check and then awaited twice; a liveness test does not
+              // survive an await. Round 3 added exactly this guard and the
+              // round-5 rewrite dropped it, unnoticed, because it had no test.
+              // Snapshot A, obtain repository B, and the hangup is signed by
+              // whoever is current: the callee will not stop (the caller no
+              // longer matches) and permanent signed history grows a row from a
+              // person who never placed the call.
+              if (_identity() != identity) {
+                debugPrint(
+                  'CallEndAnnouncer: identity changed before signing — '
+                  'abandoning the hangup for $inviteId.',
+                );
+                _claimed.remove(inviteId);
+                return;
+              }
+              final sentId = await repo.sendMessage(
+                channelId,
+                kCallEndBody,
+                replyToId: serverId,
+              );
+              if (sentId != null) return; // spoken; the claim stands.
+              // NAMED COMPROMISE, found by a fix-interaction pass rather than a
+              // reviewer: `sendMessage` fires the transport BEFORE it returns,
+              // and its catch returns null. So a throw in that window yields
+              // null with the frame ALREADY on the wire, and this retry sends a
+              // second END — two signed rows for one hangup, in permanent
+              // history. Kept deliberately, because the failures are not
+              // symmetric: a duplicate end is inert at the receiver (`_ended`
+              // holds a list, `stopRinging` is idempotent) while a MISSING end
+              // rings a handset for thirty seconds at a room nobody is coming
+              // to. Removing it properly needs a write-ahead attempt record,
+              // not another guard here.
+            }
+          }
         } catch (e) {
+          // "Not this millisecond", never "not this universe".
           debugPrint('CallEndAnnouncer: transient failure for $inviteId: $e');
-          await Future<void>.delayed(const Duration(milliseconds: 250));
-          continue;
         }
-        if (repo == null) {
-          // A timeout consumed the WHOLE remaining budget, so the ring has
-          // expired on its own — this is the deadline, reached by another road.
-          break;
-        }
-        if (serverId == null) {
-          // Not acked YET. `reply_to` is an FK onto `messages.id`, so naming a
-          // client id here gets the whole frame refused (`no_reply_target`,
-          // verified live) — there is nothing to send until the island answers.
-          await Future<void>.delayed(const Duration(milliseconds: 250));
-          continue;
-        }
-        // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
-        // identity check and then awaited twice, and a liveness test does not
-        // survive an await — this file says so about the mounted-check bug and
-        // then stopped doing it. Round 3 added exactly this guard; the round-5
-        // rewrite into a retry loop dropped it, and no test noticed because the
-        // guard never had one. Snapshot A, obtain repository B, and the hangup
-        // is signed by whoever is current: the callee will not stop (the caller
-        // no longer matches) and permanent signed history grows a row from a
-        // person who never placed the call.
-        if (_identity() != identity) {
-          debugPrint(
-            'CallEndAnnouncer: identity changed before signing — abandoning '
-            'the hangup for $inviteId.',
-          );
-          _claimed.remove(inviteId);
-          return;
-        }
-        final sentId = await repo.sendMessage(
-          channelId,
-          kCallEndBody,
-          replyToId: serverId,
-        );
-        if (sentId != null) return; // spoken; the claim stands.
-        // NAMED COMPROMISE, found by a fix-interaction pass rather than a
-        // reviewer: `sendMessage` fires the transport BEFORE it returns, and its
-        // catch returns null. So a throw in that window yields null with the
-        // frame ALREADY on the wire, and this retry sends a second END. Two
-        // signed rows for one hangup, in permanent history.
-        //
-        // Kept deliberately, because the two failures are not symmetric. A
-        // duplicate end is inert at the receiver — `_ended` holds a list, and
-        // `stopRinging` is idempotent — so the cost is one redundant row. A
-        // MISSING end rings someone's handset for thirty seconds at a room
-        // nobody is coming to, which is the entire subject of this PR. Removing
-        // it properly needs a write-ahead attempt record (the debt-record shape
-        // this codebase has now grown twice), not a guard here.
-        //
-        // NULL IS NOT SUCCESS, and ignoring it was this class's own bug
-        // (cage-match round 5, Tesla). `sendMessage` documents `null` for a
-        // post-dispose no-op and for a teardown-race write — precisely the
-        // mortal repository this object was built to outlive. Awaiting it and
-        // discarding the value counted a hangup that never entered the cache
-        // and never reached the wire as an obligation discharged. Retry against
-        // a FRESH repository instead.
-        await Future<void>.delayed(const Duration(milliseconds: 250));
+        await Future<void>.delayed(_retryCadence);
       }
       debugPrint(
         'CallEndAnnouncer: gave up on $inviteId after $_ackWait — the peer ring '
@@ -267,10 +247,22 @@ class CallEndAnnouncer {
       );
       _claimed.remove(inviteId);
     } catch (e) {
+      // Only an identity read can reach here now; everything inside the pass is
+      // caught above.
       debugPrint('CallEndAnnouncer: could not announce the hangup: $e');
       _claimed.remove(inviteId);
     }
   }
+
+  /// How long ONE attempt may wait for the repository before trying again.
+  ///
+  /// Short on purpose: the point is to come back and read the CURRENT provider,
+  /// not to keep holding a future that may never complete.
+  static const Duration _attemptSlice = Duration(seconds: 2);
+
+  /// The gap between attempts. Slow enough not to spin, far shorter than any
+  /// ring window.
+  static const Duration _retryCadence = Duration(milliseconds: 250);
 
   /// The CURRENT repository, or null if it does not arrive within [left].
   ///

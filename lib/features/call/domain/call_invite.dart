@@ -183,10 +183,18 @@ bool _hasVerifiedOrigin(Message message) =>
 /// "should this ring me NOW", and a call that happened yesterday still belongs
 /// in history as an event.
 ///
-/// HONEST LIMIT, because the opposite is easy to assume in a codebase that signs
-/// everything: this cannot stop a person TYPING the sentinel as a reply. The app
-/// signs at birth, so a typed sentinel is signed exactly like a generated one,
-/// and no clause here tells them apart. What it does stop is an unverified or
+/// HONEST LIMIT, stated precisely rather than generally (cage-match round 7,
+/// Tesla). `replyToId != null` means "names A message", not "names THIS
+/// invitation" — so a person can still type the sentinel as a reply to ANY
+/// message and be drawn as a call event. Signing cannot separate them: this app
+/// signs at birth, so a typed sentinel is signed exactly like a generated one.
+///
+/// Closing it needs the reply TARGET resolved and checked for an invitation
+/// body, and this screen has no reply-target resolver at all today — it renders
+/// no reply previews — so that is new machinery for a cosmetic spoof inside a
+/// conversation the reader already chose to be in. Tracked rather than built.
+///
+/// What these clauses DO stop, which is the part with teeth: an unverified or
 /// imported row, a bot, and an authorless actor being elevated into system
 /// narration.
 bool isRenderableCallEnd(Message message, {required bool isMine}) =>

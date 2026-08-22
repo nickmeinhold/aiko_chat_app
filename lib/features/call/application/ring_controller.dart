@@ -291,8 +291,15 @@ class RingController extends Notifier<CallInvite?> {
     _expiry?.cancel();
     _expiry = null;
     final done = _live;
-    // RECORDED as settled before clearing — otherwise the replay that arrives a
-    // second after Ignore finds no `_live` to match and rings again.
+    // A PRAYER OVER AN EMPTY ALTAR until round 7 (Tesla): this said the id was
+    // "RECORDED as settled before clearing", which stopped being true when the
+    // `_settled` set was deleted. `_settle` now only drops `_live`, and the
+    // invariant it used to defend — a re-delivered invitation does not ring
+    // again after Ignore — is enforced one layer below, where the repository
+    // announces only on a first insert of a server ULID. Pinned by
+    // `a re-delivered invitation does not ring again after Ignore`, which
+    // asserts the INVARIANT against the real repository rather than this
+    // mechanism, so the day that layer changes the test fails here.
     if (done != null) _settle(done);
     _live = null; // cleared too, or the next rebuild would re-publish it.
     state = null;

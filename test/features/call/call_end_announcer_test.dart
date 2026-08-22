@@ -376,6 +376,50 @@ void main() {
     );
   });
 
+  test('a sendMessage that THROWS is retried, not a funeral', () async {
+    // Cage-match round 7, Tesla: "the tests prove two harmonics of the triad and
+    // never pluck the third." The loop wrapped the repository read and the
+    // server-id lookup, and left `sendMessage` itself outside the catch — so the
+    // SAME failure was a shrug expressed as null and a funeral expressed as a
+    // throw. The comment above it claimed the exits were enumerated, which is
+    // how three rounds each left one await outside the guard.
+    final flaky = _FlakySendRepo(
+      cache: cache,
+      transport: transport,
+      rest: FakeChatRestApi(),
+      me: FakeRestApi.defaultUser,
+      subscribedChannelIds: const [_channel],
+      newTempId: nextTempId,
+      nullsToReturn: 0,
+    )..throwsToRaise = 2;
+    flaky.start();
+    addTearDown(flaky.dispose);
+    final c = build(repoOverride: flaky);
+    addTearDown(c.dispose);
+
+    final inviteId = (await flaky.sendMessage(_channel, kCallInviteBody))!;
+    transport.emitAck(inviteId, '01M0GS7FDWBVQ31950B1PTV2DY');
+    await pumpEventQueue();
+
+    final a = c.read(callEndAnnouncerProvider);
+    a.announce(channelId: _channel, inviteId: inviteId);
+    await Future.wait(a.settling);
+
+    expect(
+      flaky.throwsToRaise,
+      0,
+      reason: 'precondition — both throwing attempts were actually consumed',
+    );
+    final ends = transport.sent.where((m) => m.body == kCallEndBody).toList();
+    expect(
+      ends,
+      hasLength(1),
+      reason:
+          'a throw is "not this millisecond", not "not this universe" — the '
+          'send recovered inside the ring window and must have spoken',
+    );
+  });
+
   test('a completed announcement is not retained', () async {
     final inviteId = await sendAndAck();
     final a = announcer();
@@ -407,6 +451,7 @@ class _FlakySendRepo extends ChatRepository {
   });
 
   int nullsToReturn;
+  int throwsToRaise = 0;
   int sendAttempts = 0;
 
   @override
@@ -417,6 +462,10 @@ class _FlakySendRepo extends ChatRepository {
   }) async {
     if (body == kCallEndBody) {
       sendAttempts++;
+      if (throwsToRaise > 0) {
+        throwsToRaise--;
+        throw StateError('cache closed mid-send');
+      }
       if (nullsToReturn > 0) {
         nullsToReturn--;
         return null;

@@ -250,6 +250,50 @@ void main() {
     expect(container.read(incomingRingProvider), isNull);
   });
 
+  test('a re-delivered invitation does not ring again after Ignore', () async {
+    // Cage-match round 7, Tesla. The `_settled` set was deleted because the
+    // repository already collapses a re-delivery, and the tests that exercised
+    // it went with it — leaving the INVARIANT unpinned. The objection is fair
+    // and has history behind it: this same PR deleted `isDmChannelId` because a
+    // gateway constraint did not mean what the documentation swore, and one live
+    // call refuted six review rounds. Keying a deletion to another peer-side
+    // fact and then removing the test that could catch it being wrong is the
+    // same move.
+    //
+    // So this asserts the INVARIANT, not the mechanism. It says nothing about
+    // where suppression happens — it says a replay must not ring after Ignore.
+    // It passes today because `ChatRepository` announces only on a first insert
+    // of a server ULID (measured, with a positive control). If that ever stops
+    // being true, this fails HERE, in the feature that cares.
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+    final invitation = await inbound();
+
+    transport.emitMessage(invitation);
+    await pump();
+    expect(
+      container.read(incomingRingProvider),
+      isNotNull,
+      reason: 'precondition — it rang the first time',
+    );
+
+    container.read(incomingRingProvider.notifier).stopRinging(); // Ignore
+    expect(container.read(incomingRingProvider), isNull);
+
+    // The SAME delivery again, well inside the freshness window.
+    transport.emitMessage(invitation);
+    await pump();
+
+    expect(
+      container.read(incomingRingProvider),
+      isNull,
+      reason:
+          'the user dismissed this call — a re-delivery of the very same '
+          'message must not ring them a second time, wherever that is enforced',
+    );
+  });
+
   test('a RETRACTED invite is never announced, so it never rings', () async {
     // `upsertInbound` suppresses a retracted message via Door A and writes no
     // row, but returns `false` meaning "not newly invalid" — indistinguishable
