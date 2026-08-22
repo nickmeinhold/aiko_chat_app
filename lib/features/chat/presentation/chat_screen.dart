@@ -906,8 +906,27 @@ class MessageTile extends ConsumerWidget {
     // that only touched the wire would have put `aiko:call/1 · 📞 ended the
     // call` straight back into a speech bubble, which is the precise thing this
     // block was added to stop. Two sentinels, one arm.
+    //
+    // AND THE HANGUP ARM CARRIES THE ADMISSION RULE THE RING ALREADY APPLIES.
+    // `admitCallEnd` refuses a stop that "names no call — a stop with no
+    // replyTo is about everything or nothing"; the render arm matched on the
+    // body alone, so a message that the RING would refuse still drew a centred,
+    // unbubbled system line reading "X ended the call" for a call that never
+    // existed (cage-match round 6, Carnot). Signing does not help here and it is
+    // worth being clear why: this app signs at birth, so a sentinel somebody
+    // TYPES is signed exactly like one the call screen generates. The signature
+    // proves authorship of the bytes, never that they were machine-authored — so
+    // the discriminator has to be the reply binding, which the composer cannot
+    // aim at an arbitrary message without actually replying to it.
+    //
+    // The invitation arm needs no such clause, and the asymmetry is real rather
+    // than an oversight: a typed invitation IS an invitation. It passes
+    // `admitRing`, it rings the peer, and Answer joins the channel's room —
+    // which is precisely what pressing Call would have done. Rendering it as an
+    // event is therefore honest. A stop is different because a stop makes a
+    // claim about a PRIOR event, and that claim is checkable.
     final isInvite = isCallInviteBody(message.body);
-    final isCallEnd = isCallEndBody(message.body);
+    final isCallEnd = isCallEndBody(message.body) && message.replyToId != null;
     if (isInvite || isCallEnd) {
       final scheme = Theme.of(context).colorScheme;
       return Padding(

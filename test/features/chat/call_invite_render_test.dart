@@ -10,6 +10,7 @@
 // Reported as: "the sender and 'started a call' being on separate lines with
 // something in between is confusing."
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
+import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -126,11 +127,23 @@ void main() {
     await pumpApp(tester, container);
     await signIn(tester);
 
-    await tester.enterText(find.byType(TextField).first, kCallEndBody);
-    await tester.tap(find.byKey(const Key('composer-send')));
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 50)),
-    );
+    // A REAL hangup names the call it ends. `admitCallEnd` refuses a stop with
+    // no `replyTo` — "about everything or nothing" — and the render arm now
+    // applies the same clause, so this must send one that is actually bound.
+    //
+    // Sent through the REPOSITORY rather than the composer, because that is the
+    // path a hangup actually takes: `CallEndAnnouncer` calls `sendMessage` with
+    // the invitation's server id. The composer has no way to aim a `reply_to`,
+    // which is precisely the property the gate below relies on.
+    await tester.runAsync(() async {
+      final repo = await container.read(chatRepositoryProvider.future);
+      await repo.sendMessage(
+        'c1',
+        kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
     await tester.pumpAndSettle();
 
     expect(
@@ -139,5 +152,49 @@ void main() {
       reason: 'the wire anchor leaked into the UI on the hangup path',
     );
     expect(find.text('You ended the call'), findsOneWidget);
+  });
+
+  testWidgets('a hangup that names NO call is not drawn as a call event', (
+    tester,
+  ) async {
+    // Cage-match round 6, Carnot. The arm matched the body alone, so anyone who
+    // typed the sentinel got a centred, unbubbled system line announcing the end
+    // of a call that never happened — the ring's admission gate was strictly
+    // tighter than the presentation gate that reports on it.
+    //
+    // Signing is no defence and it matters to say why: this app signs at BIRTH,
+    // so a sentinel someone types is signed exactly like one the call screen
+    // generates. A signature proves who authored the bytes, never that a machine
+    // did. The reply binding is the discriminator, because a composer cannot aim
+    // one at a message without actually replying to it.
+    final container = makeContainer(
+      rest: FakeRestApi(channels: channels),
+      transport: FakeChatTransport(),
+    );
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    await tester.enterText(find.byType(TextField).first, kCallEndBody);
+    await tester.tap(find.byKey(const Key('composer-send')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('You ended the call'),
+      findsNothing,
+      reason:
+          'an unbound sentinel is a message someone typed, not a call event — '
+          'rendering it as one lets any reader be told a call ended',
+    );
+    expect(
+      find.textContaining('aiko:call/1'),
+      findsOneWidget,
+      reason:
+          'and it degrades to exactly what it is: the literal text, in an '
+          'ordinary bubble, with no system authority borrowed',
+    );
   });
 }
