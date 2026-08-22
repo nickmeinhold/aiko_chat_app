@@ -89,6 +89,12 @@ const Duration kCallRingDuration = Duration(seconds: 30);
 /// `chat_screen`), which is the half that must ship WITH the wire half: without
 /// it, hanging up would put `aiko:call/1 · 📞 ended the call` back on screen as
 /// a raw bubble — the exact thing the invite's render arm exists to prevent.
+/// Confirmed by Nick 2026-08-22 — AFTER first transmission, not before, and that
+/// order is recorded rather than tidied. #3198 asked for the same hand-check the
+/// invite body got; the live two-party runs that verified this feature had
+/// already written the string into signed history by the time it was asked. The
+/// cost happened to be nil (a handful of rows from test accounts, no users on
+/// older builds) but that was luck, not process.
 const String kCallEndBody = 'aiko:call/1 · 📞 ended the call';
 
 /// True when [body] is the call-invitation sentinel.
