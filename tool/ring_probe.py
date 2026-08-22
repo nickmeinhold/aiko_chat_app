@@ -21,6 +21,7 @@ exactly as often as it is right.
 
 Usage (driven by the Dart test; env vars documented in its header):
     python3 tool/ring_probe.py selftest        # golden vector, no network
+    python3 tool/ring_probe.py vector [reply_to]  # emit a signed frame, no network
     python3 tool/ring_probe.py invite          # ring the other party
     python3 tool/ring_probe.py end <server_id> # hang up on the call it names
 
@@ -232,12 +233,59 @@ async def send_signed(body: str, reply_to: str | None) -> str:
     raise SystemExit(f"no ack for {client_msg_id} within 15s — nothing was sent")
 
 
+def emit_vector(reply_to: str | None) -> str:
+    """A signed frame, printed rather than sent — the whole conformance check
+    minus the network.
+
+    This exists because the live harness needs an island, two accounts and a
+    password, so it runs approximately never, and an instrument that runs never
+    is the one that quietly rots (this file spent a round existing only in
+    /tmp). The interesting half of that test — does a signature from an
+    INDEPENDENT implementation verify against the app's own verifier — needs
+    none of those things. `test/features/chat/probe_conformance_test.dart` runs
+    this command and feeds the result through `validateOrigin` + `verifyOrigin`,
+    so the cross-implementation check runs on every ordinary `flutter test`.
+
+    Deterministic seed and timestamp, so the output is a fixed vector rather
+    than a fresh sample: a conformance test that generates new input each run
+    tells you about today's input, not about the contract.
+    """
+    key = SigningKey(b"probe-conformance-seed".ljust(32, b"\0")[:32])
+    channel_id = "01M0GS7FDWBVQ31950B1PTV2D0"
+    client_msg_id = "probe-conformance-1"
+    signed_at_ms = 1720000000000
+    body = CALL_END_BODY if reply_to else CALL_INVITE_BODY
+    sig = key.sign(
+        signing_bytes(
+            raw_public_key=bytes(key.verify_key),
+            channel_id=channel_id,
+            client_msg_id=client_msg_id,
+            signed_at_ms=signed_at_ms,
+            body=body,
+            reply_to=reply_to,
+        )
+    ).signature
+    frame = {
+        "type": "send",
+        "client_msg_id": client_msg_id,
+        "channel_id": channel_id,
+        "body": body,
+        "origin": origin_wire(key, client_msg_id, signed_at_ms, sig),
+    }
+    if reply_to is not None:
+        frame["reply_to"] = reply_to
+    return json.dumps(frame, ensure_ascii=False)
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
     cmd = sys.argv[1]
     selftest()  # ALWAYS — never sign on the wire with an unpinned codec.
     if cmd == "selftest":
+        return
+    if cmd == "vector":
+        print(emit_vector(sys.argv[2] if len(sys.argv) > 2 else None))
         return
     if cmd == "invite":
         print(asyncio.run(send_signed(CALL_INVITE_BODY, None)))
