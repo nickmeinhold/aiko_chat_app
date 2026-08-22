@@ -206,14 +206,35 @@ class FakeRestApi implements ChatRestApi {
   Future<void>? registerDeviceGate;
   Future<void>? unregisterDeviceGate;
 
+  /// Fails the register AFTER recording it — the "maybe landed" shape, where a
+  /// response is lost but the island already wrote the row. [registerDeviceThrows]
+  /// is the other half (definitely-not-landed: rejected before any write), and
+  /// the two must stay distinguishable or the invariant that owes a debt on an
+  /// ambiguous failure cannot be tested apart from one that owes on every
+  /// failure.
+  Object? registerDeviceThrowsAfterLanding;
+
   @override
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
   }) async {
-    if (registerDeviceThrows != null) throw registerDeviceThrows!;
+    // YIELD FIRST, for the same reason unregisterDevice does: an async body runs
+    // synchronously to its first await, so with no gate set this fake used to
+    // record the call in the microtask it was invoked in — something no HTTP
+    // request can do. The unregister half was fixed in round 4; this half was
+    // not, and an impossibly-fast register hides every ordering assertion about
+    // what a session edge landing MID-POST does.
+    await Future<void>.delayed(Duration.zero);
     if (registerDeviceGate != null) await registerDeviceGate;
+    // AFTER the gate: a failure that cannot be held in flight cannot be
+    // interleaved with a session edge, which is the only place the interesting
+    // cases live.
+    if (registerDeviceThrows != null) throw registerDeviceThrows!;
     registeredDevices.add((platform: platform, token: token));
+    if (registerDeviceThrowsAfterLanding != null) {
+      throw registerDeviceThrowsAfterLanding!;
+    }
   }
 
   /// Fails the next [unregisterDevice] — for proving a failed attempt KEEPS the

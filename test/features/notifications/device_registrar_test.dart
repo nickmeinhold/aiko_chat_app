@@ -10,6 +10,7 @@
 // compare-and-clear — which is exactly the class of bug this suite exists for.
 import 'dart:async';
 
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/notifications/application/device_registrar.dart';
 import 'package:aiko_chat_app/features/notifications/data/pending_unregister_store.dart';
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
@@ -372,13 +373,19 @@ void main() {
       expect(pending.read(_island), ['tok-owed']);
     });
 
-    test('a late unregister that lands on the LIVE pairing is REPAIRED', () async {
+    test('an OBSERVED over-delete is restored — the straggler signals the live '
+        'door, it does not POST from the DELETE path', () async {
       // The straggler, round 4 (Carnot + Tesla, independently). The DELETE is
       // issued for a dead session, the same user signs back in and re-registers
       // the same token, and THEN the DELETE lands — matching (user_id, token)
       // and removing the live row. Ordering cannot fix it: Future.timeout does
-      // not cancel the request, and the island offers no fencing token. So the
-      // repair IS the contract — notice afterwards and put the row back.
+      // not cancel the request, and the island offers no fencing token.
+      //
+      // Round 5 answered this by POSTing from _attemptUnregister itself. That
+      // was defect five (below): a write issued from a dead session's path, on
+      // a check sampled before its own await. Cast 3 keeps the OUTCOME and
+      // changes the ISSUER — the straggler's completion signals the live door,
+      // which restates the current pairing at the CURRENT generation.
       await registrar.start();
       final gate = Completer<void>();
       api.unregisterDeviceGate = gate.future;
@@ -409,7 +416,85 @@ void main() {
       expect(api.registeredDevices.last.token, 'tok-1');
     });
 
-    test('no repair fires when the pairing has genuinely ended', () async {
+    test('DEFECT FIVE: a restore that lands after the session ended owes a '
+        'DELETE — it does not leave a routable row behind', () async {
+      // THE ACCEPTANCE TEST FOR THIS WHOLE DESIGN. Round 5's repair checked
+      // `_registered != token` BEFORE its await and never again, so a logout
+      // inside the restore POST's flight re-created a routable row for a
+      // signed-out handset — the exact outcome the feature exists to prevent,
+      // produced by the mechanism added to prevent it.
+      //
+      // RED-PROOF: run this against e5d7c01 and the debt is empty, because the
+      // repair had no tail at all.
+      await registrar.start();
+      final deleteGate = Completer<void>();
+      api.unregisterDeviceGate = deleteGate.future;
+      await registrar.unpair(credential: 'cred-a');
+      await pumpEventQueue();
+
+      await registrar.start(); // same user back; tok-1 is live again
+      final restoreGate = Completer<void>();
+      api.registerDeviceGate = restoreGate.future;
+
+      deleteGate.complete(); // straggler lands on the live row -> restore fires
+      await pumpEventQueue();
+
+      // ...and the session ends while that restore is still on the wire.
+      api.unregisterDeviceGate = null;
+      await registrar.unpair(credential: 'cred-b');
+      await registrar.settled;
+      await pumpEventQueue();
+      expect(
+        pending.read(_island),
+        isEmpty,
+        reason:
+            'precondition: the second unpair paid its own debt, so nothing is '
+            'owed at the moment the straggling restore lands',
+      );
+
+      restoreGate.complete(); // the restore finally lands, into a dead session
+      await pumpEventQueue();
+
+      expect(
+        pending.read(_island),
+        contains('tok-1'),
+        reason:
+            'the restore may have created a row for a handset nobody is signed '
+            'in to. It must be OWED a delete, not assumed harmless — nothing '
+            'else in the system will ever notice it',
+      );
+    });
+
+    test('a restore reaches the wire even though the token is UNCHANGED — '
+        'skip-if-same is an optimisation, not a wall', () async {
+      // Carnot and Tesla, round 2, independently. `_register` returned BEFORE
+      // the wire when `token == _registered`, which is exactly the steady state
+      // a restatement exists to restate. An invariant a restore cannot enter is
+      // prose, not a door.
+      //
+      // RED-PROOF: drop the `force` flag and this reads 2, not 3 — the restore
+      // is silently swallowed and the handset stays deaf.
+      await registrar.start();
+      final gate = Completer<void>();
+      api.unregisterDeviceGate = gate.future;
+      await registrar.unpair(credential: 'cred-a');
+      await pumpEventQueue();
+      await registrar.start();
+
+      expect(registrar.registeredToken, 'tok-1', reason: 'precondition: same token');
+
+      gate.complete();
+      await registrar.settled;
+      await pumpEventQueue();
+
+      expect(api.registeredDevices.map((d) => d.token), [
+        'tok-1',
+        'tok-1',
+        'tok-1',
+      ]);
+    });
+
+    test('no restore fires when the pairing has genuinely ended', () async {
       await registrar.start();
       final gate = Completer<void>();
       api.unregisterDeviceGate = gate.future;
@@ -450,6 +535,171 @@ void main() {
 
       expect(registrar.registeredToken, 'tok-1');
       expect(pending.read(_island), isEmpty);
+    });
+  });
+
+  // The far side of every POST. Round 2 of the design temper found the invariant
+  // was incomplete in three separate ways, each traced to a defect rather than
+  // imagined: it fired only on SUCCESS, it tested only the SESSION and not the
+  // TOKEN, and its single remedy (owe a delete) is the WRONG one when a late
+  // POST reassigned a live row away from the user who now owns it.
+  group('the register invariant — the check on the far side', () {
+    test('a register that LANDS and then throws, after the session ended, owes '
+        'a debt — "it threw" is not "nothing happened"', () async {
+      // The one real insight in round 5's repair branch, nearly thrown out with
+      // it. A POST whose response was lost may still have written the row, so an
+      // ambiguous failure must fail toward deletion.
+      //
+      // RED-PROOF: handle only the success path and the debt is empty.
+      await registrar.start();
+      final gate = Completer<void>();
+      api.registerDeviceGate = gate.future;
+      api.registerDeviceThrowsAfterLanding = Exception('response lost');
+
+      source.refreshes.add('tok-2'); // a rotation puts a POST on the wire
+      await pumpEventQueue();
+
+      await registrar.unpair(credential: 'cred-a'); // session ends mid-POST
+      await registrar.settled;
+      await pumpEventQueue();
+
+      gate.complete();
+      await pumpEventQueue();
+
+      expect(
+        pending.read(_island),
+        contains('tok-2'),
+        reason:
+            'the island may hold tok-2 for a session that has ended, and no '
+            'later event re-examines a POST that threw',
+      );
+    });
+
+    test('a register REJECTED before it could write owes nothing — the remedy '
+        'follows what the write DID, not merely that it failed', () async {
+      // The control for the test above. Without it, "owe a debt on every
+      // failure" passes just as well, and a debt for a row that was never
+      // created is a DELETE aimed at whatever holds that token next.
+      await registrar.start();
+      final gate = Completer<void>();
+      api.registerDeviceGate = gate.future;
+      api.registerDeviceThrows = Unauthorized(401);
+
+      source.refreshes.add('tok-2');
+      await pumpEventQueue();
+      await registrar.unpair(credential: 'cred-a');
+      await registrar.settled;
+      await pumpEventQueue();
+      gate.complete();
+      await pumpEventQueue();
+
+      expect(
+        pending.read(_island),
+        isNot(contains('tok-2')),
+        reason: 'the island rejected this before writing anything',
+      );
+    });
+
+    test('a register in flight across a ROTATION does not roll the pairing '
+        'back — generation alone cannot see this', () async {
+      // Tesla, round 2. `_generation` answers session liveness, not token
+      // currency: a POST for tok-1 in flight while the platform rotates to
+      // tok-2 lands with the generation STILL MATCHING. If the tail accepts it,
+      // `_registered` rolls back to the stale token, `unpair` then owes the
+      // wrong one, and tok-2's row routes to a handset nobody can clear.
+      //
+      // RED-PROOF: test the generation only, and registeredToken reads 'tok-1'.
+      source.token = 'tok-1';
+      final gate = Completer<void>();
+      api.registerDeviceGate = gate.future;
+      final first = registrar.start(); // tok-1's POST goes on the wire
+      await pumpEventQueue();
+
+      api.registerDeviceGate = null;
+      source.refreshes.add('tok-2'); // rotation lands FIRST
+      await pumpEventQueue();
+
+      gate.complete(); // now tok-1's straggling POST completes
+      await first;
+      await pumpEventQueue();
+
+      expect(
+        registrar.registeredToken,
+        'tok-2',
+        reason: 'the newer token is the desired one; a straggler cannot undo it',
+      );
+      expect(
+        pending.read(_island),
+        contains('tok-1'),
+        reason:
+            'tok-1 may have been written and nobody wants it — fail toward '
+            'deletion for a row that is merely STALE',
+      );
+    });
+
+    test('a late POST that REASSIGNS a live row is answered by restating it, '
+        'not by owing a delete', () async {
+      // The finding that corrected the governing principle (Tesla, round 2).
+      // `register_device` upserts on UNIQUE(token) and REASSIGNS user_id, so a
+      // POST crossing a logout does not linger — it takes the row BACK from
+      // whoever owns it now. A DELETE cannot undo that: `unregister` matches
+      // (user_id, token), and the current session's credential no longer
+      // matches the row. Only a POST from the CURRENT session reclaims it.
+      //
+      // The in-flight POST here is a RESTATEMENT, because that is the only way
+      // one exists: an ordinary refresh of an unchanged token never reaches the
+      // wire, which is the whole reason `force` had to exist.
+      //
+      // RED-PROOF: send this case to `remember` like any other stale POST and
+      // the count does not move — the previous owner keeps the handset.
+      await registrar.start();
+      final deleteGate = Completer<void>();
+      api.unregisterDeviceGate = deleteGate.future;
+      await registrar.unpair(credential: 'cred-a');
+      await pumpEventQueue();
+      await registrar.start();
+
+      // The straggler lands on the live pairing and the live door restates it.
+      final restateGate = Completer<void>();
+      api.registerDeviceGate = restateGate.future;
+      api.unregisterDeviceGate = null;
+      deleteGate.complete();
+      await registrar.settled;
+      await pumpEventQueue();
+
+      // That restatement is still on the wire when the session ends...
+      await registrar.unpair(credential: 'cred-b');
+      await registrar.settled;
+      await pumpEventQueue();
+
+      // ...and the next user signs in and takes tok-1 for themselves.
+      api.registerDeviceGate = null;
+      await registrar.start();
+      expect(registrar.registeredToken, 'tok-1', reason: 'precondition');
+      final beforeLanding = api.registeredDevices.length;
+
+      restateGate.complete(); // the straggler lands and reassigns the row away
+      await pumpEventQueue();
+
+      expect(
+        api.registeredDevices.length,
+        beforeLanding + 2,
+        reason:
+            'TWO, and counting only one is how this test was void: completing '
+            'the gate records the straggler MID-FLIGHT REGISTER itself (+1), '
+            'which happens whatever the remedy is. The restatement is the '
+            'SECOND (+1) — otherwise the previous owner\'s notifications ride '
+            'this handset until the next sign-in, and no DELETE this session '
+            'can issue will match the row',
+      );
+      expect(api.registeredDevices.last.token, 'tok-1');
+      expect(
+        pending.read(_island),
+        isNot(contains('tok-1')),
+        reason:
+            'and it must NOT also be owed a delete — the restatement made this '
+            'row ours, so a debt would drain at the next sign-in and remove it',
+      );
     });
   });
 

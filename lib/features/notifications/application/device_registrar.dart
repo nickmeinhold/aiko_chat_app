@@ -26,22 +26,15 @@ import '../domain/push_token_source.dart';
 /// ## The unpair is a DEBT, not a step
 ///
 /// [unpair] returns without awaiting anything, and that is the whole design.
-/// `DELETE /v1/devices` is authenticated, so an earlier version awaited it ahead
-/// of the credential clear — but nothing slow may sit there, because a re-login
+/// `DELETE /v1/devices` is authenticated, so it wants to run before the
+/// credential is cleared; but nothing slow may sit there, because a re-login
 /// inside that window writes fresh tokens the trailing clear then stomps. The
-/// two constraints are genuinely opposed, so every guard that tried to honour
-/// both just relocated the contradiction: a token fence that mis-fired on an
-/// ordinary 401 refresh and aborted the whole teardown, leaving the user parked
-/// on /login holding a LIVE credential; a generation counter sampled after the
-/// permission prompt, so a stop mid-prompt still POSTed the previous account's
-/// token; and an inline undo that unregistered by token, which is stable per
-/// install, so a stale completion deleted the NEXT session's live row.
+/// two constraints are genuinely opposed, and every guard that tried to honour
+/// both just relocated the contradiction (five of them — see the design doc).
 ///
-/// So the unpair stopped being something the teardown waits for. It writes a
-/// durable debt, fires a best-effort attempt out of band with a credential it
-/// carries by value, and returns. The credential clear is unconditional and
-/// immediate again, and the three races have nowhere to live because nothing is
-/// racing: there is no instant that two operations are contending for.
+/// So the unpair is not something the teardown waits for. It writes a durable
+/// debt, fires a best-effort attempt out of band with a credential carried by
+/// value, and returns. There is no instant two operations contend for.
 ///
 /// ## Why the debt can be paid by a different user, and why ORDER is the proof
 ///
@@ -109,6 +102,10 @@ class DeviceRegistrar {
 
   Future<void>? _settling;
 
+  /// Which register ISSUE is the newest. Bumped when a register goes on the
+  /// wire, and checked again on the far side — see [_register].
+  int _registerEpoch = 0;
+
   /// A push token is a routing secret — the REST layer deliberately keeps it out
   /// of URLs so it never reaches an access log or a proxy trace, and a debug
   /// print that dumps it whole quietly undoes that (cage-match round 4, Carnot).
@@ -160,8 +157,17 @@ class DeviceRegistrar {
     // the platform can reissue during the permission grant. The listener reads
     // the CURRENT generation at delivery time rather than closing over this one,
     // because a refresh arriving now belongs to whatever session is live now.
+    // TERMINAL CATCH on the listener. `_register` rethrows `Unauthorized` by
+    // design, and a listener callback's future is awaited by nobody — so a
+    // rotation arriving while the session is dying surfaced as an unhandled
+    // ZONE ERROR rather than a log line. Found by writing the not-landed
+    // control for the register invariant, not by review.
     _refreshes = _source.tokenRefreshes().listen(
-      (t) => _register(t, generation),
+      (t) => unawaited(
+        _register(t, generation).catchError((Object e) {
+          debugPrint('DeviceRegistrar: a rotation could not register: $e');
+        }),
+      ),
     );
 
     if (!await _source.requestPermission()) {
@@ -236,23 +242,22 @@ class DeviceRegistrar {
     _refreshes = null;
   }
 
-  /// The out-of-band DELETE, plus the repair that makes its TIMING irrelevant.
+  /// The out-of-band DELETE, and the SIGNAL that follows it.
   ///
-  /// THE STRAGGLER CANNOT BE ORDERED, so it is repaired instead (cage-match
-  /// round 4 — Carnot and Tesla converged here independently). Three rounds
-  /// tried to order it: await the DELETE (lost the teardown), fence it (abandoned
-  /// a live credential), pin the re-register behind it (correct, but unbounded),
-  /// then bound that (reopened the race). The bound was the clearest lesson —
-  /// `Future.timeout` in Dart does NOT cancel the original, it only stops
-  /// listening, so the DELETE stayed in flight with a loaded gun while we
-  /// re-registered in front of it.
+  /// THIS PATH DOES NOT WRITE. The island offers no fencing token and answers
+  /// 204 either way, so an in-flight DELETE can neither be recalled nor
+  /// observed — and a write issued from here would carry a dead session's
+  /// credential and a check sampled before its own await. That was defect five.
   ///
-  /// The island matches `(user_id, token)` and offers no fencing token, so a
-  /// DELETE issued for a dead session and a DELETE issued for a live one are
-  /// indistinguishable to it once in flight. We cannot make it land in order and
-  /// we cannot recall it. What we CAN do is notice afterwards: if this pairing is
-  /// still the current one when our DELETE finally completes, the row we just
-  /// removed was live, so put it back. Convergence instead of choreography.
+  /// So if the pairing is live when our DELETE resolves, [_restate] asks the
+  /// LIVE door to say so again, at the current generation. The straggler is not
+  /// corrected; it is merely when we learned to look.
+  ///
+  /// The signal fires on the failure path too: a DELETE whose response was lost
+  /// may still have removed the row, so "it threw" is not "nothing happened".
+  ///
+  /// Full history of the five guards this replaces:
+  /// `docs/design/15-device-pairing-single-writer.md`.
   Future<void> _attemptUnregister(String token, String? credential) async {
     if (credential == null) return;
     try {
@@ -261,55 +266,115 @@ class DeviceRegistrar {
     } catch (e) {
       debugPrint('DeviceRegistrar: unregister deferred to next sign-in: $e');
     }
-    // REPAIR, on the failure path too: a DELETE whose response was lost may still
-    // have deleted the row, so "it threw" is not "nothing happened". Re-POSTing a
-    // token the island already holds is an idempotent upsert, which makes the
-    // wrong guess here cheap and the right one load-bearing.
-    if (_registered != token) return;
-    try {
-      await _api.registerDevice(platform: _source.platform, token: token);
-      debugPrint(
-        'DeviceRegistrar: a late unregister landed on the LIVE pairing for '
-        '${_redact(token)} — re-registered it.',
-      );
-    } catch (e) {
-      debugPrint('DeviceRegistrar: could not repair a late unregister: $e');
-    }
+    if (_registered == token) _restate();
   }
 
-  Future<void> _register(String token, int generation) async {
+  /// Ask the live door to restate the current pairing.
+  ///
+  /// NOT A COMPENSATING WRITE: it corrects no specific prior operation and
+  /// samples nothing before an await. It reads the desired state fresh, at the
+  /// current generation, and hands it to the one door — subject to the same
+  /// post-await check as every other register. Best-effort; reach is never a
+  /// gate.
+  void _restate() {
+    final token = _registered;
+    if (token == null) return;
+    unawaited(
+      _register(token, _generation, force: true).catchError((Object _) {}),
+    );
+  }
+
+  /// THE ONE POST DOOR. `start`, a rotation and a restatement all enter here,
+  /// so the check on the far side is inherited rather than re-implemented — a
+  /// second copy of it would be the next guard.
+  ///
+  /// [force] exists because skip-if-same returns BEFORE the wire, which is
+  /// exactly the steady state a restatement needs to restate. It is an
+  /// optimisation for the refresh path, not a wall the self-heal cannot pass.
+  Future<void> _register(
+    String token,
+    int generation, {
+    bool force = false,
+  }) async {
     if (generation != _generation) return;
     // Re-registering an unchanged token is harmless island-side (the upsert is
     // keyed on the token) but it is a pointless round trip on every rotation
     // event that reports the same value.
-    if (token == _registered) return;
+    if (!force && token == _registered) return;
+    // Which register is the newest ISSUE. `_generation` answers session
+    // liveness and cannot see a rotation: a POST for tok-1 in flight while the
+    // platform rotates to tok-2 lands with the generation still matching, and a
+    // tail that accepted it would roll the pairing back to the stale token while
+    // tok-2's row routes to a handset nothing will ever clear.
+    final epoch = ++_registerEpoch;
     try {
       await _api.registerDevice(platform: _source.platform, token: token);
     } on Unauthorized {
-      // The session died underneath us. Not ours to handle — the auth controller
-      // owns that transition — and NOT recorded as registered, so a later
-      // sign-in re-registers rather than assuming this one landed.
+      // The island rejected this before writing anything, so there is nothing
+      // to owe and nothing to reclaim — DEFINITELY-NOT-LANDED. Not ours to
+      // handle either: the auth controller owns that transition.
       rethrow;
     } catch (e) {
       debugPrint(
         'DeviceRegistrar: register failed, this device will not wake: $e',
       );
+      // MAYBE-LANDED. A POST whose response was lost may still have written the
+      // row, and no later event re-examines a register that threw. Everything
+      // that is not a rejection is treated as ambiguous, and ambiguity settles
+      // through the same tail as success.
+      await _settle(token, generation, epoch, confirmed: false);
       return;
     }
-    if (generation != _generation) {
-      // Landed after the session ended. Owe it rather than deleting it inline:
-      // the token is stable per install, so by the time an inline DELETE
-      // completed it could be matching a row the NEXT session had already
-      // registered — deleting a live pairing to clean up a dead one. As a debt
-      // it is safe by ordering instead, since the drain runs strictly before the
-      // next start.
-      await _pending.remember(_islandBaseUrl, token);
+    await _settle(token, generation, epoch, confirmed: true);
+  }
+
+  /// The far side of every register — the check that could not be sampled early.
+  ///
+  /// Three questions, and the third is the one round 2 of the design temper
+  /// corrected: not just "is this still current?" but "what did the write DO?".
+  Future<void> _settle(
+    String token,
+    int generation,
+    int epoch, {
+    required bool confirmed,
+  }) async {
+    if (generation == _generation && epoch == _registerEpoch) {
+      // STILL THE ONE WE WANT. On a confirmed write the pairing is live and
+      // ours, so any older debt for the same token is discharged — it would
+      // otherwise drain at the next sign-in edge and delete a row we want.
+      // Compare-and-clear, so a newer debt is left alone.
+      //
+      // On an AMBIGUOUS one, nothing: the row may or may not exist, but it is
+      // the row we want either way, so there is nothing to owe. It is
+      // deliberately NOT recorded as registered — a failed register that reads
+      // as landed makes the next sign-in skip it, and the device stays
+      // unreachable forever.
+      if (!confirmed) return;
+      _registered = token;
+      await _pending.forget(_islandBaseUrl, token);
       return;
     }
-    _registered = token;
-    // This pairing is live and ours, so any older debt for the same token is
-    // discharged — it would otherwise drain at the next sign-in edge and delete
-    // a row we want. Compare-and-clear, so a newer debt is left alone.
-    await _pending.forget(_islandBaseUrl, token);
+
+    // A REASSIGNMENT, not a leftover. `register_device` upserts on
+    // UNIQUE(token) and REASSIGNS user_id, so this late POST did not linger —
+    // it took the row BACK from whoever holds it now. A debt cannot undo that:
+    // `unregister` matches (user_id, token), and the current session's
+    // credential no longer matches the row it would have to delete. Only a POST
+    // from the CURRENT session reclaims it.
+    if (_registered == token) {
+      debugPrint(
+        'DeviceRegistrar: a late register REASSIGNED the live row for '
+        '${_redact(token)} — restating it under the current session.',
+      );
+      _restate();
+      return;
+    }
+
+    // Merely stale: this token is not the desired one and nobody live holds it.
+    // Owe a DELETE rather than issuing one inline — the token is stable per
+    // install, so an inline delete could match a row the NEXT session already
+    // registered. As a debt it is safe by ordering instead, since the drain runs
+    // strictly before the next start.
+    await _pending.remember(_islandBaseUrl, token);
   }
 }
