@@ -16,12 +16,19 @@ library;
 // it needs network, credentials, and a second identity. Run it deliberately:
 //
 //   RING_HOST=chat.enspyr.co RING_CHANNEL=... RING_B_USER=... RING_B_PASS=... \
-//   RING_PROBE=/abs/path/ring_probe.py RING_A_USER=... RING_A_PASS=... \
+//   RING_PROBE=tool/ring_probe.py RING_A_USER=... RING_A_PASS=... \
 //   RING_KEY_SEED=... flutter test test/live --run-skipped --tags live
 //
 // `--run-skipped` is REQUIRED (dart_test.yaml marks this tag skipped). Without
 // it the run reports a skip and exits 0 — which looks like verification while
 // measuring nothing at all.
+//
+// THE OTHER PARTY LIVES IN THIS REPO: `tool/ring_probe.py`. It did not, for one
+// round — the signer existed only under /tmp, so this file was committed,
+// tagged, and quietly unrunnable while the project record described the
+// instrument as complete and positive-controlled. Half an instrument reads
+// exactly like a whole one from the outside. Check `python3 tool/ring_probe.py
+// selftest` (golden vector, no network) before believing any run of this file.
 import 'dart:convert';
 import 'dart:io';
 
