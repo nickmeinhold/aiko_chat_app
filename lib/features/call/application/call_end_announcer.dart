@@ -277,13 +277,17 @@ class CallEndAnnouncer {
   }
 }
 
-/// PINNED IN `main()`, and that is not decoration. Providers auto-dispose by
-/// default in Riverpod 3, so an announcer read only by `CallScreen` would be
-/// created by that screen and disposed WITH it — killing the in-flight
-/// announcement along with the widget that handed it over, which is precisely
-/// the bug this class exists to fix. A fix for a mortal capture that is itself
-/// mortal is not a fix. `main()` watches it for the app's lifetime, the same way
-/// it pins `pushPairingProvider`.
+/// Watched in `main()` so this object's lifetime is intentional, not incidental.
+///
+/// CORRECTING TWO FABRICATIONS that stood here through eight review rounds and
+/// four model families (round 8, Tesla). This comment claimed providers
+/// "auto-dispose by default in Riverpod 3" — they do not; every builder in
+/// riverpod 3.3.2 declares `bool isAutoDispose = false`, so a plain `Provider`
+/// lives as long as its container and the announcer was never mortal. And it
+/// cited `pushPairingProvider` as the precedent for pinning: no such provider
+/// exists anywhere in this repo. Both were invented to justify a decision that
+/// is fine on its own terms, and neither had a reader-side falsifier — which is
+/// exactly why nobody checked.
 final callEndAnnouncerProvider = Provider<CallEndAnnouncer>(
   (ref) => CallEndAnnouncer(ref, ackWait: ref.read(callEndAckWaitProvider)),
 );

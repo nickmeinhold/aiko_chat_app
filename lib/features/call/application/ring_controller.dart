@@ -225,14 +225,13 @@ class RingController extends Notifier<CallInvite?> {
     // a ring that an in-order end would not have.
     final owed = _ended[invite.serverMsgId];
     if (owed != null && owed.any((e) => endsInvite(e.end, invite))) {
-      // `_live` is necessarily some OTHER invitation, or none. For this one to
-      // be ringing already, its end would have had to arrive while it was live —
-      // and the live arm above stops the ring in that case. One ULID per signed
-      // invitation is what makes that exhaustive (the island's UNIQUE constraint),
-      // so there is no third state where the invitation on screen is also the one
-      // being settled here. A `stopRinging` branch guarding that state was added
-      // and then removed with the rest of the two-ULID machinery.
-      _settle(invite);
+      // Dead on arrival: its hangup got here first, so it never rings. `_live`
+      // cannot be this invitation — it is only being admitted now, so the end
+      // that is already remembered arrived when something else (or nothing) was
+      // live, and the live arm above handles that case. The comment here used to
+      // argue exactly that while the code still called `_settle(invite)`, whose
+      // only remaining act is `if (_live == invite)` — a check for the state the
+      // comment denies (round 8, Tesla).
       return;
     }
     // The SAME invitation, already ringing. Nothing to do — and notably nothing

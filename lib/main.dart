@@ -37,13 +37,8 @@ class AikoChatApp extends ConsumerWidget {
     // Ask the island who it is, once, and cache the answer. Fire-and-forget —
     // the mark renders from its URL fallback meanwhile.
     ref.watch(islandManifestFetcherProvider);
-    // PINNED HERE FOR THE APP'S LIFETIME, and that is load-bearing rather than
-    // tidy. Providers auto-dispose by default in Riverpod 3, so an announcer
-    // read only by CallScreen would be created by that screen and disposed with
-    // it — taking any in-flight hangup down with the widget that handed it over.
-    // The whole point of the announcer is to outlive that screen (see
-    // CallEndAnnouncer), so the fix for a mortal capture would have been mortal
-    // itself. Same reason pushPairingProvider is watched here.
+    // Held here so the announcer's lifetime is INTENTIONAL rather than
+    // incidental — it must outlive any call screen (see CallEndAnnouncer).
     ref.watch(callEndAnnouncerProvider);
     // The chosen look supplies BOTH halves, so picking a preset never costs you
     // OS following: themeMode still decides how bright, the preset decides which
