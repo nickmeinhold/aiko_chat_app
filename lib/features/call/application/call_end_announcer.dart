@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../chat/application/chat_providers.dart';
+import '../../chat/data/chat_repository.dart' show ChatRepository;
 import '../domain/call_invite.dart';
 
 /// Announces that a call ended — as an OBLIGATION, not an instant.
@@ -65,6 +66,14 @@ class CallEndAnnouncer {
   /// That is deliberately the opposite of a fence — the failure this replaced
   /// was an obligation with exactly one owner who was not always born.
   ///
+  /// THE SECOND OWNER STARTS THE OBLIGATION; IT DOES NOT RETRY IT. Both owners
+  /// fire in the same pop, so by the time the first has reached an `await` the
+  /// second has already run and no-oped — a second striker that arrives before
+  /// the first has struck is not a fallback (cage-match round 5, Tesla). The
+  /// only thing the second owner is FOR is the case where the first was never
+  /// born at all, which is exactly the bug it was added for. Retrying a failed
+  /// attempt is the loop's job, in [_announce], where it can actually happen.
+  ///
   /// Grows by one short string per call PLACED on this device, in a session.
   /// Named rather than bounded: unlike [settling], an entry retains no closure
   /// graph, and a device that placed enough calls to notice has other problems.
@@ -113,79 +122,93 @@ class CallEndAnnouncer {
     _ref.read(configProvider).httpBaseUrl,
   );
 
+  /// ONE OBLIGATION, RETRIED UNTIL THE RING WINDOW CLOSES.
+  ///
+  /// Three review rounds each added a guard here and each guard grew the next
+  /// round's defect: dual owners, then idempotence, then unclaim-on-abandon.
+  /// The contract was never actually written down, so it kept being approximated
+  /// — *a hangup is announced exactly once, and an attempt that fails is tried
+  /// again until there is nothing left to stop*. Retry belongs INSIDE the single
+  /// obligation. Spreading it across two owners could never work: the mint site's
+  /// `finally` and `CallScreen.dispose` fire in the same pop, so the "second
+  /// striker" had already returned before the first reached its first `await`
+  /// (cage-match round 5, Tesla).
+  ///
+  /// [_ackWait] bounds the WHOLE loop, not just the wait for an id — after it,
+  /// the peer's ring has expired on its own and there is nothing left to still.
   Future<void> _announce(
     String channelId,
     String inviteId,
     (String?, String) identity,
   ) async {
+    final deadline = DateTime.now().add(_ackWait);
     try {
-      final serverId = await _awaitServerId(inviteId);
-      if (_identity() != identity) {
-        // The session or the island changed while we waited. The invitation
-        // belonged to a user we are no longer, on a gateway we may no longer be
-        // talking to — announcing now would sign a hangup as somebody else.
-        debugPrint(
-          'CallEndAnnouncer: identity changed while waiting for the ack — '
-          'abandoning the hangup for $inviteId.',
+      while (DateTime.now().isBefore(deadline)) {
+        // Re-checked EVERY pass, not once at the top. The loop spans awaits, and
+        // a liveness test does not survive an await — signing a hangup as
+        // whoever is current would be worse than not sending one.
+        if (_identity() != identity) {
+          debugPrint(
+            'CallEndAnnouncer: identity changed — abandoning the hangup for '
+            '$inviteId.',
+          );
+          _claimed.remove(inviteId);
+          return;
+        }
+        final left = deadline.difference(DateTime.now());
+        if (left <= Duration.zero) break;
+        // BOUNDED. The deadline used to sit on the `while` while the read inside
+        // it was unbounded, so a repository stuck in `AsyncLoading` (a reconnect,
+        // exactly what this class exists to outlive) meant the clock was never
+        // consulted again — an uncancellable wait inside a poll chosen because
+        // polling needs no cancellation. `timeout` does not cancel the original;
+        // it stops US waiting, which is all a bounded retry needs.
+        final repo = await _repositoryWithin(left);
+        if (repo == null) break;
+        final serverId = await repo.serverIdFor(inviteId);
+        if (serverId == null) {
+          // Not acked YET. `reply_to` is an FK onto `messages.id`, so naming a
+          // client id here gets the whole frame refused (`no_reply_target`,
+          // verified live) — there is nothing to send until the island answers.
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          continue;
+        }
+        final sentId = await repo.sendMessage(
+          channelId,
+          kCallEndBody,
+          replyToId: serverId,
         );
-        _claimed.remove(inviteId);
-        return;
+        if (sentId != null) return; // spoken; the claim stands.
+        // NULL IS NOT SUCCESS, and ignoring it was this class's own bug
+        // (cage-match round 5, Tesla). `sendMessage` documents `null` for a
+        // post-dispose no-op and for a teardown-race write — precisely the
+        // mortal repository this object was built to outlive. Awaiting it and
+        // discarding the value counted a hangup that never entered the cache
+        // and never reached the wire as an obligation discharged. Retry against
+        // a FRESH repository instead.
+        await Future<void>.delayed(const Duration(milliseconds: 250));
       }
-      if (serverId == null) {
-        // The invitation was never acked within the whole ring window, so it
-        // almost certainly never reached the peer either — there is no ring to
-        // stop, and a `reply_to` the island cannot resolve would sink the entire
-        // message (`no_reply_target`, verified live).
-        debugPrint(
-          'CallEndAnnouncer: $inviteId was never acked within $_ackWait — no '
-          'hangup announced; nothing should be ringing.',
-        );
-        _claimed.remove(inviteId);
-        return;
-      }
-      // Read the repository FRESH, at send time. Capturing one at hangup time
-      // would reintroduce the mortal-instance bug this object exists to fix.
-      final repo = await _ref.read(chatRepositoryProvider.future);
-      // AND CHECK IDENTITY AGAIN, because that read is itself an await
-      // (cage-match round 3, Tesla). Guarding the long wait and then signing
-      // after an unguarded one is the mounted-check bug in another costume: a
-      // liveness test does not survive a subsequent await. This gap is short and
-      // that is exactly why it went unnoticed — but it is the LAST thing before
-      // a signature, so the whole armour above is worth only as much as this.
-      if (_identity() != identity) {
-        debugPrint(
-          'CallEndAnnouncer: identity changed while resolving the repository — '
-          'abandoning the hangup for $inviteId.',
-        );
-        _claimed.remove(inviteId);
-        return;
-      }
-      await repo.sendMessage(channelId, kCallEndBody, replyToId: serverId);
+      debugPrint(
+        'CallEndAnnouncer: gave up on $inviteId after $_ackWait — the peer ring '
+        'has expired on its own, so there is nothing left to stop.',
+      );
+      _claimed.remove(inviteId);
     } catch (e) {
       debugPrint('CallEndAnnouncer: could not announce the hangup: $e');
-      // A throw is an abandonment like any other — the obligation is still owed,
-      // so it must not stay claimed by an attempt that died.
       _claimed.remove(inviteId);
     }
   }
 
-  /// Poll for the island's ULID for [inviteId] until it lands or [_ackWait]
-  /// elapses.
+  /// The CURRENT repository, or null if it does not arrive within [left].
   ///
-  /// Polling rather than watching, deliberately: the alternative is a stream
-  /// subscription that must be cancelled by something, and "something that must
-  /// remember to clean up" is what the screen already failed to be. A loop that
-  /// ends by itself has no teardown to get wrong.
-  Future<String?> _awaitServerId(String inviteId) async {
-    final deadline = DateTime.now().add(_ackWait);
-    while (DateTime.now().isBefore(deadline)) {
-      final repo = await _ref.read(chatRepositoryProvider.future);
-      final id = await repo.serverIdFor(inviteId);
-      if (id != null) return id;
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+  /// Read fresh on every attempt rather than captured: capturing one at hangup
+  /// time is the mortal-instance bug this object exists to fix.
+  Future<ChatRepository?> _repositoryWithin(Duration left) async {
+    try {
+      return await _ref.read(chatRepositoryProvider.future).timeout(left);
+    } on TimeoutException {
+      return null;
     }
-    final repo = await _ref.read(chatRepositoryProvider.future);
-    return repo.serverIdFor(inviteId);
   }
 }
 

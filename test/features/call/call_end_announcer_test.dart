@@ -237,6 +237,53 @@ void main() {
 
   /// Cleans up the settling list so a pinned, app-lifetime announcer does not
   /// retain every hangup's closure graph forever.
+  test('a sendMessage that returns NULL is retried, not counted as spoken', () async {
+    // Cage-match round 5, Tesla. `sendMessage` documents `null` for a
+    // post-dispose no-op AND for a teardown-race write — exactly the mortal
+    // repository this class exists to outlive. `_announce` used to `await` the
+    // call and discard the value, so a hangup that never entered the cache and
+    // never reached the wire was recorded as an obligation discharged, and the
+    // claim made sure nobody ever asked again. The callee rings the full window.
+    final flaky = _FlakySendRepo(
+      cache: cache,
+      transport: transport,
+      rest: FakeChatRestApi(),
+      me: FakeRestApi.defaultUser,
+      subscribedChannelIds: const [_channel],
+      newTempId: nextTempId,
+      nullsToReturn: 2, // two dead attempts, then the world comes back
+    );
+    flaky.start();
+    addTearDown(flaky.dispose);
+    // The file's own builder — same overrides, same pinning as every other test
+    // here, so this differs from them in exactly one variable: the repository.
+    final c = build(repoOverride: flaky);
+    addTearDown(c.dispose);
+
+    final inviteId = (await flaky.sendMessage(_channel, kCallInviteBody))!;
+    transport.emitAck(inviteId, '01M0GS7FDWBVQ31950B1PTV2DX');
+    await pumpEventQueue();
+
+    final a = c.read(callEndAnnouncerProvider);
+    a.announce(channelId: _channel, inviteId: inviteId);
+    await Future.wait(a.settling);
+
+    expect(
+      flaky.sendAttempts,
+      greaterThan(1),
+      reason: 'a null send is not a delivery — it must be tried again',
+    );
+    final ends = transport.sent.where((m) => m.body == kCallEndBody).toList();
+    expect(
+      ends,
+      hasLength(1),
+      reason:
+          'and the retry must eventually SPEAK, exactly once — the whole point '
+          'of the obligation is that the peer stops ringing',
+    );
+    expect(ends.single.replyToId, '01M0GS7FDWBVQ31950B1PTV2DX');
+  });
+
   test('a completed announcement is not retained', () async {
     final inviteId = await sendAndAck();
     final a = announcer();
@@ -247,4 +294,42 @@ void main() {
 
     expect(a.settling, isEmpty);
   });
+}
+
+/// A repository whose first [nullsToReturn] sends report the documented `null`
+/// — the post-dispose no-op / teardown-race write — before behaving normally.
+///
+/// A subclass rather than a fake, so every other path is the REAL repository:
+/// the thing under test is what the announcer does with one specific return
+/// value, and a hand-built stub would have to re-implement signing, the cache
+/// and the outbox to get there, then be trusted to have done it right.
+class _FlakySendRepo extends ChatRepository {
+  _FlakySendRepo({
+    required super.cache,
+    required super.transport,
+    required super.rest,
+    required super.me,
+    required super.subscribedChannelIds,
+    required super.newTempId,
+    required this.nullsToReturn,
+  });
+
+  int nullsToReturn;
+  int sendAttempts = 0;
+
+  @override
+  Future<String?> sendMessage(
+    String channelId,
+    String body, {
+    String? replyToId,
+  }) async {
+    if (body == kCallEndBody) {
+      sendAttempts++;
+      if (nullsToReturn > 0) {
+        nullsToReturn--;
+        return null;
+      }
+    }
+    return super.sendMessage(channelId, body, replyToId: replyToId);
+  }
 }

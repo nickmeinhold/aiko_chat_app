@@ -30,29 +30,52 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// Run the independent signer and return the frame it emits.
 ///
-/// Skips (rather than fails) when python3 or pynacl is absent, because a
-/// missing toolchain is not a conformance failure — but it says so loudly, so a
-/// skip can never be mistaken for a pass.
-Map<String, dynamic>? _vector({String? replyTo}) {
-  final r = Process.runSync('python3', [
-    'tool/ring_probe.py',
-    'vector',
-    ?replyTo,
-  ]);
+/// SKIPPING AND FAILING ARE DIFFERENT ANSWERS, and collapsing them is how a
+/// conformance check reports green while the thing it checks is broken. The
+/// first version of this helper turned EVERY non-zero exit into a skip — so a
+/// signer that had declared itself NON-CONFORMANT against the golden vector
+/// would have been recorded as "not run", which reads as fine (cage-match round
+/// 5, Carnot). The instrument existed to catch a self-consistently wrong codec
+/// and had a mode where it silently declined to look.
+///
+/// So the probe hands back a distinct exit code — 3 for "I could not run",
+/// anything else non-zero for "I ran and something is wrong" — and only the
+/// first is a skip. A missing `python3` (which throws rather than exiting) is
+/// the same class as 3.
+({Map<String, dynamic>? frame, String? skipReason}) _vector({String? replyTo}) {
+  const exitMissingDep = 3;
+  final ProcessResult r;
+  try {
+    r = Process.runSync('python3', ['tool/ring_probe.py', 'vector', ?replyTo]);
+  } on ProcessException catch (e) {
+    // python3 itself is absent — an environment fact, not a conformance verdict.
+    return (frame: null, skipReason: 'python3 not available: ${e.message}');
+  }
+
+  if (r.exitCode == exitMissingDep) {
+    return (frame: null, skipReason: 'signer dependency absent: ${r.stderr}');
+  }
   if (r.exitCode != 0) {
-    // ignore: avoid_print
-    print('ring_probe unavailable (exit ${r.exitCode}): ${r.stderr}');
-    return null;
+    // The probe RAN and reported a problem — a golden-vector mismatch, a signer
+    // regression, a crash. Every one of those is the failure this test exists
+    // to surface, and none of them is a skip.
+    fail(
+      'ring_probe failed (exit ${r.exitCode}) — this is a conformance FAILURE, '
+      'not a missing tool:\n${r.stdout}\n${r.stderr}',
+    );
   }
   final lines = '${r.stdout}'.trim().split('\n');
-  return jsonDecode(lines.last) as Map<String, dynamic>;
+  return (
+    frame: jsonDecode(lines.last) as Map<String, dynamic>,
+    skipReason: null,
+  );
 }
 
 void main() {
   test('an INDEPENDENT signer\'s invitation verifies against our verifier', () async {
-    final frame = _vector();
+    final (:frame, :skipReason) = _vector();
     if (frame == null) {
-      markTestSkipped('python3/pynacl not available — conformance NOT checked');
+      markTestSkipped('conformance NOT checked — $skipReason');
       return;
     }
 
@@ -102,11 +125,9 @@ void main() {
       // produce a valid-looking envelope whose signature covers the wrong tuple.
       // Signing the invitation alone would never catch that.
       const target = '01M0GS7FDWBVQ31950B1PTV2D5';
-      final frame = _vector(replyTo: target);
+      final (:frame, :skipReason) = _vector(replyTo: target);
       if (frame == null) {
-        markTestSkipped(
-          'python3/pynacl not available — conformance NOT checked',
-        );
+        markTestSkipped('conformance NOT checked — $skipReason');
         return;
       }
       final origin = validateOrigin(

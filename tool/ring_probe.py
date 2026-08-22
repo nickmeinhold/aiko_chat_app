@@ -37,9 +37,24 @@ import struct
 import sys
 import time
 
-import requests
-import websockets
-from nacl.signing import SigningKey
+# EXIT CODES ARE THE CONTRACT WITH THE DART SIDE, because "the probe could not
+# run" and "the probe ran and says the codec is wrong" must never be the same
+# signal. A caller that collapses them turns a non-conformant signer into a
+# skipped test, which reads as green (cage-match round 5, Carnot).
+EXIT_NONCONFORMANT = 2  # ran, and the golden vector did not match
+EXIT_MISSING_DEP = 3  # could not run at all — dependency absent
+
+try:
+    from nacl.signing import SigningKey
+except ImportError as e:  # pragma: no cover - environment, not logic
+    print(f"MISSING_DEPENDENCY: pynacl is required ({e})", file=sys.stderr)
+    raise SystemExit(EXIT_MISSING_DEP) from e
+
+# `requests` and `websockets` are imported LAZILY, inside the network path only.
+# `selftest` and `vector` are the offline commands the ordinary test suite runs,
+# and a module-level import here made them require live-test-only packages — so
+# on a machine without them the local conformance check quietly skipped rather
+# than running (cage-match round 5, Carnot).
 
 # --- the interop contract, transcribed from SIGNING-SPEC.md -------------------
 
@@ -141,6 +156,11 @@ GOLDEN_HEX = (
 
 
 def selftest() -> None:
+    """Compare our signing bytes to the spec's published vector.
+
+    Exits [EXIT_NONCONFORMANT] on mismatch — a distinct code from a missing
+    dependency, so the Dart caller can FAIL on this and skip only on that.
+    """
     got = signing_bytes(
         raw_public_key=bytes(range(32)),
         channel_id="chan-1",
@@ -154,7 +174,7 @@ def selftest() -> None:
         print("GOLDEN VECTOR MISMATCH — this signer is NON-CONFORMANT", file=sys.stderr)
         print(f"  want {want}", file=sys.stderr)
         print(f"  got  {got}", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(EXIT_NONCONFORMANT)
     print("selftest OK — signing bytes match the spec's golden vector")
 
 
@@ -169,6 +189,8 @@ def env(k: str) -> str:
 
 
 def login(host: str, user: str, password: str) -> str:
+    import requests
+
     r = requests.post(
         f"https://{host}/v1/auth/login",
         json={"username": user, "password": password},
@@ -180,6 +202,18 @@ def login(host: str, user: str, password: str) -> str:
 
 
 async def send_signed(body: str, reply_to: str | None) -> str:
+    # Imported here, not at module load — see the note by the imports.
+    try:
+        import requests
+        import websockets
+    except ImportError as e:
+        print(
+            f"MISSING_DEPENDENCY: requests/websockets are required for the "
+            f"network commands ({e})",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_MISSING_DEP) from e
+
     host = env("AIKO_HOST")
     channel_id = env("RING_CHANNEL")
     token = login(host, env("RING_USER"), env("RING_PASS"))
