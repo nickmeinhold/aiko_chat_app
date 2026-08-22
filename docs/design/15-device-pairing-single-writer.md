@@ -1,15 +1,17 @@
 # 15 — Device pairing: fail toward deletion
 
-**Status:** cast 2, tempered once (RECAST), awaiting re-strike.
+**Status:** cast 3, tempered twice (RECAST, RECAST), awaiting re-strike or build.
 **Scope:** app-side only (`DeviceRegistrar`). **Supersedes:** the repair strategy on
 `feat/push-pairing-wiring` (PR #156) as of `e5d7c01`.
-**Round 1 record:** `15-device-pairing-single-writer-TEMPER.md` + `temper-strikes/`.
+**Round records:** `…-TEMPER.md` (r1), `…-TEMPER-r2.md` (r2), `temper-strikes/`.
 
-> **Cast 1 proposed a serialized reconciler and was RECAST 4/4.** Its central claim —
-> "this install is the row's only writer" — was asserted rather than scheduled, and every
-> family struck it. Cast 2 does not fix that claim. **It no longer needs it.** If that reads
-> as a retreat, note what it costs: cast 2 is a net deletion, and the premise four families
-> spent their strike on has no role in it.
+> **Cast 1** proposed a serialized reconciler — RECAST 4/4; its single-writer premise was
+> asserted, never scheduled.
+> **Cast 2** deleted the repair branch and hung reach on a resume timer — RECAST. Two findings
+> broke it, both traced against the source: the resume timer is **deaf at the one frequency
+> over-delete actually occupies**, and a late `POST` crossing a logout is not an idempotent
+> upsert but a **cross-account reassignment** — a theft that owing a `DELETE` cannot undo.
+> **Cast 3** keeps cast 2's deletion, and replaces its clock with evidence.
 
 ---
 
@@ -67,96 +69,112 @@ these operations and we cannot ask what happened.** Every app-side design takes 
 
 ---
 
-## The governing principle: the two failure directions are not equal
-
-Cast 1's mistake was treating "the island holds no row when it should" and "the island holds a
-row when it should not" as one problem deserving one mechanism.
+## The governing principle: the failure directions are unequal — but not uniform
 
 | | Cost | Recovers? |
 |---|---|---|
-| **Over-delete** (a row removed that should be live) | The handset loses push | **Yes** — self-heals, see below |
-| **Under-delete** (a row kept that should be gone) | The next person holding this handset receives the previous owner's notifications | **No.** Disclosure is not undoable |
+| **Over-delete** (a row removed that should be live) | The handset goes deaf: a missed call, a missed MFA code, a missed alert | Yes — but only if something **restates** the pairing |
+| **Under-delete** (a stale row kept) | The signed-out user keeps receiving their own previews; on a transferred handset, a stranger's | No. Disclosure is not undoable |
+| **Reassignment** (a late `POST` hands the row to the *previous* user) | The **current** user's whole session is deaf while the previous owner receives their notifications | No — and a `DELETE` cannot fix it (below) |
 
-Reach degradation is recoverable and private. A leak is neither. This repo's own rule is that
-**fail direction inverts by domain**; for a roster that routes a stranger's messages to a
-handset, the safe direction is **toward deletion**.
+Round 2 corrected two things here, and neither is cosmetic.
 
-The repair branch exists solely to convert the *safe* failure back into reach, by issuing a
-second unorderable write. Defect five is the bill for that trade.
+**Lost reach is an availability failure, not a private inconvenience.** Cast 2's table filed it
+under "self-heals" and moved on. A user who misses the only call that mattered is not consoled
+that the row would have healed. Privacy still orders *ahead* of reach — a leak is irreversible
+and deafness is not — but "recoverable" only counts if a mechanism actually recovers it, which
+is what cast 2 got wrong.
+
+**And the safe direction is not uniform.** `register_device` upserts on `UNIQUE(token)` and
+**reassigns `user_id`**. So a `POST` that crosses a logout does not merely linger — it takes the
+row *back* from whoever owns it now:
+
+> A's re-assert `POST` goes in flight → logout → B signs in → `drainPending` → `start` (row is
+> B's) → **A's `POST` lands and reassigns the row to A**. B's credential cannot delete A's row
+> (`unregister` matches `(user_id, token)`), and B's drain already ran. B's entire session is
+> the previous owner's lock screen.
+
+**A reassignment cannot be repaired by owing a `DELETE`.** Only a `POST` from the *current*
+session takes the row back. Fail-toward-deletion is right for a **stale** row and wrong for a
+**stolen** one, and a design that applies one remedy to both is choosing the wrong failure half
+the time.
 
 ## The design
 
-Three parts. Two of them are deletions.
-
 ### 1. Delete the repair branch
 
-`_attemptUnregister` becomes: issue the `DELETE`, `forget` the debt on success, log on failure.
-Nothing else. Defect five does not become unstateable — it **ceases to exist**, along with the
-entire category of "a `POST` issued to correct a `DELETE`".
+`_attemptUnregister` becomes: issue the `DELETE`, `forget` the debt on success, log on failure,
+and **signal** (part 3). No `POST`. Defect five does not become unstateable — it **ceases**,
+along with the category of "a `POST` issued to correct a `DELETE`".
 
-### 2. Name the invariant `_register` already obeys
+This is Tesla's adopted acceptance bar, and cast 3 meets it by deletion, not by replacement.
 
-The repair was not the only `POST` site; it was the only one that got this **wrong**. The
-existing `_register` already ends:
+### 2. One `POST` door, with a complete check on the far side
 
-```dart
-if (generation != _generation) {
-  await _pending.remember(_islandBaseUrl, token);   // landed into a dead session — owe a DELETE
-  return;
-}
-```
+Round 2 found cast 2's invariant was prose rather than a door: `_register` returns **before the
+wire** when `token == _registered` — exactly the steady state a re-assertion exists to restate.
+So skip-if-same is demoted to what it always was (an optimisation for the refresh path), and
+every register — `start`, rotation, re-assert — enters **the same tail**. A second copy of the
+check would be guard six.
 
-That is the whole rule, and it was already here. Promote it from an implementation detail to a
-stated invariant every present and future `POST` site inherits:
+> **REGISTER INVARIANT.** Every `registerDevice` re-checks, **after** its `await` and on
+> **success or throw**, whether the pairing it was issued for is still current — testing *both*
+> the issue-time generation *and* the desired token. If it is not current, it takes the remedy
+> that matches what the write did.
 
-> **REGISTER INVARIANT.** Any `registerDevice` that may have landed re-checks liveness
-> **after** its `await`. If the pairing it was issued for is no longer current, it **records a
-> debt** rather than assuming it was harmless.
+Three corrections round 2 forced into that sentence, each from a traced defect:
 
-Note the direction: the post-await check's remedy is always to *owe a deletion*, never to issue
-a compensating write. That is what keeps it from generating a guard six. `_generation` is the
-liveness signal — **not deleted, not "an open question": it is the mechanism** (unanimous
-adversary ruling, round 1).
+- **On throw, too.** Deleting the repair branch nearly threw away its one real insight: *"it threw" is not "nothing happened".* A `POST` whose response was lost may have landed. Outcomes are classified **definitely-not-landed** vs **maybe-landed**; where the REST client cannot distinguish them, it says so and the maybe-landed branch is taken.
+- **Generation is not enough.** `_generation` answers *session* liveness, not *token* currency. A re-assert of `T1` in flight across a rotation to `T2` lands with the generation still matching, rolls `_registered` back to `T1`, and `T2` then leaks. The check tests both.
+- **The remedy is direction-dependent** — the correction that matters most:
 
-### 3. Restore reach by re-assertion, not by correction
+| What the stale `POST` did | Who owns the row now | Remedy |
+|---|---|---|
+| Registered for a session that has since ended, and no session is live | The dead session's user | **Owe a `DELETE`** (the debt record, as today) |
+| Registered for a dead session **while another session is live** — a reassignment | The *previous* user | **Nudge the live door** — only a `POST` from the current session takes it back |
 
-Deleting the repair means an over-deleted row stays deleted. Unmitigated, the handset is deaf
-until the next sign-in — days. So reach is restored by **periodically restating the truth from
-the only place that knows it**:
+### 3. Re-assert on evidence, not on a clock
 
-> On app resume, **if a pairing is already established** (`_registered != null`) and the last
-> successful register is older than `_reassertAfter`, re-`POST` the current token.
+Cast 2's fatal flaw: over-delete is not a mystery outage. It is `unpair`'s `DELETE₁` completing
+on the **ordinary second sign-in, same isolate, app already foregrounded** — where Flutter
+delivers no `resumed` event for the session you are already sitting in, and a throttle refuses
+anyway because `start()` just succeeded. The clock was deaf at the one frequency the fault
+occupies.
 
-- It is a `POST` from a **live session** — desired state read at issue time, current credential, no dead-session write in play.
-- It is an **idempotent upsert** on `UNIQUE(token)` by island design, so re-asserting is free and safe.
-- It obeys the **register invariant** above, so a logout landing inside its flight owes a `DELETE` rather than leaving a row.
-- It cannot disturb `drainPending`'s strict-before-`start` ordering **by construction**: `_registered` is non-null only after `start` completed, which is after the drain.
+So the trigger is the **evidence**, at the moment it arrives:
 
-Recovery from an over-delete drops from *the next sign-in* to *the next foreground*. That is
-what makes deleting the repair affordable; the two halves are one design.
+- **Primary — the straggler's own completion.** When `_attemptUnregister` finishes, success or failure, and this registrar still holds `_registered == token`, it **signals the live door** to restate the current pairing at the current generation. It does **not** `POST` from the `DELETE` path; that path has a dead credential and a dead session's state, which is how defect five was born. An *observed* over-delete now heals in one live round trip.
+- **Secondary — a detected reassignment.** The stale-`POST` branch of the invariant, per the table above.
+- **Backstop only — resume plus a throttle.** For an *unobserved* over-delete: a `DELETE` that succeeded and then threw, so nothing knows a row was removed. Explicitly a backstop, and explicitly **not** the primary self-heal. Answering the already-foreground gap by setting the interval to zero is how a throttle becomes a correctness parameter and how a flaky network fills the isolate with uncancelled `POST`s.
 
-`_reassertAfter` is a throttle, not a heartbeat — a foreground event is frequent and a
-round trip is not free. Start at 6 hours and treat it as a tuning knob, not a correctness
-parameter: correctness never depends on how often this fires, only reach does.
+**Is the nudge a compensating write — guard six?** The honest test, and the thing to strike
+hardest: a compensating write corrects *a specific prior operation* using state sampled before
+its own `await`. The nudge does neither. It restates **current desired state**, from a live
+session, at the current generation, through the one door, subject to the same post-`await`
+check as every other register. It is not aimed at the straggler; the straggler is merely when we
+learned to look.
 
-## What cast 2 does NOT need, and cast 1 did
+Ordering with `drainPending` is preserved **by construction**: the nudge fires only when
+`_registered != null`, which is true only after `start` completed, which is after the drain.
 
-Each of these was a round-1 fatal flaw. They are not fixed here; they are **absent**:
+## What cast 3 does not need, and cast 1 did
 
-- **No single-writer claim.** The premise all four families struck — "a push token is unique per install, so this install is the row's only writer" — has no role. Nothing here assumes it. Already-dispatched HTTP from a dead incarnation is handled by the register invariant, not excluded by an assumption.
-- **No `UNKNOWN` state**, so nothing un-actionable is stored and no `DELETE(believed)` ghost exists.
-- **No retry loop**, so no backoff, no termination proof, no `while(true)` against a hung island. The failure path is today's: leave the debt, stop, pay at the next session edge — which round 1 confirmed was correct.
-- **No scalar-vs-set mismatch.** `drainPending` keeps its set worklist untouched; nothing tries to express a 16-entry ledger as one desired token.
-- **No queue**, so single-flight's unbounded delay behind a hung `DELETE` never arises.
+Each was a round-1 fatal flaw, and round 2 re-litigated none of them. They are **absent**:
+
+- **No single-writer claim.** The premise all four families struck has no role here.
+- **No `UNKNOWN`**, no un-actionable state, no `DELETE(believed)` ghost.
+- **No retry loop**, so no backoff proof, no termination proof, no `while(true)` against a hung island. A failed `DELETE` leaves the debt and stops — today's path, which round 1 confirmed correct.
+- **No scalar-vs-set mismatch.** `drainPending` keeps its set worklist untouched.
+- **No queue**, so no unbounded delay behind a hung `DELETE`.
 - **No persisted state machine** — no `inFlightKind`, no `lastKnownToken`, no new durability boundary.
 
 ## Net change
 
 | | |
 |---|---|
-| **Deleted** | the repair branch and its pre-`await` check (~20 lines) |
-| **Added** | a re-assert path on app resume + its throttle (~15 lines) |
-| **Promoted** | an existing 4-line block to a stated invariant (0 lines) |
+| **Deleted** | the repair branch and its pre-`await` check |
+| **Added** | a `force` entry sharing `_register`'s tail; a signal from `_attemptUnregister`'s completion; the resume backstop |
+| **Widened** | the existing post-`await` block — runs on throw too, tests desired-token as well as generation, and branches to nudge-or-owe |
 | **Unchanged** | `unpair`'s contract, the debt store, `drainPending`'s ordering, `_generation` |
 
 `unpair` keeps its contract exactly: await only the **durable debt write** (local preferences,
@@ -165,11 +183,13 @@ five rounds actually bought and nothing here reopens it.
 
 ## Named residuals
 
-- **Deafness between an over-delete and the next re-assertion.** Bounded by `_reassertAfter` and by the app being foregrounded. Reach, never correctness, never disclosure — the direction we chose deliberately.
-- **A hung `DELETE` is still un-cancellable.** It is no longer *ordered against* anything, so it no longer delays a `POST` or triggers a compensating write. It lands, or it doesn't, and the debt outlives it either way.
+- **An unobserved over-delete waits for the backstop.** Where the `DELETE` succeeded and then threw, nothing knows a row was removed, so the primary signal never fires. Bounded by the resume backstop, the next sign-in, or process death. This is the honest bound; cast 2's "recovery drops to the next foreground" was not.
+- **A stale re-assert can plant a debt that later over-deletes a live row.** Safe direction, real cost, named rather than covered. Mitigated by the next restatement, not by `_generation`.
+- **A `POST` in flight across an account switch reassigns the row** until the live session restates it. The nudge is what closes this; until it lands, the previous owner rides the handset.
+- **A hung `DELETE` is still un-cancellable.** It is no longer ordered against anything, so it delays nothing and triggers no compensating write.
 - **Sign out offline and never sign in again on this handset.** The island keeps a routable row. Unchanged, unreachable by any client mechanism; needs server-side expiry. Filed.
-- **The debt store's 16-entry FIFO eviction** drops a debt, leaving an island row this client can never clear. Named in the store, and now named here: it is a **correctness degradation in the leak direction**, which is the direction that does not self-heal. It deserves its own decision, not a footnote — filed.
-- **A backup-restored debt file** names another living device's token and would `DELETE` it under the same `user_id`. Independent of this design. Filed (device-stamp each debt; discard on mismatch — fails closed).
+- **The debt store's 16-entry FIFO eviction** drops a debt, leaving a row this client can never clear — a degradation in the **leak** direction, which is the one that does not self-heal. Deserves its own decision. Filed.
+- **A backup-restored debt file** names another living device's token and would `DELETE` it under the same `user_id`. Independent of this design. Filed.
 
 ## Island handoff (separate, not a precondition)
 
@@ -181,12 +201,18 @@ over-delete residual entirely.
 
 This design does not depend on it.
 
-## Acceptance bar (Tesla's subtraction test, adopted from round 1)
+## Acceptance bar
+
+**Tesla's subtraction test, adopted round 1 and re-affirmed round 2** (he declined to move it
+after being cited):
 
 > The recast is real only when `_attemptUnregister`'s repair is **gone**. If it remains beside
 > anything, this document is guard six and must not supersede #156.
 
-Cast 2 meets it by deleting the repair rather than replacing it. The remaining question for the
-re-strike is whether **re-assertion** is a fourth writer in disguise — the design's answer is
-that it is not, because it obeys the register invariant and issues from a live session, and
-that answer is the thing to strike hardest.
+Cast 3 meets it by deletion. The open question handed forward — and the thing to strike hardest
+— is **whether the nudge is a restatement or a compensating write in better clothes.** The
+design's answer is in part 3; it is an argument, not a proof, and it is where cast 3 is most
+likely to be wrong.
+
+**Design temper only. The implementation is UNPROVEN and a code cage-match is owed on whatever
+ships.**
