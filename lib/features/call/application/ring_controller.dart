@@ -54,16 +54,29 @@ class RingController extends Notifier<CallInvite?> {
   /// all. Measured, with a positive control: a repeated emit announced once, a
   /// genuinely new one announced again.
   ///
-  /// The case that DOES reach here is a caller RETRY. The same signed
-  /// `clientMsgId` re-sent gets a NEW server ULID from the island, so it is a
-  /// first insert, it is announced, and it carries an `inviteId` this device may
-  /// already have dealt with. Suppressing only against `_live` is not enough —
-  /// `stopRinging()` clears `_live`, so a retry landing after the user pressed
-  /// Ignore would ring all over again. "Currently ringing" and "already dealt
-  /// with" are different questions and need different memory.
+  /// AND THE CASE THIS GUARD DEFENDS IS, AS OF TODAY, UNREACHABLE — stated
+  /// plainly because two earlier versions of this comment stated a reachability
+  /// that was not checked, and each one made a test look meaningful that was not.
   ///
-  /// Pinned by `a caller RETRY of a dismissed invitation does not ring again`,
-  /// which varies the two ids independently — the only shape that can fail.
+  /// For a second delivery to reach `_consider` carrying an `inviteId` already
+  /// settled, one signed `clientMsgId` would have to exist under TWO server
+  /// ULIDs. The island refuses that: `messages_service.py` holds
+  /// `UNIQUE(channel_id, client_msg_id)` and its create path short-circuits —
+  /// "a resend of an already-persisted (channel, client_msg_id) returns the
+  /// EXISTING row". One signed invitation, one ULID, forever. So a caller retry
+  /// is reconciled to the first row rather than minting a second, and the
+  /// suppression below has no input that can trigger it.
+  ///
+  /// IT IS KEPT ANYWAY, and the reason is the coupling rather than the code:
+  /// "unreachable" here is a fact about the ISLAND's idempotency contract, not
+  /// about this file. A peer repo that relaxed that contract would not fail a
+  /// test here — it would silently restore a ring that replays after Ignore. A
+  /// guard whose precondition lives in another repository is defence in depth,
+  /// and deleting it would bake a cross-repo assumption into silence.
+  ///
+  /// The tests below exercise it by CONSTRUCTING the two-ULID delivery the
+  /// island will not currently produce. That is legitimate for defence in depth
+  /// and dishonest if unlabelled, so they say so.
   ///
   /// Bounded: an invitation is only ringable for [kCallInviteFreshness], so ids
   /// older than that can never be admitted again and are dropped. This set can
@@ -238,7 +251,27 @@ class RingController extends Notifier<CallInvite?> {
     // a ring that an in-order end would not have.
     final owed = _ended[invite.serverMsgId];
     if (owed != null && owed.any((e) => endsInvite(e.end, invite))) {
-      _settle(invite);
+      // Same standing as `_settled` above: with one ULID per signed invitation
+      // (the island's idempotency contract, verified in its source), a live
+      // invitation whose end is already remembered would have been stopped by
+      // the live arm, so `_live == invite` here has no reachable input today.
+      // Correct regardless, and kept for the same reason — the precondition
+      // belongs to a peer repo, not to this file.
+      //
+      // SETTLING IS BOOKKEEPING; STOPPING IS THE RING. `_settle` records the
+      // invitation as dealt with and drops `_live`, but it deliberately does not
+      // touch `state` or the expiry timer — so when the invitation being settled
+      // is the one currently ON SCREEN, the banner keeps ringing for a call the
+      // device can prove is over, Answer still joins the dead room, and the only
+      // undertaker is the timer (cage-match round 4, Tesla). `stopRinging` is the
+      // single door that clears all three; `_settle` alone is correct only when
+      // some OTHER invitation is live, where touching state would stop the wrong
+      // ring.
+      if (_live == invite) {
+        stopRinging();
+      } else {
+        _settle(invite);
+      }
       return;
     }
     // At-least-once delivery means the SAME invitation can arrive again (live +

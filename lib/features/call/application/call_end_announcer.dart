@@ -68,6 +68,15 @@ class CallEndAnnouncer {
   /// Grows by one short string per call PLACED on this device, in a session.
   /// Named rather than bounded: unlike [settling], an entry retains no closure
   /// graph, and a device that placed enough calls to notice has other problems.
+  ///
+  /// A CLAIM IS RELEASED WHEN THE ATTEMPT ABANDONS, and that is what keeps the
+  /// dual ownership honest. Claiming permanently on ENTRY would mean the first
+  /// owner to speak also gets to fail silently on everyone's behalf: the screen's
+  /// teardown claims, the announcement gives up (identity changed, never acked),
+  /// and the mint site's `finally` — the whole point of which is to be a second
+  /// owner — is turned into a no-op by the corpse of the first attempt
+  /// (cage-match round 4, Tesla). So the set means "an announcement is in flight
+  /// or has SUCCEEDED", never "someone once intended to".
   final Set<String> _claimed = {};
 
   /// Say that the call opened by [inviteId] in [channelId] has ended.
@@ -119,6 +128,7 @@ class CallEndAnnouncer {
           'CallEndAnnouncer: identity changed while waiting for the ack — '
           'abandoning the hangup for $inviteId.',
         );
+        _claimed.remove(inviteId);
         return;
       }
       if (serverId == null) {
@@ -130,6 +140,7 @@ class CallEndAnnouncer {
           'CallEndAnnouncer: $inviteId was never acked within $_ackWait — no '
           'hangup announced; nothing should be ringing.',
         );
+        _claimed.remove(inviteId);
         return;
       }
       // Read the repository FRESH, at send time. Capturing one at hangup time
@@ -146,11 +157,15 @@ class CallEndAnnouncer {
           'CallEndAnnouncer: identity changed while resolving the repository — '
           'abandoning the hangup for $inviteId.',
         );
+        _claimed.remove(inviteId);
         return;
       }
       await repo.sendMessage(channelId, kCallEndBody, replyToId: serverId);
     } catch (e) {
       debugPrint('CallEndAnnouncer: could not announce the hangup: $e');
+      // A throw is an abandonment like any other — the obligation is still owed,
+      // so it must not stay claimed by an attempt that died.
+      _claimed.remove(inviteId);
     }
   }
 
