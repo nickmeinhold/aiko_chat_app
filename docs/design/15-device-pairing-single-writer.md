@@ -1,15 +1,22 @@
-# 15 — Device pairing: one writer, checked after the fact
+# 15 — Device pairing: fail toward deletion
 
-**Status:** design, awaiting temper. **Scope:** app-side only (`DeviceRegistrar`,
-`PendingUnregisterStore`). **Supersedes:** the ordering/repair strategy on
+**Status:** cast 2, tempered once (RECAST), awaiting re-strike.
+**Scope:** app-side only (`DeviceRegistrar`). **Supersedes:** the repair strategy on
 `feat/push-pairing-wiring` (PR #156) as of `e5d7c01`.
+**Round 1 record:** `15-device-pairing-single-writer-TEMPER.md` + `temper-strikes/`.
+
+> **Cast 1 proposed a serialized reconciler and was RECAST 4/4.** Its central claim —
+> "this install is the row's only writer" — was asserted rather than scheduled, and every
+> family struck it. Cast 2 does not fix that claim. **It no longer needs it.** If that reads
+> as a retreat, note what it costs: cast 2 is a net deletion, and the premise four families
+> spent their strike on has no role in it.
 
 ---
 
 ## Why this is a design note and not another review round
 
-The device-pairing straggler has now been fixed five times, each fix correct
-against the finding it answered and each one opening the next:
+The device-pairing straggler has been fixed five times, each fix correct against the finding
+it answered and each one opening the next:
 
 | # | The guard | How it failed |
 |---|---|---|
@@ -17,156 +24,169 @@ against the finding it answered and each one opening the next:
 | 2 | Fence the clear on a token check | Mis-fired on an ordinary 401 refresh, parking the user on `/login` holding a **live** credential |
 | 3 | Pin `_register` behind `_settling` | Correct, but unbounded — a hung `DELETE` blocked re-registration indefinitely |
 | 4 | Bound that wait with `.timeout(...)` | `Future.timeout` does not cancel the original. The `DELETE` stayed in flight with a loaded gun |
-| 5 | Stop ordering it; **repair** after it lands | Below — the repair is itself an unorderable write, gated by a check sampled before its own `await` |
+| 5 | Stop ordering it; **repair** after it lands | Below — the repair is itself an unorderable write, gated on a check sampled before its own `await` |
 
-The repo's own rule puts the signal at guard **two**. We are at five. The
-recurrence is the finding: each round treated the symptom as a timing problem
-and answered it with a timing primitive, inside a system where **no operation
-can be cancelled, recalled, or ordered.**
-
-This document does not propose a sixth guard. It proposes deleting the property
-that keeps generating them.
+The repo's rule puts the signal at guard **two**. We are at five. The recurrence is the
+finding: each round read the symptom as a timing problem and answered it with a timing
+primitive, inside a system where **no operation can be cancelled, recalled, or observed.**
 
 ## Defect five, stated concretely
 
-`_attemptUnregister` ends with a repair: if our late `DELETE` removed a row that
-had since become live, re-`POST` it.
+`_attemptUnregister` ends with a repair: if our late `DELETE` removed a row that had since
+become live, re-`POST` it.
 
 ```dart
-if (_registered != token) return;        // check
+if (_registered != token) return;        // checked BEFORE
 try {
-  await _api.registerDevice(...);        // in flight — and unorderable
-  // nothing re-examines _registered here
+  await _api.registerDevice(...);        // ... and never re-checked after
 ```
 
-The check is sampled **before** the round trip; the write completes after it.
-A session ending inside that flight is unobserved:
+Verified reachable, independently, by three adversary families:
 
 1. Session A registers `T`. Logout → debt(`T`) recorded, `DELETE₁` in flight, slow.
 2. Same user signs back in. `drainPending` deletes the row; `start` re-`POST`s it. `_registered = T`.
-3. `DELETE₁` finally lands and removes the **live** row. `_registered == T`, so the repair issues `POST₁`.
+3. `DELETE₁` lands and removes the **live** row. `_registered == T`, so the repair issues `POST₁`.
 4. **Logout again**, inside `POST₁`'s flight. `_registered = null`, debt recorded, `DELETE₂` fires, lands, clears the row *and forgets the debt*.
-5. `POST₁` lands. It **re-creates a routable row for a signed-out handset**, and nothing is left that will ever clear it.
+5. `POST₁` lands. It **re-creates a routable row for a signed-out handset**, and nothing remains that will ever clear it.
 
-That is the exact outcome the feature exists to prevent — *"the next person to
-hold this handset does not receive the previous owner's pushes"* — reached by
-the mechanism added to prevent it.
+The root cause is a **lifecycle violation**, not merely a TOCTOU (Kelvin): the repair consults
+state belonging to a *new* session to correct an operation issued by a session already dead.
 
-**Stated at its proven scope:** this instance is narrow. It requires a
-straggling `DELETE` that outlives a full logout/login cycle, and then a second
-logout inside a single round trip. It is *narrower* than the race round 3 was
-fixing. The argument for changing the design is **not** the severity of instance
-five; it is that instance five was produced by the fix for instance four, and
-was found by a state-space pass rather than by four model families across four
-rounds. The generator is still running.
+**At its proven scope:** this instance is narrow — narrower than the race round 3 fixed. The
+case for changing the design is the recurrence, not the severity.
 
-## What the island can and cannot do (verified, not assumed)
+## What the island can and cannot do (verified at `a344943`, not assumed)
 
-Read directly from `../aiko-chat-island` at `a344943`:
+- `unregister_device` matches `(user_id, token)`; the REST route discards its bool and answers **204 unconditionally** (a 404 would leak whether a token is registered).
+- `register_device` upserts on `UNIQUE(token)` and **reassigns** `user_id` on conflict.
+- `DeviceToken` carries `updated_at`, but **no version, generation or fencing token is exposed**, and no conditional delete exists.
 
-- `unregister_device` matches on `(user_id, token)` and returns a bool; the REST
-  route (`rest/devices.py:44`) discards it and answers **204 unconditionally** —
-  deliberate, since a 404 would leak whether a token is registered.
-- `register_device` upserts on `UNIQUE(token)` and **reassigns** `user_id` on
-  conflict.
-- `DeviceToken` carries `updated_at`, but **no version, generation or fencing
-  token is exposed**, and no conditional delete exists.
+An in-flight `DELETE` for a dead session and one for a live session are indistinguishable to
+the island once dispatched, and the response says nothing about what it did. **We cannot order
+these operations and we cannot ask what happened.** Every app-side design takes that as given.
 
-So: an in-flight `DELETE` issued for a dead session and one issued for a live
-session are indistinguishable to the island once dispatched, and its response
-tells us nothing about what it did. **We cannot order these operations and we
-cannot ask what happened.** Every app-side design must take that as given.
+---
 
-## The invariant
+## The governing principle: the two failure directions are not equal
 
-> For a given `(island, token)` this app issues **at most one device-roster
-> write at a time**, and decides the next write only after the previous one has
-> completed.
+Cast 1's mistake was treating "the island holds no row when it should" and "the island holds a
+row when it should not" as one problem deserving one mechanism.
 
-The correctness argument for solving this client-side — rather than waiting for
-a server-side fence — is a property of the domain, not an assumption:
+| | Cost | Recovers? |
+|---|---|---|
+| **Over-delete** (a row removed that should be live) | The handset loses push | **Yes** — self-heals, see below |
+| **Under-delete** (a row kept that should be gone) | The next person holding this handset receives the previous owner's notifications | **No.** Disclosure is not undoable |
 
-**A push token is unique per install, so this install is its only writer.**
-Another handset holds a different token and touches a different row. There is no
-second client to serialize against. Client-side single-flight is therefore not
-an approximation of a distributed lock; it is the whole of the mutual exclusion
-the row requires.
+Reach degradation is recoverable and private. A leak is neither. This repo's own rule is that
+**fail direction inverts by domain**; for a roster that routes a stranger's messages to a
+handset, the safe direction is **toward deletion**.
 
-Process death breaks in-memory single-flight, and that is exactly what the
-durable debt record already covers: on the next start, `drainPending` runs
-strictly before `start`, which is a `DELETE`-then-`POST` sequence — the same
-converging order, recovered from disk.
+The repair branch exists solely to convert the *safe* failure back into reach, by issuing a
+second unorderable write. Defect five is the bill for that trade.
 
-## The design: a reconciler, not a choreography
+## The design
 
-Replace "each operation repairs after itself" with one serialized loop.
+Three parts. Two of them are deletions.
 
-- **Desired state** is `_registered`: a token, or `null`. It changes only on
-  session edges (`start`, `_register`, `unpair`) — never inside a round trip.
-- **Believed island state** is what our last completed write established.
-- **One operation in flight**, chained. When it completes, re-compare desired
-  against believed and issue the next write only if they differ.
+### 1. Delete the repair branch
 
-```
-loop:
-  desired = _registered            // sampled AFTER the previous await
-  if desired == believed: stop
-  op = (desired == null) ? DELETE(believed) : POST(desired)
-  await op                          // may fail; may have landed anyway
-  believed = (op succeeded) ? desired : UNKNOWN
-  repeat
+`_attemptUnregister` becomes: issue the `DELETE`, `forget` the debt on success, log on failure.
+Nothing else. Defect five does not become unstateable — it **ceases to exist**, along with the
+entire category of "a `POST` issued to correct a `DELETE`".
+
+### 2. Name the invariant `_register` already obeys
+
+The repair was not the only `POST` site; it was the only one that got this **wrong**. The
+existing `_register` already ends:
+
+```dart
+if (generation != _generation) {
+  await _pending.remember(_islandBaseUrl, token);   // landed into a dead session — owe a DELETE
+  return;
+}
 ```
 
-Three properties fall out, and each one retires a guard rather than adding one:
+That is the whole rule, and it was already here. Promote it from an implementation detail to a
+stated invariant every present and future `POST` site inherits:
 
-1. **The pre-issue check disappears.** Nothing is gated on state sampled before
-   an `await`, because the loop's only decision point is *after* one. Defect
-   five is not fixed — it is unstateable.
-2. **The straggler disappears as a category.** There is never a second write in
-   flight to straggle past. "Unorderable" stops mattering when there is only one.
-3. **It converges and terminates.** Desired state changes only at session edges;
-   each iteration moves believed toward desired; equality stops the loop. A
-   failed write sets believed to `UNKNOWN`, which is never equal to desired, so
-   the loop retries rather than assuming — and `UNKNOWN` is the honest reading
-   of a lost response, which may have landed.
+> **REGISTER INVARIANT.** Any `registerDevice` that may have landed re-checks liveness
+> **after** its `await`. If the pairing it was issued for is no longer current, it **records a
+> debt** rather than assuming it was harmless.
 
-`unpair` keeps its current contract exactly: await only the **durable debt
-write** (a local preferences write, microseconds), then return, leaving the
-credential clear unconditional and immediate. The reconciler is what runs out of
-band, and it carries the credential by value as `_attemptUnregister` already does.
+Note the direction: the post-await check's remedy is always to *owe a deletion*, never to issue
+a compensating write. That is what keeps it from generating a guard six. `_generation` is the
+liveness signal — **not deleted, not "an open question": it is the mechanism** (unanimous
+adversary ruling, round 1).
 
-## What this subtracts
+### 3. Restore reach by re-assertion, not by correction
 
-Not a new layer — a smaller one. It deletes `_settling`-as-fire-and-forget, the
-repair branch and its pre-check, and the asymmetry where `_register` guards on
-`_generation` while `_attemptUnregister` guards on `_registered`. Two liveness
-proxies for one question become one loop condition.
+Deleting the repair means an over-deleted row stays deleted. Unmitigated, the handset is deaf
+until the next sign-in — days. So reach is restored by **periodically restating the truth from
+the only place that knows it**:
 
-`_generation` may survive for `start`'s permission-sheet window, which is a
-different concern (an OS prompt, not a round trip) — the temper should rule on
-whether the reconciler subsumes it or the two genuinely answer different
-questions.
+> On app resume, **if a pairing is already established** (`_registered != null`) and the last
+> successful register is older than `_reassertAfter`, re-`POST` the current token.
+
+- It is a `POST` from a **live session** — desired state read at issue time, current credential, no dead-session write in play.
+- It is an **idempotent upsert** on `UNIQUE(token)` by island design, so re-asserting is free and safe.
+- It obeys the **register invariant** above, so a logout landing inside its flight owes a `DELETE` rather than leaving a row.
+- It cannot disturb `drainPending`'s strict-before-`start` ordering **by construction**: `_registered` is non-null only after `start` completed, which is after the drain.
+
+Recovery from an over-delete drops from *the next sign-in* to *the next foreground*. That is
+what makes deleting the repair affordable; the two halves are one design.
+
+`_reassertAfter` is a throttle, not a heartbeat — a foreground event is frequent and a
+round trip is not free. Start at 6 hours and treat it as a tuning knob, not a correctness
+parameter: correctness never depends on how often this fires, only reach does.
+
+## What cast 2 does NOT need, and cast 1 did
+
+Each of these was a round-1 fatal flaw. They are not fixed here; they are **absent**:
+
+- **No single-writer claim.** The premise all four families struck — "a push token is unique per install, so this install is the row's only writer" — has no role. Nothing here assumes it. Already-dispatched HTTP from a dead incarnation is handled by the register invariant, not excluded by an assumption.
+- **No `UNKNOWN` state**, so nothing un-actionable is stored and no `DELETE(believed)` ghost exists.
+- **No retry loop**, so no backoff, no termination proof, no `while(true)` against a hung island. The failure path is today's: leave the debt, stop, pay at the next session edge — which round 1 confirmed was correct.
+- **No scalar-vs-set mismatch.** `drainPending` keeps its set worklist untouched; nothing tries to express a 16-entry ledger as one desired token.
+- **No queue**, so single-flight's unbounded delay behind a hung `DELETE` never arises.
+- **No persisted state machine** — no `inFlightKind`, no `lastKnownToken`, no new durability boundary.
+
+## Net change
+
+| | |
+|---|---|
+| **Deleted** | the repair branch and its pre-`await` check (~20 lines) |
+| **Added** | a re-assert path on app resume + its throttle (~15 lines) |
+| **Promoted** | an existing 4-line block to a stated invariant (0 lines) |
+| **Unchanged** | `unpair`'s contract, the debt store, `drainPending`'s ordering, `_generation` |
+
+`unpair` keeps its contract exactly: await only the **durable debt write** (local preferences,
+microseconds), then return, credential clear unconditional and immediate. That contract is what
+five rounds actually bought and nothing here reopens it.
 
 ## Named residuals
 
-- **A gap where the island holds no row.** Between a stale `DELETE` landing and
-  the reconciler's `POST`, a push is lost. Bounded by one round trip; degrades
-  reach, never correctness. Not closable without server-side fencing.
-- **Sign out offline and never sign in again on this handset.** The island keeps
-  a routable row. Unchanged by this design, and unreachable by any client
-  mechanism; it needs a server-side expiry. Already filed.
-- **`UNKNOWN` after a failed write costs a redundant round trip** on the next
-  reconcile. Deliberate: re-`POST`ing a token the island already holds is an
-  idempotent upsert, so guessing wrong is cheap and guessing right is
-  load-bearing.
+- **Deafness between an over-delete and the next re-assertion.** Bounded by `_reassertAfter` and by the app being foregrounded. Reach, never correctness, never disclosure — the direction we chose deliberately.
+- **A hung `DELETE` is still un-cancellable.** It is no longer *ordered against* anything, so it no longer delays a `POST` or triggers a compensating write. It lands, or it doesn't, and the debt outlives it either way.
+- **Sign out offline and never sign in again on this handset.** The island keeps a routable row. Unchanged, unreachable by any client mechanism; needs server-side expiry. Filed.
+- **The debt store's 16-entry FIFO eviction** drops a debt, leaving an island row this client can never clear. Named in the store, and now named here: it is a **correctness degradation in the leak direction**, which is the direction that does not self-heal. It deserves its own decision, not a footnote — filed.
+- **A backup-restored debt file** names another living device's token and would `DELETE` it under the same `user_id`. Independent of this design. Filed (device-stamp each debt; discard on mismatch — fails closed).
 
 ## Island handoff (separate, not a precondition)
 
-The class exists because the roster offers no fencing. Worth proposing to the
-island tab, on its own timeline: a conditional unregister — the app sends the
-`updated_at` (or an opaque etag) it received from its own `register`, and the
-island deletes only if the row still carries it. A stale `DELETE` then no-ops
-**server-side**, which is the only place it can be made to no-op reliably.
+Worth proposing to the island tab on its own timeline: a **conditional unregister** — the app
+sends the `updated_at`/etag its own `register` returned, and the island deletes only if the row
+still carries it. A stale `DELETE` then no-ops **server-side**, which is the only place it can
+be made to no-op as a *fact* rather than as a hope, and it would let a later version drop the
+over-delete residual entirely.
 
-This design does not depend on it. It is what would let a later version drop the
-`UNKNOWN` retry.
+This design does not depend on it.
+
+## Acceptance bar (Tesla's subtraction test, adopted from round 1)
+
+> The recast is real only when `_attemptUnregister`'s repair is **gone**. If it remains beside
+> anything, this document is guard six and must not supersede #156.
+
+Cast 2 meets it by deleting the repair rather than replacing it. The remaining question for the
+re-strike is whether **re-assertion** is a fourth writer in disguise — the design's answer is
+that it is not, because it obeys the register invariant and issues from a live session, and
+that answer is the thing to strike hardest.
