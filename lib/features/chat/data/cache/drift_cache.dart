@@ -1063,8 +1063,6 @@ class DriftCache extends GeneratedDatabase {
     return rows.map((r) => _toDomain(MessageRow.fromRow(r))).toList();
   }
 
-  /// Invariant O — the outbox is a QUERY, not a table: every un-acked,
-  /// not-failed row, in send order.
   /// The SERVER ULID the island assigned to [clientTempId], or null while the
   /// row is still in the outbox (unacked) or unknown.
   ///
@@ -1074,6 +1072,8 @@ class DriftCache extends GeneratedDatabase {
   Future<String?> serverUlidFor(String clientTempId) async =>
       (await _messageBy(_M.clientTempId, clientTempId))?.serverUlid;
 
+  /// Invariant O — the outbox is a QUERY, not a table: every un-acked,
+  /// not-failed row, in send order.
   Future<List<Message>> outbox() async {
     final rows = await customSelect(
       'SELECT * FROM ${_M.table} WHERE ${_M.serverUlid} IS NULL '

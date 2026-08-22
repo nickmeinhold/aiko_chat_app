@@ -54,6 +54,22 @@ class CallEndAnnouncer {
   @visibleForTesting
   final List<Future<void>> settling = [];
 
+  /// Invitations whose hangup has already been claimed by someone.
+  ///
+  /// ONE CALL, ONE END — and the reason is the same one that made `startCall`
+  /// single-flight: `kCallEndBody` is a signed row in permanent history, so a
+  /// second announcement is not a harmless retry, it is a duplicate fact.
+  /// Idempotence here is what lets MORE THAN ONE owner be responsible for the
+  /// hangup without coordinating: the call screen's teardown and the call's mint
+  /// site can both demand it, and whichever runs first is the one that speaks.
+  /// That is deliberately the opposite of a fence — the failure this replaced
+  /// was an obligation with exactly one owner who was not always born.
+  ///
+  /// Grows by one short string per call PLACED on this device, in a session.
+  /// Named rather than bounded: unlike [settling], an entry retains no closure
+  /// graph, and a device that placed enough calls to notice has other problems.
+  final Set<String> _claimed = {};
+
   /// Say that the call opened by [inviteId] in [channelId] has ended.
   ///
   /// Returns immediately. Safe to call from `dispose()` — it captures nothing
@@ -68,6 +84,7 @@ class CallEndAnnouncer {
     // wrong — and that is well inside a 30s ack wait. RingController already
     // treats identity as a non-reversible key and clears on swap; this is its
     // sending-side twin and needs the same rule.
+    if (!_claimed.add(inviteId)) return;
     final identity = _identity();
     late final Future<void> f;
     f = _announce(channelId, inviteId, identity).whenComplete(() {
@@ -118,6 +135,19 @@ class CallEndAnnouncer {
       // Read the repository FRESH, at send time. Capturing one at hangup time
       // would reintroduce the mortal-instance bug this object exists to fix.
       final repo = await _ref.read(chatRepositoryProvider.future);
+      // AND CHECK IDENTITY AGAIN, because that read is itself an await
+      // (cage-match round 3, Tesla). Guarding the long wait and then signing
+      // after an unguarded one is the mounted-check bug in another costume: a
+      // liveness test does not survive a subsequent await. This gap is short and
+      // that is exactly why it went unnoticed — but it is the LAST thing before
+      // a signature, so the whole armour above is worth only as much as this.
+      if (_identity() != identity) {
+        debugPrint(
+          'CallEndAnnouncer: identity changed while resolving the repository — '
+          'abandoning the hangup for $inviteId.',
+        );
+        return;
+      }
       await repo.sendMessage(channelId, kCallEndBody, replyToId: serverId);
     } catch (e) {
       debugPrint('CallEndAnnouncer: could not announce the hangup: $e');

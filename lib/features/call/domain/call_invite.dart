@@ -177,14 +177,12 @@ CallEnd? admitCallEnd(Message message, {required String meUserId}) {
 /// can only match an invitation still live, and a live invitation is at most
 /// [kCallRingDuration] old. Re-delivery is idempotent.
 bool endsInvite(CallEnd end, CallInvite invite) {
-  final serverId = invite.serverMsgId;
-  if (serverId == null) return false; // nothing a reply_to could have named
   // Only the account that started the call may end it, and only in the channel
   // it was started in. (Inherited caveat: `sender` is server-supplied and outside
   // the signature, so this is exactly as strong as the app's trust root and no
   // stronger — see admitRing. What IS signed is the end body and its reply
   // binding; the claim is not cryptographic caller identity.)
-  return end.targetServerMsgId == serverId &&
+  return end.targetServerMsgId == invite.serverMsgId &&
       end.fromUserId == invite.from.userId &&
       end.channelId == invite.channelId;
 }
@@ -218,9 +216,24 @@ class CallInvite {
   /// `messages.id`, so it resolves the SERVER id and refuses a client one with
   /// `no_reply_target` — verified against the live island, which is the only
   /// place that fact is written down. So identity uses one and the wire binding
-  /// uses the other. Null if the island did not name it (it always does for an
-  /// inbound message; the field is nullable because [Message.id] is).
-  final String? serverMsgId;
+  /// uses the other.
+  ///
+  /// NON-NULLABLE, and that is a claim about the ingest layer rather than a
+  /// convenience. Every message that can reach a ring is built by
+  /// [Message.fromView] — live fanout (`gateway_transport.dart`) and history
+  /// (`gateway_rest_api.dart`) both — and that factory reads the id as
+  /// `v['msg_id'] as String`, a hard cast: a frame without one throws there and
+  /// never becomes a [Message] at all. [Message.id] stays `String?` for the
+  /// LOCAL optimistic row, which is this device's own echo and is refused by
+  /// [admitRing] one clause earlier.
+  ///
+  /// It was `String?` for one round, purely because [Message.id] is — and three
+  /// separate guards grew on that nullability (an upgrade-on-replay branch here,
+  /// a null check in [endsInvite], a nullable-key map lookup in the ring). All
+  /// three defended a state the cast above makes unrepresentable, and the dead
+  /// branch went on to generate a HIGH review finding for a bug that could not
+  /// occur. Refusing the null at the door deletes all three.
+  final String serverMsgId;
 
   /// The LiveKit room to join. The room IS the channel id (#2726).
   final String channelId;
@@ -338,9 +351,16 @@ CallInvite? admitRing(
   // unreadable, and admitting it would let a bad clock ring forever.
   // `!isNegative` is the guard; `> freshness` alone would admit it.
   if (age.isNegative || age > kCallInviteFreshness) return null;
+  // The island's id is REFUSED here rather than carried as a null. Unreachable
+  // via either production producer (see [CallInvite.serverMsgId]) — so this is
+  // the door where an impossible state stops being representable, not a runtime
+  // hope. A ring with no server id could never be stilled by a hangup anyway:
+  // `reply_to` is an FK onto `messages.id`, so there would be nothing to name.
+  final serverMsgId = message.id;
+  if (serverMsgId == null) return null;
   return CallInvite(
     inviteId: origin.clientMsgId,
-    serverMsgId: message.id,
+    serverMsgId: serverMsgId,
     channelId: message.channelId,
     from: message.sender,
     startedAt: signedAt,

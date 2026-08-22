@@ -193,7 +193,7 @@ void main() {
 
     // --- the other party hangs up ---------------------------------------------
     final stoppedAt = DateTime.now();
-    await _probe(['end', live.serverMsgId!]);
+    await _probe(['end', live.serverMsgId]);
 
     final stopped = await _await(
       () => container.read(incomingRingProvider) == null,

@@ -59,6 +59,16 @@ void main() {
     Duration age = const Duration(seconds: 1),
     String clientMsgId = 'M1',
     String? replyTo,
+    // The SERVER ulid, variable INDEPENDENTLY of the client id.
+    //
+    // It defaulted to `serverIdFor(clientMsgId)` and nothing else — a pure
+    // function of the client id, so the two could not be varied apart and the
+    // one shape that can defeat `_settled` (one signed invitation, two server
+    // ULIDs) was inexpressible. That is why deleting the replay guard left every
+    // test in this file green: the suite could not build the failing input
+    // (cage-match round 3, Maxwell). A fixture that agrees with itself is the
+    // recurring mechanism behind every void test this feature has produced.
+    String? serverId,
   }) async {
     final key = await SovereignKeyStore().loadOrCreate();
     final signedAt = DateTime.now().toUtc().subtract(age);
@@ -74,14 +84,28 @@ void main() {
       replyTo: replyTo,
     );
     final sig = await sign(key, payload);
+    final ulid = serverId ?? serverIdFor(clientMsgId);
     return Message(
-      clientTempId: clientMsgId,
+      // clientTempId IS THE SERVER ULID for an inbound message, exactly as
+      // `Message.fromView` builds one: `final msgId = v['msg_id'] as String;
+      // Message(clientTempId: msgId, id: msgId, ...)`. The signed client id
+      // lives only in the origin envelope, which is where `inviteId` reads it.
+      //
+      // This fixture used to put the SIGNED id here, which production never
+      // does — and the messages table is keyed on `clientTempId`, so a caller
+      // retry (same signed id, new ULID) collided on the primary key and was
+      // dropped as a write failure instead of inserting and ringing. That made
+      // `_settled` look like unreachable dead code when it is in fact
+      // load-bearing: the divergence, not the guard, was the defect
+      // (cage-match round 3, Maxwell — measured, after the first "fix" to this
+      // fixture was itself void).
+      clientTempId: ulid,
       // The SERVER ulid — distinct from the client id (the gateway's reply_to
       // is an FK onto messages.id, and a fixture reusing one string for both
       // cannot tell a correct binding from the wire bug a live probe caught),
       // and canonical ULID SHAPE, because a value no island could mint proves
       // the binding against an id that cannot occur.
-      id: serverIdFor(clientMsgId),
+      id: ulid,
       channelId: dmId,
       sender: MessageSender(
         userId: from,
@@ -202,7 +226,7 @@ void main() {
     expect(container.read(incomingRingProvider), isNull);
   });
 
-  test('a replay AFTER Ignore does not ring again', () async {
+  test('a caller RETRY after Ignore does not ring again', () async {
     // At-least-once delivery: the same signed invitation arrives twice (live +
     // history, reconnect drain). Suppressing only against "currently ringing"
     // was not enough — `stopRinging()` clears that, so a replay landing seconds
@@ -219,13 +243,28 @@ void main() {
     container.read(incomingRingProvider.notifier).stopRinging();
     expect(container.read(incomingRingProvider), isNull);
 
-    // The SAME invitation, redelivered well inside its freshness window.
-    transport.emitMessage(msg);
+    // THE CALLER RETRIES — and that, not a redelivery, is the shape that can
+    // actually defeat `_settled`.
+    //
+    // This assertion used to re-emit `msg` itself and passed for the wrong
+    // reason: `ChatRepository._announceInbound` fires only on `inserted`, a
+    // FIRST insert of that server ULID, so a redelivery of one message never
+    // reaches the ring at all. Deleting the guard under test left this test —
+    // and every other in this file — green (cage-match round 3, Maxwell;
+    // measured with a positive control).
+    //
+    // A retry is a genuinely new row: the caller re-sends the SAME signed
+    // `clientMsgId`, the island mints a NEW ULID for it, so it inserts, so it is
+    // announced, and it arrives carrying an `inviteId` this device has already
+    // dismissed. That is the only input that can tell the guard from its absence.
+    transport.emitMessage(await inbound(serverId: serverIdFor('RETRY')));
     await pump();
     expect(
       container.read(incomingRingProvider),
       isNull,
-      reason: 'a settled invitation must never ring twice',
+      reason:
+          'the user pressed Ignore on THIS invitation — a retry of it carries '
+          'the same signed id and must stay dismissed',
     );
   });
 
@@ -363,11 +402,11 @@ void main() {
     expect(container.read(incomingRingProvider), isNotNull);
   });
 
-  test('a hangup does not resurrect the ring on the invite replay', () async {
-    // At-least-once delivery: the INVITE can arrive again inside its freshness
-    // window, after the hangup. stopRinging settles the invitation, so the
-    // replay finds it already dealt with — the same memory that makes Ignore
-    // stick.
+  test('a hangup does not resurrect the ring on a caller RETRY', () async {
+    // The hangup settles the invitation, so a retry of it finds the id already
+    // dealt with — the same memory that makes Ignore stick. (Was written against
+    // a redelivery, which the repository dedupes before the ring ever sees it;
+    // see the retry note above.)
     await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
@@ -387,10 +426,58 @@ void main() {
       reason: 'precondition',
     );
 
-    transport.emitMessage(await inbound()); // the invite, delivered again
+    transport.emitMessage(await inbound(serverId: serverIdFor('RETRY')));
     await pump();
 
     expect(container.read(incomingRingProvider), isNull);
+  });
+
+  test('a LATER end cannot evict the genuine one from the overtake memory', () async {
+    // Cage-match round 3, Tesla. The overtake memory hung one value per target
+    // ULID, and the caller/channel clauses run at LOOKUP time — so an end this
+    // device would ultimately REFUSE could still displace a genuine stop that
+    // arrived before it. The existing third-party test only ever plays the
+    // impostor FIRST, which is the ordering that cannot fail; this is the
+    // ordering that can.
+    //
+    // Not reachable in a two-party DM today, because a stranger cannot learn the
+    // invitation's ULID. It is reachable the moment calls are channel-wide —
+    // which is the future `isDmChannelId` was deleted to make room for, and the
+    // reason a single slot for a contested key does not get to stay.
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+
+    // The caller's genuine hangup, overtaking its own invitation.
+    transport.emitMessage(
+      await inbound(
+        body: kCallEndBody,
+        clientMsgId: 'M2',
+        replyTo: serverIdFor('M1'),
+      ),
+    );
+    await pump();
+    // ...then somebody else's stop, naming the SAME call.
+    transport.emitMessage(
+      await inbound(
+        from: 'mallory-key',
+        body: kCallEndBody,
+        clientMsgId: 'M9',
+        replyTo: serverIdFor('M1'),
+      ),
+    );
+    await pump();
+
+    transport.emitMessage(await inbound()); // ...and now the invitation
+    await pump();
+
+    expect(
+      container.read(incomingRingProvider),
+      isNull,
+      reason:
+          'the caller DID hang up before the invitation arrived — a later stop '
+          'from someone with no standing must not erase that fact',
+    );
   });
 
   test('an end that OVERTAKES its own invite still stops the ring', () async {

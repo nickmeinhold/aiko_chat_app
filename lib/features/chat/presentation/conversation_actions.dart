@@ -15,6 +15,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
+import '../../call/application/call_end_announcer.dart'
+    show callEndAnnouncerProvider;
 import '../../call/domain/call_invite.dart' show kCallInviteBody;
 import '../../call/presentation/call_screen.dart' show pushCall;
 import '../../moderation/application/moderation_controller.dart';
@@ -91,6 +93,17 @@ Future<void> startCall(
   // this latch as tidiness; the ring promoted it to correctness.)
   if (_callActionInFlight) return;
   _callActionInFlight = true;
+  // Captured BEFORE any await, like `messenger` above, and for a stronger
+  // reason: the paths that need it are exactly the paths where this widget is
+  // already gone. The announcer is app-scoped (pinned in `main`), so holding one
+  // across a teardown is the whole point of the class rather than a leak.
+  final endAnnouncer = ref.read(callEndAnnouncerProvider);
+  // Hoisted out of the try so EVERY exit below can see it. The obligation is
+  // owed from the instant the invitation is on the wire, and after that point no
+  // arm of this function — early return, throw, or success — is allowed to leave
+  // the peer ringing. Channel and invitation travel together because the
+  // announcement needs both and neither is meaningful alone.
+  ({String channelId, String inviteId})? owedHangup;
   final String failure;
   try {
     // openDm stays idempotent (same room on a re-open) — belt-and-braces under
@@ -102,10 +115,14 @@ Future<void> startCall(
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
     final inviteId = await _ring(ref, dm.id);
+    if (inviteId != null) {
+      owedHangup = (channelId: dm.id, inviteId: inviteId);
+    }
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
     // longer holds here. A mounted check does not survive a subsequent await —
     // adding the ring introduced a NEW async gap, not just another statement
     // (the #133 bug class, caught by `use_build_context_synchronously`).
+    // This return is the one that used to strand the peer — see the `finally`.
     if (!context.mounted) return;
     if (inviteId == null) {
       // Honest, not fatal: the room is still opening behind this.
@@ -133,6 +150,24 @@ Future<void> startCall(
     // without a finally is a latch that leaks on the first unmounted-context
     // return and locks Call out for the rest of the session.
     _callActionInFlight = false;
+    // AND THE HANGUP IS DISCHARGED FROM HERE, not from a screen that may never
+    // exist (cage-match round 3, Tesla). `_ring` puts a signed invitation on the
+    // wire and lights the peer's handset; the only thing that ever announced the
+    // end was `CallScreen.dispose`. So every arm between those two points — the
+    // unmounted-context return, a throw from `pushCall`, anything the catch-all
+    // swallows — meant no screen, so no dispose, so no end, and the callee rang
+    // the full 30 seconds at a room nobody was coming to.
+    //
+    // That is the SAME defect this PR exists to remove, one frame earlier: there
+    // the hangup was an instant, here it was the property of a single owner who
+    // is not always born. A `finally` is the only place that sees all of those
+    // exits at once. `announce` is idempotent per invitation, so the ordinary
+    // path — where the screen did live and its dispose already spoke — passes
+    // through here as a no-op rather than saying it twice into signed history.
+    final owed = owedHangup;
+    if (owed != null) {
+      endAnnouncer.announce(channelId: owed.channelId, inviteId: owed.inviteId);
+    }
   }
   // Liveness on the ERROR path too. Every arm above fires after an await and the
   // messenger was captured before it, so telling a torn-down surface about a
