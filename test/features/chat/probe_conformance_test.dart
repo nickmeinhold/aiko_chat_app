@@ -37,7 +37,7 @@ Map<String, dynamic>? _vector({String? replyTo}) {
   final r = Process.runSync('python3', [
     'tool/ring_probe.py',
     'vector',
-    if (replyTo != null) replyTo,
+    ?replyTo,
   ]);
   if (r.exitCode != 0) {
     // ignore: avoid_print
@@ -136,7 +136,7 @@ void main() {
       // proves nothing: a verifier that ignored reply_to would pass it happily.
       expect(
         await verifyOrigin(
-          origin!,
+          origin,
           channelId: frame['channel_id'] as String,
           body: frame['body'] as String,
           replyTo: null,

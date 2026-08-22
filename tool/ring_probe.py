@@ -211,6 +211,14 @@ async def send_signed(body: str, reply_to: str | None) -> str:
         frame["reply_to"] = reply_to
 
     async with websockets.connect(f"wss://{host}/v1/ws?token={token}") as ws:
+        # SUBSCRIBE BEFORE SEND. The gateway routes acks and fanout to the
+        # channels this socket has subscribed to, so a send on a cold socket can
+        # be accepted while its ack goes nowhere — which would look identical to
+        # a refusal from here, and would make the "no ack in 15s" exit below lie
+        # about which half failed.
+        await ws.send(
+            json.dumps({"type": "subscribe", "channel_ids": [channel_id]})
+        )
         await ws.send(json.dumps(frame))
         # Wait for the island's ack so a REFUSAL is loud rather than a silent
         # no-op. `reply_to` is an FK onto messages.id: naming a client id here
