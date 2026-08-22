@@ -238,6 +238,20 @@ class CallEndAnnouncer {
           replyToId: serverId,
         );
         if (sentId != null) return; // spoken; the claim stands.
+        // NAMED COMPROMISE, found by a fix-interaction pass rather than a
+        // reviewer: `sendMessage` fires the transport BEFORE it returns, and its
+        // catch returns null. So a throw in that window yields null with the
+        // frame ALREADY on the wire, and this retry sends a second END. Two
+        // signed rows for one hangup, in permanent history.
+        //
+        // Kept deliberately, because the two failures are not symmetric. A
+        // duplicate end is inert at the receiver — `_ended` holds a list, and
+        // `stopRinging` is idempotent — so the cost is one redundant row. A
+        // MISSING end rings someone's handset for thirty seconds at a room
+        // nobody is coming to, which is the entire subject of this PR. Removing
+        // it properly needs a write-ahead attempt record (the debt-record shape
+        // this codebase has now grown twice), not a guard here.
+        //
         // NULL IS NOT SUCCESS, and ignoring it was this class's own bug
         // (cage-match round 5, Tesla). `sendMessage` documents `null` for a
         // post-dispose no-op and for a teardown-race write — precisely the

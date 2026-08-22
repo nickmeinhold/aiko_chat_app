@@ -147,16 +147,66 @@ class CallEnd {
 /// - **has no author** — `MessageSender.userId` is null for an external actor.
 ///   "Only the caller may end the call" is unanswerable without one, and an
 ///   authorless stop would then be a stop from anybody.
+/// The SHAPE of a call end: the pinned body, a human author with an id, and a
+/// reply that names the call being ended.
+///
+/// Shared by the ring and the screen so presentation cannot quietly be more
+/// generous than admission. The render arm used to match the BODY alone, so a
+/// message the ring would refuse still drew a centred "X ended the call" — a
+/// second almost-gate with fewer clauses, which is how a UI ends up narrating
+/// events the domain never admitted (cage-match rounds 6-7, Carnot).
+bool _isCallEndShape(Message message) =>
+    isCallEndBody(message.body) &&
+    message.sender.userId != null &&
+    message.sender.kind == SenderKind.human &&
+    message.replyToId != null; // "names no call" — see admitCallEnd's doc
+
+/// A verified sovereign origin: this key signed these bytes, checked at ingest.
+bool _hasVerifiedOrigin(Message message) =>
+    message.originCryptoValid == true && message.origin != null;
+
+/// A call END the SCREEN may draw as an event rather than as speech.
+///
+/// Two deliberate divergences from [admitCallEnd], both about who is asking:
+///
+///   * YOUR OWN hangup renders (as "You ended the call") where the ring refuses
+///     it — you do not ring yourself.
+///   * `isMine` also EXEMPTS the origin verdict, and that is not a shortcut.
+///     `originCryptoValid` is written when an INBOUND message is verified at
+///     ingest; a row this device composed carries the signature it self-verified
+///     at sign time and no verdict column, so requiring `true` here would stop
+///     the app rendering its own call events at all. There is no adversary
+///     between this device and its own cache — the verdict exists to judge
+///     what ARRIVED.
+///
+/// Freshness, DM-ness, blocks and mutes are deliberately absent: they answer
+/// "should this ring me NOW", and a call that happened yesterday still belongs
+/// in history as an event.
+///
+/// HONEST LIMIT, because the opposite is easy to assume in a codebase that signs
+/// everything: this cannot stop a person TYPING the sentinel as a reply. The app
+/// signs at birth, so a typed sentinel is signed exactly like a generated one,
+/// and no clause here tells them apart. What it does stop is an unverified or
+/// imported row, a bot, and an authorless actor being elevated into system
+/// narration.
+bool isRenderableCallEnd(Message message, {required bool isMine}) =>
+    _isCallEndShape(message) && (isMine || _hasVerifiedOrigin(message));
+
+/// A call INVITATION the screen may draw as an event. Same authorship floor and
+/// the same `isMine` reasoning — fixing only the hangup would have left the
+/// identical leak one line above it.
+bool isRenderableCallInvite(Message message, {required bool isMine}) =>
+    isCallInviteBody(message.body) &&
+    message.sender.userId != null &&
+    message.sender.kind == SenderKind.human &&
+    (isMine || _hasVerifiedOrigin(message));
+
 CallEnd? admitCallEnd(Message message, {required String meUserId}) {
-  if (!isCallEndBody(message.body)) return null;
-  final from = message.sender.userId;
-  if (from == null) return null;
+  if (!_isCallEndShape(message)) return null;
+  if (!_hasVerifiedOrigin(message)) return null;
+  final from = message.sender.userId!;
   if (from == meUserId) return null;
-  if (message.sender.kind != SenderKind.human) return null;
-  if (message.originCryptoValid != true) return null;
-  if (message.origin == null) return null; // valid implies present
-  final target = message.replyToId;
-  if (target == null) return null;
+  final target = message.replyToId!;
   return CallEnd(
     targetServerMsgId: target,
     fromUserId: from,

@@ -12,6 +12,7 @@
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
+import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -152,6 +153,67 @@ void main() {
       reason: 'the wire anchor leaked into the UI on the hangup path',
     );
     expect(find.text('You ended the call'), findsOneWidget);
+  });
+
+  testWidgets('an UNVERIFIED sentinel is not elevated into system narration', (
+    tester,
+  ) async {
+    // Cage-match round 7, Carnot. Adding the reply clause alone left a second
+    // gate with fewer clauses than the domain's: `admitCallEnd` also demands a
+    // verified origin and a human author, so an unsigned or imported row
+    // carrying the sentinel and a `reply_to` could still be drawn as a system
+    // event. Both arms now call the SAME predicates, beside `admitCallEnd`.
+    final transport = FakeChatTransport();
+    final container = makeContainer(
+      rest: FakeRestApi(channels: channels),
+      transport: transport,
+    );
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+
+    // Arrives from someone else, carrying the exact sentinel AND a reply
+    // binding — but unsigned, so nothing vouches for who wrote it.
+    transport.emitMessage(
+      Message(
+        clientTempId: '01M0GS7FDWBVQ31950B1PTV2E1',
+        id: '01M0GS7FDWBVQ31950B1PTV2E1',
+        channelId: 'c1',
+        sender: const MessageSender(
+          userId: 'mallory-key',
+          kind: SenderKind.human,
+          label: 'Mallory',
+        ),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: DateTime.now().toUtc(),
+        deliveryState: DeliveryState.sent,
+      ),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 80)),
+    );
+    await tester.pumpAndSettle();
+
+    // ASSERT ON THE EVENT FORM, not on the words. The sentinel body literally
+    // contains "ended the call", so `textContaining` matches the raw text too
+    // and cannot tell a system line from a degraded one — an instrument blind to
+    // the difference it exists to measure. The event line is the composed
+    // sentence; the ordinary rendering still carries the machine anchor.
+    expect(
+      find.text('Mallory ended the call'),
+      findsNothing,
+      reason:
+          'the ring would refuse this message outright — the screen must not '
+          'be more generous than the gate it reports on',
+    );
+    expect(
+      find.textContaining('aiko:call/1'),
+      findsOneWidget,
+      reason:
+          'and it degrades to the literal text it is, with no system authority '
+          'borrowed from a signature nobody checked',
+    );
   });
 
   testWidgets('a hangup that names NO call is not drawn as a call event', (

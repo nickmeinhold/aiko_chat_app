@@ -925,8 +925,12 @@ class MessageTile extends ConsumerWidget {
     // which is precisely what pressing Call would have done. Rendering it as an
     // event is therefore honest. A stop is different because a stop makes a
     // claim about a PRIOR event, and that claim is checkable.
-    final isInvite = isCallInviteBody(message.body);
-    final isCallEnd = isCallEndBody(message.body) && message.replyToId != null;
+    // ONE ADMISSION RESULT, REUSED — not a second gate with fewer clauses. Both
+    // predicates live beside `admitCallEnd` in the domain, share its authorship
+    // floor, and document the single clause they deliberately drop (your own
+    // echo, which the ring must refuse and the screen must render as "You").
+    final isInvite = isRenderableCallInvite(message, isMine: isMine);
+    final isCallEnd = isRenderableCallEnd(message, isMine: isMine);
     if (isInvite || isCallEnd) {
       final scheme = Theme.of(context).colorScheme;
       return Padding(
