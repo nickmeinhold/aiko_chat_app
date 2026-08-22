@@ -703,6 +703,166 @@ void main() {
     });
   });
 
+  // A register is an OBLIGATION from the moment it is on the wire. Both of these
+  // were found by the cage-match (Carnot, P1 x2) reading the real checkout, and
+  // both are silent in production: the island keeps routing to a handset nobody
+  // is signed in to, and nothing anywhere raises.
+  group('the register write-ahead obligation', () {
+    test('a register that LANDS then throws in a LIVE session is still owed at '
+        'the next logout — a lost response never tells us it landed', () async {
+      // `_registered` is set on CONFIRMED success only, and `unpair` owes what
+      // `_registered` names. So before the write-ahead, a POST that wrote the row
+      // and then lost its response left `_registered` null, and the logout that
+      // followed recorded NOTHING.
+      //
+      // RED-PROOF: drop the remember() before the POST and the debt is empty.
+      api.registerDeviceThrowsAfterLanding = Exception('response lost');
+      await registrar.start();
+      expect(
+        registrar.registeredToken,
+        isNull,
+        reason: 'precondition: an ambiguous register is not recorded as landed',
+      );
+
+      await registrar.unpair(credential: 'cred-a');
+      await pumpEventQueue();
+
+      expect(
+        pending.read(_island),
+        contains('tok-1'),
+        reason:
+            'the island may hold tok-1 for a session that has just ended, and '
+            'the only thing that could ever have known is gone',
+      );
+    });
+
+    test('a logout while the FIRST registration is still in flight leaves a '
+        'DURABLE debt — not one that depends on the POST coming back', () async {
+      // The PR claims the debt is durable before the credential clear. It was
+      // not, for a register still on the wire: `unpair` read a null
+      // `_registered`, recorded nothing and returned, and only the eventual
+      // `_settle` remembered anything. A process kill or app suspension in that
+      // interval is exactly the failure the debt record exists to survive.
+      //
+      // RED-PROOF: drop the remember() before the POST and this reads empty —
+      // the debt only appears after the gate is completed.
+      final gate = Completer<void>();
+      api.registerDeviceGate = gate.future;
+      unawaited(registrar.start());
+      await pumpEventQueue();
+      expect(api.registeredDevices, isEmpty, reason: 'precondition: in flight');
+
+      await registrar.unpair(credential: 'cred-a');
+
+      expect(
+        pending.read(_island),
+        contains('tok-1'),
+        reason:
+            'durable NOW, with the POST still on the wire — a kill here must not '
+            'lose the only record that this island may hold a row',
+      );
+      gate.complete();
+      await pumpEventQueue();
+    });
+
+    test('epoch-only staleness inside ONE session does not restate — only a '
+        'session edge can reassign a row', () async {
+      // Maxwell's own finding. A reassignment needs a DIFFERENT user's credential
+      // to have posted; two registers racing inside one session both belong to
+      // the same user, so the newer one already owns the row and restating is a
+      // pointless round trip under a log line that is not true.
+      //
+      // RED-PROOF: widen the branch back to `if (_registered == token)` and the
+      // count goes to 3 — a spurious restatement.
+      await registrar.start();
+      final gate = Completer<void>();
+      api.registerDeviceGate = gate.future;
+      source.refreshes.add('tok-2'); // an older register goes on the wire
+      await pumpEventQueue();
+
+      api.registerDeviceGate = null;
+      source.refreshes.add('tok-2'); // superseded by a newer one, same session
+      await pumpEventQueue();
+      final before = api.registeredDevices.length;
+
+      gate.complete(); // the older one lands, stale by EPOCH but not generation
+      await pumpEventQueue();
+
+      expect(
+        api.registeredDevices.length,
+        before + 1,
+        reason:
+            'ONE — the straggler\'s own landing, which completing the gate '
+            'records whatever the remedy is. A second would be a restatement, '
+            'and there is nothing to restate: same session, same user, same '
+            'token, so nothing was taken. (Asserting == before instead makes '
+            'this test unsatisfiable — the same void-test trap the reassignment '
+            'case hit.)',
+      );
+      expect(
+        pending.read(_island),
+        isNot(contains('tok-2')),
+        reason:
+            'and the LIVE token must not be owed a delete — that would aim the '
+            'next drain at the pairing we just confirmed',
+      );
+    });
+  });
+
+  group('a restatement must not fight a rotation', () {
+    test('a straggling DELETE does NOT restate over a register already in '
+        'flight — that would owe a delete for the LIVE platform token', () async {
+      // Tesla's resonant collision (cage-match). `_registered` is the last
+      // CONFIRMED token, not the desired one, so while a rotation is on the wire
+      // it is deliberately stale. Restating it there makes a THIRD writer that
+      // fights the second with a NEWER epoch:
+      //   sign-in registers tok-1 -> platform rotates to tok-2 (in flight) ->
+      //   the dead session's DELETE lands and restates tok-1 at a higher epoch ->
+      //   tok-2 settles STALE and is owed a DELETE (the live token!) while the
+      //   memo rolls back to tok-1. Silently unreachable, and skip-if-same means
+      //   nothing re-registers tok-2 until the next real rotation.
+      //
+      // RED-PROOF: drop the `_registerEpoch != _settledEpoch` yield in _restate
+      // and this goes red on BOTH assertions.
+      await registrar.start(); // tok-1 confirmed
+      final deleteGate = Completer<void>();
+      api.unregisterDeviceGate = deleteGate.future;
+      await registrar.unpair(credential: 'cred-a');
+      await pumpEventQueue();
+      await registrar.start(); // same user back, tok-1 live again
+
+      final rotateGate = Completer<void>();
+      api.registerDeviceGate = rotateGate.future;
+      source.token = 'tok-2';
+      source.refreshes.add('tok-2'); // the rotation goes on the wire
+      await pumpEventQueue();
+
+      api.unregisterDeviceGate = null;
+      deleteGate.complete(); // the dead session's DELETE lands mid-rotation
+      await registrar.settled;
+      await pumpEventQueue();
+
+      api.registerDeviceGate = null;
+      rotateGate.complete(); // the rotation settles
+      await pumpEventQueue();
+
+      expect(
+        registrar.registeredToken,
+        'tok-2',
+        reason:
+            'the platform rotated; a restatement of the older token must not '
+            'roll the pairing back to a token FCM will not re-emit',
+      );
+      expect(
+        pending.read(_island),
+        isNot(contains('tok-2')),
+        reason:
+            'and the LIVE platform token must never be owed a delete — the next '
+            'drain would remove the only row that can wake this handset',
+      );
+    });
+  });
+
   group('the debt record itself', () {
     test('a SECOND debt for the same island does not evict the first — the '
         'single-slot memo bug', () async {

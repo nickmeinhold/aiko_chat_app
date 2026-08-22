@@ -91,8 +91,16 @@ class PendingUnregisterStore {
     owed.add(token);
     while (owed.length > _maxPerIsland) {
       final dropped = owed.removeAt(0);
+      // REDACTED (cage-match, Tesla). A push token is a routing secret — the
+      // REST layer keeps it out of URLs so it never reaches an access log or a
+      // proxy trace, and debugPrint is not stripped in release. This was the one
+      // path that dumped a whole token, and it is the path that already admits
+      // it is dropping a debt nobody can retry.
+      final shown = dropped.length <= 8
+          ? dropped
+          : '${dropped.substring(0, 8)}…[${dropped.length}]';
       debugPrint(
-        'PendingUnregisterStore: DROPPING owed token $dropped for '
+        'PendingUnregisterStore: DROPPING owed token $shown for '
         '$islandBaseUrl — more than $_maxPerIsland debts outstanding. That '
         "island keeps a routable row this client can no longer clear.",
       );

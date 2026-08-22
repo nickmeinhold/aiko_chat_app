@@ -558,8 +558,17 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// structurally unable to skip the security-critical one. The clear then runs
   /// unconditionally, whatever the pairing did.
   Future<void> _clearCredentialAndUnpair() async {
-    final credential = await _tokens.currentAccessToken();
+    // INSIDE the try, and that is the whole point of the try (cage-match, Carnot).
+    // This read falls through to SecureTokenStore.read() on a cache miss, which
+    // throws on a locked or unavailable keychain — and sitting one line above the
+    // guard it threw PAST the clear, leaving a signed-out app holding a live
+    // credential that the next cold start restored. That is the exact outcome the
+    // doc above calls "strictly worse", reachable through the one statement the
+    // try did not cover. A credential we cannot read is simply a credential the
+    // best-effort unpair does without.
+    String? credential;
     try {
+      credential = await _tokens.currentAccessToken();
       // AWAITED, and only as far as the debt being durable — a local
       // preferences write, not the authenticated round trip, which stays out of
       // band. Returning before that write lands meant a process kill between
