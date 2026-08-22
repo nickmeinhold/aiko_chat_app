@@ -42,55 +42,15 @@ class RingController extends Notifier<CallInvite?> {
   /// the user: a repo reconnecting is not the user ignoring a call.
   CallInvite? _live;
 
-  /// Invitations already shown and finished with — answered, ignored, or
-  /// expired. Keyed on the signed [CallInvite.inviteId].
-  ///
-  /// WHAT REACHES HERE IS NOT WHAT THE TRANSPORT SENDS, and an earlier version
-  /// of this comment got that wrong: it justified this map by "live + history
-  /// dual delivery, reconnect drain", which are precisely the deliveries
-  /// [ChatRepository] already collapses one layer below. `_announceInbound`
-  /// fires only when the cache reports `inserted` — a FIRST insert of that
-  /// server ULID — so a re-delivery of one message never reaches `_consider` at
-  /// all. Measured, with a positive control: a repeated emit announced once, a
-  /// genuinely new one announced again.
-  ///
-  /// AND THE CASE THIS GUARD DEFENDS IS, AS OF TODAY, UNREACHABLE — stated
-  /// plainly because two earlier versions of this comment stated a reachability
-  /// that was not checked, and each one made a test look meaningful that was not.
-  ///
-  /// For a second delivery to reach `_consider` carrying an `inviteId` already
-  /// settled, one signed `clientMsgId` would have to exist under TWO server
-  /// ULIDs. The island refuses that: `messages_service.py` holds
-  /// `UNIQUE(channel_id, client_msg_id)` and its create path short-circuits —
-  /// "a resend of an already-persisted (channel, client_msg_id) returns the
-  /// EXISTING row". One signed invitation, one ULID, forever. So a caller retry
-  /// is reconciled to the first row rather than minting a second, and the
-  /// suppression below has no input that can trigger it.
-  ///
-  /// IT IS KEPT ANYWAY, and the reason is the coupling rather than the code:
-  /// "unreachable" here is a fact about the ISLAND's idempotency contract, not
-  /// about this file. A peer repo that relaxed that contract would not fail a
-  /// test here — it would silently restore a ring that replays after Ignore. A
-  /// guard whose precondition lives in another repository is defence in depth,
-  /// and deleting it would bake a cross-repo assumption into silence.
-  ///
-  /// The tests below exercise it by CONSTRUCTING the two-ULID delivery the
-  /// island will not currently produce. That is legitimate for defence in depth
-  /// and dishonest if unlabelled, so they say so.
-  ///
-  /// Bounded: an invitation is only ringable for [kCallInviteFreshness], so ids
-  /// older than that can never be admitted again and are dropped. This set can
-  /// therefore only hold the invitations of the last few seconds.
-  final Map<String, DateTime> _settled = {};
-
   /// Calls whose END we have seen, keyed on the signed server id the hangup
-  /// named. Value is when we saw it, for the same bounded forgetting as
-  /// [_settled].
+  /// named. Value is when we saw it, so it can be forgotten on the same bound
+  /// as admission.
   ///
   /// AN END CAN ARRIVE BEFORE ITS OWN INVITE, and without this it was discarded
-  /// (cage-match, Tesla + Maxwell). Delivery here is at-least-once and locally
-  /// out of order — this file already says so, and `_settled` exists because
-  /// `_live` was not memory enough. An unmatched end is that same bug inverted:
+  /// (cage-match, Tesla + Maxwell). Delivery is at-least-once and locally OUT OF
+  /// ORDER, and ordering is the part that survives: the repository collapses a
+  /// re-delivery of one message, but it cannot make a stop arrive after the
+  /// start it refers to. An unmatched end is the ring bug inverted:
   /// a signed "this call is dead" with nowhere to live until the invitation is
   /// admitted, by which point the stop has already been thrown away and the bell
   /// rings for a corpse. Push makes it likelier rather than rarer: the island
@@ -118,9 +78,6 @@ class RingController extends Notifier<CallInvite?> {
   Set<String> _dmIds = const {};
 
   void _forget(DateTime now) {
-    _settled.removeWhere(
-      (_, at) => now.difference(at) > kCallInviteFreshness * 2,
-    );
     // An end is only useful while its invitation could still be ADMITTED, and
     // admission is capped by freshness. Same bound, same reason: this can only
     // ever hold the last few seconds of calls.
@@ -151,9 +108,27 @@ class RingController extends Notifier<CallInvite?> {
     return live;
   }
 
-  /// Record an invitation as dealt with. See [_settled].
+  /// This invitation is no longer the live one — answered, ignored, expired, or
+  /// displaced by a newer caller.
+  ///
+  /// It used to ALSO record the id in a `_settled` set, so a later delivery of
+  /// the same invitation could be suppressed. That set is gone. Reaching it
+  /// required one signed `clientMsgId` to exist under two server ULIDs, and the
+  /// island refuses that at the database: `UNIQUE(channel_id, client_msg_id)`,
+  /// with a create path that returns the EXISTING row on a resend. Nothing else
+  /// can deliver one invitation to `_consider` twice — `ChatRepository`
+  /// announces only on a first insert of a server ULID (measured, with a
+  /// positive control).
+  ///
+  /// It was kept for one round as cross-repo defence in depth, and that reading
+  /// does not survive contact: the thing it defended against is not a peer
+  /// changing its mind, it is a peer's UNIQUE constraint failing. Defending
+  /// against that admits no limit — every foreign key and every documented
+  /// contract would earn a client-side shadow. What the set did buy was three
+  /// tests that could only be written by constructing a delivery the island
+  /// cannot emit, and a false review finding, which is the going rate for
+  /// machinery guarding a state nobody can produce.
   void _settle(CallInvite invite) {
-    _settled[invite.inviteId] = DateTime.now().toUtc();
     if (_live == invite) _live = null;
   }
 
@@ -176,7 +151,6 @@ class RingController extends Notifier<CallInvite?> {
     if (me != _identity) {
       _identity = me;
       _live = null;
-      _settled.clear();
       _ended.clear();
       _expiry?.cancel();
       _expiry = null;
@@ -251,36 +225,16 @@ class RingController extends Notifier<CallInvite?> {
     // a ring that an in-order end would not have.
     final owed = _ended[invite.serverMsgId];
     if (owed != null && owed.any((e) => endsInvite(e.end, invite))) {
-      // Same standing as `_settled` above: with one ULID per signed invitation
-      // (the island's idempotency contract, verified in its source), a live
-      // invitation whose end is already remembered would have been stopped by
-      // the live arm, so `_live == invite` here has no reachable input today.
-      // Correct regardless, and kept for the same reason — the precondition
-      // belongs to a peer repo, not to this file.
-      //
-      // SETTLING IS BOOKKEEPING; STOPPING IS THE RING. `_settle` records the
-      // invitation as dealt with and drops `_live`, but it deliberately does not
-      // touch `state` or the expiry timer — so when the invitation being settled
-      // is the one currently ON SCREEN, the banner keeps ringing for a call the
-      // device can prove is over, Answer still joins the dead room, and the only
-      // undertaker is the timer (cage-match round 4, Tesla). `stopRinging` is the
-      // single door that clears all three; `_settle` alone is correct only when
-      // some OTHER invitation is live, where touching state would stop the wrong
-      // ring.
-      if (_live == invite) {
-        stopRinging();
-      } else {
-        _settle(invite);
-      }
+      // `_live` is necessarily some OTHER invitation, or none. For this one to
+      // be ringing already, its end would have had to arrive while it was live —
+      // and the live arm above stops the ring in that case. One ULID per signed
+      // invitation is what makes that exhaustive (the island's UNIQUE constraint),
+      // so there is no third state where the invitation on screen is also the one
+      // being settled here. A `stopRinging` branch guarding that state was added
+      // and then removed with the rest of the two-ULID machinery.
+      _settle(invite);
       return;
     }
-    // At-least-once delivery means the SAME invitation can arrive again (live +
-    // history dual delivery, reconnect replay). Two distinct failures if this is
-    // not suppressed: re-arming the timer would extend the ring from the LAST
-    // echo rather than the first (Tesla), and a replay after the user pressed
-    // Ignore would ring again (Carnot). Both are answered by remembering the
-    // signed invite id, not by comparing against whatever is ringing now.
-    if (_settled.containsKey(invite.inviteId)) return;
     // The SAME invitation, already ringing. Nothing to do — and notably nothing
     // to UPGRADE: an earlier round grew a branch here that re-published `_live`
     // when a replay carried a server id the first sighting lacked. That state is

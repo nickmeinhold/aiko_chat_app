@@ -40,9 +40,6 @@ void main() {
     'M1': '01M0GS7FDWBVQ31950B1PTV2D0',
     'M2': '01M0GS7FDWBVQ31950B1PTV2D1',
     'M9': '01M0GS7FDWBVQ31950B1PTV2D2',
-    // The caller's RETRY: the same signed invitation, a DIFFERENT island ULID.
-    // The whole point is that this is not derivable from 'M1'.
-    'RETRY': '01M0GS7FDWBVQ31950B1PTV2D3',
   };
   String serverIdFor(String clientMsgId) {
     final id = serverIds[clientMsgId];
@@ -253,56 +250,6 @@ void main() {
     expect(container.read(incomingRingProvider), isNull);
   });
 
-  test('a caller RETRY after Ignore does not ring again', () async {
-    // At-least-once delivery: the same signed invitation arrives twice (live +
-    // history, reconnect drain). Suppressing only against "currently ringing"
-    // was not enough — `stopRinging()` clears that, so a replay landing seconds
-    // after Ignore rang all over again (cage-match #139 R2, Carnot).
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
-    final msg = await inbound();
-
-    transport.emitMessage(msg);
-    await pump();
-    expect(container.read(incomingRingProvider), isNotNull);
-
-    container.read(incomingRingProvider.notifier).stopRinging();
-    expect(container.read(incomingRingProvider), isNull);
-
-    // THE CALLER RETRIES — and that, not a redelivery, is the shape that can
-    // actually defeat `_settled`.
-    //
-    // This assertion used to re-emit `msg` itself and passed for the wrong
-    // reason: `ChatRepository._announceInbound` fires only on `inserted`, a
-    // FIRST insert of that server ULID, so a redelivery of one message never
-    // reaches the ring at all. Deleting the guard under test left this test —
-    // and every other in this file — green (cage-match round 3, Maxwell;
-    // measured with a positive control).
-    //
-    // HONEST LABEL: the island will not currently produce this delivery. Its
-    // `messages_service` holds UNIQUE(channel_id, client_msg_id) and returns the
-    // EXISTING row on a resend, so one signed invitation has exactly one ULID and
-    // a retry is reconciled rather than re-inserted. An earlier version of this
-    // comment asserted the opposite as fact, without checking the peer repo —
-    // the same unverified-premise error the rest of this file was written to fix.
-    //
-    // The test is kept because the guard is kept: its precondition lives in
-    // ANOTHER repository, so this constructs the delivery a relaxed island
-    // idempotency contract would start emitting, and pins that the ring stays
-    // silent for it. Defence in depth, labelled as such rather than dressed up
-    // as a reachable bug.
-    transport.emitMessage(await inbound(serverId: serverIdFor('RETRY')));
-    await pump();
-    expect(
-      container.read(incomingRingProvider),
-      isNull,
-      reason:
-          'the user pressed Ignore on THIS invitation — a retry of it carries '
-          'the same signed id and must stay dismissed',
-    );
-  });
-
   test('a RETRACTED invite is never announced, so it never rings', () async {
     // `upsertInbound` suppresses a retracted message via Door A and writes no
     // row, but returns `false` meaning "not newly invalid" — indistinguishable
@@ -435,85 +382,6 @@ void main() {
     await pump();
 
     expect(container.read(incomingRingProvider), isNotNull);
-  });
-
-  test('a hangup does not resurrect the ring on a caller RETRY', () async {
-    // The hangup settles the invitation, so a retry of it finds the id already
-    // dealt with — the same memory that makes Ignore stick. (Was written against
-    // a redelivery, which the repository dedupes before the ring ever sees it;
-    // see the retry note above.)
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
-    transport.emitMessage(await inbound());
-    await pump();
-    transport.emitMessage(
-      await inbound(
-        body: kCallEndBody,
-        clientMsgId: 'M2',
-        replyTo: serverIdFor('M1'),
-      ),
-    );
-    await pump();
-    expect(
-      container.read(incomingRingProvider),
-      isNull,
-      reason: 'precondition',
-    );
-
-    transport.emitMessage(await inbound(serverId: serverIdFor('RETRY')));
-    await pump();
-
-    expect(container.read(incomingRingProvider), isNull);
-  });
-
-  test('a hangup naming the RETRY stops the ring, banner and all', () async {
-    // Cage-match round 4, Tesla. The stop is bound to ONE island ULID; the ring's
-    // identity is the signed `clientMsgId`. Those are not the same name, and a
-    // caller retry is where they come apart: the island mints a second ULID for
-    // one signed invitation, so a hangup can name a ULID the live invitation
-    // does not carry.
-    //
-    // What that used to leave behind is the bug this PR exists to remove,
-    // restored as a rebuild gap: the overtake arm called `_settle`, which drops
-    // `_live` but leaves `state` and the expiry timer holding the invitation —
-    // so the banner kept ringing for a call the device could prove was over, and
-    // Answer still joined the dead room until the timer fired.
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
-
-    // The first delivery rings, under the island's FIRST ulid.
-    transport.emitMessage(await inbound());
-    await pump();
-    expect(
-      container.read(incomingRingProvider),
-      isNotNull,
-      reason: 'precondition — the bell is ringing',
-    );
-
-    // The caller hangs up, naming the ulid of their RETRY, which this device has
-    // not seen. Nothing can match yet, and that is honest.
-    transport.emitMessage(
-      await inbound(
-        body: kCallEndBody,
-        clientMsgId: 'M2',
-        replyTo: serverIdFor('RETRY'),
-      ),
-    );
-    await pump();
-
-    // ...and now the retry itself lands: same signed invitation, second ulid.
-    transport.emitMessage(await inbound(serverId: serverIdFor('RETRY')));
-    await pump();
-
-    expect(
-      container.read(incomingRingProvider),
-      isNull,
-      reason:
-          'the caller hung up on this very invitation — settling it in the '
-          'bookkeeping while the banner keeps ringing is not stopping a ring',
-    );
   });
 
   test('a LATER end cannot evict the genuine one from the overtake memory', () async {
