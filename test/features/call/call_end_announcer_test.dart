@@ -284,6 +284,98 @@ void main() {
     expect(ends.single.replyToId, '01M0GS7FDWBVQ31950B1PTV2DX');
   });
 
+  test('a repository ERROR is retried, not fatal', () async {
+    // Cage-match round 6, Tesla — and the note it names is the one that was not
+    // written: "put chatRepositoryProvider in error, recover it, and watch a
+    // hangup that should still speak stay silent."
+    //
+    // `_repositoryWithin` rethrew everything that was not a TimeoutException, so
+    // the outer catch unclaimed and the obligation died with time still on the
+    // clock. Reconnect, seedOpenedDm and a subscription rebuild — the three
+    // deaths this class exists to outlive — surface as errors at least as often
+    // as they do as hangs, so the one failure mode that was fatal is a common
+    // one. A timeout means "the ring expired"; an error means "not this
+    // millisecond".
+    var failures = 2;
+    final c = ProviderContainer(
+      overrides: [
+        chatRepositoryProvider.overrideWith((ref) async {
+          if (failures > 0) {
+            failures--;
+            throw StateError('repository rebuilding');
+          }
+          return repo;
+        }),
+        sharedPreferencesProvider.overrideWithValue(testPrefs),
+        currentUserProvider.overrideWith((ref) => knobUser),
+        callEndAckWaitProvider.overrideWithValue(const Duration(seconds: 5)),
+      ],
+    );
+    c.listen(callEndAnnouncerProvider, (_, _) {}, fireImmediately: true);
+    addTearDown(c.dispose);
+
+    final inviteId = await sendAndAck();
+    final a = c.read(callEndAnnouncerProvider);
+    a.announce(channelId: _channel, inviteId: inviteId);
+    await Future.wait(a.settling);
+
+    expect(
+      failures,
+      0,
+      reason: 'precondition — both error passes were actually consumed',
+    );
+    final ends = transport.sent.where((m) => m.body == kCallEndBody).toList();
+    expect(
+      ends,
+      hasLength(1),
+      reason:
+          'the repository came back inside the ring window — a hangup that '
+          'gave up on the first exception leaves the peer ringing at nothing',
+    );
+  });
+
+  test('announce() never throws into a dispose that is still unwinding', () async {
+    // Cage-match round 6, Tesla. The caller is `CallScreen.dispose`, and it
+    // calls this BEFORE `super.dispose()`. So a throw here does not merely lose
+    // a hangup — it breaks the widget teardown, from the one path that exists to
+    // make teardown safe. `_identity()` reads two providers off a long-lived
+    // `Ref`, and a disposed `Ref` throws (#3349), which is precisely the
+    // fragility this class carries by design.
+    final c = ProviderContainer(
+      overrides: [
+        chatRepositoryProvider.overrideWith((ref) async => repo),
+        sharedPreferencesProvider.overrideWithValue(testPrefs),
+        currentUserProvider.overrideWith(
+          (ref) => throw StateError('Ref disposed'),
+        ),
+        callEndAckWaitProvider.overrideWithValue(ackWait),
+      ],
+    );
+    c.listen(callEndAnnouncerProvider, (_, _) {}, fireImmediately: true);
+    addTearDown(c.dispose);
+
+    final a = c.read(callEndAnnouncerProvider);
+
+    expect(
+      () => a.announce(channelId: _channel, inviteId: 'whatever'),
+      returnsNormally,
+      reason:
+          'a hangup that cannot even be started must not take the widget '
+          'teardown down with it',
+    );
+
+    // AND THE CLAIM MUST NOT SURVIVE IT. A claim means "in flight or
+    // succeeded"; an announcement that never started is neither, and leaving it
+    // claimed would silently no-op the mint site's `finally` — the second owner
+    // that exists for exactly this case.
+    a.announce(channelId: _channel, inviteId: 'whatever');
+    expect(
+      a.settling,
+      isEmpty,
+      reason: 'nothing was ever in flight, so nothing should be settling',
+    );
+  });
+
   test('a completed announcement is not retained', () async {
     final inviteId = await sendAndAck();
     final a = announcer();

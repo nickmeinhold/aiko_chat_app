@@ -103,7 +103,22 @@ class CallEndAnnouncer {
     // treats identity as a non-reversible key and clears on swap; this is its
     // sending-side twin and needs the same rule.
     if (!_claimed.add(inviteId)) return;
-    final identity = _identity();
+    // NOTHING BELOW MAY THROW, because the caller is `CallScreen.dispose` and a
+    // throw there skips `super.dispose()` — a broken widget teardown, from the
+    // one path that exists to make teardown safe. `_identity()` reads two
+    // providers off a long-lived `Ref`, and a disposed `Ref` throws (the
+    // fragility already tracked as #3349), so it sits inside the guard rather
+    // than in front of it. The claim is released on that path too: a claim means
+    // "in flight or succeeded", and an announcement that never started is
+    // neither (cage-match round 6, Tesla).
+    final (String?, String) identity;
+    try {
+      identity = _identity();
+    } catch (e) {
+      debugPrint('CallEndAnnouncer: could not read identity for $inviteId: $e');
+      _claimed.remove(inviteId);
+      return;
+    }
     late final Future<void> f;
     f = _announce(channelId, inviteId, identity).whenComplete(() {
       // Completed obligations must not accumulate: this object is pinned for the
@@ -157,21 +172,65 @@ class CallEndAnnouncer {
         }
         final left = deadline.difference(DateTime.now());
         if (left <= Duration.zero) break;
+        // EVERY FAILURE INSIDE THIS PASS IS A RETRY, and that is the invariant
+        // three rounds kept re-discovering one hole at a time: round 5 found a
+        // `null` send treated as spoken, round 6 found a repository ERROR ending
+        // the obligation with time still on the clock. `_repositoryWithin`
+        // rethrew everything that was not a `TimeoutException`, so the outer
+        // catch unclaimed and the peer rang out — and reconnect, `seedOpenedDm`
+        // and a subscription rebuild, the three deaths this class exists to
+        // survive, surface as errors at least as often as they do as hangs.
+        //
+        // So the exits are enumerated here rather than discovered:
+        //   1. the send returns an id   -> spoken, done
+        //   2. identity changed         -> abandon; it is not ours to say
+        //   3. the deadline passed      -> abandon; the peer's ring expired
+        // Anything else — an error, a null, a timeout, no server id yet — is
+        // "not this millisecond", never "not this universe".
         // BOUNDED. The deadline used to sit on the `while` while the read inside
         // it was unbounded, so a repository stuck in `AsyncLoading` (a reconnect,
         // exactly what this class exists to outlive) meant the clock was never
         // consulted again — an uncancellable wait inside a poll chosen because
         // polling needs no cancellation. `timeout` does not cancel the original;
         // it stops US waiting, which is all a bounded retry needs.
-        final repo = await _repositoryWithin(left);
-        if (repo == null) break;
-        final serverId = await repo.serverIdFor(inviteId);
+        final ChatRepository? repo;
+        final String? serverId;
+        try {
+          repo = await _repositoryWithin(left);
+          serverId = repo == null ? null : await repo.serverIdFor(inviteId);
+        } catch (e) {
+          debugPrint('CallEndAnnouncer: transient failure for $inviteId: $e');
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          continue;
+        }
+        if (repo == null) {
+          // A timeout consumed the WHOLE remaining budget, so the ring has
+          // expired on its own — this is the deadline, reached by another road.
+          break;
+        }
         if (serverId == null) {
           // Not acked YET. `reply_to` is an FK onto `messages.id`, so naming a
           // client id here gets the whole frame refused (`no_reply_target`,
           // verified live) — there is nothing to send until the island answers.
           await Future<void>.delayed(const Duration(milliseconds: 250));
           continue;
+        }
+        // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
+        // identity check and then awaited twice, and a liveness test does not
+        // survive an await — this file says so about the mounted-check bug and
+        // then stopped doing it. Round 3 added exactly this guard; the round-5
+        // rewrite into a retry loop dropped it, and no test noticed because the
+        // guard never had one. Snapshot A, obtain repository B, and the hangup
+        // is signed by whoever is current: the callee will not stop (the caller
+        // no longer matches) and permanent signed history grows a row from a
+        // person who never placed the call.
+        if (_identity() != identity) {
+          debugPrint(
+            'CallEndAnnouncer: identity changed before signing — abandoning '
+            'the hangup for $inviteId.',
+          );
+          _claimed.remove(inviteId);
+          return;
         }
         final sentId = await repo.sendMessage(
           channelId,
