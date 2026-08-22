@@ -67,6 +67,30 @@ const Duration kCallInviteFreshness = Duration(seconds: 10);
 /// happened.
 const Duration kCallRingDuration = Duration(seconds: 30);
 
+/// The pinned END body — the caller saying "I hung up". **Signed and durable —
+/// never edit this string.**
+///
+/// A SECOND SENTINEL, NOT A NEW KIND, for exactly the reasons [kCallInviteBody]
+/// is one: `signingBytes()` covers the body and NOT `kind`, so a stop carried as
+/// a kind would be the one field an island could flip. It carries no parameters
+/// either — the call it ends is named by the signed `replyTo`, which is inside
+/// the same signature (see [admitCallEnd]).
+///
+/// WHY THIS IS A SMALLER DOOR THAN THE INVITE. The island does not need to learn
+/// it: `push_service` wakes a handset only on the INVITE body, so an end message
+/// is an ordinary message to the gateway and this stays an app-side change. And
+/// the privilege runs the safe way — forging a *stop* suppresses a ring, which a
+/// hostile island could achieve anyway by dropping the invite; forging a *start*
+/// lights a camera.
+///
+/// Worded to mirror the invite so a client predating the feature degrades to a
+/// readable line rather than breaking — the human words trailing the machine
+/// anchor. This client renders it as an event and never shows the anchor (see
+/// `chat_screen`), which is the half that must ship WITH the wire half: without
+/// it, hanging up would put `aiko:call/1 · 📞 ended the call` back on screen as
+/// a raw bubble — the exact thing the invite's render arm exists to prevent.
+const String kCallEndBody = 'aiko:call/1 · 📞 ended the call';
+
 /// True when [body] is the call-invitation sentinel.
 ///
 /// Exact match, deliberately: a `startsWith`/`contains` test would let anyone
@@ -74,10 +98,158 @@ const Duration kCallRingDuration = Duration(seconds: 30);
 /// quotation of this doc a ringing message.
 bool isCallInviteBody(String body) => body == kCallInviteBody;
 
+/// True when [body] is the call-END sentinel. Exact match, same reasoning.
+bool isCallEndBody(String body) => body == kCallEndBody;
+
+/// A verified hangup: WHICH call ended, and WHO said so.
+///
+/// It exists so there is exactly ONE door. The end has two consumers — "stop the
+/// ring that is ringing now" and "remember this, in case its invitation has not
+/// arrived yet" — and the first version gave them different keys: the live path
+/// checked caller and channel, the memory checked neither and then suppressed a
+/// ring on the target id alone. A third party, or an end from another channel,
+/// could pre-poison a ring the live path would have refused (cage-match round 2,
+/// Carnot and Tesla independently). An irreversible cache must carry everything
+/// needed to replay the original decision, so it carries all three fields and
+/// both consumers run [endsInvite].
+class CallEnd {
+  const CallEnd({
+    required this.targetServerMsgId,
+    required this.fromUserId,
+    required this.channelId,
+  });
+
+  /// The island ULID of the invitation being ended — the signed `replyTo`.
+  final String targetServerMsgId;
+  final String fromUserId;
+  final String channelId;
+}
+
+/// **Is [message] a verified hangup at all?** The single door, and the only
+/// place an end message is ever judged.
+///
+/// Deliberately says NOTHING about what is ringing. That question is
+/// [endsInvite]'s, and separating them is what lets an end that OVERTAKES its
+/// own invitation be remembered under the same clauses it would have been
+/// admitted under.
+///
+/// Refusals, each its own clause:
+/// - **not the sentinel** — an ordinary message.
+/// - **my own echo** — I ended my own call; there is nothing here to stop.
+/// - **an unverified origin** — `originCryptoValid != true`. Fail CLOSED, which
+///   here means KEEP RINGING. The asymmetry with [admitRing] is deliberate: an
+///   unverified *start* must not light a camera, an unverified *stop* must not
+///   silence a genuine call. Both refusals preserve the ring.
+/// - **a bot** — mirroring [admitRing]. Unreachable while an end must match a
+///   human's invitation, but the two gates sit side by side and asymmetric
+///   clauses are how a later reader "fixes" the wrong one.
+/// - **names no call** — a stop with no `replyTo` is about everything or nothing.
+/// - **has no author** — `MessageSender.userId` is null for an external actor.
+///   "Only the caller may end the call" is unanswerable without one, and an
+///   authorless stop would then be a stop from anybody.
+/// The SHAPE of a call end: the pinned body, a human author with an id, and a
+/// reply that names the call being ended.
+///
+/// Shared by the ring and the screen so presentation cannot quietly be more
+/// generous than admission. The render arm used to match the BODY alone, so a
+/// message the ring would refuse still drew a centred "X ended the call" — a
+/// second almost-gate with fewer clauses, which is how a UI ends up narrating
+/// events the domain never admitted (cage-match rounds 6-7, Carnot).
+bool _isCallEndShape(Message message) =>
+    isCallEndBody(message.body) &&
+    message.sender.userId != null &&
+    message.sender.kind == SenderKind.human &&
+    message.replyToId != null; // "names no call" — see admitCallEnd's doc
+
+/// A verified sovereign origin: this key signed these bytes, checked at ingest.
+bool _hasVerifiedOrigin(Message message) =>
+    message.originCryptoValid == true && message.origin != null;
+
+/// A call END the SCREEN may draw as an event rather than as speech.
+///
+/// Two deliberate divergences from [admitCallEnd], both about who is asking:
+///
+///   * YOUR OWN hangup renders (as "You ended the call") where the ring refuses
+///     it — you do not ring yourself.
+///   * `isMine` also EXEMPTS the origin verdict, and that is not a shortcut.
+///     `originCryptoValid` is written when an INBOUND message is verified at
+///     ingest; a row this device composed carries the signature it self-verified
+///     at sign time and no verdict column, so requiring `true` here would stop
+///     the app rendering its own call events at all. There is no adversary
+///     between this device and its own cache — the verdict exists to judge
+///     what ARRIVED.
+///
+/// Freshness, DM-ness, blocks and mutes are deliberately absent: they answer
+/// "should this ring me NOW", and a call that happened yesterday still belongs
+/// in history as an event.
+///
+/// HONEST LIMIT, stated precisely rather than generally (cage-match round 7,
+/// Tesla). `replyToId != null` means "names A message", not "names THIS
+/// invitation" — so a person can still type the sentinel as a reply to ANY
+/// message and be drawn as a call event. Signing cannot separate them: this app
+/// signs at birth, so a typed sentinel is signed exactly like a generated one.
+///
+/// Closing it needs the reply TARGET resolved and checked for an invitation
+/// body, and this screen has no reply-target resolver at all today — it renders
+/// no reply previews — so that is new machinery for a cosmetic spoof inside a
+/// conversation the reader already chose to be in. Tracked rather than built.
+///
+/// What these clauses DO stop, which is the part with teeth: an unverified or
+/// imported row, a bot, and an authorless actor being elevated into system
+/// narration.
+bool isRenderableCallEnd(Message message, {required bool isMine}) =>
+    _isCallEndShape(message) && (isMine || _hasVerifiedOrigin(message));
+
+/// A call INVITATION the screen may draw as an event. Same authorship floor and
+/// the same `isMine` reasoning — fixing only the hangup would have left the
+/// identical leak one line above it.
+bool isRenderableCallInvite(Message message, {required bool isMine}) =>
+    isCallInviteBody(message.body) &&
+    message.sender.userId != null &&
+    message.sender.kind == SenderKind.human &&
+    (isMine || _hasVerifiedOrigin(message));
+
+CallEnd? admitCallEnd(Message message, {required String meUserId}) {
+  if (!_isCallEndShape(message)) return null;
+  if (!_hasVerifiedOrigin(message)) return null;
+  final from = message.sender.userId!;
+  if (from == meUserId) return null;
+  final target = message.replyToId!;
+  return CallEnd(
+    targetServerMsgId: target,
+    fromUserId: from,
+    channelId: message.channelId,
+  );
+}
+
+/// Does [end] end [invite]? Applied identically whether the end arrived while
+/// the invitation was ringing or before it existed.
+///
+/// The binding is the SERVER id, and that is not a preference: a live probe
+/// showed `reply_to` is an FK onto `messages.id`, so a frame carrying a
+/// `client_msg_id` there is refused outright (`no_reply_target`) and the hangup
+/// never leaves the device. Comparing the client id would have matched a message
+/// that cannot exist.
+///
+/// FRESHNESS NEEDS NO CLOCK, and that falls out of the binding: a replayed end
+/// can only match an invitation still live, and a live invitation is at most
+/// [kCallRingDuration] old. Re-delivery is idempotent.
+bool endsInvite(CallEnd end, CallInvite invite) {
+  // Only the account that started the call may end it, and only in the channel
+  // it was started in. (Inherited caveat: `sender` is server-supplied and outside
+  // the signature, so this is exactly as strong as the app's trust root and no
+  // stronger — see admitRing. What IS signed is the end body and its reply
+  // binding; the claim is not cryptographic caller identity.)
+  return end.targetServerMsgId == invite.serverMsgId &&
+      end.fromUserId == invite.from.userId &&
+      end.channelId == invite.channelId;
+}
+
 /// An admitted, ringable invitation — the room to join and who is calling.
 class CallInvite {
   const CallInvite({
     required this.inviteId,
+    required this.serverMsgId,
     required this.channelId,
     required this.from,
     required this.startedAt,
@@ -93,6 +265,33 @@ class CallInvite {
   /// freshness window rang all over again (cage-match #139 R2, Carnot). A thing
   /// you must remember having dismissed needs a name, not a shape.
   final String inviteId;
+
+  /// The island's ULID for this invitation — what a hangup's `reply_to` names.
+  ///
+  /// A SECOND id, and the duplication is the wire's, not ours. [inviteId] is the
+  /// signed `clientMsgId`: content-bound, stable across deliveries, and the only
+  /// id either party can compute. But the gateway's `reply_to` is an FK onto
+  /// `messages.id`, so it resolves the SERVER id and refuses a client one with
+  /// `no_reply_target` — verified against the live island, which is the only
+  /// place that fact is written down. So identity uses one and the wire binding
+  /// uses the other.
+  ///
+  /// NON-NULLABLE, and that is a claim about the ingest layer rather than a
+  /// convenience. Every message that can reach a ring is built by
+  /// [Message.fromView] — live fanout (`gateway_transport.dart`) and history
+  /// (`gateway_rest_api.dart`) both — and that factory reads the id as
+  /// `v['msg_id'] as String`, a hard cast: a frame without one throws there and
+  /// never becomes a [Message] at all. [Message.id] stays `String?` for the
+  /// LOCAL optimistic row, which is this device's own echo and is refused by
+  /// [admitRing] one clause earlier.
+  ///
+  /// It was `String?` for one round, purely because [Message.id] is — and three
+  /// separate guards grew on that nullability (an upgrade-on-replay branch here,
+  /// a null check in [endsInvite], a nullable-key map lookup in the ring). All
+  /// three defended a state the cast above makes unrepresentable, and the dead
+  /// branch went on to generate a HIGH review finding for a bug that could not
+  /// occur. Refusing the null at the door deletes all three.
+  final String serverMsgId;
 
   /// The LiveKit room to join. The room IS the channel id (#2726).
   final String channelId;
@@ -210,16 +409,34 @@ CallInvite? admitRing(
   // unreadable, and admitting it would let a bad clock ring forever.
   // `!isNegative` is the guard; `> freshness` alone would admit it.
   if (age.isNegative || age > kCallInviteFreshness) return null;
+  // The island's id is REFUSED here rather than carried as a null. Unreachable
+  // via either production producer (see [CallInvite.serverMsgId]) — so this is
+  // the door where an impossible state stops being representable, not a runtime
+  // hope. A ring with no server id could never be stilled by a hangup anyway:
+  // `reply_to` is an FK onto `messages.id`, so there would be nothing to name.
+  final serverMsgId = message.id;
+  if (serverMsgId == null) return null;
   return CallInvite(
     inviteId: origin.clientMsgId,
+    serverMsgId: serverMsgId,
     channelId: message.channelId,
     from: message.sender,
     startedAt: signedAt,
   );
 }
 
-/// True when [channelId] is a DM, per the island's `dm:` prefix — which is a
-/// gateway CHECK constraint (`ck_channels_dm_prefix`, case-sensitive; island
-/// design 11 "Direct messages"), not a client-side naming convention, so it is
-/// safe to key a trust decision on.
-bool isDmChannelId(String channelId) => channelId.startsWith('dm:');
+// `isDmChannelId` was DELETED here, not merely unused.
+//
+// It tested `channelId.startsWith('dm:')` and its doc called that "safe to key a
+// trust decision on". It is not: the `dm:` prefix is a CHECK constraint on
+// `channels.aiko_channel` (the bus name), while the id the app receives is
+// `channels.id`, a bare ULID — so the predicate answered false for every genuine
+// DM in production. Six adversarial review rounds reasoned from the same design
+// doc and missed it; one live `POST /v1/dm` refuted it in a second.
+//
+// The gate was fixed to take `isDm` from the app's own channel model, which left
+// this helper with zero callers — but a dead function is not an inert one. It
+// sat one import away from the ring's trust decision, wearing a doc that told
+// the next reader it was authoritative, and channel-wide calls are a real future
+// feature whose author would have found it and believed it. A confirmed-false
+// helper is a loaded gun, so it is removed rather than left for a grep to find.

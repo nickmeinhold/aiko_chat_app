@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app/font_licences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
+import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
 import 'features/settings/application/island_manifest_provider.dart';
 import 'features/settings/application/theme_mode_controller.dart';
@@ -36,6 +37,9 @@ class AikoChatApp extends ConsumerWidget {
     // Ask the island who it is, once, and cache the answer. Fire-and-forget —
     // the mark renders from its URL fallback meanwhile.
     ref.watch(islandManifestFetcherProvider);
+    // Held here so the announcer's lifetime is INTENTIONAL rather than
+    // incidental — it must outlive any call screen (see CallEndAnnouncer).
+    ref.watch(callEndAnnouncerProvider);
     // The chosen look supplies BOTH halves, so picking a preset never costs you
     // OS following: themeMode still decides how bright, the preset decides which
     // look, and the chosen typeface rides along in both. All three are set in

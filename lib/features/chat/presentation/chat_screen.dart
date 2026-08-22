@@ -899,19 +899,63 @@ class MessageTile extends ConsumerWidget {
     // register of a thing that happened rather than a thing someone said. Only
     // the RENDERING changes: [kCallInviteBody] is inside signatures already sent
     // to a live island and is a one-way door.
-    if (isCallInviteBody(message.body)) {
+    //
+    // THE HANGUP RENDERS THROUGH THE SAME ARM, and shipping it any other way
+    // would have undone this. `kCallEndBody` is worded the same way — machine
+    // anchor first so an old client degrades to a readable line — so a hangup
+    // that only touched the wire would have put `aiko:call/1 · 📞 ended the
+    // call` straight back into a speech bubble, which is the precise thing this
+    // block was added to stop. Two sentinels, one arm.
+    //
+    // AND THE HANGUP ARM CARRIES THE ADMISSION RULE THE RING ALREADY APPLIES.
+    // `admitCallEnd` refuses a stop that "names no call — a stop with no
+    // replyTo is about everything or nothing"; the render arm matched on the
+    // body alone, so a message that the RING would refuse still drew a centred,
+    // unbubbled system line reading "X ended the call" for a call that never
+    // existed (cage-match round 6, Carnot). Signing does not help here and it is
+    // worth being clear why: this app signs at birth, so a sentinel somebody
+    // TYPES is signed exactly like one the call screen generates. The signature
+    // proves authorship of the bytes, never that they were machine-authored — so
+    // the discriminator has to be the reply binding, which the composer cannot
+    // aim at an arbitrary message without actually replying to it.
+    //
+    // The invitation arm needs no such clause, and the asymmetry is real rather
+    // than an oversight: a typed invitation IS an invitation. It passes
+    // `admitRing`, it rings the peer, and Answer joins the channel's room —
+    // which is precisely what pressing Call would have done. Rendering it as an
+    // event is therefore honest. A stop is different because a stop makes a
+    // claim about a PRIOR event, and that claim is checkable.
+    // ONE ADMISSION RESULT, REUSED — not a second gate with fewer clauses. Both
+    // predicates live beside `admitCallEnd` in the domain, share its authorship
+    // floor, and document the single clause they deliberately drop (your own
+    // echo, which the ring must refuse and the screen must render as "You").
+    final isInvite = isRenderableCallInvite(message, isMine: isMine);
+    final isCallEnd = isRenderableCallEnd(message, isMine: isMine);
+    if (isInvite || isCallEnd) {
       final scheme = Theme.of(context).colorScheme;
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.phone_in_talk_outlined, size: 15, color: scheme.primary),
+            Icon(
+              isInvite ? Icons.phone_in_talk_outlined : Icons.call_end_outlined,
+              size: 15,
+              // The end is a settled fact, not an invitation to act, so it does
+              // not take the accent the ring does.
+              color: isInvite ? scheme.primary : scheme.onSurfaceVariant,
+            ),
             const SizedBox(width: 7),
             Flexible(
               child: Text(
                 // "You" reads better than your own handle for your own act.
-                isMine ? 'You started a call' : '$senderName started a call',
+                isInvite
+                    ? (isMine
+                          ? 'You started a call'
+                          : '$senderName started a call')
+                    : (isMine
+                          ? 'You ended the call'
+                          : '$senderName ended the call'),
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
                   color: scheme.onSurfaceVariant,

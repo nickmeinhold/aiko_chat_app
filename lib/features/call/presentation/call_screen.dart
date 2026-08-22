@@ -7,6 +7,7 @@ import 'package:livekit_client/livekit_client.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/theme/maritime_theme.dart';
+import '../application/call_end_announcer.dart';
 import '../data/call_session.dart';
 import '../domain/call_connection_state.dart';
 
@@ -20,8 +21,11 @@ import '../domain/call_connection_state.dart';
 /// double-fired open resolves to the same room, and this dedups the screen.)
 bool _callLaunchInFlight = false;
 
-Future<void> pushCall(BuildContext context, String channelId) =>
-    pushCallOn(GoRouter.of(context), channelId);
+Future<void> pushCall(
+  BuildContext context,
+  String channelId, {
+  String? inviteId,
+}) => pushCallOn(GoRouter.of(context), channelId, inviteId: inviteId);
 
 /// Router-first form of [pushCall], for callers that have a [GoRouter] but no
 /// in-scope context.
@@ -34,11 +38,15 @@ Future<void> pushCall(BuildContext context, String channelId) =>
 /// Maxwell; pinned by `ring_overlay_test.dart`). The banner reaches the router
 /// through `routerProvider` instead. Both entry points share the ONE latch, so
 /// "is a call being launched" stays a single app-wide fact.
-Future<void> pushCallOn(GoRouter router, String channelId) async {
+Future<void> pushCallOn(
+  GoRouter router,
+  String channelId, {
+  String? inviteId,
+}) async {
   if (_callLaunchInFlight) return;
   _callLaunchInFlight = true;
   try {
-    await router.push('/call/$channelId');
+    await router.push('/call/$channelId', extra: inviteId);
   } finally {
     _callLaunchInFlight = false;
   }
@@ -54,9 +62,18 @@ void resetCallLaunchGuard() => _callLaunchInFlight = false;
 /// its lifetime; the room is the channel id. Renders the first remote
 /// participant full-screen with a mirrored local PiP overlay.
 class CallScreen extends ConsumerStatefulWidget {
-  const CallScreen({super.key, required this.channelId});
+  const CallScreen({super.key, required this.channelId, this.inviteId});
 
   final String channelId;
+
+  /// The signed `clientMsgId` of the invitation that opened this call, when we
+  /// are the party that sent it. Leaving announces the end of THAT call.
+  ///
+  /// Null for every other way in — answering someone else's ring, a deep link, a
+  /// restored route. Only the caller ends the call it started: an end from
+  /// anyone else names no live invitation and would be refused anyway
+  /// ([admitCallEnd]), so sending one would be a signed row saying nothing.
+  final String? inviteId;
 
   @override
   ConsumerState<CallScreen> createState() => _CallScreenState();
@@ -65,6 +82,12 @@ class CallScreen extends ConsumerStatefulWidget {
 class _CallScreenState extends ConsumerState<CallScreen> {
   late final CallSession _session;
 
+  /// The announcer, captured in [initState] because [dispose] must not touch
+  /// `ref`. Capturing THIS is safe where capturing a repository was not: it is
+  /// app-scoped, so it outlives both this screen and any number of repository
+  /// rebuilds, and it resolves the live repository itself at send time.
+  late final CallEndAnnouncer _endAnnouncer;
+
   @override
   void initState() {
     super.initState();
@@ -72,6 +95,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       api: ref.read(restApiProvider),
       channelId: widget.channelId,
     );
+    _endAnnouncer = ref.read(callEndAnnouncerProvider);
     unawaited(_session.connect());
   }
 
@@ -81,6 +105,16 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // notifiers. The child ValueListenableBuilders unsubscribe first (children
     // unmount before this parent), so disposing the notifiers here is safe.
     unawaited(_session.leave());
+    // HAND OVER THE OBLIGATION; do not try to discharge it here. Every exit
+    // lands in dispose — the leave button, a system back, a pop from anywhere —
+    // which is why the announcement belongs here and the ANNOUNCING does not.
+    // The screen is the wrong owner for work that may have to outlive it: the
+    // invitation may not be acked yet (so it has no id the wire can name) and
+    // this widget's repository may be replaced mid-ring. See CallEndAnnouncer.
+    final inviteId = widget.inviteId;
+    if (inviteId != null) {
+      _endAnnouncer.announce(channelId: widget.channelId, inviteId: inviteId);
+    }
     super.dispose();
   }
 

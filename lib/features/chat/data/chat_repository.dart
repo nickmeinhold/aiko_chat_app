@@ -417,7 +417,15 @@ class ChatRepository {
   /// W1 — commit the optimistic row (derives localSeq) BEFORE the wire send, so
   /// an app kill between the two loses nothing: the row is in the outbox and
   /// re-sends on the next connect (invariant B-optimistic).
-  Future<void> sendMessage(
+  /// Returns the `clientMsgId` this send was signed under, or null if it never
+  /// left (a post-dispose no-op, or a teardown-race write).
+  ///
+  /// THE ID IS RETURNED BECAUSE IT IS PART OF THE SIGNATURE. It is minted here,
+  /// covered by `signingBytes`, and is the name the recipient knows this message
+  /// by — so a caller that must later refer to what it just sent (a call
+  /// invitation, so that hanging up can name the call it is ending) has no other
+  /// way to learn it. Returning void made that caller guess or re-derive.
+  Future<String?> sendMessage(
     String channelId,
     String body, {
     String? replyToId,
@@ -429,7 +437,7 @@ class ChatRepository {
     // crash the app — it just has nowhere to land (the cache is closing). The
     // entry guard proves entry-time state; a dispose that begins DURING the
     // awaits below is caught + owned in the catch (teardown-race write).
-    if (_disposed) return;
+    if (_disposed) return null;
     try {
       final tempId = _newTempId();
       final createdAt = await _clampToBottom(channelId);
@@ -478,12 +486,31 @@ class ChatRepository {
               : OriginEnvelope.fromSignature(signature, clientMsgId: tempId),
         ),
       );
+      return tempId;
     } catch (e, st) {
       // The entry guard proves entry-time state only; dispose can begin DURING
       // the awaits above and close the cache. A teardown-race write is benign
       // (session ending) — own it; a genuine error still propagates.
       if (!_disposed) rethrow;
       _telemetry.inboundWriteFailed(e, st);
+      return null;
+    }
+  }
+
+  /// The island's ULID for a message this client sent, once acked.
+  ///
+  /// The two ids are NOT interchangeable on the wire: `reply_to` is an FK onto
+  /// `messages.id` gateway-side, so it takes the SERVER id and rejects a
+  /// `client_msg_id` with `no_reply_target`. A caller that must REFER to
+  /// something it sent — the hangup naming the invitation it ends — has to
+  /// resolve one to the other, and only the ack can do that. Null means the
+  /// send has not been acked (offline, or still in flight).
+  Future<String?> serverIdFor(String clientTempId) async {
+    if (_disposed) return null;
+    try {
+      return await _cache.serverUlidFor(clientTempId);
+    } catch (_) {
+      return null; // teardown race; the caller degrades to sending nothing.
     }
   }
 
