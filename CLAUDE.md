@@ -12,7 +12,9 @@ reactions are **signed-at-birth**. Stack: `dio` + `freezed` +
   implementation, not just wire work.** The gateway is a peer repo
   (`../aiko-chat-island`, its own Claude tab) that co-owns far more than the wire:
   the identity model, moderation, federation, signing, community semantics,
-  recovery. Any of these can be decided in the island tab's docs and silently
+  recovery, and the **deployment/runtime config of a shared island** (env,
+  credentials, which services run where — reconfiguring APNs on enspyr in the
+  middle of the island tab's push-topology design was the 2026-08-23 miss). Any of these can be decided in the island tab's docs and silently
   contradicted by an app change with **no wire touched at all**. So **before
   starting any non-trivial build, first check whether the island tab's record
   bears on it**, and if it does, build against THAT — the ticket is intent, the
