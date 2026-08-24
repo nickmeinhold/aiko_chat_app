@@ -197,6 +197,24 @@ class FakeRestApi implements ChatRestApi {
   /// of the bug the island's upsert exists to absorb.
   final List<({DevicePlatform platform, String token})> registeredDevices = [];
   final List<String> unregisteredDevices = [];
+
+  /// Device calls in the order they LANDED — `('register'|'unregister', token)`.
+  ///
+  /// The membership lists above cannot express ordering, and ordering is the
+  /// whole of the drain-before-start invariant: reversed, the DELETE matches the
+  /// row the register just created and destroys the live pairing. A test that
+  /// asserts only "both happened" passes either way (it did — see the wiring
+  /// test this was added for).
+  final List<({String op, String token})> deviceCalls = [];
+
+  /// The island's ROW SET — what a push would actually be routed to.
+  ///
+  /// Distinct from [registeredDevices], which is an append-only history of
+  /// register CALLS. Only this one shrinks on a delete, so only this one can
+  /// express the drain-after-start failure: a DELETE matching the row a
+  /// register just created leaves the handset silently unreachable while the
+  /// call history still shows a successful registration.
+  final Set<String> liveRows = {};
   Object? registerDeviceThrows;
 
   /// If set, the call AWAITS this before recording — lets a test hold a
@@ -232,6 +250,8 @@ class FakeRestApi implements ChatRestApi {
     // cases live.
     if (registerDeviceThrows != null) throw registerDeviceThrows!;
     registeredDevices.add((platform: platform, token: token));
+    deviceCalls.add((op: 'register', token: token));
+    liveRows.add(token);
     if (registerDeviceThrowsAfterLanding != null) {
       throw registerDeviceThrowsAfterLanding!;
     }
@@ -266,6 +286,13 @@ class FakeRestApi implements ChatRestApi {
     onUnregister?.call(token);
     unregisteredDevices.add(token);
     unregisterCredentials.add(credential);
+    deviceCalls.add((op: 'unregister', token: token));
+    // THE DELETE ACTUALLY DELETES — but from [liveRows], never from
+    // [registeredDevices]. The two answer different questions and merging them
+    // breaks four tests that (correctly) read the latter as an append-only call
+    // history: "did a register reach the wire N times". [liveRows] is the
+    // island's ROW SET, where a delete on `(user_id, token)` genuinely removes.
+    liveRows.remove(token);
   }
 
   /// Roster returned by [listMembers], keyed per channel id.

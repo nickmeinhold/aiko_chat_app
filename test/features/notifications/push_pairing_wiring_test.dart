@@ -536,27 +536,42 @@ void main() {
       final container = await harness(rest: rest, source: source);
       addTearDown(source.refreshes.close);
       final island = container.read(configProvider).httpBaseUrl;
+      // THE DEBT IS FOR THE TOKEN THIS DEVICE IS ABOUT TO REGISTER, and that is
+      // the entire point of the fixture. The previous version owed 'tok-owed'
+      // while the source handed back 'tok-1' — two strings that cannot collide,
+      // so the DELETE and the register never interacted and the test passed with
+      // the ordering REVERSED. It was void: it asserted that both calls happened,
+      // never that they happened in order.
+      //
+      // Same-token is not an edge case, it is the ordinary one: iOS returns the
+      // SAME APNs device token across sign-outs, so a sign-out-then-in on one
+      // handset always owes exactly the token it is about to re-register.
       await container
           .read(pendingUnregisterStoreProvider)
-          .remember(island, 'tok-owed');
+          .remember(island, 'tok-1');
 
       await container.read(authControllerProvider.notifier).signInWithPasskey();
       await pumpEventQueue();
 
-      expect(rest.unregisteredDevices, [
-        'tok-owed',
-      ], reason: 'a debt outstanding at sign-in is paid off');
+      // ORDER, asserted directly. Membership cannot express this.
       expect(
-        rest.registeredDevices,
-        isNotEmpty,
-        reason: 'and the new session still pairs',
+        rest.deviceCalls.map((c) => c.op),
+        containsAllInOrder(['unregister', 'register']),
+        reason: 'the debt is paid BEFORE the new pairing is created',
       );
-      // Reversed, the debt's token would have just been re-registered to the
-      // CURRENT user — so the island's (user_id, token)-scoped delete would
-      // match, and the drain would destroy the live pairing it just created.
+      // And the consequence that makes the ordering matter: reversed, the
+      // island's (user_id, token)-scoped delete matches the row the register
+      // just created and removes it, leaving a handset that believes it is
+      // paired and can never be woken.
+      expect(
+        rest.liveRows,
+        contains('tok-1'),
+        reason: 'the live pairing survives — the drain did not eat it',
+      );
       expect(
         container.read(pendingUnregisterStoreProvider).read(island),
         isEmpty,
+        reason: 'and the debt is discharged',
       );
     });
   });
