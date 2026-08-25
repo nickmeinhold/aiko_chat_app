@@ -32,7 +32,13 @@ void main() {
     SenderKind kind = SenderKind.human,
   }) => Message(
     clientTempId: 'm1',
-    id: 'm1',
+    // DELIBERATELY DIFFERENT from clientTempId, and a REAL canonical ULID. The
+    // gateway's reply_to is an FK onto messages.id, so the end must name this
+    // one — and a fixture using the same string for both could not tell a
+    // correct binding from the wire bug. `SRV-m1` did force them apart but is a
+    // value no island could mint, so it proved the binding while exercising an
+    // impossible id (this repo asserts canonical ULID case elsewhere).
+    id: '01M0GS7FDWBVQ31950B1PTV2DW',
     channelId: channelId,
     sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
     body: body,
@@ -223,6 +229,157 @@ void main() {
     test('staleness gate is 10s; ring duration is longer', () {
       expect(kCallInviteFreshness, const Duration(seconds: 10));
       expect(kCallRingDuration, greaterThan(kCallInviteFreshness));
+    });
+  });
+
+  group('the hangup — admitCallEnd', () {
+    /// The invitation currently ringing, as `admitRing` would have produced it.
+    final live = admit(invite())!;
+
+    Message end({
+      String from = robin,
+      String? replyTo = '01M0GS7FDWBVQ31950B1PTV2DW',
+      String channelId = 'dm:aaa:bbb',
+      String body = kCallEndBody,
+      bool? cryptoValid = true,
+      bool withOrigin = true,
+    }) => Message(
+      clientTempId: 'e1',
+      id: 'e1',
+      channelId: channelId,
+      sender: MessageSender(
+        userId: from,
+        kind: SenderKind.human,
+        label: 'Robin',
+      ),
+      body: body,
+      replyToId: replyTo,
+      createdAt: now,
+      origin: withOrigin ? signedAt(now) : null,
+      originCryptoValid: cryptoValid,
+      deliveryState: DeliveryState.sent,
+    );
+
+    /// The two doors together, which is how production uses them: judge the
+    /// message, then match it to a ring. A test that only exercised one would
+    /// miss the class the round-2 finding lived in — a memory whose key was
+    /// weaker than the live path's.
+    bool stops(Message m, {CallInvite? ringing}) {
+      final end = admitCallEnd(m, meUserId: me);
+      return end != null && endsInvite(end, ringing ?? live);
+    }
+
+    test('the END sentinel is pinned — it is signed, permanent history', () {
+      // A golden, for the same reason the invite has one: this string is inside
+      // signatures the moment it is first sent, so changing it is a v2 with a
+      // compatibility branch, never an edit.
+      expect(kCallEndBody, 'aiko:call/1 · 📞 ended the call');
+    });
+
+    test('the caller hanging up stops the ring', () {
+      expect(stops(end()), isTrue);
+    });
+
+    test('an ordinary message does not stop a ring', () {
+      expect(stops(end(body: 'ok bye')), isFalse);
+    });
+
+    test(
+      'an exact match only — a sentinel with a word after it is a remark',
+      () {
+        expect(stops(end(body: '$kCallEndBody now')), isFalse);
+      },
+    );
+
+    test(
+      'an end is judged WITHOUT reference to what is ringing — so one that '
+      'overtakes its invitation can be remembered under the same clauses',
+      () {
+        // The round-2 shape: the gate used to take `live` and answer a single
+        // fused question, so the out-of-order memory had to invent its own,
+        // weaker, key. Split, both consumers run identical clauses.
+        final judged = admitCallEnd(end(), meUserId: me);
+        expect(judged, isNotNull);
+        expect(judged!.targetServerMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
+        expect(judged.fromUserId, robin);
+        expect(judged.channelId, 'dm:aaa:bbb');
+      },
+    );
+
+    test('an end with NO AUTHOR is refused — "only the caller may end it" is '
+        'unanswerable without one', () {
+      final anon = Message(
+        clientTempId: 'e1',
+        id: 'e1',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(kind: SenderKind.human, label: 'ghost'),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: now,
+        origin: signedAt(now),
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(admitCallEnd(anon, meUserId: me), isNull);
+    });
+
+    test('a NON-HUMAN end is refused, mirroring admitRing', () {
+      final robot = Message(
+        clientTempId: 'e1',
+        id: 'e1',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(userId: robin, kind: SenderKind.robot),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: now,
+        origin: signedAt(now),
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(admitCallEnd(robot, meUserId: me), isNull);
+    });
+
+    test(
+      'an UNVERIFIED end keeps ringing — fail closed means KEEP RINGING',
+      () {
+        // The asymmetry with admitRing, stated as a test: an unverified START
+        // must not light a camera, and an unverified STOP must not silence a
+        // genuine call. Both refusals preserve the ring.
+        expect(stops(end(cryptoValid: null)), isFalse);
+        expect(stops(end(cryptoValid: false)), isFalse);
+        expect(stops(end(withOrigin: false, cryptoValid: true)), isFalse);
+      },
+    );
+
+    test('a THIRD PARTY cannot silence your ring', () {
+      expect(stops(end(from: 'someone-else')), isFalse);
+    });
+
+    test('my own end does not stop my own ring', () {
+      expect(stops(end(from: me)), isFalse);
+    });
+
+    test('the end must name the SERVER id — a client_msg_id is a frame the '
+        'gateway REFUSES outright', () {
+      // Found live, not by review: `reply_to` is an FK onto `messages.id`, so a
+      // frame carrying a client_msg_id there comes back `no_reply_target` and
+      // the hangup never leaves the device — silently, because announcing it is
+      // best-effort. Both ids are opaque 26-char strings, so nothing but the
+      // real island could tell them apart.
+      expect(stops(end(replyTo: 'm1')), isFalse);
+      expect(stops(end(replyTo: '01M0GS7FDWBVQ31950B1PTV2DW')), isTrue);
+    });
+
+    test('an end for a DIFFERENT call does not stop this one', () {
+      // The double-call race: hang up, ring again immediately, and the first
+      // end must not reach through and kill the second ring. The signed replyTo
+      // is what makes the end about ONE call.
+      expect(stops(end(replyTo: 'some-other-invite')), isFalse);
+      expect(stops(end(replyTo: null)), isFalse);
+    });
+
+    test('an end in a different channel does not stop this ring', () {
+      expect(stops(end(channelId: 'dm:ccc:ddd')), isFalse);
     });
   });
 }

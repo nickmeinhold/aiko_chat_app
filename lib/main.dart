@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app/font_licences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
+import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
 import 'features/notifications/application/push_providers.dart';
 import 'features/settings/application/island_manifest_provider.dart';
@@ -42,6 +43,9 @@ class AikoChatApp extends ConsumerWidget {
     // publishes a user — a listener created any later misses the very
     // transition it exists to observe, and the failure is silence.
     ref.watch(pushPairingProvider);
+    // Held here so the announcer's lifetime is INTENTIONAL rather than
+    // incidental — it must outlive any call screen (see CallEndAnnouncer).
+    ref.watch(callEndAnnouncerProvider);
     // The chosen look supplies BOTH halves, so picking a preset never costs you
     // OS following: themeMode still decides how bright, the preset decides which
     // look, and the chosen typeface rides along in both. All three are set in
