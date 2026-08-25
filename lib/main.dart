@@ -7,6 +7,7 @@ import 'app/providers.dart';
 import 'app/router.dart';
 import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
+import 'features/notifications/application/push_providers.dart';
 import 'features/settings/application/island_manifest_provider.dart';
 import 'features/settings/application/theme_mode_controller.dart';
 import 'features/settings/application/theme_preset_controller.dart';
@@ -37,6 +38,11 @@ class AikoChatApp extends ConsumerWidget {
     // Ask the island who it is, once, and cache the answer. Fire-and-forget —
     // the mark renders from its URL fallback meanwhile.
     ref.watch(islandManifestFetcherProvider);
+    // Keep the push pairing current for whoever is signed in. Watched HERE, at
+    // the root, because it must be listening before the session restore
+    // publishes a user — a listener created any later misses the very
+    // transition it exists to observe, and the failure is silence.
+    ref.watch(pushPairingProvider);
     // Held here so the announcer's lifetime is INTENTIONAL rather than
     // incidental — it must outlive any call screen (see CallEndAnnouncer).
     ref.watch(callEndAnnouncerProvider);

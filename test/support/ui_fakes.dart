@@ -197,20 +197,102 @@ class FakeRestApi implements ChatRestApi {
   /// of the bug the island's upsert exists to absorb.
   final List<({DevicePlatform platform, String token})> registeredDevices = [];
   final List<String> unregisteredDevices = [];
+
+  /// Device calls in the order they LANDED — `('register'|'unregister', token)`.
+  ///
+  /// The membership lists above cannot express ordering, and ordering is the
+  /// whole of the drain-before-start invariant: reversed, the DELETE matches the
+  /// row the register just created and destroys the live pairing. A test that
+  /// asserts only "both happened" passes either way (it did — see the wiring
+  /// test this was added for).
+  final List<({String op, String token})> deviceCalls = [];
+
+  /// The island's ROW SET — what a push would actually be routed to.
+  ///
+  /// Distinct from [registeredDevices], which is an append-only history of
+  /// register CALLS. Only this one shrinks on a delete, so only this one can
+  /// express the drain-after-start failure: a DELETE matching the row a
+  /// register just created leaves the handset silently unreachable while the
+  /// call history still shows a successful registration.
+  final Set<String> liveRows = {};
   Object? registerDeviceThrows;
+
+  /// If set, the call AWAITS this before recording — lets a test hold a
+  /// registration in flight and interleave a sign-out with it. The in-flight
+  /// window is the only place the start/stop race lives, and it is invisible to
+  /// any test that awaits each step to completion.
+  Future<void>? registerDeviceGate;
+  Future<void>? unregisterDeviceGate;
+
+  /// Fails the register AFTER recording it — the "maybe landed" shape, where a
+  /// response is lost but the island already wrote the row. [registerDeviceThrows]
+  /// is the other half (definitely-not-landed: rejected before any write), and
+  /// the two must stay distinguishable or the invariant that owes a debt on an
+  /// ambiguous failure cannot be tested apart from one that owes on every
+  /// failure.
+  Object? registerDeviceThrowsAfterLanding;
 
   @override
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
   }) async {
+    // YIELD FIRST, for the same reason unregisterDevice does: an async body runs
+    // synchronously to its first await, so with no gate set this fake used to
+    // record the call in the microtask it was invoked in — something no HTTP
+    // request can do. The unregister half was fixed in round 4; this half was
+    // not, and an impossibly-fast register hides every ordering assertion about
+    // what a session edge landing MID-POST does.
+    await Future<void>.delayed(Duration.zero);
+    if (registerDeviceGate != null) await registerDeviceGate;
+    // AFTER the gate: a failure that cannot be held in flight cannot be
+    // interleaved with a session edge, which is the only place the interesting
+    // cases live.
     if (registerDeviceThrows != null) throw registerDeviceThrows!;
     registeredDevices.add((platform: platform, token: token));
+    deviceCalls.add((op: 'register', token: token));
+    liveRows.add(token);
+    if (registerDeviceThrowsAfterLanding != null) {
+      throw registerDeviceThrowsAfterLanding!;
+    }
   }
 
+  /// Fails the next [unregisterDevice] — for proving a failed attempt KEEPS the
+  /// durable debt rather than silently discharging it.
+  Object? unregisterDeviceThrows;
+
+  /// The credential each unregister carried, positionally paired with
+  /// [unregisteredDevices]. `null` means "resolved by the auth interceptor" —
+  /// the drain path — and a non-null value means it was carried BY VALUE from a
+  /// session being torn down, which is the property that lets the credential
+  /// clear run first.
+  final List<String?> unregisterCredentials = [];
+
+  /// Per-call hook — lets a test fail SOME unregisters and not others (a
+  /// partially-failing drain), which a single `unregisterDeviceThrows` cannot
+  /// express.
+  void Function(String token)? onUnregister;
+
   @override
-  Future<void> unregisterDevice(String token) async {
+  Future<void> unregisterDevice(String token, {String? credential}) async {
+    // YIELD FIRST, always. Without this the fake records the call in the SAME
+    // microtask it is invoked in — something no HTTP request can do — which made
+    // it more aggressive than the real API and inverted every ordering assertion
+    // about "did the credential clear get delayed by the network". A fake that
+    // is faster-than-possible is as misleading as one that is more forgiving.
+    await Future<void>.delayed(Duration.zero);
+    if (unregisterDeviceGate != null) await unregisterDeviceGate;
+    if (unregisterDeviceThrows != null) throw unregisterDeviceThrows!;
+    onUnregister?.call(token);
     unregisteredDevices.add(token);
+    unregisterCredentials.add(credential);
+    deviceCalls.add((op: 'unregister', token: token));
+    // THE DELETE ACTUALLY DELETES — but from [liveRows], never from
+    // [registeredDevices]. The two answer different questions and merging them
+    // breaks four tests that (correctly) read the latter as an append-only call
+    // history: "did a register reach the wire N times". [liveRows] is the
+    // island's ROW SET, where a delete on `(user_id, token)` genuinely removes.
+    liveRows.remove(token);
   }
 
   /// Roster returned by [listMembers], keyed per channel id.

@@ -1,4 +1,5 @@
 import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
@@ -40,6 +41,12 @@ void main() {
     container = ProviderContainer(
       overrides: [
         restApiProvider.overrideWithValue(rest),
+        // No push source, so no registrar. Without this the REAL provider
+        // runs, and `flutter_test` reports the target platform as android —
+        // so these auth-lifecycle tests would construct a live FcmTokenSource
+        // and reach for Firebase. `test_helpers.makeContainer` overrides it to
+        // null for the same reason; this fixture predates that.
+        pushTokenSourceProvider.overrideWithValue(null),
         transportProvider.overrideWithValue(FakeChatTransport()),
         passkeyAuthClientProvider.overrideWithValue(
           passkey ?? FakePasskeyAuthClient(),

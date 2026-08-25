@@ -3,6 +3,8 @@ import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
+import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
+import 'package:aiko_chat_app/features/notifications/domain/push_token_source.dart';
 import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
@@ -82,6 +84,16 @@ ProviderContainer makeContainer({
   FakeEulaStore? eula,
   String? eulaText,
   DriftCache? cache,
+
+  /// The push token source, ALWAYS overridden — null by default.
+  ///
+  /// Defaulting to null rather than leaving the real provider in place keeps
+  /// every existing test deterministic: the real one keys off
+  /// `defaultTargetPlatform`, so an un-overridden container would construct a
+  /// real [FcmTokenSource] on whichever platform the suite reports, and reach
+  /// for Firebase from a unit test. Null means "no registrar", which is what
+  /// every test that does not care about push wants.
+  PushTokenSource? pushSource,
 }) {
   final tokenStore = store ?? InMemoryTokenStore();
   late final ProviderContainer container;
@@ -146,6 +158,7 @@ ProviderContainer makeContainer({
       // fires (which would leak a pending timer past widget disposal). The picker
       // then renders the bundled seed set.
       gatewayDirectoryProvider.overrideWith((ref) async => const []),
+      pushTokenSourceProvider.overrideWithValue(pushSource),
     ],
   );
   return container;

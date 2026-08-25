@@ -7,6 +7,7 @@
 // a real auth controller over an in-memory token store, then signs in.
 
 import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
@@ -48,6 +49,11 @@ ProviderContainer _container(FakeRestApi rest) {
   container = ProviderContainer(
     overrides: [
       restApiProvider.overrideWithValue(rest),
+      // No push source, so no registrar — a ban routes through the session
+      // teardown, which reaches the pairing. Without this the REAL provider
+      // runs and `flutter_test` reports android, so this fixture would build a
+      // live FcmTokenSource (see test_helpers.makeContainer).
+      pushTokenSourceProvider.overrideWithValue(null),
       transportProvider.overrideWithValue(FakeChatTransport()),
       passkeyAuthClientProvider.overrideWithValue(FakePasskeyAuthClient()),
       cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
