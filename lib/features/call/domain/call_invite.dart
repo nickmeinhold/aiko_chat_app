@@ -45,6 +45,9 @@
 library;
 
 import '../../chat/domain/message.dart';
+// `encodeMultikey` — the allowlist is keyed on the canonical wire form of the
+// signer's key, so a stored entry and a live envelope compare as the same string.
+import '../../chat/domain/origin_envelope.dart';
 
 /// The pinned invitation body. **Signed and durable — never edit this string.**
 /// A client that predates the feature renders it as a readable line of text
@@ -161,10 +164,19 @@ class CallEnd {
 /// message the ring would refuse still drew a centred "X ended the call" — a
 /// second almost-gate with fewer clauses, which is how a UI ends up narrating
 /// events the domain never admitted (cage-match rounds 6-7, Carnot).
+/// The SHAPE of a hangup — body, an author, and a call it names. Authorization
+/// is NOT here; it lives in [_mayRing], which both admission doors share.
+///
+/// The kind clause used to sit in this predicate, which quietly made the stop
+/// gate COLDER than the start gate the moment `admitRing` widened: an
+/// allowlisted resident could wake the handset and then could not silence it,
+/// so the ring ran its full 30 seconds after the caller had already hung up
+/// (cage-match — Carnot HIGH and Tesla, independently, which is the strongest
+/// signal this review produced). A protocol whose start and stop have different
+/// admission rules is not a protocol, it is two.
 bool _isCallEndShape(Message message) =>
     isCallEndBody(message.body) &&
     message.sender.userId != null &&
-    message.sender.kind == SenderKind.human &&
     message.replyToId != null; // "names no call" — see admitCallEnd's doc
 
 /// A verified sovereign origin: this key signed these bytes, checked at ingest.
@@ -203,8 +215,15 @@ bool _hasVerifiedOrigin(Message message) =>
 /// What these clauses DO stop, which is the part with teeth: an unverified or
 /// imported row, a bot, and an authorless actor being elevated into system
 /// narration.
+/// NOTE the explicit `kind` clause. It used to be inherited from
+/// [_isCallEndShape]; that predicate now carries shape only, so the RENDER rule
+/// is stated here to keep it exactly as it was. Whether a consented agent's
+/// hangup should draw as a system event is a presentation decision, separate
+/// from whether it may stop a ring, and it is deliberately NOT changed here.
 bool isRenderableCallEnd(Message message, {required bool isMine}) =>
-    _isCallEndShape(message) && (isMine || _hasVerifiedOrigin(message));
+    _isCallEndShape(message) &&
+    message.sender.kind == SenderKind.human &&
+    (isMine || _hasVerifiedOrigin(message));
 
 /// A call INVITATION the screen may draw as an event. Same authorship floor and
 /// the same `isMine` reasoning — fixing only the hangup would have left the
@@ -215,9 +234,18 @@ bool isRenderableCallInvite(Message message, {required bool isMine}) =>
     message.sender.kind == SenderKind.human &&
     (isMine || _hasVerifiedOrigin(message));
 
-CallEnd? admitCallEnd(Message message, {required String meUserId}) {
+CallEnd? admitCallEnd(
+  Message message, {
+  required String meUserId,
+  /// The SAME consent set [admitRing] is given. A hangup is admitted by exactly
+  /// the rule that admitted the ring — see [_isCallEndShape].
+  required Set<String> ringAllowedKeys,
+}) {
   if (!_isCallEndShape(message)) return null;
   if (!_hasVerifiedOrigin(message)) return null;
+  final origin = message.origin;
+  if (origin == null) return null; // verified implies present
+  if (!_mayRing(message.sender, origin, ringAllowedKeys)) return null;
   final from = message.sender.userId!;
   if (from == meUserId) return null;
   final target = message.replyToId!;
@@ -386,23 +414,106 @@ class CallInvite {
 /// direction — the alternative hands the freshness decision to the party the
 /// signature exists to distrust. A monotonic fix needs a signed island "now";
 /// tracked, not faked.
+/// May this sender ring at all — the kind gate, widened by explicit consent.
+///
+/// The plain reading of `kind != human` is "no bots". That is NOT what it does
+/// on the live gateway, and the gap is invisible from inside this repo. The
+/// deployed island reports the sender's kind as:
+///
+///     if sender_user is not None: return "human"   # ANY account, unconditionally
+///     if channel.kind in ("llm","robot"): return channel.kind
+///     return "actor"
+///
+/// So `kind` answers "did the sender hold an account?", never "is the sender a
+/// person" — and the clause only ever fires on `actor`, the accountless bus
+/// participant. Measured, not inferred: a resident agent holding its own account
+/// and key rang a real handset through this path on 2026-08-26, and the gateway
+/// labelled it `human`. The island's unreleased source starts reporting true
+/// kinds (island #3096), at which point that same resident would be refused —
+/// a capability regressing with no change here. This is the widening that has to
+/// land first (claude-tasks#3448).
+///
+/// Three properties, each chosen against a specific way this could go wrong:
+///
+/// 1. **Keyed on the KEY, never the account or the label.** `signingBytes`
+///    covers the pubkey; `sender.userId` and `sender.label` are server-supplied
+///    and NOT covered, so an island in the middle can rewrite them (the app-wide
+///    key→account gap, #3166). An allowlist keyed on anything the island can
+///    rewrite is an allowlist the island controls.
+///
+/// 2. **Consulted only AFTER the signature verifies** — enforced by call order
+///    in [admitRing]. Scoped honestly: this is defence for a future refactor,
+///    NOT a property today's tests establish. Reversing the two still refuses,
+///    because the crypto check runs before any invite is returned either way;
+///    the test that claimed to pin the order was void and now pins the real
+///    invariant instead (an unverified envelope never rings, consent or not).
+///
+/// 3. **An allowlisted ringer must still be BLOCKABLE** — against an island that
+///    is BUGGY, not one that is LYING. `userId != null` is required, so
+///    allowlisting a keyed-but-accountless actor cannot mint exactly the
+///    unblockable ringer the `actor` refusal exists to prevent: consent that
+///    cannot be withdrawn is not consent.
+///
+///    SCOPED, because an earlier version of this comment claimed more than the
+///    code can deliver (cage-match round 2, Carnot HIGH). `sender.userId` is
+///    server-supplied and OUTSIDE `signingBytes` — the same fact property 1
+///    relies on — so a HOSTILE island can staple any non-null id to an
+///    accountless actor and satisfy this check while the id names nothing the
+///    block path can reach.
+///
+///    That is not a hole this gate opens, and the reason matters: `kind` is
+///    unsigned too, so a hostile island already bypasses the allowlist entirely
+///    by reporting `human`. Against that adversary nothing here helps, and the
+///    honest answer is the app-wide key→account trust root (#3166), not another
+///    clause. What this check DOES buy is real and worth keeping: it closes the
+///    island's own `actor` arm, where `userId` is genuinely null, and it holds
+///    for every sender rather than only allowlisted ones.
+///
+/// Everything else still applies: block, mute, DM-only, freshness, own-echo. The
+/// allowlist widens ONE gate; it is not a bypass.
+bool _mayRing(
+  MessageSender sender,
+  OriginEnvelope origin,
+  Set<String> ringAllowedKeys,
+) {
+  // FIRST, for EVERY sender — not only allowlisted ones (cage-match, Carnot
+  // HIGH). The earlier version returned true for `human` before this check, so a
+  // malformed or hostile island row with `kind: human` and a null `userId` rang
+  // and then could not be blocked: `blockedUserIds.contains(null)` never
+  // matches. Whoever may wake you must always be someone you can name and
+  // refuse. Closing it at the single door rather than per-branch.
+  if (sender.userId == null) return false;
+  if (sender.kind == SenderKind.human) return true;
+  if (ringAllowedKeys.isEmpty) return false; // the overwhelmingly common path
+  return ringAllowedKeys.contains(encodeMultikey(origin.rawPublicKey));
+}
+
 CallInvite? admitRing(
   Message message, {
   required String meUserId,
   required Set<String> blockedUserIds,
+  /// Multikey (`z…`) public keys this handset has consented to be rung by even
+  /// though the island does not call them people. DEVICE-LOCAL by design — see
+  /// [_mayRing]. Empty is the correct default and preserves the old behaviour
+  /// exactly.
+  required Set<String> ringAllowedKeys,
   required bool conversationMuted,
   required bool isDm,
   required DateTime now,
 }) {
   if (!isCallInviteBody(message.body)) return null;
   if (message.sender.userId == meUserId) return null;
-  if (message.sender.kind != SenderKind.human) return null;
   // The signature check — see the doc above. `originCryptoValid` is computed
   // ONCE at ingest by the repository; `true` is the only admitting value
   // (`null` = unsigned/unverified, `false` = carried-but-invalid).
+  //
+  // MOVED AHEAD OF THE KIND GATE, and the order is now load-bearing rather than
+  // incidental: the kind gate below may consult the SIGNER'S KEY, and a key read
+  // off an unverified envelope is a key anyone can claim. Verify, then consult.
   if (message.originCryptoValid != true) return null;
   final origin = message.origin;
   if (origin == null) return null; // belt-and-braces: valid implies present.
+  if (!_mayRing(message.sender, origin, ringAllowedKeys)) return null;
   if (!isDm) return null;
   if (blockedUserIds.contains(message.sender.userId)) return null;
   if (conversationMuted) return null;
