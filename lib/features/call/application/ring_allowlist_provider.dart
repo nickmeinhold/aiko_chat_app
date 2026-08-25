@@ -49,14 +49,31 @@ class RingAllowlist extends Notifier<Set<String>> {
   Future<bool> allow(String multikey) async {
     final store = ref.read(ringAllowlistStoreProvider);
     if (!await store.allow(multikey)) return false;
-    state = store.read();
-    return true;
+    return _publish(store);
   }
 
   /// Withdraw consent, and republish. Same failure handling as [allow].
   Future<bool> revoke(String multikey) async {
     final store = ref.read(ringAllowlistStoreProvider);
     if (!await store.revoke(multikey)) return false;
+    return _publish(store);
+  }
+
+  /// Republish, but ONLY if [store] is still the one this session is reading.
+  ///
+  /// The disk was namespaced per user and the in-memory register was not
+  /// (cage-match round 2, Tesla). `allow`/`revoke` capture a store, yield on
+  /// SharedPreferences, then publish into whichever identity now occupies this
+  /// same notifier — so a grant in flight across a logout-then-login lands
+  /// Alice's keys in Bob's live set, and `RingController` reads THAT on the next
+  /// invite. Bob is woken for a covenant he never made: the identical
+  /// identity-as-mutable-key defect as the device-global prefs key, one layer up,
+  /// which is the tell that the first fix was an instance and not the class.
+  ///
+  /// `build()` has already spoken for the new sleeper by then, so the correct
+  /// action is to say nothing rather than to correct it.
+  bool _publish(RingAllowlistStore store) {
+    if (!identical(ref.read(ringAllowlistStoreProvider), store)) return false;
     state = store.read();
     return true;
   }

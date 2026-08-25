@@ -90,6 +90,43 @@ void main() {
     });
   });
 
+  group('concurrent mutations do not lose each other', () {
+    test('a revoke racing a grant does not resurrect the revoked key', () async {
+      // PROPERTY TEST, NOT A REGRESSION TEST — and the distinction is the point.
+      //
+      // Tesla (cage-match round 2) described a read-modify-write interleave:
+      // revoke snapshots {A,B}, allow snapshots {A,B}, revoke persists {B},
+      // allow persists {A,B,C}, and A returns from the dead. The reasoning is
+      // sound and the `_serialize` chain that answers it is real.
+      //
+      // But this test does NOT go red without that chain, and pretending
+      // otherwise would be exactly the void test this PR keeps exorcising.
+      // MEASURED: `SharedPreferences.setString` updates its in-memory cache
+      // SYNCHRONOUSLY, before the returned Future completes — a probe reading
+      // the key without awaiting the write already sees the new value. So the
+      // window Tesla names is not reachable through THIS backing store, and the
+      // chain is defence for a future one (or a different prefs impl) rather
+      // than a fix for a live defect. Stated so the next reader does not read a
+      // green here as proof the chain is load-bearing.
+      //
+      // (Same caveat applies to `PendingUnregisterStore._writes`, whose comment
+      // claims more than its backing store can currently do wrong.)
+      final s = await storeFor(alice);
+      await s.allow(resident);
+      await s.allow(stranger);
+      // Fire both WITHOUT awaiting between them — that is the race.
+      final revoking = s.revoke(resident);
+      final granting = s.allow(encodeMultikey(Uint8List(32)..[0] = 11));
+      await Future.wait([revoking, granting]);
+      expect(
+        s.read(),
+        isNot(contains(resident)),
+        reason: 'the revoked key must not survive a concurrent grant',
+      );
+      expect(s.read(), contains(stranger));
+    });
+  });
+
   group('what is stored must be what is MATCHED', () {
     test('a stored key is byte-identical to what admitRing compares', () async {
       // `_mayRing` compares against `encodeMultikey(origin.rawPublicKey)`. If the

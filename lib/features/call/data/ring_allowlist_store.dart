@@ -40,9 +40,35 @@ class RingAllowlistStore {
   /// inherited-consent defect above.
   final String? _userId;
 
-  const RingAllowlistStore(this._prefs, this._userId);
+  RingAllowlistStore(this._prefs, this._userId);
 
   String get _key => '$_prefix$_userId';
+
+  /// Serializes read-modify-write, exactly as [PendingUnregisterStore] does and
+  /// for exactly the same reason — a precedent twenty lines away in this repo
+  /// that this class failed to reuse until a reviewer found the bug it prevents.
+  ///
+  /// Every mutation below is read → mutate → write, and the write awaits. Two
+  /// overlapping mutations therefore interleave: revoke snapshots {A,B}, allow
+  /// snapshots {A,B}, revoke persists {B}, allow persists {A,B,C} — and A, which
+  /// was just revoked, is back. A withdrawal that loses a race is not a
+  /// withdrawal. Chaining removes the interleaving rather than guarding it
+  /// (cage-match round 2, Tesla).
+  ///
+  /// SCOPED HONESTLY: defence in depth, not a fix for a reachable bug.
+  /// `SharedPreferences.setString` updates its in-memory cache SYNCHRONOUSLY
+  /// before the returned Future completes — measured with a probe, not assumed —
+  /// so a later `read()` already sees the write and the window above does not
+  /// currently open. The chain earns its place against a future async-backed
+  /// store; the test covering it says plainly that it cannot go red today.
+  Future<void> _writes = Future<void>.value();
+
+  Future<bool> _serialize(Future<bool> Function() mutate) {
+    final result = _writes.then((_) => mutate());
+    // The chain must not break on an error, or every later mutation is dropped.
+    _writes = result.then((_) {}, onError: (_) {});
+    return result;
+  }
 
   /// Every consented key, as an UNMODIFIABLE set.
   ///
@@ -86,7 +112,7 @@ class RingAllowlistStore {
     } on OriginError {
       return false;
     }
-    return _write({...read(), canonical});
+    return _serialize(() => _write({...read(), canonical}));
   }
 
   /// Withdraw consent. Consent that cannot be withdrawn is not consent, so this
@@ -102,7 +128,7 @@ class RingAllowlistStore {
       // the literal anyway rather than refusing, so a store corrupted by hand can
       // still be cleaned up through the front door.
     }
-    return _write({...read()}..remove(canonical));
+    return _serialize(() => _write({...read()}..remove(canonical)));
   }
 
   Future<bool> _write(Set<String> keys) => keys.isEmpty
