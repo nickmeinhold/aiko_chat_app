@@ -65,6 +65,26 @@ void main() {
     deliveryState: DeliveryState.sent,
   );
 
+  /// A hangup naming [target], parameterised the same way [invite] is so the
+  /// symmetry tests can vary sender kind and signing key.
+  Message callEnd({
+    String from = robin,
+    SenderKind kind = SenderKind.human,
+    Uint8List? key,
+    String target = '01M0GS7FDWBVQ31950B1PTV2DW',
+  }) => Message(
+    clientTempId: 'end1',
+    id: '01M0GS7FDWBVQ31950B1PTV2DX',
+    channelId: 'dm:aaa:bbb',
+    sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
+    body: kCallEndBody,
+    replyToId: target,
+    createdAt: now,
+    origin: signedAt(now, key: key),
+    originCryptoValid: true,
+    deliveryState: DeliveryState.sent,
+  );
+
   CallInvite? admit(
     Message m, {
     Set<String> blocked = const {},
@@ -369,6 +389,35 @@ void main() {
       }
     });
 
+    test('a consented ringer can also HANG UP — start and stop share one gate', () {
+      // Carnot (HIGH) and Tesla found this independently: the kind clause lived
+      // in `_isCallEndShape`, so widening `admitRing` alone made the STOP gate
+      // colder than the START gate. An allowlisted resident could wake the
+      // handset and then not silence it — the ring ran its full 30 seconds after
+      // the caller had already hung up. A protocol whose start and stop have
+      // different admission rules is not a protocol, it is two.
+      final allowed = {mk(residentKey)};
+      final ended = admitCallEnd(
+        callEnd(kind: SenderKind.llm, key: residentKey),
+        meUserId: me,
+        ringAllowedKeys: allowed,
+      );
+      expect(ended, isNotNull, reason: 'the consented caller must be able to stop its own ring');
+    });
+
+    test('an UNCONSENTED non-human still cannot hang up', () {
+      // The widening is symmetric, not a hole: without consent the stop gate
+      // refuses exactly as the start gate does.
+      expect(
+        admitCallEnd(
+          callEnd(kind: SenderKind.llm, key: strangerKey),
+          meUserId: me,
+          ringAllowedKeys: {mk(residentKey)},
+        ),
+        isNull,
+      );
+    });
+
     test('a human still rings without appearing on any allowlist', () {
       expect(admit(invite(key: strangerKey)), isNotNull);
     });
@@ -416,7 +465,7 @@ void main() {
     /// miss the class the round-2 finding lived in — a memory whose key was
     /// weaker than the live path's.
     bool stops(Message m, {CallInvite? ringing}) {
-      final end = admitCallEnd(m, meUserId: me);
+      final end = admitCallEnd(m, meUserId: me, ringAllowedKeys: const {});
       return end != null && endsInvite(end, ringing ?? live);
     }
 
@@ -449,7 +498,7 @@ void main() {
         // The round-2 shape: the gate used to take `live` and answer a single
         // fused question, so the out-of-order memory had to invent its own,
         // weaker, key. Split, both consumers run identical clauses.
-        final judged = admitCallEnd(end(), meUserId: me);
+        final judged = admitCallEnd(end(), meUserId: me, ringAllowedKeys: const {});
         expect(judged, isNotNull);
         expect(judged!.targetServerMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
         expect(judged.fromUserId, robin);
@@ -471,7 +520,7 @@ void main() {
         originCryptoValid: true,
         deliveryState: DeliveryState.sent,
       );
-      expect(admitCallEnd(anon, meUserId: me), isNull);
+      expect(admitCallEnd(anon, meUserId: me, ringAllowedKeys: const {}), isNull);
     });
 
     test('a NON-HUMAN end is refused, mirroring admitRing', () {
@@ -487,7 +536,7 @@ void main() {
         originCryptoValid: true,
         deliveryState: DeliveryState.sent,
       );
-      expect(admitCallEnd(robot, meUserId: me), isNull);
+      expect(admitCallEnd(robot, meUserId: me, ringAllowedKeys: const {}), isNull);
     });
 
     test(

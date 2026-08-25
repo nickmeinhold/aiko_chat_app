@@ -204,7 +204,11 @@ class RingController extends Notifier<CallInvite?> {
     // ring. Both consumers below run the SAME clauses — the first version gave
     // the memory a weaker key than the live path, so a third party or another
     // channel could pre-poison a ring the live path would have refused.
-    final end = admitCallEnd(m, meUserId: me);
+    final end = admitCallEnd(
+      m,
+      meUserId: me,
+      ringAllowedKeys: ref.read(ringAllowedKeysProvider),
+    );
     if (end != null) {
       (_ended[end.targetServerMsgId] ??= []).add((end: end, at: now));
       final live = _live;

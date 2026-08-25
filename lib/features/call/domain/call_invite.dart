@@ -164,10 +164,19 @@ class CallEnd {
 /// message the ring would refuse still drew a centred "X ended the call" — a
 /// second almost-gate with fewer clauses, which is how a UI ends up narrating
 /// events the domain never admitted (cage-match rounds 6-7, Carnot).
+/// The SHAPE of a hangup — body, an author, and a call it names. Authorization
+/// is NOT here; it lives in [_mayRing], which both admission doors share.
+///
+/// The kind clause used to sit in this predicate, which quietly made the stop
+/// gate COLDER than the start gate the moment `admitRing` widened: an
+/// allowlisted resident could wake the handset and then could not silence it,
+/// so the ring ran its full 30 seconds after the caller had already hung up
+/// (cage-match — Carnot HIGH and Tesla, independently, which is the strongest
+/// signal this review produced). A protocol whose start and stop have different
+/// admission rules is not a protocol, it is two.
 bool _isCallEndShape(Message message) =>
     isCallEndBody(message.body) &&
     message.sender.userId != null &&
-    message.sender.kind == SenderKind.human &&
     message.replyToId != null; // "names no call" — see admitCallEnd's doc
 
 /// A verified sovereign origin: this key signed these bytes, checked at ingest.
@@ -206,8 +215,15 @@ bool _hasVerifiedOrigin(Message message) =>
 /// What these clauses DO stop, which is the part with teeth: an unverified or
 /// imported row, a bot, and an authorless actor being elevated into system
 /// narration.
+/// NOTE the explicit `kind` clause. It used to be inherited from
+/// [_isCallEndShape]; that predicate now carries shape only, so the RENDER rule
+/// is stated here to keep it exactly as it was. Whether a consented agent's
+/// hangup should draw as a system event is a presentation decision, separate
+/// from whether it may stop a ring, and it is deliberately NOT changed here.
 bool isRenderableCallEnd(Message message, {required bool isMine}) =>
-    _isCallEndShape(message) && (isMine || _hasVerifiedOrigin(message));
+    _isCallEndShape(message) &&
+    message.sender.kind == SenderKind.human &&
+    (isMine || _hasVerifiedOrigin(message));
 
 /// A call INVITATION the screen may draw as an event. Same authorship floor and
 /// the same `isMine` reasoning — fixing only the hangup would have left the
@@ -218,9 +234,18 @@ bool isRenderableCallInvite(Message message, {required bool isMine}) =>
     message.sender.kind == SenderKind.human &&
     (isMine || _hasVerifiedOrigin(message));
 
-CallEnd? admitCallEnd(Message message, {required String meUserId}) {
+CallEnd? admitCallEnd(
+  Message message, {
+  required String meUserId,
+  /// The SAME consent set [admitRing] is given. A hangup is admitted by exactly
+  /// the rule that admitted the ring — see [_isCallEndShape].
+  required Set<String> ringAllowedKeys,
+}) {
   if (!_isCallEndShape(message)) return null;
   if (!_hasVerifiedOrigin(message)) return null;
+  final origin = message.origin;
+  if (origin == null) return null; // verified implies present
+  if (!_mayRing(message.sender, origin, ringAllowedKeys)) return null;
   final from = message.sender.userId!;
   if (from == meUserId) return null;
   final target = message.replyToId!;
@@ -436,8 +461,14 @@ bool _mayRing(
   OriginEnvelope origin,
   Set<String> ringAllowedKeys,
 ) {
+  // FIRST, for EVERY sender — not only allowlisted ones (cage-match, Carnot
+  // HIGH). The earlier version returned true for `human` before this check, so a
+  // malformed or hostile island row with `kind: human` and a null `userId` rang
+  // and then could not be blocked: `blockedUserIds.contains(null)` never
+  // matches. Whoever may wake you must always be someone you can name and
+  // refuse. Closing it at the single door rather than per-branch.
+  if (sender.userId == null) return false;
   if (sender.kind == SenderKind.human) return true;
-  if (sender.userId == null) return false; // property 3
   if (ringAllowedKeys.isEmpty) return false; // the overwhelmingly common path
   return ringAllowedKeys.contains(encodeMultikey(origin.rawPublicKey));
 }
