@@ -57,9 +57,26 @@ import '../domain/push_token_source.dart';
 ///   a different user   → the DELETE no-ops, then THEIR register takes the row
 ///   nobody signs in    → the row survives (below)
 ///
-/// Reversing it is the bug the ordering exists to prevent: drain AFTER start and
-/// the debt's token has just been re-registered to the current user, so the
-/// DELETE matches — and deletes the live row we created a moment ago.
+/// WHY THE ORDER, STATED ACCURATELY — the obvious reason is no longer the real
+/// one, and a live run proved it (`docs/runbooks/arm2-teardown-ordering.md`).
+///
+/// The reversed order was justified here as "the DELETE matches the row the
+/// register just created and destroys the live pairing". For a CONFIRMED
+/// register of the SAME token that is now false: `_settle` discharges the debt
+/// on proven success, so by the time a late drain ran the ledger would already
+/// be empty. Reversing the two and signing out offline was measured live — the
+/// island saw a POST and NO DELETE, and the row survived. The write-ahead
+/// obligation closed that path independently.
+///
+/// What the ordering still buys is narrower and does not depend on that:
+/// A DRAIN MUST NEVER BE A SESSION-START'S LAST WRITE. An AMBIGUOUS register
+/// (response lost) deliberately leaves its obligation standing, so a drain that
+/// ran afterwards could delete a row that POST may have just created, with
+/// nothing following to re-create it. Draining FIRST means whatever it removes,
+/// the register behind it puts back.
+///
+/// Both facts matter and neither replaces the other: keep the order, and do not
+/// re-derive its justification from the sentence that used to be here.
 ///
 /// NAMED RESIDUAL: sign out while offline and never sign in again on this
 /// handset, and the island keeps a routable row. The out-of-band attempt closes
