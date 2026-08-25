@@ -45,6 +45,9 @@
 library;
 
 import '../../chat/domain/message.dart';
+// `encodeMultikey` — the allowlist is keyed on the canonical wire form of the
+// signer's key, so a stored entry and a live envelope compare as the same string.
+import '../../chat/domain/origin_envelope.dart';
 
 /// The pinned invitation body. **Signed and durable — never edit this string.**
 /// A client that predates the feature renders it as a readable line of text
@@ -386,23 +389,85 @@ class CallInvite {
 /// direction — the alternative hands the freshness decision to the party the
 /// signature exists to distrust. A monotonic fix needs a signed island "now";
 /// tracked, not faked.
+/// May this sender ring at all — the kind gate, widened by explicit consent.
+///
+/// The plain reading of `kind != human` is "no bots". That is NOT what it does
+/// on the live gateway, and the gap is invisible from inside this repo. The
+/// deployed island reports the sender's kind as:
+///
+///     if sender_user is not None: return "human"   # ANY account, unconditionally
+///     if channel.kind in ("llm","robot"): return channel.kind
+///     return "actor"
+///
+/// So `kind` answers "did the sender hold an account?", never "is the sender a
+/// person" — and the clause only ever fires on `actor`, the accountless bus
+/// participant. Measured, not inferred: a resident agent holding its own account
+/// and key rang a real handset through this path on 2026-08-26, and the gateway
+/// labelled it `human`. The island's unreleased source starts reporting true
+/// kinds (island #3096), at which point that same resident would be refused —
+/// a capability regressing with no change here. This is the widening that has to
+/// land first (claude-tasks#3448).
+///
+/// Three properties, each chosen against a specific way this could go wrong:
+///
+/// 1. **Keyed on the KEY, never the account or the label.** `signingBytes`
+///    covers the pubkey; `sender.userId` and `sender.label` are server-supplied
+///    and NOT covered, so an island in the middle can rewrite them (the app-wide
+///    key→account gap, #3166). An allowlist keyed on anything the island can
+///    rewrite is an allowlist the island controls.
+///
+/// 2. **Consulted only AFTER the signature verifies** — enforced by call order
+///    in [admitRing]. Scoped honestly: this is defence for a future refactor,
+///    NOT a property today's tests establish. Reversing the two still refuses,
+///    because the crypto check runs before any invite is returned either way;
+///    the test that claimed to pin the order was void and now pins the real
+///    invariant instead (an unverified envelope never rings, consent or not).
+///
+/// 3. **An allowlisted ringer must still be BLOCKABLE.** `userId != null` is
+///    required, so a consented ringer always has an account the block and mute
+///    paths can name. Without it, allowlisting a keyed-but-accountless actor
+///    would mint exactly the unblockable ringer the `actor` refusal exists to
+///    prevent — consent that cannot be withdrawn is not consent.
+///
+/// Everything else still applies: block, mute, DM-only, freshness, own-echo. The
+/// allowlist widens ONE gate; it is not a bypass.
+bool _mayRing(
+  MessageSender sender,
+  OriginEnvelope origin,
+  Set<String> ringAllowedKeys,
+) {
+  if (sender.kind == SenderKind.human) return true;
+  if (sender.userId == null) return false; // property 3
+  if (ringAllowedKeys.isEmpty) return false; // the overwhelmingly common path
+  return ringAllowedKeys.contains(encodeMultikey(origin.rawPublicKey));
+}
+
 CallInvite? admitRing(
   Message message, {
   required String meUserId,
   required Set<String> blockedUserIds,
+  /// Multikey (`z…`) public keys this handset has consented to be rung by even
+  /// though the island does not call them people. DEVICE-LOCAL by design — see
+  /// [_mayRing]. Empty is the correct default and preserves the old behaviour
+  /// exactly.
+  required Set<String> ringAllowedKeys,
   required bool conversationMuted,
   required bool isDm,
   required DateTime now,
 }) {
   if (!isCallInviteBody(message.body)) return null;
   if (message.sender.userId == meUserId) return null;
-  if (message.sender.kind != SenderKind.human) return null;
   // The signature check — see the doc above. `originCryptoValid` is computed
   // ONCE at ingest by the repository; `true` is the only admitting value
   // (`null` = unsigned/unverified, `false` = carried-but-invalid).
+  //
+  // MOVED AHEAD OF THE KIND GATE, and the order is now load-bearing rather than
+  // incidental: the kind gate below may consult the SIGNER'S KEY, and a key read
+  // off an unverified envelope is a key anyone can claim. Verify, then consult.
   if (message.originCryptoValid != true) return null;
   final origin = message.origin;
   if (origin == null) return null; // belt-and-braces: valid implies present.
+  if (!_mayRing(message.sender, origin, ringAllowedKeys)) return null;
   if (!isDm) return null;
   if (blockedUserIds.contains(message.sender.userId)) return null;
   if (conversationMuted) return null;

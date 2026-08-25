@@ -16,6 +16,7 @@ import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../moderation/application/moderation_controller.dart';
 import '../domain/call_invite.dart';
+import 'ring_allowlist_provider.dart';
 
 /// The invitation currently ringing, or null.
 ///
@@ -214,6 +215,7 @@ class RingController extends Notifier<CallInvite?> {
       m,
       meUserId: me,
       blockedUserIds: ref.read(blockedUserIdsProvider),
+      ringAllowedKeys: ref.read(ringAllowedKeysProvider),
       conversationMuted: _isMuted(m),
       isDm: _isDm(m),
       now: now,
