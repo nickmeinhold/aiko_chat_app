@@ -448,11 +448,26 @@ class CallInvite {
 ///    the test that claimed to pin the order was void and now pins the real
 ///    invariant instead (an unverified envelope never rings, consent or not).
 ///
-/// 3. **An allowlisted ringer must still be BLOCKABLE.** `userId != null` is
-///    required, so a consented ringer always has an account the block and mute
-///    paths can name. Without it, allowlisting a keyed-but-accountless actor
-///    would mint exactly the unblockable ringer the `actor` refusal exists to
-///    prevent — consent that cannot be withdrawn is not consent.
+/// 3. **An allowlisted ringer must still be BLOCKABLE** — against an island that
+///    is BUGGY, not one that is LYING. `userId != null` is required, so
+///    allowlisting a keyed-but-accountless actor cannot mint exactly the
+///    unblockable ringer the `actor` refusal exists to prevent: consent that
+///    cannot be withdrawn is not consent.
+///
+///    SCOPED, because an earlier version of this comment claimed more than the
+///    code can deliver (cage-match round 2, Carnot HIGH). `sender.userId` is
+///    server-supplied and OUTSIDE `signingBytes` — the same fact property 1
+///    relies on — so a HOSTILE island can staple any non-null id to an
+///    accountless actor and satisfy this check while the id names nothing the
+///    block path can reach.
+///
+///    That is not a hole this gate opens, and the reason matters: `kind` is
+///    unsigned too, so a hostile island already bypasses the allowlist entirely
+///    by reporting `human`. Against that adversary nothing here helps, and the
+///    honest answer is the app-wide key→account trust root (#3166), not another
+///    clause. What this check DOES buy is real and worth keeping: it closes the
+///    island's own `actor` arm, where `userId` is genuinely null, and it holds
+///    for every sender rather than only allowlisted ones.
 ///
 /// Everything else still applies: block, mute, DM-only, freshness, own-echo. The
 /// allowlist widens ONE gate; it is not a bypass.
