@@ -187,6 +187,29 @@ void main() {
         // sentinel in #general rings every member and no block or mute stops it.
         // Enumerated rather than spot-checked: `!= human` must hold for the WHOLE
         // non-human set, and a new SenderKind added later inherits the refusal.
+        //
+        // WHAT THIS DOES NOT CURRENTLY STOP, measured on the live island
+        // 2026-08-26 — and the reason this test is a TRIPWIRE, not just a guard.
+        // The deployed gateway does not report a sender's real kind. It reports
+        // `"human"` for ANY sender holding an account, unconditionally:
+        //
+        //     if sender_user is not None: return "human"
+        //     if channel.kind in ("llm","robot"): return channel.kind
+        //     return "actor"
+        //
+        // So `kind` answers "did the sender have an account?", never "is the
+        // sender a person" — and the clause above fires only on the `actor` arm,
+        // which is exactly the bus-actor case named above. An agent that simply
+        // HOLDS an account is admitted, and one did: `Dreamfinder`, its own
+        // account and Ed25519 key, rang a real handset through this path.
+        //
+        // The gateway's unreleased source replaces that hardcode with the
+        // account's true kind ("never a hardcoded 'human'", island #3096). On the
+        // day it deploys, this test stops describing a bus actor and starts
+        // refusing a resident Nick asked to be called by — a working capability
+        // regressing, in a repo that did not change. If this test is what broke,
+        // read claude-tasks#3448 BEFORE weakening it: the `actor` refusal must
+        // survive; only the account-holding case is in question.
         for (final kind in SenderKind.values.where(
           (k) => k != SenderKind.human,
         )) {
