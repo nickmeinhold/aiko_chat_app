@@ -30,11 +30,12 @@ reason to stop, not a caveat to note.
 
 | Field | Value |
 |---|---|
-| **Artifact** | `restack-157` @ `84bc932` (= `origin/feat/apns-token-source`, restacked on #156). A debug build — see *Which build* below. |
-| **Target environment** | **Deliberately unbound.** Resolved by observation in step 2, not asserted here. |
+| **Artifact** | `restack-157` @ `84bc932` (= `origin/feat/apns-token-source`, restacked on #156), built **release** and installed as container `CD5764BB-5FB8-494B-A192-2FCC76C45328` on `00008120-000428CE1EB8201E`. See *Which build* below — the obvious recipe does not work. |
+| **Target environment** | **`https://chat.enspyr.co`** — BOUND by direct read of the handset's own `flutter.aiko_gateway_base_url` (`tool/probe_debt.sh`), not by assumption and not by waiting for a row to move. This is the value that cost four hours on 2026-08-24. Re-read it, don't remember it. |
 | **Actor** | The handset's signed-in account, whichever it is. Arm 2 is single-party; no second account is involved. |
 | **Invariant** | `drainPending()` completes strictly before `start()` on every sign-in edge. |
-| **Terminal observable** | `select count(*) from device_tokens` on the island the app is signed into, after the final sign-in settles. **1 = correct. 0 = the bug.** |
+| **Terminal observable** | `select count(*) from device_tokens` on `chat.enspyr.co`, after the final sign-in settles. **1 = correct. 0 = the bug.** |
+| **Second, independent observable** | `tool/probe_debt.sh` reads the handset's OWN debt ledger. The island probe reads a CONSEQUENCE; this reads the MECHANISM. They fail differently, which is why both run. |
 | **Positive control** | Step 2. A row must be seen to APPEAR before anything is torn down. |
 | **Negative control (must-read-zero)** | Step 1. Both islands read zero at rest. |
 | **Negative control (forces the bug)** | `tool/probes/arm2-reverse-order.patch` — step 8. |
@@ -56,14 +57,47 @@ reason to stop, not a caveat to note.
 
 ## Which build, and why it matters
 
-`APNS_USE_SANDBOX=true` on **both** islands (verified 2026-08-25). A dev build's
-token is valid only against sandbox and a TestFlight token only against prod,
-and the two strings are indistinguishable — so today only a **debug build** can
-ring (claude-tasks #3386).
+**It must be a RELEASE build, locally signed.** The obvious recipe — `flutter
+build ios --debug` then `devicectl install` + `launch` — produces a process that
+starts, matches its container UUID, appears in `devicectl device info processes`,
+and is **not running Flutter at all**:
 
-Arm 2 does not need a push to be *delivered*; it counts rows. But use the debug
-build anyway: it is the artifact the fix will ship in, and mixing build types
-here reintroduces the exact class of ambiguity the contract exists to remove.
+```
+[ERROR:flutter/runtime/ptrace_check.cc(75)] Could not call ptrace(PT_TRACE_ME): Operation not permitted
+Cannot create a FlutterEngine instance in debug mode without Flutter tooling or Xcode.
+```
+
+A debug iOS build cannot start its engine unless `flutter run` or Xcode is
+attached. Every process-level check reads green while no Dart executes — the
+claim ("the app is running") sits one layer above the thing measured ("the
+binary is executing"). Verify the ENGINE:
+
+```
+flutter build ios --release
+xcrun devicectl device install app --device <udid> build/ios/iphoneos/Runner.app
+xcrun devicectl device process launch --device <udid> --terminate-existing cc.imagineering.aikoChatApp
+# then, in a syslog capture spanning the launch:
+#   ptrace / "without Flutter tooling"  ABSENT   (the debug run is the control that proves this line is visible)
+#   Runner(Flutter) ... Impeller ...    PRESENT
+```
+
+Release rather than debug does not change the APNs environment. That is set by
+the **entitlement** in the provisioning profile, not by the Dart build mode: a
+locally-signed build carries `aps-environment: development` and therefore a
+SANDBOX token, matching `APNS_USE_SANDBOX=true` on both islands. A TestFlight
+build would carry a production token and silently fail to match (claude-tasks
+#3386). So: build locally, never test this against a TestFlight install.
+
+**Gate the build on the artifact's mtime, never on the exit code.** `flutter
+build ios` has been observed exiting 0 while `xcodebuild` was still running,
+leaving a four-day-old binary on disk that installs as a clean success.
+
+**Do not plan on Dart log lines.** `debugPrint` does not reach
+`idevicesyslog` — of 929 lines emitted by the app process during a launch, every
+one came from CoreFoundation/UIKit/Flutter-engine subsystems and none from Dart.
+The registrar's `unregister deferred to next sign-in` and friends are NOT
+observable this way. `tool/probe_debt.sh` is the replacement, and it is better:
+it reads the debt itself rather than a message about it.
 
 ---
 
@@ -72,27 +106,35 @@ here reintroduces the exact class of ambiguity the contract exists to remove.
 Nick's hands are needed from step 3 (airplane mode, sign-out/in). Everything
 else is mine.
 
-**1. Rest reading — both islands.**
+**1. Rest reading — both islands, and the handset.**
+
+```
+./tool/probe_pairing.sh    # expect UNBOUND (both islands zero)
+./tool/probe_debt.sh       # expect: signed into <island>, owed nothing
+```
+
+The must-read-zero arm, on both instruments. An unexpected row or an unexpected
+debt means the sequence starts from a state this runbook did not model — stop
+and find out which, rather than proceeding and attributing it later.
+
+`probe_debt.sh` carries its own **extraction control**: every SharedPreferences
+key is prefixed `flutter.` and `.` is a `plutil -extract` keypath separator, so
+one missing backslash makes every lookup report a confident, plausible ABSENT.
+It resolves a key known to exist before it is allowed to report absence. This
+bit once already, on the very reading it exists to take.
+
+**2. Sign in on the handset. Positive control.**
 
 ```
 ./tool/probe_pairing.sh
 ```
 
-Expect `UNBOUND` (both zero). This is the must-read-zero arm. If a row is
-already present, stop and find out whose it is before continuing — an unexpected
-row means the sequence starts from a state this runbook did not model.
-
-**2. Sign in on the handset. Positive control + target binding, in one act.**
-
-```
-./tool/probe_pairing.sh
-```
-
-Exactly one island's count must go `0 → 1`. **That island is the target** for
-every later reading; write it down. The probe is now bound, and it has been
-shown to read non-zero.
+The island named in step 1 must go `0 → 1`. **If a DIFFERENT island moves, the
+handset's stored gateway and its live session disagree** — that is a finding,
+not a nuisance; stop and reconcile before continuing.
 
 > This step is also a functional precondition, not just an instrument check.
+
 > `unpair` writes a debt only for the token in `_registered`, and `_registered`
 > is set on *confirmed* success. No confirmed register ⇒ no debt ⇒ no ordering
 > to test, and Arm 2 would pass while proving nothing.
@@ -104,8 +146,20 @@ its own is the ordinary iOS behaviour and it would let the DELETE land, quietly
 converting this into a second run of Arm 1.
 
 **5. Sign out.** The `DELETE` cannot reach the island, so `unpair` writes a
-durable debt and the out-of-band attempt fails. Nothing is observable from
-outside yet; the island still holds the row.
+durable debt and the out-of-band attempt fails.
+
+```
+./tool/probe_debt.sh
+```
+
+The ledger must now show `https://chat.enspyr.co` owing the token from step 3.
+**This is the state the whole ordering exists to handle** — if it is empty, no
+debt was written and steps 6-7 test nothing.
+
+> Background the app first (swipe up) and give it a few seconds.
+> `NSUserDefaults` flushes periodically and on suspend, not on every write, so a
+> read taken immediately can legitimately show the previous state — and a stale
+> read is indistinguishable from "the write never happened".
 
 **6. Airplane mode OFF.** Wait for the network. Do **not** sign in yet.
 
