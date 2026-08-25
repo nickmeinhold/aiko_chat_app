@@ -206,3 +206,79 @@ distinguish the bug and the green in step 7 was worth nothing. Restore with
   sends expired undelivered on 2026-08-24.
 - Whatever the contract table above got wrong is the real output of this run.
   #8 is the contract's home; this file is its first use.
+
+
+---
+
+# RESULT — run 2026-08-25, 21:00-21:12 AEST
+
+Handset `00008120-000428CE1EB8201E`, artifact `restack-157` @ `84bc932` built
+release, island **`chat.enspyr.co`** (bound by direct plist read, confirmed by
+which island's count moved).
+
+## Green arm — PASS
+
+| Gate | Reading |
+|---|---|
+| Rest | both islands 0, ledger empty |
+| Positive control | `chat.enspyr.co` 0 → 1, `id=01M0W95V…`, `d309f150ddd0…[64]` |
+| Debt written offline | ledger owes `chat.enspyr.co d309f150ddd0…` |
+| Row survives the gap | 1 row, `updated` still 10:59:08 — nothing drained outside the sign-in edge |
+| **Terminal** | **1 row, `id=01M0W9CR…` — NEW**, token prefix MATCHES, ledger discharged |
+
+Confirmed by a second, independent instrument. The island's own access log:
+
+```
+11:02:54  "DELETE /v1/devices" 204
+11:02:54  "POST   /v1/devices" 201
+```
+
+DELETE before POST, on the wire, in the same second. The new row id says the old
+row was destroyed rather than upserted in place — the count alone could not have
+told those apart.
+
+Not void: the token prefix was identical across the sequence, so the debt's
+token and the new registration were the same string and the bug was
+representable. (`d309f150…` is also the token that rang this handset on
+2026-08-24 — iOS is returning a stable token per install.)
+
+## Red arm — DID NOT REPRODUCE, and that is the finding
+
+Order reversed via `tool/probes/arm2-reverse-order.patch`, rebuilt, reinstalled
+(binaries verified distinct: green `d0d0d0df…`, red `abe42f30…`, so the build
+genuinely took), same sequence run.
+
+**Expected 0 rows. Got 1 row, `id` unchanged, ledger empty, and on the wire:**
+
+```
+11:11:44  "POST /v1/devices" 201     ← and no DELETE at all
+```
+
+`_settle` discharges the obligation on a confirmed register (`ef0a353`). In the
+reversed order `start()` therefore clears the debt before `drainPending()` reads
+it, and nothing is left to match. Every observation fits: a POST with no DELETE,
+the row id preserved (upsert, not delete-and-recreate), an empty ledger.
+
+**So `e5d7c01` and `ef0a353` overlap.** The second independently closed the
+failure mode the first's class doc cited as its entire justification. Corrected
+in `0a21cfa` — the surviving reason is narrower and does not depend on it: *a
+drain must never be a session start's last write*, because an AMBIGUOUS register
+deliberately leaves its obligation standing, and a drain running after one can
+delete a row that POST may have just created with nothing behind it to restore.
+
+## What this run does and does not prove
+
+**Proves:** drain-before-start executes in that order against a real island,
+with a real offline-written debt, and leaves exactly one live row. Two
+independent instruments agree, and the wire log is not derived from the row
+count.
+
+**Does NOT prove:** that the observable can detect the ordering defect. The red
+arm was voided by a code path, not by an instrument — so the green remains a
+green with no red behind it. **Do not record Arm 2 as closed.** Reproducing the
+surviving failure mode needs an AMBIGUOUS register (a lost response), which
+airplane mode cannot produce: it fails cleanly. A red arm that works would have
+to force `confirmed: false`, and designing it is open work.
+
+**Also does not prove:** anything about Android, about a token that rotates
+mid-sequence, or about the multi-debt set-valued ledger path.

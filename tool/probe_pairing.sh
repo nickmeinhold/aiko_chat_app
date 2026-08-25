@@ -27,14 +27,18 @@ QUERY='
 import sqlite3
 c = sqlite3.connect("/data/aiko.db")
 rows = list(c.execute(
-    "select d.user_id, u.username, d.platform, d.token, d.created_at, d.updated_at "
+    "select d.id, u.username, d.platform, d.token, d.created_at, d.updated_at "
     "from device_tokens d left join users u on u.id = d.user_id "
     "order by d.updated_at desc"))
 print("COUNT", len(rows))
-for uid, name, plat, tok, created, updated in rows:
+for rid, name, plat, tok, created, updated in rows:
     # Prefix only: a push token is a routing secret and this output lands in a
     # transcript. Enough to correlate two readings, never enough to route with.
-    print("ROW", name or uid, plat, tok[:12] + "…[%d]" % len(tok), "updated=" + str(updated))
+    # The ROW ID is the sharp discriminator, not the count. A correct
+    # drain-then-register DELETES the row and POSTs a new one, so the id CHANGES.
+    # A register alone upserts on the token and keeps the id. Same count, and the
+    # two mean completely different things about whether the drain fired.
+    print("ROW", "id=" + rid, name, plat, tok[:12] + "…[%d]" % len(tok), "updated=" + str(updated))
 '
 
 read_island() {
