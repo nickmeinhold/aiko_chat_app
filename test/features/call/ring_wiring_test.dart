@@ -1,4 +1,6 @@
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
+import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/features/call/application/ring_allowlist_provider.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
@@ -14,6 +16,7 @@ import 'package:drift/native.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/test_helpers.dart';
 
@@ -93,12 +96,18 @@ void main() {
     // (cage-match round 3, Maxwell). A fixture that agrees with itself is the
     // recurring mechanism behind every void test this feature has produced.
     String? serverId,
+    // The island's verdict on the sender. Variable because the consent path only
+    // exists for senders it does NOT call people — a fixture stuck on `human`
+    // cannot reach the allowlist branch at all, which is how a wiring test ends
+    // up proving nothing about the wiring it was written for.
+    SenderKind kind = SenderKind.human,
+    String channelId = dmId,
   }) async {
     final key = await SovereignKeyStore().loadOrCreate();
     final signedAt = DateTime.now().toUtc().subtract(age);
     final payload = SignedPayload(
       rawPublicKey: key.rawPublicKey,
-      channelId: dmId,
+      channelId: channelId,
       clientMsgId: clientMsgId,
       signedAtMs: signedAt.millisecondsSinceEpoch,
       body: body,
@@ -130,12 +139,8 @@ void main() {
       // and canonical ULID SHAPE, because a value no island could mint proves
       // the binding against an id that cannot occur.
       id: ulid,
-      channelId: dmId,
-      sender: MessageSender(
-        userId: from,
-        kind: SenderKind.human,
-        label: 'Robin',
-      ),
+      channelId: channelId,
+      sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
       body: body,
       replyToId: replyTo,
       createdAt: DateTime.now().toUtc(),
@@ -144,8 +149,12 @@ void main() {
     );
   }
 
-  setUp(() {
+  late SharedPreferences prefs;
+
+  setUp(() async {
     installSecureStorageMock(); // the sovereign key store needs a backing store
+    SharedPreferences.setMockInitialValues({});
+    prefs = await SharedPreferences.getInstance();
     cache = DriftCache(NativeDatabase.memory());
     transport = FakeChatTransport();
     repo = ChatRepository(
@@ -161,6 +170,10 @@ void main() {
       overrides: [
         chatRepositoryProvider.overrideWith((ref) async => repo),
         currentUserProvider.overrideWithValue(me),
+        // The consent store's backing. Additive: before the allowlist existed
+        // nothing in this harness read it, and the ring path is written so that
+        // an unreadable store means NO CONSENT rather than no ring.
+        sharedPreferencesProvider.overrideWithValue(prefs),
         blockedUserIdsProvider.overrideWithValue(const <String>{}),
         mutedChannelIdsProvider.overrideWithValue(const <String>{}),
         mutedUserIdsProvider.overrideWithValue(const <String>{}),
@@ -552,6 +565,194 @@ void main() {
           'only the caller may end their own call — the remembered end must be '
           'matched by the SAME clauses the live path applies, or the memory is '
           'a weaker second gate',
+    );
+  });
+
+  group('the consent provider actually reaches the gate (#3453)', () {
+    // THE SEAM #161 SHIPPED UNPROVEN. `admitRing` was tested with a hand-built
+    // consent and the provider was tested in isolation, so nothing anywhere
+    // proved the controller hands ONE to the OTHER. A rename, a stale read, or a
+    // slice against the wrong channel would have left both suites green.
+    //
+    // It matters more now than it did then: the wiring changed when consent
+    // became per-conversation, and the value being threaded is no longer a bare
+    // set that would fail loudly if it went missing — an empty consent and a
+    // wrong-room consent behave identically to a correct refusal.
+    const otherDm = '01M0GS7FDWBVQ31950B1PTV3AA';
+
+    Future<String> myMultikey() async =>
+        encodeMultikey((await SovereignKeyStore().loadOrCreate()).rawPublicKey);
+
+    Future<void> watch() async {
+      await warmDms();
+      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+      await pump();
+    }
+
+    test('an UNCONSENTED non-human does not ring — the precondition', () async {
+      await watch();
+
+      transport.emitMessage(await inbound(kind: SenderKind.llm));
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNull);
+    });
+
+    test(
+      'consent granted THROUGH THE PROVIDER, in this conversation, rings',
+      () async {
+        await watch();
+        final granted = await container
+            .read(ringConsentByChannelProvider.notifier)
+            .allow(dmId, await myMultikey());
+        expect(granted, isTrue, reason: 'precondition: the grant persisted');
+
+        transport.emitMessage(await inbound(kind: SenderKind.llm));
+        await pump();
+
+        expect(
+          container.read(incomingRingProvider),
+          isNotNull,
+          reason:
+              'the controller must read the live provider at the moment the '
+              'invite lands — not a value captured when it was built',
+        );
+      },
+    );
+
+    test(
+      'consent granted in ANOTHER conversation does NOT ring here — the '
+      'ruling, proved through the real wiring rather than a hand-built value',
+      () async {
+        await watch();
+        await container
+            .read(ringConsentByChannelProvider.notifier)
+            .allow(otherDm, await myMultikey());
+
+        transport.emitMessage(await inbound(kind: SenderKind.llm));
+        await pump();
+
+        expect(container.read(incomingRingProvider), isNull);
+      },
+    );
+
+    test('a REVOKE reaches the gate too — consent that cannot be withdrawn '
+        'is not consent', () async {
+      await watch();
+      final key = await myMultikey();
+      final notifier = container.read(ringConsentByChannelProvider.notifier);
+      await notifier.allow(dmId, key);
+      await notifier.revoke(dmId, key);
+
+      transport.emitMessage(await inbound(kind: SenderKind.llm));
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNull);
+    });
+  });
+
+  group('the scope token is INSIDE the signature (#3166 asked of channelId)', () {
+    // Tesla, confirming round, and the question is exactly right even though the
+    // answer is "already closed".
+    //
+    // This PR made `message.channelId` load-bearing: it now SELECTS which
+    // consent bucket the gate consults. `RingConsent` itself documents why we
+    // refuse to trust `sender.userId` and `sender.label` — they are
+    // server-supplied metadata OUTSIDE the signature, so an island could edit
+    // them. Nobody had asked the same question of `channelId`. If the envelope's
+    // channel could disagree with the SIGNED channel, the island would not need
+    // to forge a key; it could aim a consented key at a different door, and
+    // per-conversation consent would be global consent wearing a routing trick.
+    //
+    // It cannot, and the refutation is two facts that must be pinned TOGETHER:
+    //   1. `signingBytes` length-prefixes channelId (message_signing.dart — the
+    //      field's own comment reads "else a sig replays into another channel");
+    //   2. ingest verifies with `channelId: m.channelId`, the ENVELOPE's value
+    //      (chat_repository.dart `_persistInbound`).
+    // So a split envelope/signed channel fails verification, lands with
+    // `originCryptoValid == false`, and `admitRing` refuses it before `_mayRing`
+    // is ever consulted. The channel is as strong as the key, not as weak as the
+    // label.
+    //
+    // Driven through the REAL repository rather than asserted about it, because
+    // the property is the composition of those two facts and either one moving
+    // would break it silently.
+    const otherRoom = '01M0GS7FDWBVQ31950B1PTV3BB';
+
+    test('a message signed for ANOTHER channel does not ring here', () async {
+      await warmDms();
+      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+      await pump();
+      final key = await SovereignKeyStore().loadOrCreate();
+      await container
+          .read(ringConsentByChannelProvider.notifier)
+          .allow(dmId, encodeMultikey(key.rawPublicKey));
+
+      // Signed for `otherRoom`, delivered claiming `dmId` — the aiming attack.
+      final signedAt = DateTime.now().toUtc();
+      final sig = await sign(
+        key,
+        SignedPayload(
+          rawPublicKey: key.rawPublicKey,
+          channelId: otherRoom,
+          clientMsgId: 'M1',
+          signedAtMs: signedAt.millisecondsSinceEpoch,
+          body: kCallInviteBody,
+          replyTo: null,
+        ),
+      );
+      transport.emitMessage(
+        Message(
+          clientTempId: serverIdFor('M1'),
+          id: serverIdFor('M1'),
+          channelId: dmId,
+          sender: const MessageSender(
+            userId: robinId,
+            kind: SenderKind.llm,
+            label: 'Robin',
+          ),
+          body: kCallInviteBody,
+          replyToId: null,
+          createdAt: DateTime.now().toUtc(),
+          origin: OriginEnvelope.fromSignature(sig, clientMsgId: 'M1'),
+          deliveryState: DeliveryState.sent,
+        ),
+      );
+      await pump();
+
+      expect(
+        container.read(incomingRingProvider),
+        isNull,
+        reason:
+            'the signature does not cover this envelope channel, so ingest '
+            'marks it invalid and the ring gate refuses it — consent for dmId '
+            'must not be reachable by relabelling a message signed elsewhere',
+      );
+    });
+
+    test(
+      'POSITIVE CONTROL: the same message signed for THIS channel rings',
+      () async {
+        // Without this the test above passes for any reason at all — a broken
+        // fixture, a dead transport, a consent that never landed. This proves the
+        // only difference is the signed channel.
+        await warmDms();
+        container.listen(
+          incomingRingProvider,
+          (_, _) {},
+          fireImmediately: true,
+        );
+        await pump();
+        final key = await SovereignKeyStore().loadOrCreate();
+        await container
+            .read(ringConsentByChannelProvider.notifier)
+            .allow(dmId, encodeMultikey(key.rawPublicKey));
+
+        transport.emitMessage(await inbound(kind: SenderKind.llm));
+        await pump();
+
+        expect(container.read(incomingRingProvider), isNotNull);
+      },
     );
   });
 }
