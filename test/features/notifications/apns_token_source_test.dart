@@ -8,6 +8,7 @@
 // never fail a sign-in.
 import 'package:aiko_chat_app/features/notifications/data/apns_token_source.dart';
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
+import 'package:aiko_chat_app/features/notifications/domain/push_environment.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -182,5 +183,46 @@ void main() {
       expect(seen, ['tok-after-the-error']);
       expect(done, isFalse, reason: 'the subscription must still be alive');
     });
+  });
+
+  group('pushEnvironment', () {
+    // THE SEAM WHERE THE TWO VOCABULARIES MEET. The channel returns Apple's
+    // `aps-environment` verbatim; the island's closed set is sandbox/production.
+    // `production` collides, so an untranslated pass-through is correct on
+    // release and 422s the whole registration on debug.
+    test("Apple's `development` becomes the island's `sandbox`", () async {
+      onMethod(
+        (c) async => c.method == 'pushEnvironment' ? 'development' : null,
+      );
+      expect(await build().pushEnvironment(), PushEnvironment.sandbox);
+    });
+
+    test(
+      '`production` passes through, being the one value they share',
+      () async {
+        onMethod(
+          (c) async => c.method == 'pushEnvironment' ? 'production' : null,
+        );
+        expect(await build().pushEnvironment(), PushEnvironment.production);
+      },
+    );
+
+    test('an unrecognised value is null, not a guess', () async {
+      onMethod((c) async => c.method == 'pushEnvironment' ? 'staging' : null);
+      expect(await build().pushEnvironment(), isNull);
+    });
+
+    test('a native side that is not in the build degrades to null', () async {
+      onMethod(null);
+      expect(await build().pushEnvironment(), isNull);
+    });
+
+    test(
+      'a throwing channel degrades to null rather than propagating',
+      () async {
+        onMethod((_) async => throw PlatformException(code: 'boom'));
+        expect(await build().pushEnvironment(), isNull);
+      },
+    );
   });
 }

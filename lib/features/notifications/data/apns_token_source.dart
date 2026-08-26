@@ -81,7 +81,12 @@ class ApnsTokenSource implements PushTokenSource {
   @override
   Future<PushEnvironment?> pushEnvironment() async {
     try {
-      return PushEnvironment.fromWire(
+      // The channel hands up APPLE'S vocabulary (`development` / `production`,
+      // straight out of the provisioning profile) and the translation to the
+      // island's (`sandbox` / `production`) happens here. Keeping the native
+      // side dumb means the one place the two vocabularies meet is a Dart
+      // function with a test around it.
+      return PushEnvironment.fromApsEnvironment(
         await _methods.invokeMethod<String>('pushEnvironment'),
       );
     } on PlatformException catch (e) {

@@ -47,24 +47,44 @@ class _BodyCapturingAdapter implements HttpClientAdapter {
 
 void main() {
   group('PushEnvironment wire strings', () {
-    // Asserted rather than derived from `name`: they agree today, and a rename
-    // would silently start sending a value the island's enum rejects.
+    // Verified against the DEPLOYED island rather than the design note:
+    // `/openapi.json` -> components.schemas.PushEnvironment.enum is
+    // ["sandbox", "production"], and alembic 0023 pins the DB CHECK to the same
+    // pair. Asserted rather than derived from `name` so a rename cannot start
+    // sending a value that fails the constraint.
     test('are exactly what the island accepts', () {
-      expect(PushEnvironment.development.wire, 'development');
+      expect(PushEnvironment.sandbox.wire, 'sandbox');
       expect(PushEnvironment.production.wire, 'production');
     });
 
-    test('round-trip through fromWire', () {
-      for (final value in PushEnvironment.values) {
-        expect(PushEnvironment.fromWire(value.wire), value);
-      }
+    // THE BUG THIS PINS. Apple's entitlement says `development`; the island's
+    // closed set says `sandbox`. `production` collides between the two, so
+    // passing Apple's string through unchanged is correct on the release path
+    // and 422s the ENTIRE registration on the debug one — which is every build
+    // that has ever been tested against a real ring.
+    test('translate Apple\'s aps-environment, never pass it through', () {
+      expect(
+        PushEnvironment.fromApsEnvironment('development'),
+        PushEnvironment.sandbox,
+      );
+      expect(
+        PushEnvironment.fromApsEnvironment('production'),
+        PushEnvironment.production,
+      );
+      expect(
+        PushEnvironment.values.map((e) => e.wire),
+        isNot(contains('development')),
+        reason:
+            'the island rejects `development` at a DB CHECK — it must never be '
+            'reachable as an outbound wire value',
+      );
     });
 
     test('an unknown or absent value is null, never a guess', () {
-      expect(PushEnvironment.fromWire(null), isNull);
-      expect(PushEnvironment.fromWire(''), isNull);
-      expect(PushEnvironment.fromWire('sandbox'), isNull);
-      expect(PushEnvironment.fromWire('Development'), isNull);
+      expect(PushEnvironment.fromApsEnvironment(null), isNull);
+      expect(PushEnvironment.fromApsEnvironment(''), isNull);
+      expect(PushEnvironment.fromApsEnvironment('Development'), isNull);
+      expect(PushEnvironment.fromApsEnvironment('sandbox'), isNull);
     });
   });
 

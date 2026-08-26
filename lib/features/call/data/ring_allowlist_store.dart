@@ -87,9 +87,7 @@ class RingAllowlistStore {
     final raw = _prefs!.getString(_key);
     if (raw == null) return const {};
     try {
-      return Set<String>.unmodifiable(
-        (jsonDecode(raw) as List).cast<String>(),
-      );
+      return Set<String>.unmodifiable((jsonDecode(raw) as List).cast<String>());
     } catch (_) {
       return const {};
     }

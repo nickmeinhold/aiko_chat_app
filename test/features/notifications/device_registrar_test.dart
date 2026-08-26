@@ -39,7 +39,7 @@ class _FakeSource implements PushTokenSource {
 
   /// Settable so a test can drive the null / declared / throwing arms of the
   /// resolve, which is the whole surface `_pushEnvironment` guards.
-  PushEnvironment? environment = PushEnvironment.development;
+  PushEnvironment? environment = PushEnvironment.sandbox;
   Object? environmentThrows;
 
   @override
@@ -97,7 +97,7 @@ void main() {
           (
             platform: DevicePlatform.apns,
             token: 'tok-1',
-            pushEnvironment: PushEnvironment.development,
+            pushEnvironment: PushEnvironment.sandbox,
           ),
         ]);
       },
@@ -538,7 +538,11 @@ void main() {
       await pumpEventQueue();
       await registrar.start();
 
-      expect(registrar.registeredToken, 'tok-1', reason: 'precondition: same token');
+      expect(
+        registrar.registeredToken,
+        'tok-1',
+        reason: 'precondition: same token',
+      );
 
       gate.complete();
       await registrar.settled;
@@ -683,7 +687,8 @@ void main() {
       expect(
         registrar.registeredToken,
         'tok-2',
-        reason: 'the newer token is the desired one; a straggler cannot undo it',
+        reason:
+            'the newer token is the desired one; a straggler cannot undo it',
       );
       expect(
         pending.read(_island),

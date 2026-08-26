@@ -79,5 +79,6 @@ class RingAllowlist extends Notifier<Set<String>> {
   }
 }
 
-final ringAllowedKeysProvider =
-    NotifierProvider<RingAllowlist, Set<String>>(RingAllowlist.new);
+final ringAllowedKeysProvider = NotifierProvider<RingAllowlist, Set<String>>(
+  RingAllowlist.new,
+);

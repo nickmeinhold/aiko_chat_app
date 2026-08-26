@@ -237,6 +237,7 @@ bool isRenderableCallInvite(Message message, {required bool isMine}) =>
 CallEnd? admitCallEnd(
   Message message, {
   required String meUserId,
+
   /// The SAME consent set [admitRing] is given. A hangup is admitted by exactly
   /// the rule that admitted the ring — see [_isCallEndShape].
   required Set<String> ringAllowedKeys,
@@ -492,6 +493,7 @@ CallInvite? admitRing(
   Message message, {
   required String meUserId,
   required Set<String> blockedUserIds,
+
   /// Multikey (`z…`) public keys this handset has consented to be rung by even
   /// though the island does not call them people. DEVICE-LOCAL by design — see
   /// [_mayRing]. Empty is the correct default and preserves the old behaviour

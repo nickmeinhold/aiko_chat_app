@@ -1,44 +1,53 @@
-/// Which APNs host will accept the tokens this build mints.
+/// Which APNs world a push token belongs to, in THE ISLAND'S VOCABULARY.
 ///
-/// A token minted under `development` is valid ONLY against
-/// `api.sandbox.push.apple.com`; one minted by a TestFlight or App Store build
-/// is valid ONLY against `api.push.apple.com`. The two token strings are
-/// indistinguishable — same length, same alphabet — and the wrong host answers
-/// a bare `400 BadDeviceToken` with no other clue. The island deliberately does
-/// NOT reap on `BadDeviceToken` for exactly this reason, so getting it wrong
-/// costs silence rather than data.
+/// TWO VOCABULARIES FOR ONE FACT, and they do not agree. Apple's
+/// `aps-environment` entitlement says `development` / `production`; the island's
+/// closed set says `sandbox` / `production` (verified against the deployed
+/// `/openapi.json` and `devices_service.py`, not the design note). The half that
+/// collides is the half that matches — `production` means the same thing on both
+/// sides, so passing Apple's string straight through LOOKS correct until a debug
+/// build sends `development`, fails the island's DB CHECK, and 422s the entire
+/// registration. That is strictly worse than the silence this field exists to
+/// remove, so the translation lives at the boundary in [fromApsEnvironment] and
+/// there is deliberately no way to construct one of these from a raw wire string.
 ///
-/// The island resolves an OMITTED value from its own `APNS_USE_SANDBOX`, which
-/// is `true` on both boxes. That default is right for a debug build off a Mac
-/// and wrong for every distribution build, which is why declaring it is not an
-/// optimisation: until we send this, a TestFlight handset registers a
-/// production token against a sandbox island and simply never rings
+/// The underlying fact: a token minted by a development build is valid ONLY
+/// against `api.sandbox.push.apple.com`; a TestFlight or App Store build's token
+/// ONLY against `api.push.apple.com`. The strings are indistinguishable, the
+/// wrong host answers a bare `400 BadDeviceToken`, and no marking on the token
+/// lets the island infer it — which is why the client must declare it.
+///
+/// The island resolves an OMITTED value from its own `APNS_USE_SANDBOX` (`true`
+/// on both boxes), so until we declare it a TestFlight handset registers a
+/// production token against a sandbox-defaulted island and simply never rings
 /// (claude-tasks#3450, island #3386).
 enum PushEnvironment {
-  /// Sandbox — tokens from a locally-signed development build.
-  development('development'),
+  /// `api.sandbox.push.apple.com` — tokens from a locally-signed development
+  /// build. Apple calls this environment `development`.
+  sandbox('sandbox'),
 
-  /// Production — tokens from a TestFlight or App Store build.
+  /// `api.push.apple.com` — tokens from a TestFlight or App Store build.
   production('production');
 
   const PushEnvironment(this.wire);
 
-  /// The exact string the island's enum accepts; an out-of-set value is a 422
-  /// at its boundary. Never derive this from [name] — they agree today and a
-  /// rename would silently start sending a value the island rejects.
+  /// The exact string the island's `PushEnvironment` enum accepts, which drives
+  /// a DB CHECK on `device_tokens.push_environment`. Never derive this from
+  /// [name] — they agree today and a rename would send a value that fails the
+  /// constraint, and the island fails CLOSED on a bad value by design.
   final String wire;
 
-  /// Parse a value handed up from the platform channel, or null if it is
-  /// absent or unrecognised.
+  /// Translate Apple's `aps-environment` entitlement value.
   ///
-  /// An unrecognised value resolves to null rather than a guess, because null
-  /// is the one answer with a defined island-side meaning (fall back to
-  /// `APNS_USE_SANDBOX`). Guessing here would put a 422 on the register path,
-  /// which fails the whole registration rather than degrading one field.
-  static PushEnvironment? fromWire(String? wire) {
-    for (final value in PushEnvironment.values) {
-      if (value.wire == wire) return value;
-    }
-    return null;
-  }
+  /// Anything unrecognised — including null, and including a future Apple value
+  /// — resolves to null, which the island reads as "use my default". Null is the
+  /// one answer with a defined meaning on the far side; a guess here would put a
+  /// 422 on the register path and fail the whole registration rather than
+  /// degrading one field.
+  static PushEnvironment? fromApsEnvironment(String? apsEnvironment) =>
+      switch (apsEnvironment) {
+        'development' => PushEnvironment.sandbox,
+        'production' => PushEnvironment.production,
+        _ => null,
+      };
 }

@@ -199,7 +199,9 @@ class FakeRestApi implements ChatRestApi {
   /// CARRIES THE ENVIRONMENT, because a fake that drops a field is a fake more
   /// forgiving than the real API: `push_environment` could stop being sent
   /// entirely and every register assertion here would stay green.
-  final List<({DevicePlatform platform, String token, PushEnvironment? pushEnvironment})>
+  final List<
+    ({DevicePlatform platform, String token, PushEnvironment? pushEnvironment})
+  >
   registeredDevices = [];
   final List<String> unregisteredDevices = [];
 
