@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../domain/device_platform.dart';
+import '../domain/push_environment.dart';
 import '../domain/push_token_source.dart';
 
 /// Apple's [PushTokenSource] — the RAW APNs device token, taken from Apple
@@ -68,6 +69,23 @@ class ApnsTokenSource implements PushTokenSource {
       return await _methods.invokeMethod<String>('currentToken');
     } on PlatformException catch (e) {
       debugPrint('ApnsTokenSource: no device token: $e');
+      return null;
+    } on MissingPluginException catch (e) {
+      debugPrint(
+        'ApnsTokenSource: native APNs channel is not in this build: $e',
+      );
+      return null;
+    }
+  }
+
+  @override
+  Future<PushEnvironment?> pushEnvironment() async {
+    try {
+      return PushEnvironment.fromWire(
+        await _methods.invokeMethod<String>('pushEnvironment'),
+      );
+    } on PlatformException catch (e) {
+      debugPrint('ApnsTokenSource: no push environment: $e');
       return null;
     } on MissingPluginException catch (e) {
       debugPrint(

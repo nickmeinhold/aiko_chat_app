@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
+import 'package:aiko_chat_app/features/notifications/domain/push_environment.dart';
 import 'package:aiko_chat_app/features/auth/data/passkey_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
@@ -195,7 +196,11 @@ class FakeRestApi implements ChatRestApi {
   /// Device tokens this island believes are registered, in call order. A LIST
   /// rather than a set so a test can see a double-register, which is the shape
   /// of the bug the island's upsert exists to absorb.
-  final List<({DevicePlatform platform, String token})> registeredDevices = [];
+  /// CARRIES THE ENVIRONMENT, because a fake that drops a field is a fake more
+  /// forgiving than the real API: `push_environment` could stop being sent
+  /// entirely and every register assertion here would stay green.
+  final List<({DevicePlatform platform, String token, PushEnvironment? pushEnvironment})>
+  registeredDevices = [];
   final List<String> unregisteredDevices = [];
 
   /// Device calls in the order they LANDED — `('register'|'unregister', token)`.
@@ -236,6 +241,7 @@ class FakeRestApi implements ChatRestApi {
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
+    PushEnvironment? pushEnvironment,
   }) async {
     // YIELD FIRST, for the same reason unregisterDevice does: an async body runs
     // synchronously to its first await, so with no gate set this fake used to
@@ -249,7 +255,11 @@ class FakeRestApi implements ChatRestApi {
     // interleaved with a session edge, which is the only place the interesting
     // cases live.
     if (registerDeviceThrows != null) throw registerDeviceThrows!;
-    registeredDevices.add((platform: platform, token: token));
+    registeredDevices.add((
+      platform: platform,
+      token: token,
+      pushEnvironment: pushEnvironment,
+    ));
     deviceCalls.add((op: 'register', token: token));
     liveRows.add(token);
     if (registerDeviceThrowsAfterLanding != null) {

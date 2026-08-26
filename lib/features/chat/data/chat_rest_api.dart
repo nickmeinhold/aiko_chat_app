@@ -3,6 +3,7 @@ import '../../auth/domain/identity_models.dart';
 import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../../notifications/domain/device_platform.dart';
+import '../../notifications/domain/push_environment.dart';
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import '../domain/gateway_capabilities.dart';
@@ -375,6 +376,13 @@ abstract interface class ChatRestApi {
   /// else on the same handset moves the routing rather than leaving a stale row
   /// pointed at the previous owner.
   ///
+  /// [pushEnvironment] declares which APNs host will accept [token]. OPTIONAL on
+  /// the wire and omitted when null, which the island resolves from its own
+  /// `APNS_USE_SANDBOX` — the behaviour that predates the field. Declaring it is
+  /// what makes a TestFlight build reachable: its production token registered
+  /// against a sandbox-defaulted island draws a bare `400 BadDeviceToken` from
+  /// APNs and the handset simply never rings (claude-tasks#3450, island #3386).
+  ///
   /// Throws [Unauthorized] on a terminal auth rejection. Every other failure is
   /// the caller's to swallow: a device that cannot register is a device that
   /// will not be woken, which is a degradation and never a reason to block
@@ -382,6 +390,7 @@ abstract interface class ChatRestApi {
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
+    PushEnvironment? pushEnvironment,
   });
 
   /// Unregister [token] (`DELETE /v1/devices`), so this island stops routing

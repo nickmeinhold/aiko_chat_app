@@ -3,6 +3,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 
 import '../domain/device_platform.dart';
+import '../domain/push_environment.dart';
 import '../domain/push_token_source.dart';
 
 /// Android's [PushTokenSource] — Firebase Cloud Messaging.
@@ -40,6 +41,13 @@ class FcmTokenSource implements PushTokenSource {
 
   @override
   DevicePlatform get platform => DevicePlatform.fcm;
+
+  /// Always null — FCM has no sandbox/production token split, so there is
+  /// nothing here for the island to route on. Its `push_environment` column
+  /// governs which APNs HOST a token is sent to, a question that only exists on
+  /// Apple's transport (see [PushEnvironment]).
+  @override
+  Future<PushEnvironment?> pushEnvironment() async => null;
 
   @override
   Future<bool> requestPermission() async {
