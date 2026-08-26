@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
+import 'package:aiko_chat_app/features/call/domain/ring_consent.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -95,7 +96,10 @@ void main() {
     m,
     meUserId: me,
     blockedUserIds: blocked,
-    ringAllowedKeys: allowedKeys,
+    // Scoped to the message's OWN channel, so these cases keep testing what
+    // they were written to test. The scoping property itself is exercised
+    // separately, below.
+    consent: RingConsent(channelId: m.channelId, keys: allowedKeys),
     conversationMuted: muted,
     isDm: isDm,
     now: now,
@@ -215,48 +219,45 @@ void main() {
       expect(admit(resurrected), isNull);
     });
 
-    test(
-      'every NON-HUMAN sender — the refusal a user could not make themselves',
-      () {
-        // Bus actors are unblockable by island design (NULL sender_user_id is
-        // always visible; claude-tasks#27). Without this, @@armbot posting the
-        // sentinel in #general rings every member and no block or mute stops it.
-        // Enumerated rather than spot-checked: `!= human` must hold for the WHOLE
-        // non-human set, and a new SenderKind added later inherits the refusal.
-        //
-        // WHAT THIS DOES NOT CURRENTLY STOP, measured on the live island
-        // 2026-08-26 — and the reason this test is a TRIPWIRE, not just a guard.
-        // The deployed gateway does not report a sender's real kind. It reports
-        // `"human"` for ANY sender holding an account, unconditionally:
-        //
-        //     if sender_user is not None: return "human"
-        //     if channel.kind in ("llm","robot"): return channel.kind
-        //     return "actor"
-        //
-        // So `kind` answers "did the sender have an account?", never "is the
-        // sender a person" — and the clause above fires only on the `actor` arm,
-        // which is exactly the bus-actor case named above. An agent that simply
-        // HOLDS an account is admitted, and one did: `Dreamfinder`, its own
-        // account and Ed25519 key, rang a real handset through this path.
-        //
-        // The gateway's unreleased source replaces that hardcode with the
-        // account's true kind ("never a hardcoded 'human'", island #3096). On the
-        // day it deploys, this test stops describing a bus actor and starts
-        // refusing a resident Nick asked to be called by — a working capability
-        // regressing, in a repo that did not change. If this test is what broke,
-        // read claude-tasks#3448 BEFORE weakening it: the `actor` refusal must
-        // survive; only the account-holding case is in question.
-        for (final kind in SenderKind.values.where(
-          (k) => k != SenderKind.human,
-        )) {
-          expect(
-            admit(invite(kind: kind)),
-            isNull,
-            reason: 'a $kind must not ring',
-          );
-        }
-      },
-    );
+    test('every NON-HUMAN sender — the refusal a user could not make themselves', () {
+      // Bus actors are unblockable by island design (NULL sender_user_id is
+      // always visible; claude-tasks#27). Without this, @@armbot posting the
+      // sentinel in #general rings every member and no block or mute stops it.
+      // Enumerated rather than spot-checked: `!= human` must hold for the WHOLE
+      // non-human set, and a new SenderKind added later inherits the refusal.
+      //
+      // WHAT THIS DOES NOT CURRENTLY STOP, measured on the live island
+      // 2026-08-26 — and the reason this test is a TRIPWIRE, not just a guard.
+      // The deployed gateway does not report a sender's real kind. It reports
+      // `"human"` for ANY sender holding an account, unconditionally:
+      //
+      //     if sender_user is not None: return "human"
+      //     if channel.kind in ("llm","robot"): return channel.kind
+      //     return "actor"
+      //
+      // So `kind` answers "did the sender have an account?", never "is the
+      // sender a person" — and the clause above fires only on the `actor` arm,
+      // which is exactly the bus-actor case named above. An agent that simply
+      // HOLDS an account is admitted, and one did: `Dreamfinder`, its own
+      // account and Ed25519 key, rang a real handset through this path.
+      //
+      // The gateway's unreleased source replaces that hardcode with the
+      // account's true kind ("never a hardcoded 'human'", island #3096). On the
+      // day it deploys, this test stops describing a bus actor and starts
+      // refusing a resident Nick asked to be called by — a working capability
+      // regressing, in a repo that did not change. If this test is what broke,
+      // read claude-tasks#3448 BEFORE weakening it: the `actor` refusal must
+      // survive; only the account-holding case is in question.
+      for (final kind in SenderKind.values.where(
+        (k) => k != SenderKind.human,
+      )) {
+        expect(
+          admit(invite(kind: kind)),
+          isNull,
+          reason: 'a $kind must not ring',
+        );
+      }
+    });
 
     test('a blocked sender', () {
       expect(admit(invite(), blocked: {robin}), isNull);
@@ -291,13 +292,16 @@ void main() {
     // land first, and — more importantly — pin what it must NOT loosen.
     String mk(Uint8List k) => encodeMultikey(k);
 
-    test('an allowlisted key rings even though the island says it is not a person', () {
-      final admitted = admit(
-        invite(kind: SenderKind.llm, key: residentKey),
-        allowedKeys: {mk(residentKey)},
-      );
-      expect(admitted, isNotNull);
-    });
+    test(
+      'an allowlisted key rings even though the island says it is not a person',
+      () {
+        final admitted = admit(
+          invite(kind: SenderKind.llm, key: residentKey),
+          allowedKeys: {mk(residentKey)},
+        );
+        expect(admitted, isNotNull);
+      },
+    );
 
     test('a DIFFERENT key does not ride in on someone else\'s consent', () {
       // The allowlist is NON-EMPTY and holds the resident's key; the caller
@@ -312,45 +316,64 @@ void main() {
       );
     });
 
-    test('consent is keyed on the KEY, not the account — a relabelled sender gains nothing', () {
-      // `sender.userId`/`label` are server-supplied and OUTSIDE signingBytes, so
-      // an island can rewrite them. Same allowlisted USER, stranger's key.
-      expect(
-        admit(
-          invite(from: robin, kind: SenderKind.robot, key: strangerKey),
-          allowedKeys: {mk(residentKey), robin},
-        ),
-        isNull,
-        reason: 'putting a user id in the allowlist must never admit anyone',
-      );
-    });
+    test(
+      'consent is keyed on the KEY, not the account — a relabelled sender gains nothing',
+      () {
+        // `sender.userId`/`label` are server-supplied and OUTSIDE signingBytes, so
+        // an island can rewrite them. Same allowlisted USER, stranger's key.
+        expect(
+          admit(
+            invite(from: robin, kind: SenderKind.robot, key: strangerKey),
+            allowedKeys: {mk(residentKey), robin},
+          ),
+          isNull,
+          reason: 'putting a user id in the allowlist must never admit anyone',
+        );
+      },
+    );
 
-    test('an allowlisted key with NO account is still refused — consent must stay withdrawable', () {
-      // An accountless ringer cannot be blocked or muted, so allowlisting one
-      // would mint exactly the unblockable ringer the `actor` refusal exists to
-      // prevent. Consent you cannot withdraw is not consent.
-      expect(
-        admit(
-          invite(kind: SenderKind.actor, key: residentKey, hasAccount: false),
-          allowedKeys: {mk(residentKey)},
-        ),
-        isNull,
-      );
-    });
+    test(
+      'an allowlisted key with NO account is still refused — consent must stay withdrawable',
+      () {
+        // An accountless ringer cannot be blocked or muted, so allowlisting one
+        // would mint exactly the unblockable ringer the `actor` refusal exists to
+        // prevent. Consent you cannot withdraw is not consent.
+        expect(
+          admit(
+            invite(kind: SenderKind.actor, key: residentKey, hasAccount: false),
+            allowedKeys: {mk(residentKey)},
+          ),
+          isNull,
+        );
+      },
+    );
 
     test('the allowlist widens ONE gate — it is not a bypass', () {
       final allowed = {mk(residentKey)};
       Message resident() => invite(kind: SenderKind.llm, key: residentKey);
       // Each of these would admit if the allowlist short-circuited the rest.
-      expect(admit(resident(), allowedKeys: allowed, blocked: {robin}), isNull,
-          reason: 'blocked');
-      expect(admit(resident(), allowedKeys: allowed, muted: true), isNull,
-          reason: 'muted');
-      expect(admit(resident(), allowedKeys: allowed, isDm: false), isNull,
-          reason: 'not a DM');
+      expect(
+        admit(resident(), allowedKeys: allowed, blocked: {robin}),
+        isNull,
+        reason: 'blocked',
+      );
+      expect(
+        admit(resident(), allowedKeys: allowed, muted: true),
+        isNull,
+        reason: 'muted',
+      );
+      expect(
+        admit(resident(), allowedKeys: allowed, isDm: false),
+        isNull,
+        reason: 'not a DM',
+      );
       expect(
         admit(
-          invite(kind: SenderKind.llm, key: residentKey, age: const Duration(minutes: 5)),
+          invite(
+            kind: SenderKind.llm,
+            key: residentKey,
+            age: const Duration(minutes: 5),
+          ),
           allowedKeys: allowed,
         ),
         isNull,
@@ -382,12 +405,20 @@ void main() {
       }
     });
 
-    test('an EMPTY allowlist preserves the old behaviour for every non-human kind', () {
-      for (final kind in SenderKind.values.where((k) => k != SenderKind.human)) {
-        expect(admit(invite(kind: kind, key: residentKey)), isNull,
-            reason: 'a $kind must not ring with no consent recorded');
-      }
-    });
+    test(
+      'an EMPTY allowlist preserves the old behaviour for every non-human kind',
+      () {
+        for (final kind in SenderKind.values.where(
+          (k) => k != SenderKind.human,
+        )) {
+          expect(
+            admit(invite(kind: kind, key: residentKey)),
+            isNull,
+            reason: 'a $kind must not ring with no consent recorded',
+          );
+        }
+      },
+    );
 
     test('a consented ringer can also HANG UP — start and stop share one gate', () {
       // Carnot (HIGH) and Tesla found this independently: the kind clause lived
@@ -400,9 +431,13 @@ void main() {
       final ended = admitCallEnd(
         callEnd(kind: SenderKind.llm, key: residentKey),
         meUserId: me,
-        ringAllowedKeys: allowed,
+        consent: RingConsent(channelId: 'dm:aaa:bbb', keys: allowed),
       );
-      expect(ended, isNotNull, reason: 'the consented caller must be able to stop its own ring');
+      expect(
+        ended,
+        isNotNull,
+        reason: 'the consented caller must be able to stop its own ring',
+      );
     });
 
     test('an UNCONSENTED non-human still cannot hang up', () {
@@ -412,7 +447,10 @@ void main() {
         admitCallEnd(
           callEnd(kind: SenderKind.llm, key: strangerKey),
           meUserId: me,
-          ringAllowedKeys: {mk(residentKey)},
+          consent: RingConsent(
+            channelId: 'dm:aaa:bbb',
+            keys: {mk(residentKey)},
+          ),
         ),
         isNull,
       );
@@ -420,6 +458,121 @@ void main() {
 
     test('a human still rings without appearing on any allowlist', () {
       expect(admit(invite(key: strangerKey)), isNotNull);
+    });
+
+    group('consent is PER CONVERSATION (Nick, 2026-08-26)', () {
+      const here = 'dm:aaa:bbb';
+      const elsewhere = 'dm:aaa:ccc';
+
+      test('a key consented HERE rings here', () {
+        expect(
+          admitRing(
+            invite(kind: SenderKind.llm, key: residentKey, channelId: here),
+            meUserId: me,
+            blockedUserIds: const {},
+            consent: RingConsent(channelId: here, keys: {mk(residentKey)}),
+            conversationMuted: false,
+            isDm: true,
+            now: now,
+          ),
+          isNotNull,
+        );
+      });
+
+      test(
+        'the SAME key does NOT ring in another conversation — the whole ruling',
+        () {
+          // The global version admitted this. A resident agent may hold membership
+          // in many channels, so "blessed in one room" leaking into every room it
+          // can reach is not a corner case, it is the ordinary shape of the thing.
+          expect(
+            admitRing(
+              invite(
+                kind: SenderKind.llm,
+                key: residentKey,
+                channelId: elsewhere,
+              ),
+              meUserId: me,
+              blockedUserIds: const {},
+              consent: RingConsent(
+                channelId: elsewhere,
+                keys: {mk(residentKey)},
+              ),
+              conversationMuted: false,
+              isDm: true,
+              now: now,
+            ),
+            isNotNull,
+            reason: 'precondition: consent granted THERE does admit there',
+          );
+          expect(
+            admitRing(
+              invite(
+                kind: SenderKind.llm,
+                key: residentKey,
+                channelId: elsewhere,
+              ),
+              meUserId: me,
+              blockedUserIds: const {},
+              consent: RingConsent(channelId: here, keys: {mk(residentKey)}),
+              conversationMuted: false,
+              isDm: true,
+              now: now,
+            ),
+            isNull,
+          );
+        },
+      );
+
+      test('a MIS-SCOPED consent is refused, not silently trusted — the gate '
+          're-checks the slice rather than believing the caller', () {
+        // The defence against the defect this feature has already produced
+        // twice: a caller that pairs one room's keys with another room's id.
+        // The keys match, the sender is consented, and it still must not ring.
+        final consent = RingConsent(
+          channelId: elsewhere,
+          keys: {mk(residentKey)},
+        );
+        expect(consent.permits(here, decodeMultikey(mk(residentKey))), isFalse);
+        expect(
+          admitRing(
+            invite(kind: SenderKind.llm, key: residentKey, channelId: here),
+            meUserId: me,
+            blockedUserIds: const {},
+            consent: consent,
+            conversationMuted: false,
+            isDm: true,
+            now: now,
+          ),
+          isNull,
+        );
+      });
+
+      test('the stop gate is scoped identically to the start gate', () {
+        // Rounds 6-7 found the start and stop gates diverging once before. A
+        // per-conversation start with a global stop would be the same defect
+        // wearing the new scope.
+        expect(
+          admitCallEnd(
+            callEnd(kind: SenderKind.llm, key: residentKey),
+            meUserId: me,
+            consent: RingConsent(channelId: elsewhere, keys: {mk(residentKey)}),
+          ),
+          isNull,
+          reason:
+              'the end arrives in dm:aaa:bbb; consent for another room must not '
+              'admit it, or a caller could be consented to stop rings it was '
+              'never allowed to start',
+        );
+      });
+
+      test('RingConsent.none admits nobody anywhere', () {
+        expect(
+          RingConsent.none.permits(here, decodeMultikey(mk(residentKey))),
+          isFalse,
+        );
+        expect(RingConsent.none.channelId, isNull);
+      });
     });
   });
 
@@ -465,7 +618,7 @@ void main() {
     /// miss the class the round-2 finding lived in — a memory whose key was
     /// weaker than the live path's.
     bool stops(Message m, {CallInvite? ringing}) {
-      final end = admitCallEnd(m, meUserId: me, ringAllowedKeys: const {});
+      final end = admitCallEnd(m, meUserId: me, consent: RingConsent.none);
       return end != null && endsInvite(end, ringing ?? live);
     }
 
@@ -498,7 +651,11 @@ void main() {
         // The round-2 shape: the gate used to take `live` and answer a single
         // fused question, so the out-of-order memory had to invent its own,
         // weaker, key. Split, both consumers run identical clauses.
-        final judged = admitCallEnd(end(), meUserId: me, ringAllowedKeys: const {});
+        final judged = admitCallEnd(
+          end(),
+          meUserId: me,
+          consent: RingConsent.none,
+        );
         expect(judged, isNotNull);
         expect(judged!.targetServerMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
         expect(judged.fromUserId, robin);
@@ -520,7 +677,10 @@ void main() {
         originCryptoValid: true,
         deliveryState: DeliveryState.sent,
       );
-      expect(admitCallEnd(anon, meUserId: me, ringAllowedKeys: const {}), isNull);
+      expect(
+        admitCallEnd(anon, meUserId: me, consent: RingConsent.none),
+        isNull,
+      );
     });
 
     test('a NON-HUMAN end is refused, mirroring admitRing', () {
@@ -536,7 +696,10 @@ void main() {
         originCryptoValid: true,
         deliveryState: DeliveryState.sent,
       );
-      expect(admitCallEnd(robot, meUserId: me, ringAllowedKeys: const {}), isNull);
+      expect(
+        admitCallEnd(robot, meUserId: me, consent: RingConsent.none),
+        isNull,
+      );
     });
 
     test(

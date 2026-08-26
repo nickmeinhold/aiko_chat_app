@@ -3,9 +3,15 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../chat/domain/origin_envelope.dart';
+import '../domain/ring_consent.dart';
 
-/// The keys THIS USER has consented to be rung by, even though the island does
-/// not report them as people.
+/// The keys THIS USER has consented to be rung by IN A GIVEN CONVERSATION, even
+/// though the island does not report them as people.
+///
+/// PER CONVERSATION (Nick's ruling, 2026-08-26). The first version was one set
+/// per user, so a key blessed anywhere could wake you from anywhere — and a
+/// resident agent may hold membership in many channels, which is exactly where
+/// that difference stops being theoretical.
 ///
 /// DEVICE-LOCAL, and that is the design rather than a shortcut. The existing
 /// doctrine already splits these: a BLOCK is server-side moderation (the island
@@ -32,7 +38,19 @@ import '../../chat/domain/origin_envelope.dart';
 /// island can edit by relabelling a row, which would let it nominate who may
 /// wake you. The key cannot be forged without the private half.
 class RingAllowlistStore {
-  static const _prefix = 'aiko_ring_allowed_keys_';
+  /// A NEW KEY, and the old one is DELETED rather than migrated.
+  ///
+  /// The stored shape changed from a list of keys to a map of channel -> keys,
+  /// and the two cannot be told apart safely by shape alone. More importantly a
+  /// migration would have to invent a scope: a legacy grant says "anywhere",
+  /// per-conversation consent has no "anywhere", and silently promoting it into
+  /// every channel the user can see is the precise outcome the ruling rejected.
+  /// A NARROWING CANNOT BE INFERRED, so it fails closed and the user re-grants.
+  ///
+  /// The cost is nil in practice: the global version shipped dark, with no UI
+  /// that could grant through it, so no consent was ever recorded by a user.
+  static const _prefix = 'aiko_ring_consent_';
+  static const _legacyPrefix = 'aiko_ring_allowed_keys_';
 
   final SharedPreferences? _prefs;
 
@@ -43,6 +61,17 @@ class RingAllowlistStore {
   RingAllowlistStore(this._prefs, this._userId);
 
   String get _key => '$_prefix$_userId';
+  String get _legacyKey => '$_legacyPrefix$_userId';
+
+  /// Remove the global-scope grant this user may still carry.
+  ///
+  /// Not merely ignored — REMOVED, because a value on disk that nothing reads is
+  /// a record of consent that no longer means anything, and the next reader of
+  /// this file should not have to work out which of two keys is authoritative.
+  Future<void> dropLegacyGlobalConsent() async {
+    if (_userId == null) return;
+    if (_prefs!.containsKey(_legacyKey)) await _prefs.remove(_legacyKey);
+  }
 
   /// Serializes read-modify-write, exactly as [PendingUnregisterStore] does and
   /// for exactly the same reason — a precedent twenty lines away in this repo
@@ -70,7 +99,7 @@ class RingAllowlistStore {
     return result;
   }
 
-  /// Every consented key, as an UNMODIFIABLE set.
+  /// Every conversation's consent, as an UNMODIFIABLE map of unmodifiable sets.
   ///
   /// Unmodifiable on EVERY path, deliberately. The first version returned a
   /// growable set on the happy path and `const {}` on the empty and corrupt
@@ -79,32 +108,47 @@ class RingAllowlistStore {
   /// it had to work (cage-match, Tesla). A type that is sometimes mutable is
   /// the trap; making it never mutable turns that class of bug into a failure
   /// at the first call in every test, instead of only in the state no test had.
+  /// The nesting doubles the surface, so both levels are frozen.
   ///
   /// A corrupt value reads as EMPTY rather than throwing: losing a ring beats
-  /// admitting an unintended ringer, and it must never brick the ring path.
-  Set<String> read() {
+  /// admitting an unintended ringer, and it must never brick the ring path. A
+  /// LEGACY value (the flat list the global version wrote) lands here too, and
+  /// reads as empty for the same reason — it names no conversation, so there is
+  /// no scope it could honestly be admitted in.
+  Map<String, Set<String>> readAll() {
     if (_userId == null) return const {}; // signed out — nobody's consent
     final raw = _prefs!.getString(_key);
     if (raw == null) return const {};
     try {
-      return Set<String>.unmodifiable(
-        (jsonDecode(raw) as List).cast<String>(),
-      );
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return Map<String, Set<String>>.unmodifiable({
+        for (final e in decoded.entries)
+          e.key: Set<String>.unmodifiable((e.value as List).cast<String>()),
+      });
     } catch (_) {
       return const {};
     }
   }
 
-  /// Consent to be rung by [multikey]. Returns false if it is not a well-formed
-  /// ed25519 Multikey, if nobody is signed in, or if the write did not persist.
+  /// The consent in force for [channelId], as the gate wants it.
+  ///
+  /// Always carries [channelId] even when the set is empty, so the value is
+  /// self-describing at the point the gate re-checks it — an empty consent FOR
+  /// this room and a consent for some OTHER room must not be the same object.
+  RingConsent read(String channelId) =>
+      RingConsent(channelId: channelId, keys: readAll()[channelId] ?? const {});
+
+  /// Consent to be rung by [multikey] IN [channelId]. Returns false if the key
+  /// is not a well-formed ed25519 Multikey, if nobody is signed in, or if the
+  /// write did not persist.
   ///
   /// CANONICALISED, not merely validated (cage-match, Carnot + Tesla). The first
-  /// version validated the input and then stored the INPUT STRING, while
-  /// `admitRing` compares against `encodeMultikey(origin.rawPublicKey)` — so any
+  /// version validated the input and then stored the INPUT STRING, while the
+  /// gate compares against `encodeMultikey(origin.rawPublicKey)` — so any
   /// alternate-but-valid textual form would be written into a register the ring
   /// path never consults, and `revoke` would only remove the exact text. Decode
   /// then re-encode, so what is stored is byte-identical to what is matched.
-  Future<bool> allow(String multikey) async {
+  Future<bool> allow(String channelId, String multikey) async {
     if (_userId == null) return false;
     final String canonical;
     try {
@@ -112,13 +156,23 @@ class RingAllowlistStore {
     } on OriginError {
       return false;
     }
-    return _serialize(() => _write({...read(), canonical}));
+    return _serialize(() {
+      final all = {...readAll()};
+      all[channelId] = {...?all[channelId], canonical};
+      return _write(all);
+    });
   }
 
-  /// Withdraw consent. Consent that cannot be withdrawn is not consent, so this
-  /// is not an optional half of the pair. Canonicalises for the same reason
-  /// [allow] does — otherwise a caller could revoke a form that was never stored.
-  Future<bool> revoke(String multikey) async {
+  /// Withdraw consent in [channelId]. Consent that cannot be withdrawn is not
+  /// consent, so this is not an optional half of the pair. Canonicalises for the
+  /// same reason [allow] does — otherwise a caller could revoke a form that was
+  /// never stored.
+  ///
+  /// SCOPED, like the grant. Revoking here says nothing about other rooms, which
+  /// is the direct consequence of consent being per-conversation: a covenant made
+  /// four times must be unmade four times, and pretending otherwise would make
+  /// "revoke" mean something different from "allow".
+  Future<bool> revoke(String channelId, String multikey) async {
     if (_userId == null) return false;
     String canonical = multikey;
     try {
@@ -128,10 +182,27 @@ class RingAllowlistStore {
       // the literal anyway rather than refusing, so a store corrupted by hand can
       // still be cleaned up through the front door.
     }
-    return _serialize(() => _write({...read()}..remove(canonical)));
+    return _serialize(() {
+      final all = {...readAll()};
+      final remaining = {...?all[channelId]}..remove(canonical);
+      // PRUNE THE EMPTY ROOM. A channel key mapped to an empty list is a record
+      // of a covenant that no longer exists, and it would keep the whole map
+      // alive on disk after the last consent anywhere was withdrawn — so the
+      // "nothing is consented" state would persist as a file rather than as an
+      // absence.
+      if (remaining.isEmpty) {
+        all.remove(channelId);
+      } else {
+        all[channelId] = remaining;
+      }
+      return _write(all);
+    });
   }
 
-  Future<bool> _write(Set<String> keys) => keys.isEmpty
+  Future<bool> _write(Map<String, Set<String>> all) => all.isEmpty
       ? _prefs!.remove(_key)
-      : _prefs!.setString(_key, jsonEncode(keys.toList()));
+      : _prefs!.setString(
+          _key,
+          jsonEncode({for (final e in all.entries) e.key: e.value.toList()}),
+        );
 }
