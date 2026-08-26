@@ -650,4 +650,109 @@ void main() {
       expect(container.read(incomingRingProvider), isNull);
     });
   });
+
+  group('the scope token is INSIDE the signature (#3166 asked of channelId)', () {
+    // Tesla, confirming round, and the question is exactly right even though the
+    // answer is "already closed".
+    //
+    // This PR made `message.channelId` load-bearing: it now SELECTS which
+    // consent bucket the gate consults. `RingConsent` itself documents why we
+    // refuse to trust `sender.userId` and `sender.label` — they are
+    // server-supplied metadata OUTSIDE the signature, so an island could edit
+    // them. Nobody had asked the same question of `channelId`. If the envelope's
+    // channel could disagree with the SIGNED channel, the island would not need
+    // to forge a key; it could aim a consented key at a different door, and
+    // per-conversation consent would be global consent wearing a routing trick.
+    //
+    // It cannot, and the refutation is two facts that must be pinned TOGETHER:
+    //   1. `signingBytes` length-prefixes channelId (message_signing.dart — the
+    //      field's own comment reads "else a sig replays into another channel");
+    //   2. ingest verifies with `channelId: m.channelId`, the ENVELOPE's value
+    //      (chat_repository.dart `_persistInbound`).
+    // So a split envelope/signed channel fails verification, lands with
+    // `originCryptoValid == false`, and `admitRing` refuses it before `_mayRing`
+    // is ever consulted. The channel is as strong as the key, not as weak as the
+    // label.
+    //
+    // Driven through the REAL repository rather than asserted about it, because
+    // the property is the composition of those two facts and either one moving
+    // would break it silently.
+    const otherRoom = '01M0GS7FDWBVQ31950B1PTV3BB';
+
+    test('a message signed for ANOTHER channel does not ring here', () async {
+      await warmDms();
+      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+      await pump();
+      final key = await SovereignKeyStore().loadOrCreate();
+      await container
+          .read(ringConsentByChannelProvider.notifier)
+          .allow(dmId, encodeMultikey(key.rawPublicKey));
+
+      // Signed for `otherRoom`, delivered claiming `dmId` — the aiming attack.
+      final signedAt = DateTime.now().toUtc();
+      final sig = await sign(
+        key,
+        SignedPayload(
+          rawPublicKey: key.rawPublicKey,
+          channelId: otherRoom,
+          clientMsgId: 'M1',
+          signedAtMs: signedAt.millisecondsSinceEpoch,
+          body: kCallInviteBody,
+          replyTo: null,
+        ),
+      );
+      transport.emitMessage(
+        Message(
+          clientTempId: serverIdFor('M1'),
+          id: serverIdFor('M1'),
+          channelId: dmId,
+          sender: const MessageSender(
+            userId: robinId,
+            kind: SenderKind.llm,
+            label: 'Robin',
+          ),
+          body: kCallInviteBody,
+          replyToId: null,
+          createdAt: DateTime.now().toUtc(),
+          origin: OriginEnvelope.fromSignature(sig, clientMsgId: 'M1'),
+          deliveryState: DeliveryState.sent,
+        ),
+      );
+      await pump();
+
+      expect(
+        container.read(incomingRingProvider),
+        isNull,
+        reason:
+            'the signature does not cover this envelope channel, so ingest '
+            'marks it invalid and the ring gate refuses it — consent for dmId '
+            'must not be reachable by relabelling a message signed elsewhere',
+      );
+    });
+
+    test(
+      'POSITIVE CONTROL: the same message signed for THIS channel rings',
+      () async {
+        // Without this the test above passes for any reason at all — a broken
+        // fixture, a dead transport, a consent that never landed. This proves the
+        // only difference is the signed channel.
+        await warmDms();
+        container.listen(
+          incomingRingProvider,
+          (_, _) {},
+          fireImmediately: true,
+        );
+        await pump();
+        final key = await SovereignKeyStore().loadOrCreate();
+        await container
+            .read(ringConsentByChannelProvider.notifier)
+            .allow(dmId, encodeMultikey(key.rawPublicKey));
+
+        transport.emitMessage(await inbound(kind: SenderKind.llm));
+        await pump();
+
+        expect(container.read(incomingRingProvider), isNotNull);
+      },
+    );
+  });
 }

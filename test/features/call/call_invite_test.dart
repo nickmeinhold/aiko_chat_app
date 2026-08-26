@@ -575,6 +575,51 @@ void main() {
         );
       });
 
+      test('a hangup admitted in room B cannot end room A\'s ring — the stop '
+          'CORRELATION is scoped, not just the stop ADMISSION', () {
+        // Tesla asked for this at the confirming round, and was right to: the
+        // per-conversation change scoped what `admitCallEnd` ADMITS, while the
+        // `_ended` ledger is keyed on `targetServerMsgId` alone. If correlation
+        // were unscoped, an agent consented only in room B could pass the stop
+        // gate there and silence — or pre-poison — a ring living in room A.
+        //
+        // It cannot, and the reason is `endsInvite` comparing all three fields
+        // rather than the id alone (call_invite.dart). Both the live path and
+        // the memory path run it, so this pins the property both share.
+        final ringInA = CallInvite(
+          inviteId: 'c-1',
+          serverMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+          channelId: here,
+          from: const MessageSender(userId: 'agent', kind: SenderKind.llm),
+          startedAt: now,
+        );
+        const endFromB = CallEnd(
+          targetServerMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+          fromUserId: 'agent',
+          channelId: elsewhere,
+        );
+
+        expect(
+          endsInvite(endFromB, ringInA),
+          isFalse,
+          reason:
+              'same target id, same caller, DIFFERENT room — the covenant lives '
+              'in B and the ring lives in A',
+        );
+        expect(
+          endsInvite(
+            const CallEnd(
+              targetServerMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+              fromUserId: 'agent',
+              channelId: here,
+            ),
+            ringInA,
+          ),
+          isTrue,
+          reason: 'positive control — the same end IN room A does correlate',
+        );
+      });
+
       test('RingConsent.none admits nobody anywhere', () {
         expect(
           RingConsent.none.permits(here, decodeMultikey(mk(residentKey))),
