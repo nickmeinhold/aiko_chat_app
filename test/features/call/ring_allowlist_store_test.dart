@@ -284,6 +284,26 @@ void main() {
       },
     );
 
+    test(
+      'the drop CANNOT FAIL — a throwing store must not reject its Future',
+      () async {
+        // THE RED ARM. `dropLegacyGlobalConsent` is async, so a throw in its body
+        // completes the returned Future with an error rather than throwing
+        // synchronously — and its only caller invokes it fire-and-forget inside a
+        // `try` that can see synchronous throws ONLY. Before the fix, a null
+        // preferences store with a signed-in user hit `_prefs!` and the rejection
+        // escaped as an UNHANDLED ASYNC ERROR, failing whichever test the
+        // microtask happened to drain into.
+        //
+        // A null store with a non-null user is the reachable throw, so this arm
+        // FORCES the bad state rather than asserting the good one — a harness
+        // that cannot create the failure cannot clear it.
+        final broken = RingAllowlistStore(null, alice);
+
+        await expectLater(broken.dropLegacyGlobalConsent(), completes);
+      },
+    );
+
     test('a new-format store is untouched by the drop', () async {
       final s = await storeFor(alice);
       await s.allow(chan, resident);

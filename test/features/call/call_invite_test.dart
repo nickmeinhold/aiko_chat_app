@@ -99,7 +99,7 @@ void main() {
     // Scoped to the message's OWN channel, so these cases keep testing what
     // they were written to test. The scoping property itself is exercised
     // separately, below.
-    consent: RingConsent(channelId: m.channelId, keys: allowedKeys),
+    consent: RingConsent.inChannel(channelId: m.channelId, keys: allowedKeys),
     conversationMuted: muted,
     isDm: isDm,
     now: now,
@@ -431,7 +431,7 @@ void main() {
       final ended = admitCallEnd(
         callEnd(kind: SenderKind.llm, key: residentKey),
         meUserId: me,
-        consent: RingConsent(channelId: 'dm:aaa:bbb', keys: allowed),
+        consent: RingConsent.inChannel(channelId: 'dm:aaa:bbb', keys: allowed),
       );
       expect(
         ended,
@@ -447,7 +447,7 @@ void main() {
         admitCallEnd(
           callEnd(kind: SenderKind.llm, key: strangerKey),
           meUserId: me,
-          consent: RingConsent(
+          consent: RingConsent.inChannel(
             channelId: 'dm:aaa:bbb',
             keys: {mk(residentKey)},
           ),
@@ -470,7 +470,10 @@ void main() {
             invite(kind: SenderKind.llm, key: residentKey, channelId: here),
             meUserId: me,
             blockedUserIds: const {},
-            consent: RingConsent(channelId: here, keys: {mk(residentKey)}),
+            consent: RingConsent.inChannel(
+              channelId: here,
+              keys: {mk(residentKey)},
+            ),
             conversationMuted: false,
             isDm: true,
             now: now,
@@ -494,7 +497,7 @@ void main() {
               ),
               meUserId: me,
               blockedUserIds: const {},
-              consent: RingConsent(
+              consent: RingConsent.inChannel(
                 channelId: elsewhere,
                 keys: {mk(residentKey)},
               ),
@@ -514,7 +517,10 @@ void main() {
               ),
               meUserId: me,
               blockedUserIds: const {},
-              consent: RingConsent(channelId: here, keys: {mk(residentKey)}),
+              consent: RingConsent.inChannel(
+                channelId: here,
+                keys: {mk(residentKey)},
+              ),
               conversationMuted: false,
               isDm: true,
               now: now,
@@ -529,7 +535,7 @@ void main() {
         // The defence against the defect this feature has already produced
         // twice: a caller that pairs one room's keys with another room's id.
         // The keys match, the sender is consented, and it still must not ring.
-        final consent = RingConsent(
+        final consent = RingConsent.inChannel(
           channelId: elsewhere,
           keys: {mk(residentKey)},
         );
@@ -556,7 +562,10 @@ void main() {
           admitCallEnd(
             callEnd(kind: SenderKind.llm, key: residentKey),
             meUserId: me,
-            consent: RingConsent(channelId: elsewhere, keys: {mk(residentKey)}),
+            consent: RingConsent.inChannel(
+              channelId: elsewhere,
+              keys: {mk(residentKey)},
+            ),
           ),
           isNull,
           reason:

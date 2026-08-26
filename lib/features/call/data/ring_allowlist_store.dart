@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../chat/domain/origin_envelope.dart';
@@ -68,9 +70,28 @@ class RingAllowlistStore {
   /// Not merely ignored — REMOVED, because a value on disk that nothing reads is
   /// a record of consent that no longer means anything, and the next reader of
   /// this file should not have to work out which of two keys is authoritative.
+  ///
+  /// CANNOT FAIL, and the guarantee lives HERE rather than at the call site
+  /// (cage-match round 1 — Carnot MEDIUM, and Maxwell independently). This is
+  /// `async`, so an exception in its body — `_prefs!` on a null store, or a
+  /// platform-channel failure inside `remove` — does NOT throw synchronously; it
+  /// completes the returned Future with an error. The caller is
+  /// `RingAllowlist.build()`, which invokes it fire-and-forget inside a `try`
+  /// that can only ever see a synchronous throw, so the rejection escaped as an
+  /// UNHANDLED ASYNC ERROR — under `flutter_test` that fails whichever test the
+  /// microtask happens to drain into, which is the worst place to debug it.
+  ///
+  /// The catch is INSIDE rather than a `catchError` at the call site because
+  /// there is then no call site that can get it wrong. Hygiene must never be
+  /// able to touch the ring path, and the class doc above already promises
+  /// exactly that — this method was the one hole in it.
   Future<void> dropLegacyGlobalConsent() async {
-    if (_userId == null) return;
-    if (_prefs!.containsKey(_legacyKey)) await _prefs.remove(_legacyKey);
+    try {
+      if (_userId == null || _prefs == null) return;
+      if (_prefs.containsKey(_legacyKey)) await _prefs.remove(_legacyKey);
+    } catch (e) {
+      debugPrint('RingAllowlistStore: legacy consent cleanup failed: $e');
+    }
   }
 
   /// Serializes read-modify-write, exactly as [PendingUnregisterStore] does and
@@ -135,8 +156,10 @@ class RingAllowlistStore {
   /// Always carries [channelId] even when the set is empty, so the value is
   /// self-describing at the point the gate re-checks it — an empty consent FOR
   /// this room and a consent for some OTHER room must not be the same object.
-  RingConsent read(String channelId) =>
-      RingConsent(channelId: channelId, keys: readAll()[channelId] ?? const {});
+  RingConsent read(String channelId) => RingConsent.inChannel(
+    channelId: channelId,
+    keys: readAll()[channelId] ?? const {},
+  );
 
   /// Consent to be rung by [multikey] IN [channelId]. Returns false if the key
   /// is not a well-formed ed25519 Multikey, if nobody is signed in, or if the

@@ -36,13 +36,25 @@ class RingConsent {
   /// can edit by relabelling a row, which would let it nominate who may wake you.
   final Set<String> keys;
 
-  const RingConsent({required this.channelId, required this.keys});
+  /// PRIVATE, so `(channelId: null, keys: {...})` — a consent that names no room
+  /// but carries keys — is not constructible. The type's whole argument is that
+  /// a mis-scoped consent should be unrepresentable rather than merely refused;
+  /// leaving that one state reachable would make the claim mostly-true, which is
+  /// the weaker version of it (cage-match round 1, Maxwell's own pass).
+  const RingConsent._({required this.channelId, required this.keys});
+
+  /// Consent held in exactly one conversation. [channelId] is non-null HERE even
+  /// though the field is nullable — [none] is the only instance without a room.
+  const RingConsent.inChannel({
+    required String this.channelId,
+    required this.keys,
+  });
 
   /// No consent, applicable nowhere. The correct default everywhere, and the
   /// value every failure path degrades to — an unreadable store, a signed-out
   /// session, a corrupt record. Reach is never a gate, but a WIDENING of who may
   /// wake you fails closed.
-  static const none = RingConsent(channelId: null, keys: <String>{});
+  static const none = RingConsent._(channelId: null, keys: <String>{});
 
   /// Does this consent admit [rawPublicKey] ringing in [inChannelId]?
   ///

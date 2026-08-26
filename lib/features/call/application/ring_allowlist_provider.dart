@@ -43,10 +43,12 @@ class RingAllowlist extends Notifier<Map<String, Set<String>>> {
   Map<String, Set<String>> build() {
     try {
       final store = ref.watch(ringAllowlistStoreProvider);
-      // Fire-and-forget: the global-scope grant is already unreadable by every
-      // path above, so its removal is hygiene and must never delay or fail a
-      // build that the ring path depends on.
-      store.dropLegacyGlobalConsent();
+      // Fire-and-forget, and SAFE to be: the global-scope grant is already
+      // unreadable by every path above, so its removal is hygiene that must
+      // never delay or fail a build the ring path depends on. The no-throw
+      // guarantee is enforced inside `dropLegacyGlobalConsent` itself — this
+      // `try` only ever sees a SYNCHRONOUS throw, so it could not have caught a
+      // rejected Future from here (cage-match round 1).
       return store.readAll();
     } catch (_) {
       return const {};
@@ -59,8 +61,10 @@ class RingAllowlist extends Notifier<Map<String, Set<String>>> {
   /// from this notifier's raw state could pair one room's keys with another
   /// room's id, and the gate would then admit exactly what the ruling forbids.
   /// Going through here means the id and the keys come from the same lookup.
-  RingConsent consentIn(String channelId) =>
-      RingConsent(channelId: channelId, keys: state[channelId] ?? const {});
+  RingConsent consentIn(String channelId) => RingConsent.inChannel(
+    channelId: channelId,
+    keys: state[channelId] ?? const {},
+  );
 
   /// Consent to be rung by [multikey]; republishes so a live ring path sees it
   /// immediately. Returns false if the key is malformed or the write failed —

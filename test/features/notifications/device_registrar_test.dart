@@ -481,7 +481,11 @@ void main() {
       await pumpEventQueue();
       await registrar.start();
 
-      expect(registrar.registeredToken, 'tok-1', reason: 'precondition: same token');
+      expect(
+        registrar.registeredToken,
+        'tok-1',
+        reason: 'precondition: same token',
+      );
 
       gate.complete();
       await registrar.settled;
@@ -626,7 +630,8 @@ void main() {
       expect(
         registrar.registeredToken,
         'tok-2',
-        reason: 'the newer token is the desired one; a straggler cannot undo it',
+        reason:
+            'the newer token is the desired one; a straggler cannot undo it',
       );
       expect(
         pending.read(_island),
