@@ -285,6 +285,25 @@ void main() {
       },
     );
 
+    test(
+      'a stored EMPTY room is dropped on read, not published as a scope',
+      () async {
+        // The write path prunes; the read path did not, so a hand-edited or
+        // partly-written file could publish a room that `permits` admits nobody
+        // through — a listing that contradicts the gate (Carnot LOW).
+        final s = await storeFor(
+          alice,
+          seed: {
+            'flutter.aiko_ring_consent_$alice':
+                '{"$chan":[],"$other":["$resident"]}',
+          },
+        );
+
+        expect(s.readAll().keys, {other});
+        expect(s.read(chan).keys, isEmpty);
+      },
+    );
+
     test('readAll is unmodifiable at BOTH levels', () async {
       final s = await storeFor(alice);
       await s.allow(chan, resident);

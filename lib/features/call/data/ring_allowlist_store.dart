@@ -143,8 +143,20 @@ class RingAllowlistStore {
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       return Map<String, Set<String>>.unmodifiable({
+        // EMPTY ROOMS ARE DROPPED ON READ, not only pruned on write
+        // (cage-match confirming round, Carnot LOW). `revoke` removes a room
+        // once its last key goes, and this file documents why: an empty room is
+        // a record of a covenant that no longer exists. But the READ path
+        // accepted `{"room":[]}` and published a non-empty book, so
+        // `RingConsentBook.channels` and `isEmpty` would report a consent scope
+        // that `permits` correctly admits nobody through — a listing that
+        // contradicts the gate. Only reachable through a hand-edited or partly
+        // written file, which is exactly the state the read path exists to
+        // survive. Enforcing the invariant at BOTH ends means it holds no matter
+        // who wrote the bytes.
         for (final e in decoded.entries)
-          e.key: Set<String>.unmodifiable((e.value as List).cast<String>()),
+          if ((e.value as List).isNotEmpty)
+            e.key: Set<String>.unmodifiable((e.value as List).cast<String>()),
       });
     } catch (_) {
       return const {};
