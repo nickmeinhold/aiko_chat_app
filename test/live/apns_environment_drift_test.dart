@@ -4,7 +4,7 @@ library;
 // A DRIFT GATE against a REAL island's served schema.
 //
 // The rest of the suite proves the app is self-consistent about
-// `push_environment`. Self-consistency is exactly what cannot catch this bug
+// `apns_environment`. Self-consistency is exactly what cannot catch this bug
 // class: our enum and our tests and our fakes can all agree on a string the
 // island has never accepted.
 //
@@ -21,18 +21,18 @@ library;
 // EXCLUDED from the default run — it needs network. Run it deliberately, and
 // run it before shipping anything that touches the register body:
 //
-//   PUSH_ENV_ISLAND=https://chat.imagineering.cc \
-//   flutter test test/live/push_environment_drift_test.dart --run-skipped --tags live
+//   APNS_ENV_ISLAND=https://chat.imagineering.cc \
+//   flutter test test/live/apns_environment_drift_test.dart --run-skipped --tags live
 
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:aiko_chat_app/features/notifications/domain/push_environment.dart';
+import 'package:aiko_chat_app/features/notifications/domain/apns_environment.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   final island =
-      Platform.environment['PUSH_ENV_ISLAND'] ?? 'https://chat.imagineering.cc';
+      Platform.environment['APNS_ENV_ISLAND'] ?? 'https://chat.imagineering.cc';
 
   late Map<String, dynamic> schema;
 
@@ -54,17 +54,33 @@ void main() {
     }
   });
 
-  Map<String, dynamic> componentSchema(String name) =>
-      ((schema['components'] as Map)['schemas'] as Map)[name]
-          as Map<String, dynamic>;
+  Map<String, dynamic> componentSchema(String name) {
+    final s = ((schema['components'] as Map)['schemas'] as Map)[name];
+    // NAME THE DRIFT, don't crash on it. When the island renamed
+    // `PushEnvironment` -> `ApnsEnvironment` this gate fired correctly but as a
+    // `type 'Null' is not a subtype of Map` cast error, which reads as a broken
+    // test rather than as the finding it is. A gate whose red arm looks like a
+    // bug in the gate gets ignored once.
+    if (s == null) {
+      final available = ((schema['components'] as Map)['schemas'] as Map).keys
+          .map((k) => k.toString())
+          .where((k) => k.toLowerCase().contains('environment'))
+          .toList();
+      fail(
+        'the island no longer serves a `$name` schema — it was RENAMED or '
+        'removed. Environment-shaped schemas it does serve: $available',
+      );
+    }
+    return (s as Map).cast<String, dynamic>();
+  }
 
   test('our wire strings ARE the island\'s closed set — exactly', () {
-    final islandSet = (componentSchema('PushEnvironment')['enum'] as List)
+    final islandSet = (componentSchema('ApnsEnvironment')['enum'] as List)
         .cast<String>()
         .toSet();
 
     expect(
-      PushEnvironment.values.map((e) => e.wire).toSet(),
+      ApnsEnvironment.values.map((e) => e.wire).toSet(),
       islandSet,
       reason:
           'set equality, not membership: a value we can send that the island '
@@ -73,18 +89,18 @@ void main() {
     );
   });
 
-  test('push_environment is OPTIONAL on the register body', () {
+  test('apns_environment is OPTIONAL on the register body', () {
     final req = componentSchema('RegisterDeviceReq');
 
     expect(
       (req['required'] as List).cast<String>(),
-      isNot(contains('push_environment')),
+      isNot(contains('apns_environment')),
       reason:
           'the whole null-is-a-real-answer design rests on omission being legal '
           '— if it became required, every FCM register would 422',
     );
     expect(
-      (req['properties'] as Map).containsKey('push_environment'),
+      (req['properties'] as Map).containsKey('apns_environment'),
       isTrue,
       reason: 'the island stopped accepting the field we send',
     );

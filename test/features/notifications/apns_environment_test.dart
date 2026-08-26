@@ -1,4 +1,4 @@
-// Pins the `push_environment` field end to end — the enum's wire strings, and
+// Pins the `apns_environment` field end to end — the enum's wire strings, and
 // the two shapes of the register body that the island tells apart.
 //
 // The failure this exists to catch is SILENT IN BOTH DIRECTIONS. A wrong value
@@ -13,7 +13,7 @@ import 'dart:typed_data';
 
 import 'package:aiko_chat_app/features/chat/data/gateway_rest_api.dart';
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
-import 'package:aiko_chat_app/features/notifications/domain/push_environment.dart';
+import 'package:aiko_chat_app/features/notifications/domain/apns_environment.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -46,15 +46,15 @@ class _BodyCapturingAdapter implements HttpClientAdapter {
 }
 
 void main() {
-  group('PushEnvironment wire strings', () {
+  group('ApnsEnvironment wire strings', () {
     // Verified against the DEPLOYED island rather than the design note:
-    // `/openapi.json` -> components.schemas.PushEnvironment.enum is
+    // `/openapi.json` -> components.schemas.ApnsEnvironment.enum is
     // ["sandbox", "production"], and alembic 0023 pins the DB CHECK to the same
     // pair. Asserted rather than derived from `name` so a rename cannot start
     // sending a value that fails the constraint.
     test('are exactly what the island accepts', () {
-      expect(PushEnvironment.sandbox.wire, 'sandbox');
-      expect(PushEnvironment.production.wire, 'production');
+      expect(ApnsEnvironment.sandbox.wire, 'sandbox');
+      expect(ApnsEnvironment.production.wire, 'production');
     });
 
     // THE BUG THIS PINS. Apple's entitlement says `development`; the island's
@@ -64,15 +64,15 @@ void main() {
     // that has ever been tested against a real ring.
     test('translate Apple\'s aps-environment, never pass it through', () {
       expect(
-        PushEnvironment.fromApsEnvironment('development'),
-        PushEnvironment.sandbox,
+        ApnsEnvironment.fromApsEnvironment('development'),
+        ApnsEnvironment.sandbox,
       );
       expect(
-        PushEnvironment.fromApsEnvironment('production'),
-        PushEnvironment.production,
+        ApnsEnvironment.fromApsEnvironment('production'),
+        ApnsEnvironment.production,
       );
       expect(
-        PushEnvironment.values.map((e) => e.wire),
+        ApnsEnvironment.values.map((e) => e.wire),
         isNot(contains('development')),
         reason:
             'the island rejects `development` at a DB CHECK — it must never be '
@@ -81,10 +81,10 @@ void main() {
     });
 
     test('an unknown or absent value is null, never a guess', () {
-      expect(PushEnvironment.fromApsEnvironment(null), isNull);
-      expect(PushEnvironment.fromApsEnvironment(''), isNull);
-      expect(PushEnvironment.fromApsEnvironment('Development'), isNull);
-      expect(PushEnvironment.fromApsEnvironment('sandbox'), isNull);
+      expect(ApnsEnvironment.fromApsEnvironment(null), isNull);
+      expect(ApnsEnvironment.fromApsEnvironment(''), isNull);
+      expect(ApnsEnvironment.fromApsEnvironment('Development'), isNull);
+      expect(ApnsEnvironment.fromApsEnvironment('sandbox'), isNull);
     });
   });
 
@@ -97,24 +97,24 @@ void main() {
       return (GatewayRestApi(bare: dio, authed: dio), bodies);
     }
 
-    test('carries push_environment when the platform declared one', () async {
+    test('carries apns_environment when the platform declared one', () async {
       final (api, bodies) = capturing();
       await api.registerDevice(
         platform: DevicePlatform.apns,
         token: 'tok-1',
-        pushEnvironment: PushEnvironment.production,
+        apnsEnvironment: ApnsEnvironment.production,
       );
       expect(bodies.single, {
         'platform': 'apns',
         'token': 'tok-1',
-        'push_environment': 'production',
+        'apns_environment': 'production',
       });
     });
 
     test('OMITS the key when null — it is not sent as null', () async {
       final (api, bodies) = capturing();
       await api.registerDevice(platform: DevicePlatform.fcm, token: 'tok-2');
-      expect(bodies.single.containsKey('push_environment'), isFalse);
+      expect(bodies.single.containsKey('apns_environment'), isFalse);
       expect(bodies.single, {'platform': 'fcm', 'token': 'tok-2'});
     });
   });

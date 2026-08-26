@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../../chat/data/chat_rest_api.dart';
 import '../data/pending_unregister_store.dart';
-import '../domain/push_environment.dart';
+import '../domain/apns_environment.dart';
 import '../domain/push_token_source.dart';
 
 /// Keeps this island's belief about "where do I push to reach this user" in step
@@ -372,7 +372,7 @@ class DeviceRegistrar {
       await _api.registerDevice(
         platform: _source.platform,
         token: token,
-        pushEnvironment: await _pushEnvironment(),
+        apnsEnvironment: await _apnsEnvironment(),
       );
     } on Unauthorized {
       // DEFINITELY-NOT-LANDED: the island rejected this before writing, so the
@@ -409,9 +409,9 @@ class DeviceRegistrar {
   /// for them: an implementation that throws would otherwise convert "we cannot
   /// name the environment" into "this device does not register at all", which is
   /// strictly worse than the pre-field behaviour it replaces.
-  Future<PushEnvironment?> _pushEnvironment() async {
+  Future<ApnsEnvironment?> _apnsEnvironment() async {
     try {
-      return await _source.pushEnvironment();
+      return await _source.apnsEnvironment();
     } catch (e) {
       debugPrint(
         'DeviceRegistrar: could not resolve the push environment, letting the '

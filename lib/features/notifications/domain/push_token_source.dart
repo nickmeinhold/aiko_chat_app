@@ -1,5 +1,5 @@
 import 'device_platform.dart';
-import 'push_environment.dart';
+import 'apns_environment.dart';
 
 /// Where a push token comes from — the seam between [DeviceRegistrar]'s
 /// lifecycle logic and whichever platform SDK actually mints the token.
@@ -45,9 +45,9 @@ abstract class PushTokenSource {
   /// in the build cannot report one.
   ///
   /// Null is a real answer, not a failure: the island resolves an omitted
-  /// `push_environment` from its own `APNS_USE_SANDBOX`, which is exactly the
+  /// `apns_environment` from its own `APNS_USE_SANDBOX`, which is exactly the
   /// behaviour we had before this field existed. Sending a WRONG value is worse
   /// than sending none, so anything unrecognised degrades to null rather than
-  /// to a guess. See [PushEnvironment].
-  Future<PushEnvironment?> pushEnvironment();
+  /// to a guess. See [ApnsEnvironment].
+  Future<ApnsEnvironment?> apnsEnvironment();
 }

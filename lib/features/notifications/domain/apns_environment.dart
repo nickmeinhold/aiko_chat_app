@@ -21,7 +21,7 @@
 /// on both boxes), so until we declare it a TestFlight handset registers a
 /// production token against a sandbox-defaulted island and simply never rings
 /// (claude-tasks#3450, island #3386).
-enum PushEnvironment {
+enum ApnsEnvironment {
   /// `api.sandbox.push.apple.com` — tokens from a locally-signed development
   /// build. Apple calls this environment `development`.
   sandbox('sandbox'),
@@ -29,10 +29,10 @@ enum PushEnvironment {
   /// `api.push.apple.com` — tokens from a TestFlight or App Store build.
   production('production');
 
-  const PushEnvironment(this.wire);
+  const ApnsEnvironment(this.wire);
 
-  /// The exact string the island's `PushEnvironment` enum accepts, which drives
-  /// a DB CHECK on `device_tokens.push_environment`. Never derive this from
+  /// The exact string the island's `ApnsEnvironment` enum accepts, which drives
+  /// a DB CHECK on `device_tokens.apns_environment`. Never derive this from
   /// [name] — they agree today and a rename would send a value that fails the
   /// constraint, and the island fails CLOSED on a bad value by design.
   final String wire;
@@ -44,10 +44,10 @@ enum PushEnvironment {
   /// one answer with a defined meaning on the far side; a guess here would put a
   /// 422 on the register path and fail the whole registration rather than
   /// degrading one field.
-  static PushEnvironment? fromApsEnvironment(String? apsEnvironment) =>
+  static ApnsEnvironment? fromApsEnvironment(String? apsEnvironment) =>
       switch (apsEnvironment) {
-        'development' => PushEnvironment.sandbox,
-        'production' => PushEnvironment.production,
+        'development' => ApnsEnvironment.sandbox,
+        'production' => ApnsEnvironment.production,
         _ => null,
       };
 }

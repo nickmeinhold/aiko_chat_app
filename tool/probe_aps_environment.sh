@@ -7,7 +7,7 @@
 # answer on every distribution build, confidently and silently.
 #
 # This is the BUILD-MACHINE half of the instrument. The runtime half lives in
-# `ApnsTokenChannel.pushEnvironment()` (ios/Runner/AppDelegate.swift) and reads
+# `ApnsTokenChannel.apnsEnvironment()` (ios/Runner/AppDelegate.swift) and reads
 # the same key from the same file, from inside the running app. Run this against
 # an archive before submitting to confirm the two agree — a disagreement means the
 # app is telling the island something the binary contradicts.
@@ -66,7 +66,7 @@ echo
 case "$aps" in
   production)
     echo "-> tokens are valid against api.push.apple.com ONLY."
-    echo "   The app must register with push_environment=production, and an island"
+    echo "   The app must register with apns_environment=production, and an island"
     echo "   running APNS_USE_SANDBOX=true will answer 400 BadDeviceToken forever."
     ;;
   development)

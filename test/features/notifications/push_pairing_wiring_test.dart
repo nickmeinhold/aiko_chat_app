@@ -20,7 +20,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
 import 'package:aiko_chat_app/features/notifications/application/device_registrar.dart';
 import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
-import 'package:aiko_chat_app/features/notifications/domain/push_environment.dart';
+import 'package:aiko_chat_app/features/notifications/domain/apns_environment.dart';
 import 'package:aiko_chat_app/features/notifications/domain/push_token_source.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,7 +37,7 @@ class _FakeSource implements PushTokenSource {
   @override
   DevicePlatform get platform => DevicePlatform.fcm;
   @override
-  Future<PushEnvironment?> pushEnvironment() async => null;
+  Future<ApnsEnvironment?> apnsEnvironment() async => null;
   @override
   Future<bool> requestPermission() async => granted;
   @override

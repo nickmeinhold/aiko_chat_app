@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
-import 'package:aiko_chat_app/features/notifications/domain/push_environment.dart';
+import 'package:aiko_chat_app/features/notifications/domain/apns_environment.dart';
 import 'package:aiko_chat_app/features/auth/data/passkey_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
@@ -197,10 +197,10 @@ class FakeRestApi implements ChatRestApi {
   /// rather than a set so a test can see a double-register, which is the shape
   /// of the bug the island's upsert exists to absorb.
   /// CARRIES THE ENVIRONMENT, because a fake that drops a field is a fake more
-  /// forgiving than the real API: `push_environment` could stop being sent
+  /// forgiving than the real API: `apns_environment` could stop being sent
   /// entirely and every register assertion here would stay green.
   final List<
-    ({DevicePlatform platform, String token, PushEnvironment? pushEnvironment})
+    ({DevicePlatform platform, String token, ApnsEnvironment? apnsEnvironment})
   >
   registeredDevices = [];
   final List<String> unregisteredDevices = [];
@@ -243,7 +243,7 @@ class FakeRestApi implements ChatRestApi {
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
-    PushEnvironment? pushEnvironment,
+    ApnsEnvironment? apnsEnvironment,
   }) async {
     // YIELD FIRST, for the same reason unregisterDevice does: an async body runs
     // synchronously to its first await, so with no gate set this fake used to
@@ -260,7 +260,7 @@ class FakeRestApi implements ChatRestApi {
     registeredDevices.add((
       platform: platform,
       token: token,
-      pushEnvironment: pushEnvironment,
+      apnsEnvironment: apnsEnvironment,
     ));
     deviceCalls.add((op: 'register', token: token));
     liveRows.add(token);

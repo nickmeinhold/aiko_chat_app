@@ -43,7 +43,7 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
       switch call.method {
       case "requestPermission": self.requestPermission(result)
       case "currentToken": self.currentToken(result)
-      case "pushEnvironment": result(ApnsTokenChannel.pushEnvironment())
+      case "apnsEnvironment": result(ApnsTokenChannel.apnsEnvironment())
       default: result(FlutterMethodNotImplemented)
       }
     }
@@ -72,7 +72,7 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
   /// distribution artifact, and the failure of guessing `development` there is
   /// the silent one we are removing (island resolves an omitted value to its
   /// `APNS_USE_SANDBOX`, `true` on both boxes).
-  static func pushEnvironment() -> String {
+  static func apnsEnvironment() -> String {
     if let declared = apsEnvironmentFromProvisioningProfile() { return declared }
     #if DEBUG
       return "development"
