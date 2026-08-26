@@ -189,4 +189,71 @@ void main() {
       isEmpty,
     );
   });
+
+  group('the legacy drop runs THROUGH build(), not just as a method', () {
+    // THE TEST THAT WOULD HAVE CAUGHT ROUND 1'S OWN FIX BREAKING ITSELF.
+    //
+    // Round 1 rewrote the comment above `store.dropLegacyGlobalConsent()` and,
+    // in doing so, replaced the comment AND the call. The method was left with
+    // ZERO production callers — a dark capability, five tests deep, driven by
+    // nothing — and 1091 tests stayed green because every existing test invoked
+    // it directly. Only a cross-family adversary reading the provider noticed
+    // (round 2, Carnot HIGH).
+    //
+    // So the pin has to drive the BEHAVIOUR through the real build path. A test
+    // that calls the method proves the method; only this proves the wiring.
+    test('materialising the provider REMOVES the global-scope key', () async {
+      SharedPreferences.setMockInitialValues({
+        'flutter.aiko_ring_allowed_keys_${alice.userId}': '["$resident"]',
+      });
+      final prefs = await SharedPreferences.getInstance();
+      final c = ProviderContainer(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+          currentUserProvider.overrideWithValue(alice),
+        ],
+      );
+      addTearDown(c.dispose);
+      expect(
+        prefs.containsKey('aiko_ring_allowed_keys_${alice.userId}'),
+        isTrue,
+        reason: 'precondition: the legacy grant is on disk',
+      );
+
+      // Materialise the notifier — nothing else. This is what the ring path does.
+      c.read(ringConsentByChannelProvider);
+      await pumpEventQueue();
+
+      expect(
+        prefs.containsKey('aiko_ring_allowed_keys_${alice.userId}'),
+        isFalse,
+        reason:
+            'build() must actually CALL the drop — the PR promises the key is '
+            'removed from disk, and a method nobody invokes promises nothing',
+      );
+    });
+
+    test('and the legacy grant confers no consent in any room', () async {
+      SharedPreferences.setMockInitialValues({
+        'flutter.aiko_ring_allowed_keys_${alice.userId}': '["$resident"]',
+      });
+      final c = ProviderContainer(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(
+            await SharedPreferences.getInstance(),
+          ),
+          currentUserProvider.overrideWithValue(alice),
+        ],
+      );
+      addTearDown(c.dispose);
+
+      final book = c.read(ringConsentByChannelProvider);
+
+      expect(book.isEmpty, isTrue);
+      expect(
+        c.read(ringConsentByChannelProvider.notifier).consentIn(chan).keys,
+        isEmpty,
+      );
+    });
+  });
 }

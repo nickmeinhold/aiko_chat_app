@@ -45,10 +45,15 @@ class RingConsent {
 
   /// Consent held in exactly one conversation. [channelId] is non-null HERE even
   /// though the field is nullable — [none] is the only instance without a room.
-  const RingConsent.inChannel({
+  RingConsent.inChannel({
     required String this.channelId,
-    required this.keys,
-  });
+    required Set<String> keys,
+    // FROZEN AT CONSTRUCTION (cage-match round 2, Carnot MEDIUM). The field is
+    // public and the type is a trust-boundary authority; without this a caller
+    // can hold the set it passed in and mutate it afterwards — `final s = {};
+    // RingConsent.inChannel(channelId: id, keys: s); s.add(k);` — editing who may
+    // wake you AFTER the gate has been handed its answer.
+  }) : keys = Set<String>.unmodifiable(keys);
 
   /// No consent, applicable nowhere. The correct default everywhere, and the
   /// value every failure path degrades to — an unreadable store, a signed-out
@@ -67,4 +72,47 @@ class RingConsent {
     if (keys.isEmpty) return false; // the overwhelmingly common path
     return keys.contains(encodeMultikey(rawPublicKey));
   }
+}
+
+/// Every conversation's consent, with NO WAY TO OBTAIN A BARE KEY SET.
+///
+/// The third instance of one class, and the reason this type exists rather than a
+/// fourth guard (cage-match round 2, Tesla — the deepest finding of the review).
+/// Identity-as-mutable-key has now appeared at the disk key (#161 round 1), at the
+/// in-memory register (#161 round 2), and here at the PAIR: the notifier used to
+/// publish `Map<String, Set<String>>`, so `consentIn` was a SUPPORTED path, not a
+/// law. A settings surface that watched the raw map could rebuild the pair by hand
+/// and hand the gate room A's label with room B's keys — right label, wrong keys,
+/// admitted. That is exactly how #161 shipped a provider that never reached the
+/// gate: the blessed path was correct and the type did not make the cursed path
+/// impossible.
+///
+/// Tesla's sharpest line, kept because it names what the RED proof could not do:
+/// deleting `channelId != inChannelId` only proves LABEL MISMATCH refuses. You
+/// could not write a test that the type rejects right-label/wrong-keys, because it
+/// did not. So the fix is subtractive — remove the raw map from the published
+/// surface — rather than another check someone must remember to run.
+///
+/// [consentIn] is now the ONLY way to reach a key set, and it pairs the label and
+/// the keys from one lookup. [channels] exists so a settings screen can enumerate
+/// what has been granted without ever holding an unpaired set.
+class RingConsentBook {
+  const RingConsentBook(this._byChannel);
+
+  const RingConsentBook.empty() : _byChannel = const {};
+
+  final Map<String, Set<String>> _byChannel;
+
+  /// The consent in force in [channelId] — label and keys from one lookup, so the
+  /// two cannot be mismatched by a caller.
+  RingConsent consentIn(String channelId) => RingConsent.inChannel(
+    channelId: channelId,
+    keys: _byChannel[channelId] ?? const {},
+  );
+
+  /// The conversations holding consent, for a UI that lists them. Iterating these
+  /// and calling [consentIn] is always correctly paired by construction.
+  Iterable<String> get channels => _byChannel.keys;
+
+  bool get isEmpty => _byChannel.isEmpty;
 }

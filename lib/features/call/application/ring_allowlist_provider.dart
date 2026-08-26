@@ -14,12 +14,14 @@ final ringAllowlistStoreProvider = Provider<RingAllowlistStore>(
   ),
 );
 
-/// Every conversation's consented ringer keys, channel id -> canonical Multikeys.
+/// Every conversation's consent, published as a [RingConsentBook] — a surface
+/// with no bare key set on it at all.
 ///
-/// THE WHOLE MAP, not one room's slice, because the notifier is a single
-/// long-lived register and the ring path judges whichever conversation a message
-/// arrived in. Slicing happens at the one call site that holds the message —
-/// see [RingAllowlist.consentIn], which is the only supported way to narrow it.
+/// It used to publish `Map<String, Set<String>>`, which made [consentIn] a
+/// SUPPORTED path rather than a law: a settings screen watching the raw map could
+/// pair room A's label with room B's keys by hand and the gate would admit it.
+/// See [RingConsentBook] for why the fix is subtractive rather than a fourth
+/// guard (cage-match round 2, Tesla).
 ///
 /// A NOTIFIER, NOT A PLAIN PROVIDER (cage-match, Tesla). The first version was a
 /// `Provider` that called `read()` once and then cached forever, while `allow()`
@@ -38,9 +40,9 @@ final ringAllowlistStoreProvider = Provider<RingAllowlistStore>(
 /// have touched. It broke twelve existing ring tests the moment it landed. So an
 /// unreadable allowlist reads as NO CONSENT RECORDED — exactly the prior
 /// behaviour. The widening fails CLOSED while the ring itself fails OPEN.
-class RingAllowlist extends Notifier<Map<String, Set<String>>> {
+class RingAllowlist extends Notifier<RingConsentBook> {
   @override
-  Map<String, Set<String>> build() {
+  RingConsentBook build() {
     try {
       final store = ref.watch(ringAllowlistStoreProvider);
       // Fire-and-forget, and SAFE to be: the global-scope grant is already
@@ -49,22 +51,22 @@ class RingAllowlist extends Notifier<Map<String, Set<String>>> {
       // guarantee is enforced inside `dropLegacyGlobalConsent` itself — this
       // `try` only ever sees a SYNCHRONOUS throw, so it could not have caught a
       // rejected Future from here (cage-match round 1).
-      return store.readAll();
+      //
+      // THE CALL BELOW WAS DELETED BY ROUND 1'S OWN FIX (round 2, Carnot HIGH).
+      // Rewriting the comment above it replaced the comment AND the statement,
+      // leaving `dropLegacyGlobalConsent` with ZERO production callers — tested
+      // five times, driven by nothing — while 1091 tests stayed green because
+      // every one of them calls it directly. A fix that destroys the behaviour it
+      // was fixing is why the provider test now drives the drop THROUGH build().
+      store.dropLegacyGlobalConsent();
+      return RingConsentBook(store.readAll());
     } catch (_) {
-      return const {};
+      return const RingConsentBook.empty();
     }
   }
 
   /// The consent in force in [channelId], as the two gates want it.
-  ///
-  /// THE ONLY SUPPORTED NARROWING. A caller that built a `RingConsent` by hand
-  /// from this notifier's raw state could pair one room's keys with another
-  /// room's id, and the gate would then admit exactly what the ruling forbids.
-  /// Going through here means the id and the keys come from the same lookup.
-  RingConsent consentIn(String channelId) => RingConsent.inChannel(
-    channelId: channelId,
-    keys: state[channelId] ?? const {},
-  );
+  RingConsent consentIn(String channelId) => state.consentIn(channelId);
 
   /// Consent to be rung by [multikey]; republishes so a live ring path sees it
   /// immediately. Returns false if the key is malformed or the write failed —
@@ -98,7 +100,7 @@ class RingAllowlist extends Notifier<Map<String, Set<String>>> {
   /// action is to say nothing rather than to correct it.
   bool _publish(RingAllowlistStore store) {
     if (!identical(ref.read(ringAllowlistStoreProvider), store)) return false;
-    state = store.readAll();
+    state = RingConsentBook(store.readAll());
     return true;
   }
 }
@@ -108,6 +110,4 @@ class RingAllowlist extends Notifier<Map<String, Set<String>>> {
 /// the thing that no longer exists — a name that survives a scope change is a
 /// name that will be read with the old meaning.
 final ringConsentByChannelProvider =
-    NotifierProvider<RingAllowlist, Map<String, Set<String>>>(
-      RingAllowlist.new,
-    );
+    NotifierProvider<RingAllowlist, RingConsentBook>(RingAllowlist.new);
