@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/call/application/ring_allowlist_provider.dart';
+import 'package:aiko_chat_app/features/call/domain/ring_consent.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
@@ -255,5 +256,53 @@ void main() {
         isEmpty,
       );
     });
+  });
+
+  group('the consent types freeze their input — BOTH of them', () {
+    // A CLASS PIN, NOT TWO INSTANCE PINS, and the grouping is the point.
+    //
+    // Carnot flagged the leak on `RingConsent.inChannel` in round 2. I froze that
+    // one and did not sweep the class — so `RingConsentBook`, created in the very
+    // commit that applied the fix, shipped with the identical defect and Carnot
+    // found it again in round 3 (HIGH). One instance patched, the class left open,
+    // and the second instance authored by the first instance's fix.
+    //
+    // The diff holds exactly two collection-carrying types; both are asserted
+    // here, together, so a third one is added under a FAILING test rather than a
+    // green one.
+    test(
+      'RingConsent.inChannel cannot be mutated through the set it was given',
+      () async {
+        final live = <String>{resident};
+        final consent = RingConsent.inChannel(channelId: chan, keys: live);
+
+        live.add('z6MkSomeOtherKeyEntirely');
+
+        expect(consent.keys, {
+          resident,
+        }, reason: 'the authority must not follow');
+        expect(() => consent.keys.add(resident), throwsUnsupportedError);
+      },
+    );
+
+    test(
+      'RingConsentBook cannot be mutated through the map it was given',
+      () async {
+        final live = <String, Set<String>>{
+          chan: {resident},
+        };
+        final book = RingConsentBook(live);
+
+        // Both levels: a new room, and a new key in an existing room.
+        live['dm:aaa:ccc'] = {resident};
+        live[chan]!.add('z6MkSomeOtherKeyEntirely');
+
+        expect(book.channels, [chan], reason: 'a room added after the fact');
+        expect(book.consentIn(chan).keys, {
+          resident,
+        }, reason: 'a key added after the fact — this is who may wake you');
+        expect(book.consentIn('dm:aaa:ccc').keys, isEmpty);
+      },
+    );
   });
 }

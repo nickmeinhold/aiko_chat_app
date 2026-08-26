@@ -97,7 +97,24 @@ class RingConsent {
 /// the keys from one lookup. [channels] exists so a settings screen can enumerate
 /// what has been granted without ever holding an unpaired set.
 class RingConsentBook {
-  const RingConsentBook(this._byChannel);
+  /// FREEZES BOTH LEVELS AT CONSTRUCTION (cage-match round 3, Carnot HIGH).
+  ///
+  /// The const version captured the caller's map BY REFERENCE, so a caller could
+  /// hand a book to the gate and then mutate the original afterwards — changing
+  /// who may wake you without going through `allow`/`revoke` or Riverpod's state
+  /// publication, which is the whole door this type exists to be.
+  ///
+  /// The same leak Carnot flagged on `RingConsent.inChannel` one round earlier.
+  /// I froze that one and did not sweep, so the sibling shipped inside the very
+  /// commit that fixed its twin — an instance patched and the class left open.
+  /// Both members of the class are now frozen, and `both freeze their input` pins
+  /// them TOGETHER so a third collection-holding type is added under a failing
+  /// test rather than under a green one.
+  RingConsentBook(Map<String, Set<String>> byChannel)
+    : _byChannel = Map<String, Set<String>>.unmodifiable({
+        for (final e in byChannel.entries)
+          e.key: Set<String>.unmodifiable(e.value),
+      });
 
   const RingConsentBook.empty() : _byChannel = const {};
 
