@@ -14,6 +14,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/notifications/application/device_registrar.dart';
 import 'package:aiko_chat_app/features/notifications/data/pending_unregister_store.dart';
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
+import 'package:aiko_chat_app/features/notifications/domain/apns_environment.dart';
 import 'package:aiko_chat_app/features/notifications/domain/push_token_source.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -35,6 +36,17 @@ class _FakeSource implements PushTokenSource {
 
   @override
   DevicePlatform get platform => DevicePlatform.apns;
+
+  /// Settable so a test can drive the null / declared / throwing arms of the
+  /// resolve, which is the whole surface `_apnsEnvironment` guards.
+  ApnsEnvironment? environment = ApnsEnvironment.sandbox;
+  Object? environmentThrows;
+
+  @override
+  Future<ApnsEnvironment?> apnsEnvironment() async {
+    if (environmentThrows != null) throw environmentThrows!;
+    return environment;
+  }
 
   @override
   Future<bool> requestPermission() async {
@@ -82,7 +94,11 @@ void main() {
         await registrar.start();
 
         expect(api.registeredDevices, [
-          (platform: DevicePlatform.apns, token: 'tok-1'),
+          (
+            platform: DevicePlatform.apns,
+            token: 'tok-1',
+            apnsEnvironment: ApnsEnvironment.sandbox,
+          ),
         ]);
       },
     );
@@ -108,6 +124,47 @@ void main() {
         await pumpEventQueue();
 
         expect(api.registeredDevices.map((d) => d.token), ['tok-1', 'tok-2']);
+      },
+    );
+
+    test(
+      'the register carries the environment the platform declared — the field '
+      'that decides whether a distribution build can be woken at all',
+      () async {
+        source.environment = ApnsEnvironment.production;
+
+        await registrar.start();
+
+        expect(
+          api.registeredDevices.single.apnsEnvironment,
+          ApnsEnvironment.production,
+        );
+      },
+    );
+
+    test(
+      'a platform that cannot name its environment still registers, with the '
+      'field omitted so the island falls back to APNS_USE_SANDBOX',
+      () async {
+        source.environment = null;
+
+        await registrar.start();
+
+        expect(api.registeredDevices.single.apnsEnvironment, isNull);
+        expect(registrar.registeredToken, 'tok-1');
+      },
+    );
+
+    test(
+      'a THROWING environment resolve degrades to omitted — it must never turn '
+      '"we cannot name the environment" into "this device does not register"',
+      () async {
+        source.environmentThrows = Exception('channel not in this build');
+
+        await expectLater(registrar.start(), completes);
+
+        expect(api.registeredDevices.single.apnsEnvironment, isNull);
+        expect(registrar.registeredToken, 'tok-1');
       },
     );
 

@@ -8,6 +8,7 @@ import '../../auth/domain/identity_models.dart';
 import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../../notifications/domain/device_platform.dart';
+import '../../notifications/domain/apns_environment.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
@@ -431,10 +432,20 @@ class GatewayRestApi implements ChatRestApi {
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
+    ApnsEnvironment? apnsEnvironment,
   }) => _authedCall(
     () => _authed.post(
       '/v1/devices',
-      data: {'platform': platform.wire, 'token': token},
+      // The key is OMITTED rather than sent as null when we have no answer. The
+      // island's contract distinguishes the two: absent means "resolve it from
+      // APNS_USE_SANDBOX", and an explicit null is an out-of-set value at a
+      // boundary that answers 422 — which would fail the whole registration
+      // instead of degrading one field.
+      data: {
+        'platform': platform.wire,
+        'token': token,
+        if (apnsEnvironment != null) 'apns_environment': apnsEnvironment.wire,
+      },
     ),
   );
 

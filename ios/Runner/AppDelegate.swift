@@ -43,6 +43,7 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
       switch call.method {
       case "requestPermission": self.requestPermission(result)
       case "currentToken": self.currentToken(result)
+      case "apnsEnvironment": result(ApnsTokenChannel.apnsEnvironment())
       default: result(FlutterMethodNotImplemented)
       }
     }
@@ -50,6 +51,59 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
       name: "cc.imagineering.aikoChatApp/apns/refreshes",
       binaryMessenger: registrar.messenger()
     ).setStreamHandler(self)
+  }
+
+  /// Which APNs host will accept the tokens this build mints — `development`
+  /// (sandbox) or `production`.
+  ///
+  /// READ FROM THE PROVISIONING PROFILE STAPLED TO THIS BINARY, not from
+  /// `Runner.entitlements`. That file statically says `development` and Xcode
+  /// REWRITES the key at export time from the signing profile, so the checked-in
+  /// value is the debug answer on every distribution build — "just read the
+  /// entitlements file" returns a confident wrong answer and nothing fails.
+  ///
+  /// The profile cannot drift the same way: it is embedded by the signing step
+  /// that decides the environment, in the same operation. A `--dart-define`
+  /// would have been a MIRROR of a fact settled after the Dart code is compiled;
+  /// this is the fact itself.
+  ///
+  /// Falls back to the build configuration when no profile is readable. That
+  /// direction is deliberate: an unreadable profile on a Release build means a
+  /// distribution artifact, and the failure of guessing `development` there is
+  /// the silent one we are removing (island resolves an omitted value to its
+  /// `APNS_USE_SANDBOX`, `true` on both boxes).
+  static func apnsEnvironment() -> String {
+    if let declared = apsEnvironmentFromProvisioningProfile() { return declared }
+    #if DEBUG
+      return "development"
+    #else
+      return "production"
+    #endif
+  }
+
+  /// `Entitlements.aps-environment` out of `embedded.mobileprovision`.
+  ///
+  /// The file is CMS-signed DER with the plist as a payload, so there is no
+  /// plist parser that will open it directly — the XML has to be sliced out of
+  /// the surrounding binary first. `</plist>` is matched BACKWARDS because the
+  /// signature blob trails the payload and can itself contain the bytes of a
+  /// shorter match.
+  private static func apsEnvironmentFromProvisioningProfile() -> String? {
+    guard
+      let url = Bundle.main.url(
+        forResource: "embedded", withExtension: "mobileprovision"),
+      let data = try? Data(contentsOf: url),
+      let start = data.range(of: Data("<?xml".utf8)),
+      let end = data.range(of: Data("</plist>".utf8), options: [.backwards])
+    else { return nil }
+    let plist = try? PropertyListSerialization.propertyList(
+      from: data.subdata(in: start.lowerBound..<end.upperBound),
+      options: [], format: nil)
+    guard
+      let root = plist as? [String: Any],
+      let entitlements = root["Entitlements"] as? [String: Any]
+    else { return nil }
+    return entitlements["aps-environment"] as? String
   }
 
   private func requestPermission(_ result: @escaping FlutterResult) {

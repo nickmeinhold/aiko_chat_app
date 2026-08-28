@@ -1,4 +1,5 @@
 import 'device_platform.dart';
+import 'apns_environment.dart';
 
 /// Where a push token comes from — the seam between [DeviceRegistrar]'s
 /// lifecycle logic and whichever platform SDK actually mints the token.
@@ -38,4 +39,15 @@ abstract class PushTokenSource {
   /// Which service issued these tokens, and therefore which one the island must
   /// talk to. See [DevicePlatform] for why this is not simply the OS.
   DevicePlatform get platform;
+
+  /// Which APNs host will accept this source's tokens, or null when there is no
+  /// answer to give — FCM has no such split, and a platform channel that is not
+  /// in the build cannot report one.
+  ///
+  /// Null is a real answer, not a failure: the island resolves an omitted
+  /// `apns_environment` from its own `APNS_USE_SANDBOX`, which is exactly the
+  /// behaviour we had before this field existed. Sending a WRONG value is worse
+  /// than sending none, so anything unrecognised degrades to null rather than
+  /// to a guess. See [ApnsEnvironment].
+  Future<ApnsEnvironment?> apnsEnvironment();
 }

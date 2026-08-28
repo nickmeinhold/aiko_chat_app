@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../../chat/data/chat_rest_api.dart';
 import '../data/pending_unregister_store.dart';
+import '../domain/apns_environment.dart';
 import '../domain/push_token_source.dart';
 
 /// Keeps this island's belief about "where do I push to reach this user" in step
@@ -368,7 +369,11 @@ class DeviceRegistrar {
       );
     }
     try {
-      await _api.registerDevice(platform: _source.platform, token: token);
+      await _api.registerDevice(
+        platform: _source.platform,
+        token: token,
+        apnsEnvironment: await _apnsEnvironment(),
+      );
     } on Unauthorized {
       // DEFINITELY-NOT-LANDED: the island rejected this before writing, so the
       // obligation written above is owed for a row that does not exist. Discharge
@@ -388,6 +393,32 @@ class DeviceRegistrar {
       return;
     }
     await _settle(token, generation, epoch, confirmed: true);
+  }
+
+  /// Which APNs host will accept the token we are about to register, or null to
+  /// let the island resolve it from `APNS_USE_SANDBOX`.
+  ///
+  /// Resolved PER REGISTER rather than cached at construction, because the
+  /// answer is only available once the platform channel is attached and the
+  /// registrar is built before that. It is a build-invariant fact so the repeat
+  /// reads agree; the cost is one channel hop on a path that already does a
+  /// preferences write and a POST.
+  ///
+  /// A THROW HERE MUST NOT FAIL THE REGISTER. Both shipped sources already
+  /// answer null instead of throwing, so this catch is for the seam rather than
+  /// for them: an implementation that throws would otherwise convert "we cannot
+  /// name the environment" into "this device does not register at all", which is
+  /// strictly worse than the pre-field behaviour it replaces.
+  Future<ApnsEnvironment?> _apnsEnvironment() async {
+    try {
+      return await _source.apnsEnvironment();
+    } catch (e) {
+      debugPrint(
+        'DeviceRegistrar: could not resolve the push environment, letting the '
+        'island default decide: $e',
+      );
+      return null;
+    }
   }
 
   /// The far side of every register — the check that could not be sampled early.
