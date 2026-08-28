@@ -45,9 +45,8 @@
 library;
 
 import '../../chat/domain/message.dart';
-// `encodeMultikey` — the allowlist is keyed on the canonical wire form of the
-// signer's key, so a stored entry and a live envelope compare as the same string.
 import '../../chat/domain/origin_envelope.dart';
+import 'ring_consent.dart';
 
 /// The pinned invitation body. **Signed and durable — never edit this string.**
 /// A client that predates the feature renders it as a readable line of text
@@ -238,15 +237,17 @@ CallEnd? admitCallEnd(
   Message message, {
   required String meUserId,
 
-  /// The SAME consent set [admitRing] is given. A hangup is admitted by exactly
+  /// The SAME consent [admitRing] is given. A hangup is admitted by exactly
   /// the rule that admitted the ring — see [_isCallEndShape].
-  required Set<String> ringAllowedKeys,
+  required RingConsent consent,
 }) {
   if (!_isCallEndShape(message)) return null;
   if (!_hasVerifiedOrigin(message)) return null;
   final origin = message.origin;
   if (origin == null) return null; // verified implies present
-  if (!_mayRing(message.sender, origin, ringAllowedKeys)) return null;
+  if (!_mayRing(message.sender, origin, message.channelId, consent)) {
+    return null;
+  }
   final from = message.sender.userId!;
   if (from == meUserId) return null;
   final target = message.replyToId!;
@@ -475,7 +476,8 @@ class CallInvite {
 bool _mayRing(
   MessageSender sender,
   OriginEnvelope origin,
-  Set<String> ringAllowedKeys,
+  String channelId,
+  RingConsent consent,
 ) {
   // FIRST, for EVERY sender — not only allowlisted ones (cage-match, Carnot
   // HIGH). The earlier version returned true for `human` before this check, so a
@@ -485,8 +487,11 @@ bool _mayRing(
   // refuse. Closing it at the single door rather than per-branch.
   if (sender.userId == null) return false;
   if (sender.kind == SenderKind.human) return true;
-  if (ringAllowedKeys.isEmpty) return false; // the overwhelmingly common path
-  return ringAllowedKeys.contains(encodeMultikey(origin.rawPublicKey));
+  // THE MESSAGE'S OWN CHANNEL, passed separately from the consent so the two can
+  // disagree and be caught. Deriving it from the consent would make the check
+  // vacuous; deriving the consent from the message would put the slicing inside
+  // the gate it is supposed to be checked by.
+  return consent.permits(channelId, origin.rawPublicKey);
 }
 
 CallInvite? admitRing(
@@ -494,11 +499,11 @@ CallInvite? admitRing(
   required String meUserId,
   required Set<String> blockedUserIds,
 
-  /// Multikey (`z…`) public keys this handset has consented to be rung by even
-  /// though the island does not call them people. DEVICE-LOCAL by design — see
-  /// [_mayRing]. Empty is the correct default and preserves the old behaviour
-  /// exactly.
-  required Set<String> ringAllowedKeys,
+  /// This handset's consent to be rung by callers the island does not call
+  /// people, SCOPED TO ONE CONVERSATION. DEVICE-LOCAL by design — see
+  /// [RingConsent]. [RingConsent.none] is the correct default and preserves the
+  /// pre-feature behaviour exactly.
+  required RingConsent consent,
   required bool conversationMuted,
   required bool isDm,
   required DateTime now,
@@ -515,7 +520,9 @@ CallInvite? admitRing(
   if (message.originCryptoValid != true) return null;
   final origin = message.origin;
   if (origin == null) return null; // belt-and-braces: valid implies present.
-  if (!_mayRing(message.sender, origin, ringAllowedKeys)) return null;
+  if (!_mayRing(message.sender, origin, message.channelId, consent)) {
+    return null;
+  }
   if (!isDm) return null;
   if (blockedUserIds.contains(message.sender.userId)) return null;
   if (conversationMuted) return null;

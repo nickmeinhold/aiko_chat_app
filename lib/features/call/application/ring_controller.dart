@@ -204,11 +204,15 @@ class RingController extends Notifier<CallInvite?> {
     // ring. Both consumers below run the SAME clauses — the first version gave
     // the memory a weaker key than the live path, so a third party or another
     // channel could pre-poison a ring the live path would have refused.
-    final end = admitCallEnd(
-      m,
-      meUserId: me,
-      ringAllowedKeys: ref.read(ringAllowedKeysProvider),
-    );
+    // SLICED ONCE, from the message's own channel, and handed to BOTH gates.
+    // Two independent narrowings would be two chances to name a different room
+    // — and the start/stop pair having different admission rules is the exact
+    // defect rounds 6-7 found (an allowlisted caller that could wake the handset
+    // and then not silence it). One slice, one scope, both doors.
+    final consent = ref
+        .read(ringConsentByChannelProvider.notifier)
+        .consentIn(m.channelId);
+    final end = admitCallEnd(m, meUserId: me, consent: consent);
     if (end != null) {
       (_ended[end.targetServerMsgId] ??= []).add((end: end, at: now));
       final live = _live;
@@ -219,7 +223,7 @@ class RingController extends Notifier<CallInvite?> {
       m,
       meUserId: me,
       blockedUserIds: ref.read(blockedUserIdsProvider),
-      ringAllowedKeys: ref.read(ringAllowedKeysProvider),
+      consent: consent,
       conversationMuted: _isMuted(m),
       isDm: _isDm(m),
       now: now,

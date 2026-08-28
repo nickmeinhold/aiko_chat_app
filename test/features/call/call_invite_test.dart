@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
+import 'package:aiko_chat_app/features/call/domain/ring_consent.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -95,7 +96,10 @@ void main() {
     m,
     meUserId: me,
     blockedUserIds: blocked,
-    ringAllowedKeys: allowedKeys,
+    // Scoped to the message's OWN channel, so these cases keep testing what
+    // they were written to test. The scoping property itself is exercised
+    // separately, below.
+    consent: RingConsent.inChannel(channelId: m.channelId, keys: allowedKeys),
     conversationMuted: muted,
     isDm: isDm,
     now: now,
@@ -427,7 +431,7 @@ void main() {
       final ended = admitCallEnd(
         callEnd(kind: SenderKind.llm, key: residentKey),
         meUserId: me,
-        ringAllowedKeys: allowed,
+        consent: RingConsent.inChannel(channelId: 'dm:aaa:bbb', keys: allowed),
       );
       expect(
         ended,
@@ -443,7 +447,10 @@ void main() {
         admitCallEnd(
           callEnd(kind: SenderKind.llm, key: strangerKey),
           meUserId: me,
-          ringAllowedKeys: {mk(residentKey)},
+          consent: RingConsent.inChannel(
+            channelId: 'dm:aaa:bbb',
+            keys: {mk(residentKey)},
+          ),
         ),
         isNull,
       );
@@ -451,6 +458,175 @@ void main() {
 
     test('a human still rings without appearing on any allowlist', () {
       expect(admit(invite(key: strangerKey)), isNotNull);
+    });
+
+    group('consent is PER CONVERSATION (Nick, 2026-08-26)', () {
+      const here = 'dm:aaa:bbb';
+      const elsewhere = 'dm:aaa:ccc';
+
+      test('a key consented HERE rings here', () {
+        expect(
+          admitRing(
+            invite(kind: SenderKind.llm, key: residentKey, channelId: here),
+            meUserId: me,
+            blockedUserIds: const {},
+            consent: RingConsent.inChannel(
+              channelId: here,
+              keys: {mk(residentKey)},
+            ),
+            conversationMuted: false,
+            isDm: true,
+            now: now,
+          ),
+          isNotNull,
+        );
+      });
+
+      test(
+        'the SAME key does NOT ring in another conversation — the whole ruling',
+        () {
+          // The global version admitted this. A resident agent may hold membership
+          // in many channels, so "blessed in one room" leaking into every room it
+          // can reach is not a corner case, it is the ordinary shape of the thing.
+          expect(
+            admitRing(
+              invite(
+                kind: SenderKind.llm,
+                key: residentKey,
+                channelId: elsewhere,
+              ),
+              meUserId: me,
+              blockedUserIds: const {},
+              consent: RingConsent.inChannel(
+                channelId: elsewhere,
+                keys: {mk(residentKey)},
+              ),
+              conversationMuted: false,
+              isDm: true,
+              now: now,
+            ),
+            isNotNull,
+            reason: 'precondition: consent granted THERE does admit there',
+          );
+          expect(
+            admitRing(
+              invite(
+                kind: SenderKind.llm,
+                key: residentKey,
+                channelId: elsewhere,
+              ),
+              meUserId: me,
+              blockedUserIds: const {},
+              consent: RingConsent.inChannel(
+                channelId: here,
+                keys: {mk(residentKey)},
+              ),
+              conversationMuted: false,
+              isDm: true,
+              now: now,
+            ),
+            isNull,
+          );
+        },
+      );
+
+      test('a MIS-SCOPED consent is refused, not silently trusted — the gate '
+          're-checks the slice rather than believing the caller', () {
+        // The defence against the defect this feature has already produced
+        // twice: a caller that pairs one room's keys with another room's id.
+        // The keys match, the sender is consented, and it still must not ring.
+        final consent = RingConsent.inChannel(
+          channelId: elsewhere,
+          keys: {mk(residentKey)},
+        );
+        expect(consent.permits(here, decodeMultikey(mk(residentKey))), isFalse);
+        expect(
+          admitRing(
+            invite(kind: SenderKind.llm, key: residentKey, channelId: here),
+            meUserId: me,
+            blockedUserIds: const {},
+            consent: consent,
+            conversationMuted: false,
+            isDm: true,
+            now: now,
+          ),
+          isNull,
+        );
+      });
+
+      test('the stop gate is scoped identically to the start gate', () {
+        // Rounds 6-7 found the start and stop gates diverging once before. A
+        // per-conversation start with a global stop would be the same defect
+        // wearing the new scope.
+        expect(
+          admitCallEnd(
+            callEnd(kind: SenderKind.llm, key: residentKey),
+            meUserId: me,
+            consent: RingConsent.inChannel(
+              channelId: elsewhere,
+              keys: {mk(residentKey)},
+            ),
+          ),
+          isNull,
+          reason:
+              'the end arrives in dm:aaa:bbb; consent for another room must not '
+              'admit it, or a caller could be consented to stop rings it was '
+              'never allowed to start',
+        );
+      });
+
+      test('a hangup admitted in room B cannot end room A\'s ring — the stop '
+          'CORRELATION is scoped, not just the stop ADMISSION', () {
+        // Tesla asked for this at the confirming round, and was right to: the
+        // per-conversation change scoped what `admitCallEnd` ADMITS, while the
+        // `_ended` ledger is keyed on `targetServerMsgId` alone. If correlation
+        // were unscoped, an agent consented only in room B could pass the stop
+        // gate there and silence — or pre-poison — a ring living in room A.
+        //
+        // It cannot, and the reason is `endsInvite` comparing all three fields
+        // rather than the id alone (call_invite.dart). Both the live path and
+        // the memory path run it, so this pins the property both share.
+        final ringInA = CallInvite(
+          inviteId: 'c-1',
+          serverMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+          channelId: here,
+          from: const MessageSender(userId: 'agent', kind: SenderKind.llm),
+          startedAt: now,
+        );
+        const endFromB = CallEnd(
+          targetServerMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+          fromUserId: 'agent',
+          channelId: elsewhere,
+        );
+
+        expect(
+          endsInvite(endFromB, ringInA),
+          isFalse,
+          reason:
+              'same target id, same caller, DIFFERENT room — the covenant lives '
+              'in B and the ring lives in A',
+        );
+        expect(
+          endsInvite(
+            const CallEnd(
+              targetServerMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+              fromUserId: 'agent',
+              channelId: here,
+            ),
+            ringInA,
+          ),
+          isTrue,
+          reason: 'positive control — the same end IN room A does correlate',
+        );
+      });
+
+      test('RingConsent.none admits nobody anywhere', () {
+        expect(
+          RingConsent.none.permits(here, decodeMultikey(mk(residentKey))),
+          isFalse,
+        );
+        expect(RingConsent.none.channelId, isNull);
+      });
     });
   });
 
@@ -496,7 +672,7 @@ void main() {
     /// miss the class the round-2 finding lived in — a memory whose key was
     /// weaker than the live path's.
     bool stops(Message m, {CallInvite? ringing}) {
-      final end = admitCallEnd(m, meUserId: me, ringAllowedKeys: const {});
+      final end = admitCallEnd(m, meUserId: me, consent: RingConsent.none);
       return end != null && endsInvite(end, ringing ?? live);
     }
 
@@ -532,7 +708,7 @@ void main() {
         final judged = admitCallEnd(
           end(),
           meUserId: me,
-          ringAllowedKeys: const {},
+          consent: RingConsent.none,
         );
         expect(judged, isNotNull);
         expect(judged!.targetServerMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
@@ -556,7 +732,7 @@ void main() {
         deliveryState: DeliveryState.sent,
       );
       expect(
-        admitCallEnd(anon, meUserId: me, ringAllowedKeys: const {}),
+        admitCallEnd(anon, meUserId: me, consent: RingConsent.none),
         isNull,
       );
     });
@@ -575,7 +751,7 @@ void main() {
         deliveryState: DeliveryState.sent,
       );
       expect(
-        admitCallEnd(robot, meUserId: me, ringAllowedKeys: const {}),
+        admitCallEnd(robot, meUserId: me, consent: RingConsent.none),
         isNull,
       );
     });
