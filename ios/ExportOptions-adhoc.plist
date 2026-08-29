@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Ad-hoc export recipe, for closing the APNs DEVICE gate without an upload.
+  Used by: flutter build ipa --export-options-plist ios/ExportOptions-adhoc.plist
+
+  WHY THIS EXISTS ALONGSIDE ExportOptions.plist. The device gate is "a handset
+  rang from a DISTRIBUTION-signed build", because only a distribution profile
+  carries `aps-environment: production`, and a production APNs token is valid
+  only against api.push.apple.com. TestFlight is the obvious way to get such a
+  build onto a phone, but it is not the only one: `release-testing` signs with
+  the same distribution certificate and therefore mints production tokens too,
+  while installing straight to a registered device.
+
+  What that buys, measured 2026-08-29: no App Store Connect upload (so the
+  `pubspec.yaml` build number need not be bumped past the existing VALID build
+  11), no Beta App Review, and nothing reaching an external tester. The island
+  cannot see the distribution channel at all — it routes on the
+  `apns_environment` column of the device row — so ad-hoc and TestFlight are
+  indistinguishable to it.
+
+  PRECONDITION: the target device must be registered and ENABLED on the team,
+  since its UDID is baked into the ad-hoc profile. Nick's iPhone 14 Pro is.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>release-testing</string>
+	<key>teamID</key>
+	<string>SPL85G447K</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>uploadSymbols</key>
+	<false/>
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>
