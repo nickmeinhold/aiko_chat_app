@@ -233,7 +233,7 @@ bool isRenderableCallInvite(Message message, {required bool isMine}) =>
     message.sender.kind == SenderKind.human &&
     (isMine || _hasVerifiedOrigin(message));
 
-CallEnd? admitCallEnd(
+CallEndDecision admitCallEnd(
   Message message, {
   required String meUserId,
 
@@ -241,20 +241,33 @@ CallEnd? admitCallEnd(
   /// the rule that admitted the ring — see [_isCallEndShape].
   required RingConsent consent,
 }) {
-  if (!_isCallEndShape(message)) return null;
-  if (!_hasVerifiedOrigin(message)) return null;
-  final origin = message.origin;
-  if (origin == null) return null; // verified implies present
-  if (!_mayRing(message.sender, origin, message.channelId, consent)) {
-    return null;
+  if (!_isCallEndShape(message)) {
+    return const CallEndRefused(RingRefusal.notAnEnd);
   }
+  if (!_hasVerifiedOrigin(message)) {
+    return const CallEndRefused(RingRefusal.unverifiedOrigin);
+  }
+  final origin = message.origin;
+  if (origin == null) {
+    // verified implies present
+    return const CallEndRefused(RingRefusal.originMissing);
+  }
+  final notPermitted = _ringRefusalFor(
+    message.sender,
+    origin,
+    message.channelId,
+    consent,
+  );
+  if (notPermitted != null) return CallEndRefused(notPermitted);
   final from = message.sender.userId!;
-  if (from == meUserId) return null;
+  if (from == meUserId) return const CallEndRefused(RingRefusal.ownEnd);
   final target = message.replyToId!;
-  return CallEnd(
-    targetServerMsgId: target,
-    fromUserId: from,
-    channelId: message.channelId,
+  return CallEndAdmitted(
+    CallEnd(
+      targetServerMsgId: target,
+      fromUserId: from,
+      channelId: message.channelId,
+    ),
   );
 }
 
@@ -473,7 +486,147 @@ class CallInvite {
 ///
 /// Everything else still applies: block, mute, DM-only, freshness, own-echo. The
 /// allowlist widens ONE gate; it is not a bypass.
-bool _mayRing(
+/// Why a message did not ring this handset.
+///
+/// ## Why this exists as a TYPE rather than a log line
+///
+/// [admitRing] used to answer "no" eleven different ways with one
+/// indistinguishable `null`. That is unobservable by construction: on
+/// 2026-08-29, learning which gate had refused a real ring required hand-
+/// patching nine `debugPrint`s into this pure function on a throwaway branch,
+/// and the answer still had to be inferred (claude-tasks#3591, #3588).
+///
+/// Naming the reason in the RETURN TYPE rather than injecting a logger keeps
+/// [admitRing] pure — it stays a total function of its arguments, trivially
+/// testable, with no I/O at the trust boundary — while making silence
+/// unrepresentable. Tests get stronger for free: `expect(reason,
+/// RingRefusal.stale)` pins which gate fired, where `expect(result, isNull)`
+/// could not tell a freshness refusal from a signature refusal, and passed
+/// either way.
+///
+/// ## [noteworthy] is not a logging preference — it protects the log
+///
+/// The ring gate sees EVERY inbound message: [RingController] funnels the whole
+/// cross-channel stream through it, because a call must reach you in a DM you
+/// are not looking at. So [notAnInvite] fires for every ordinary chat message
+/// anyone sends.
+///
+/// Logging that would fill a 500-record ring buffer with `notAnInvite` in
+/// seconds and evict the events worth keeping — the diagnostic tool destroying
+/// its own value on contact with the hot path. The distinction is therefore
+/// structural rather than left to each caller's judgement: [notAnInvite] and
+/// [ownInvite] mean *this was never a ring attempt*; every other value means
+/// *someone tried to ring you and we said no*, which is the whole question.
+enum RingRefusal {
+  /// The body is not the invite sentinel — i.e. an ordinary message. The hot
+  /// path, and the reason [noteworthy] exists.
+  notAnInvite(noteworthy: false),
+
+  /// Our own invite, echoed back. Normal and constant during a call we placed.
+  ownInvite(noteworthy: false),
+
+  /// Our own hangup, echoed back. [admitCallEnd] only.
+  ownEnd(noteworthy: false),
+
+  /// The body is not the end sentinel, or carries no reply target.
+  /// [admitCallEnd] only.
+  notAnEnd(noteworthy: false),
+
+  /// `originCryptoValid != true` — unsigned, or carried-but-invalid. The
+  /// security-relevant refusal: a ring that could not prove who sent it.
+  unverifiedOrigin(noteworthy: true),
+
+  /// Verified but the envelope is absent — belt-and-braces; valid implies
+  /// present, so this firing at all means an upstream invariant broke.
+  originMissing(noteworthy: true),
+
+  /// The sender has no `userId`. A malformed or hostile island row: whoever may
+  /// wake you must be someone you can name and refuse, and
+  /// `blockedUserIds.contains(null)` never matches (cage-match, Carnot HIGH).
+  anonymousSender(noteworthy: true),
+
+  /// A non-human sender this conversation has not consented to be rung by.
+  /// Expected whenever an agent calls before you allow it — and the single most
+  /// useful line in a "why didn't the bot's call ring?" report.
+  consentWithheld(noteworthy: true),
+
+  /// Not a DM. Channel-wide ringing is gated until per-call consent exists.
+  notDirectMessage(noteworthy: true),
+
+  /// The sender is blocked.
+  senderBlocked(noteworthy: true),
+
+  /// The conversation is muted.
+  conversationMuted(noteworthy: true),
+
+  /// Signed in the future by a skewed clock. Refused rather than admitted: a
+  /// bad clock would otherwise ring forever.
+  clockSkew(noteworthy: true),
+
+  /// Older than [kCallInviteFreshness].
+  ///
+  /// THE ONE TO WATCH. A push-woken invite necessarily includes APNs delivery,
+  /// a human noticing, a cold start and a handshake in its measured age, so this
+  /// firing on a real push wake is the confirmation #3588 has been waiting for.
+  /// It was previously indistinguishable from every other refusal.
+  stale(noteworthy: true),
+
+  /// No server id, so a hangup could never name it (`reply_to` is an FK onto
+  /// `messages.id`). Unreachable via either production producer.
+  noServerId(noteworthy: true);
+
+  const RingRefusal({required this.noteworthy});
+
+  /// Whether this refusal is worth a log record. See the enum doc — this
+  /// protects the ring buffer from the hot path, it is not a verbosity knob.
+  final bool noteworthy;
+}
+
+/// The outcome of the ring trust gate: admitted with an invitation, or refused
+/// with a named reason.
+///
+/// Sealed so a caller must handle both arms. That is the point of the shape
+/// rather than a nullable return: the previous signature let `null` be dropped
+/// on the floor silently, which is exactly how ten distinct refusals became one
+/// unobservable outcome.
+sealed class RingDecision {
+  const RingDecision();
+}
+
+final class RingAdmitted extends RingDecision {
+  const RingAdmitted(this.invite);
+  final CallInvite invite;
+}
+
+final class RingRefused extends RingDecision {
+  const RingRefused(this.reason);
+  final RingRefusal reason;
+}
+
+/// The same shape for the hangup gate.
+sealed class CallEndDecision {
+  const CallEndDecision();
+}
+
+final class CallEndAdmitted extends CallEndDecision {
+  const CallEndAdmitted(this.end);
+  final CallEnd end;
+}
+
+final class CallEndRefused extends CallEndDecision {
+  const CallEndRefused(this.reason);
+  final RingRefusal reason;
+}
+
+/// The shared may-wake-me rule, returning WHY not — or null when permitted.
+///
+/// Returns a reason rather than a bool so its two distinct refusals stay
+/// distinguishable downstream. They are very different diagnoses: a null
+/// `userId` is a malformed or hostile island row, while a withheld consent is
+/// the ordinary, expected answer for an agent this conversation has not allowed
+/// yet. Collapsing them to `false` is a smaller version of the same defect this
+/// whole change exists to fix.
+RingRefusal? _ringRefusalFor(
   MessageSender sender,
   OriginEnvelope origin,
   String channelId,
@@ -485,16 +638,18 @@ bool _mayRing(
   // and then could not be blocked: `blockedUserIds.contains(null)` never
   // matches. Whoever may wake you must always be someone you can name and
   // refuse. Closing it at the single door rather than per-branch.
-  if (sender.userId == null) return false;
-  if (sender.kind == SenderKind.human) return true;
+  if (sender.userId == null) return RingRefusal.anonymousSender;
+  if (sender.kind == SenderKind.human) return null;
   // THE MESSAGE'S OWN CHANNEL, passed separately from the consent so the two can
   // disagree and be caught. Deriving it from the consent would make the check
   // vacuous; deriving the consent from the message would put the slicing inside
   // the gate it is supposed to be checked by.
-  return consent.permits(channelId, origin.rawPublicKey);
+  return consent.permits(channelId, origin.rawPublicKey)
+      ? null
+      : RingRefusal.consentWithheld;
 }
 
-CallInvite? admitRing(
+RingDecision admitRing(
   Message message, {
   required String meUserId,
   required Set<String> blockedUserIds,
@@ -508,8 +663,12 @@ CallInvite? admitRing(
   required bool isDm,
   required DateTime now,
 }) {
-  if (!isCallInviteBody(message.body)) return null;
-  if (message.sender.userId == meUserId) return null;
+  if (!isCallInviteBody(message.body)) {
+    return const RingRefused(RingRefusal.notAnInvite);
+  }
+  if (message.sender.userId == meUserId) {
+    return const RingRefused(RingRefusal.ownInvite);
+  }
   // The signature check — see the doc above. `originCryptoValid` is computed
   // ONCE at ingest by the repository; `true` is the only admitting value
   // (`null` = unsigned/unverified, `false` = carried-but-invalid).
@@ -517,15 +676,28 @@ CallInvite? admitRing(
   // MOVED AHEAD OF THE KIND GATE, and the order is now load-bearing rather than
   // incidental: the kind gate below may consult the SIGNER'S KEY, and a key read
   // off an unverified envelope is a key anyone can claim. Verify, then consult.
-  if (message.originCryptoValid != true) return null;
-  final origin = message.origin;
-  if (origin == null) return null; // belt-and-braces: valid implies present.
-  if (!_mayRing(message.sender, origin, message.channelId, consent)) {
-    return null;
+  if (message.originCryptoValid != true) {
+    return const RingRefused(RingRefusal.unverifiedOrigin);
   }
-  if (!isDm) return null;
-  if (blockedUserIds.contains(message.sender.userId)) return null;
-  if (conversationMuted) return null;
+  final origin = message.origin;
+  if (origin == null) {
+    // belt-and-braces: valid implies present.
+    return const RingRefused(RingRefusal.originMissing);
+  }
+  final notPermitted = _ringRefusalFor(
+    message.sender,
+    origin,
+    message.channelId,
+    consent,
+  );
+  if (notPermitted != null) return RingRefused(notPermitted);
+  if (!isDm) return const RingRefused(RingRefusal.notDirectMessage);
+  if (blockedUserIds.contains(message.sender.userId)) {
+    return const RingRefused(RingRefusal.senderBlocked);
+  }
+  if (conversationMuted) {
+    return const RingRefused(RingRefusal.conversationMuted);
+  }
   final signedAt = DateTime.fromMillisecondsSinceEpoch(
     origin.signedAtMs,
     isUtc: true,
@@ -534,20 +706,23 @@ CallInvite? admitRing(
   // Negative age (signed in the future by a skewed clock) is not fresh — it is
   // unreadable, and admitting it would let a bad clock ring forever.
   // `!isNegative` is the guard; `> freshness` alone would admit it.
-  if (age.isNegative || age > kCallInviteFreshness) return null;
+  if (age.isNegative) return const RingRefused(RingRefusal.clockSkew);
+  if (age > kCallInviteFreshness) return const RingRefused(RingRefusal.stale);
   // The island's id is REFUSED here rather than carried as a null. Unreachable
   // via either production producer (see [CallInvite.serverMsgId]) — so this is
   // the door where an impossible state stops being representable, not a runtime
   // hope. A ring with no server id could never be stilled by a hangup anyway:
   // `reply_to` is an FK onto `messages.id`, so there would be nothing to name.
   final serverMsgId = message.id;
-  if (serverMsgId == null) return null;
-  return CallInvite(
-    inviteId: origin.clientMsgId,
-    serverMsgId: serverMsgId,
-    channelId: message.channelId,
-    from: message.sender,
-    startedAt: signedAt,
+  if (serverMsgId == null) return const RingRefused(RingRefusal.noServerId);
+  return RingAdmitted(
+    CallInvite(
+      inviteId: origin.clientMsgId,
+      serverMsgId: serverMsgId,
+      channelId: message.channelId,
+      from: message.sender,
+      startedAt: signedAt,
+    ),
   );
 }
 

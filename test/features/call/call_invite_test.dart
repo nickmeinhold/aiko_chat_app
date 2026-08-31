@@ -86,13 +86,18 @@ void main() {
     deliveryState: DeliveryState.sent,
   );
 
+  /// Unwraps to the pre-#3591 shape ON PURPOSE. Every assertion below was
+  /// written against `CallInvite?` and most were won in a cage-match; rewriting
+  /// 30 of them to pattern-match would be churn at a trust boundary for no gain.
+  /// The reasons get their own dedicated group instead — see
+  /// "every refusal names itself".
   CallInvite? admit(
     Message m, {
     Set<String> blocked = const {},
     Set<String> allowedKeys = const {},
     bool muted = false,
     bool isDm = true,
-  }) => admitRing(
+  }) => switch (admitRing(
     m,
     meUserId: me,
     blockedUserIds: blocked,
@@ -103,7 +108,169 @@ void main() {
     conversationMuted: muted,
     isDm: isDm,
     now: now,
-  );
+  )) {
+    RingAdmitted(:final invite) => invite,
+    RingRefused() => null,
+  };
+
+  /// The refusal REASON for the same call — the thing that did not exist before.
+  RingRefusal? refusal(
+    Message m, {
+    Set<String> blocked = const {},
+    Set<String> allowedKeys = const {},
+    bool muted = false,
+    bool isDm = true,
+  }) => switch (admitRing(
+    m,
+    meUserId: me,
+    blockedUserIds: blocked,
+    consent: RingConsent.inChannel(channelId: m.channelId, keys: allowedKeys),
+    conversationMuted: muted,
+    isDm: isDm,
+    now: now,
+  )) {
+    RingAdmitted() => null,
+    RingRefused(:final reason) => reason,
+  };
+
+  group('every refusal names itself (claude-tasks#3591)', () {
+    // The gate answered "no" eleven ways with one indistinguishable `null`.
+    // Learning WHICH way took four hours and a throwaway instrumentation
+    // branch. One case per reason, so the vocabulary cannot rot silently.
+
+    test('an ordinary message — the hot path', () {
+      expect(refusal(invite(body: 'hello')), RingRefusal.notAnInvite);
+    });
+
+    test('my own invite, echoed back', () {
+      expect(refusal(invite(from: me)), RingRefusal.ownInvite);
+    });
+
+    test('an unsigned invite', () {
+      expect(refusal(invite(cryptoValid: null)), RingRefusal.unverifiedOrigin);
+    });
+
+    test('a carried-but-INVALID signature', () {
+      expect(refusal(invite(cryptoValid: false)), RingRefusal.unverifiedOrigin);
+    });
+
+    test('a sender with no account', () {
+      expect(refusal(invite(hasAccount: false)), RingRefusal.anonymousSender);
+    });
+
+    test('a non-human without this conversation\'s consent', () {
+      expect(
+        refusal(invite(kind: SenderKind.llm)),
+        RingRefusal.consentWithheld,
+      );
+    });
+
+    test('not a DM', () {
+      expect(refusal(invite(), isDm: false), RingRefusal.notDirectMessage);
+    });
+
+    test('a blocked sender', () {
+      expect(
+        refusal(invite(), blocked: {robin}),
+        RingRefusal.senderBlocked,
+      );
+    });
+
+    test('a muted conversation', () {
+      expect(refusal(invite(), muted: true), RingRefusal.conversationMuted);
+    });
+
+    test('signed in the FUTURE by a skewed clock', () {
+      expect(
+        refusal(invite(age: const Duration(seconds: -5))),
+        RingRefusal.clockSkew,
+      );
+    });
+
+    test('older than the freshness window — THE ONE #3588 is waiting for', () {
+      // A push-woken invite necessarily carries APNs delivery, a human
+      // noticing, a cold start and a handshake inside its measured age. If this
+      // reason appears in a report from a real suspended-phone wake, the
+      // freshness gate is what refused the ring — the observation four hours of
+      // instrumentation could not produce, because it was one `null` among ten.
+      expect(
+        refusal(invite(age: kCallInviteFreshness + const Duration(seconds: 1))),
+        RingRefusal.stale,
+      );
+    });
+
+    test('a fresh, signed, permitted invite is ADMITTED', () {
+      // The positive control. Without it every test above would still pass if
+      // `admitRing` refused unconditionally.
+      expect(refusal(invite()), isNull);
+      expect(admit(invite()), isNotNull);
+    });
+
+    test('NO REASON IS UNREACHABLE — the vocabulary has no dead values', () {
+      // The class-level check. A reason nobody can produce is worse than no
+      // reason: it reads as covered in the enum and never appears in a report,
+      // so a future refactor can orphan a gate and nothing goes red. Every
+      // value must be witnessed by a case above or by a hangup case, and the
+      // two `noServerId`/`originMissing` values are witnessed as DELIBERATELY
+      // unreachable rather than quietly absent.
+      const witnessedByRingCases = {
+        RingRefusal.notAnInvite,
+        RingRefusal.ownInvite,
+        RingRefusal.unverifiedOrigin,
+        RingRefusal.anonymousSender,
+        RingRefusal.consentWithheld,
+        RingRefusal.notDirectMessage,
+        RingRefusal.senderBlocked,
+        RingRefusal.conversationMuted,
+        RingRefusal.clockSkew,
+        RingRefusal.stale,
+      };
+      const witnessedByEndCases = {RingRefusal.notAnEnd, RingRefusal.ownEnd};
+      // Both are belt-and-braces guards on states the type system already makes
+      // impossible (`originCryptoValid == true` implies `origin != null`; a
+      // production producer always carries a server id). They exist so an
+      // upstream invariant breaking is LOUD rather than a crash, and their
+      // unreachability is the property, not an omission.
+      const deliberatelyUnreachable = {
+        RingRefusal.originMissing,
+        RingRefusal.noServerId,
+      };
+      expect(
+        {
+          ...witnessedByRingCases,
+          ...witnessedByEndCases,
+          ...deliberatelyUnreachable,
+        },
+        containsAll(RingRefusal.values),
+        reason: 'a RingRefusal value exists that no test accounts for',
+      );
+    });
+
+    test('the hot path is NOT noteworthy — this protects the ring buffer', () {
+      // `admitRing` sees EVERY inbound message, so `notAnInvite` fires for every
+      // ordinary chat message. Flipping it to noteworthy would fill a 500-record
+      // buffer with it in seconds and evict the events worth keeping — the
+      // diagnostic tool destroying its own value. Not a verbosity preference.
+      expect(RingRefusal.notAnInvite.noteworthy, isFalse);
+      expect(RingRefusal.ownInvite.noteworthy, isFalse);
+      expect(RingRefusal.notAnEnd.noteworthy, isFalse);
+      expect(RingRefusal.ownEnd.noteworthy, isFalse);
+      // Everything else means somebody tried to ring you and the gate said no.
+      for (final r in RingRefusal.values) {
+        if (r case RingRefusal.notAnInvite ||
+            RingRefusal.ownInvite ||
+            RingRefusal.notAnEnd ||
+            RingRefusal.ownEnd) {
+          continue;
+        }
+        expect(
+          r.noteworthy,
+          isTrue,
+          reason: '$r is a refused ring attempt and must be observable',
+        );
+      }
+    });
+  });
 
   group('the pinned sentinel', () {
     // GOLDEN. This string is signed and written to permanent island history, so
@@ -435,7 +602,7 @@ void main() {
       );
       expect(
         ended,
-        isNotNull,
+        isA<CallEndAdmitted>(),
         reason: 'the consented caller must be able to stop its own ring',
       );
     });
@@ -452,7 +619,11 @@ void main() {
             keys: {mk(residentKey)},
           ),
         ),
-        isNull,
+        isA<CallEndRefused>().having(
+          (r) => r.reason,
+          'reason',
+          RingRefusal.consentWithheld,
+        ),
       );
     });
 
@@ -478,7 +649,7 @@ void main() {
             isDm: true,
             now: now,
           ),
-          isNotNull,
+          isA<RingAdmitted>(),
         );
       });
 
@@ -505,7 +676,7 @@ void main() {
               isDm: true,
               now: now,
             ),
-            isNotNull,
+            isA<RingAdmitted>(),
             reason: 'precondition: consent granted THERE does admit there',
           );
           expect(
@@ -525,7 +696,15 @@ void main() {
               isDm: true,
               now: now,
             ),
-            isNull,
+            // Named, so a future refactor that starts refusing this for the
+            // WRONG reason (say, by tripping the freshness clause) cannot pass
+            // by still being a refusal. That substitution was invisible while
+            // every refusal was the same `null`.
+            isA<RingRefused>().having(
+              (r) => r.reason,
+              'reason',
+              RingRefusal.consentWithheld,
+            ),
           );
         },
       );
@@ -550,7 +729,11 @@ void main() {
             isDm: true,
             now: now,
           ),
-          isNull,
+          isA<RingRefused>().having(
+            (r) => r.reason,
+            'reason',
+            RingRefusal.consentWithheld,
+          ),
         );
       });
 
@@ -567,7 +750,11 @@ void main() {
               keys: {mk(residentKey)},
             ),
           ),
-          isNull,
+          isA<CallEndRefused>().having(
+            (r) => r.reason,
+            'reason',
+            RingRefusal.consentWithheld,
+          ),
           reason:
               'the end arrives in dm:aaa:bbb; consent for another room must not '
               'admit it, or a caller could be consented to stop rings it was '
@@ -672,7 +859,14 @@ void main() {
     /// miss the class the round-2 finding lived in — a memory whose key was
     /// weaker than the live path's.
     bool stops(Message m, {CallInvite? ringing}) {
-      final end = admitCallEnd(m, meUserId: me, consent: RingConsent.none);
+      final end = switch (admitCallEnd(
+        m,
+        meUserId: me,
+        consent: RingConsent.none,
+      )) {
+        CallEndAdmitted(:final end) => end,
+        CallEndRefused() => null,
+      };
       return end != null && endsInvite(end, ringing ?? live);
     }
 
@@ -705,13 +899,14 @@ void main() {
         // The round-2 shape: the gate used to take `live` and answer a single
         // fused question, so the out-of-order memory had to invent its own,
         // weaker, key. Split, both consumers run identical clauses.
-        final judged = admitCallEnd(
+        final decision = admitCallEnd(
           end(),
           meUserId: me,
           consent: RingConsent.none,
         );
-        expect(judged, isNotNull);
-        expect(judged!.targetServerMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
+        expect(decision, isA<CallEndAdmitted>());
+        final judged = (decision as CallEndAdmitted).end;
+        expect(judged.targetServerMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
         expect(judged.fromUserId, robin);
         expect(judged.channelId, 'dm:aaa:bbb');
       },
@@ -733,7 +928,17 @@ void main() {
       );
       expect(
         admitCallEnd(anon, meUserId: me, consent: RingConsent.none),
-        isNull,
+        // `notAnEnd`, NOT `anonymousSender` — and this is the change earning
+        // its keep on its first day. `_isCallEndShape` already requires a
+        // non-null `userId`, so an author-less end never reaches the permission
+        // gate at all. The first draft of this assertion guessed
+        // `anonymousSender` and the type caught it: while both were `null`, a
+        // wrong belief about WHICH gate fires was untestable.
+        isA<CallEndRefused>().having(
+          (r) => r.reason,
+          'reason',
+          RingRefusal.notAnEnd,
+        ),
       );
     });
 
@@ -752,7 +957,11 @@ void main() {
       );
       expect(
         admitCallEnd(robot, meUserId: me, consent: RingConsent.none),
-        isNull,
+        isA<CallEndRefused>().having(
+          (r) => r.reason,
+          'reason',
+          RingRefusal.consentWithheld,
+        ),
       );
     });
 

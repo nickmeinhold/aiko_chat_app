@@ -16,6 +16,7 @@ import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../moderation/application/moderation_controller.dart';
 import '../domain/call_invite.dart';
+import 'ring_telemetry.dart';
 import 'ring_allowlist_provider.dart';
 
 /// The invitation currently ringing, or null.
@@ -29,6 +30,11 @@ final incomingRingProvider = NotifierProvider<RingController, CallInvite?>(
 );
 
 class RingController extends Notifier<CallInvite?> {
+  /// Read per-use rather than cached in a field: `build()` runs again on every
+  /// `chatRepositoryProvider` rebuild, and a field captured there would outlive
+  /// the container it came from.
+  RingTelemetry get _telemetry => ref.read(ringTelemetryProvider);
+
   StreamSubscription<Message>? _sub;
   Timer? _expiry;
 
@@ -212,14 +218,21 @@ class RingController extends Notifier<CallInvite?> {
     final consent = ref
         .read(ringConsentByChannelProvider.notifier)
         .consentIn(m.channelId);
-    final end = admitCallEnd(m, meUserId: me, consent: consent);
-    if (end != null) {
-      (_ended[end.targetServerMsgId] ??= []).add((end: end, at: now));
-      final live = _live;
-      if (live != null && endsInvite(end, live)) stopRinging();
-      return;
+    switch (admitCallEnd(m, meUserId: me, consent: consent)) {
+      case CallEndAdmitted(:final end):
+        (_ended[end.targetServerMsgId] ??= []).add((end: end, at: now));
+        final live = _live;
+        if (live != null && endsInvite(end, live)) stopRinging();
+        return;
+      case CallEndRefused(:final reason):
+        // A refused END falls THROUGH to the ring gate — it is not a rejection
+        // of the message, only of one reading of it. `notAnEnd` is the ordinary
+        // case for every invite that arrives. Only a refusal that is noteworthy
+        // AND not simply "this is not an end" is worth a record, or the buffer
+        // fills with the shape of every message that is not a hangup.
+        if (reason.noteworthy) _telemetry.endRefused(m.channelId, reason);
     }
-    final invite = admitRing(
+    final decision = admitRing(
       m,
       meUserId: me,
       blockedUserIds: ref.read(blockedUserIdsProvider),
@@ -228,7 +241,18 @@ class RingController extends Notifier<CallInvite?> {
       isDm: _isDm(m),
       now: now,
     );
-    if (invite == null) return;
+    final CallInvite invite;
+    switch (decision) {
+      case RingRefused(:final reason):
+        // THE LINE THAT DID NOT EXIST. Ten distinct refusals used to leave here
+        // as one indistinguishable `null`, which is why learning that a real
+        // push-woken ring had been refused for staleness took four hours and a
+        // throwaway instrumentation branch (claude-tasks#3588, #3591).
+        if (reason.noteworthy) _telemetry.ringRefused(m.channelId, reason);
+        return;
+      case RingAdmitted(invite: final admitted):
+        invite = admitted;
+    }
     // Already dead on arrival: its hangup got here first. Settle rather than
     // ring, so an at-least-once replay cannot ring either. Matched through the
     // SAME predicate the live path uses, so a remembered end can never suppress
@@ -263,6 +287,11 @@ class RingController extends Notifier<CallInvite?> {
     _expiry?.cancel();
     _expiry = null;
     _live = invite;
+    // The POSITIVE CONTROL for the refusal lines above. Without an admitted
+    // record, an empty report cannot distinguish "no call arrived" from
+    // "logging is broken" — and an instrument that reads the same either way is
+    // not an instrument.
+    _telemetry.ringAdmitted(invite.channelId, now.difference(invite.startedAt));
     // ONE equation of motion. Arming an absolute `kCallRingDuration` here while
     // `_republish` derived the remaining time from `startedAt` meant a ring's
     // length depended on whether a rebuild happened to occur: an invite signed
