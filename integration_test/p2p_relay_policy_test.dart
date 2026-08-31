@@ -76,15 +76,51 @@
 ///     #   --dart-define=TURN_URL=turns:chat.enspyr.co:443
 ///     #   --dart-define=TURN_USER=<session-issued>  --dart-define=TURN_PASS=<session-issued>
 ///
-/// **Two live details, before anyone reads a red as a verdict** (island tab):
-/// `bind_addresses: 10.0.0.22` on imagineering is a secondary IP and silently
-/// kills the UDP relay if `rtc.node_ip` drifts from it (claude-tasks#3133); and
-/// `deny_peer_cidrs: 100.64.0.0/10` means the TURN **refuses to relay into CGNAT
-/// space by policy**, so a relay attempt toward such a peer fails BY DESIGN.
-/// Reading that as "relay unavailable" would be a fresh instance of the very
-/// class this file exists to close. Also claude-tasks#3353: one of seven
-/// relay-only connects failed unreproducibly, so a single green is an
-/// observation, not a distribution.
+/// **Live details, before anyone reads a red as a verdict** (island tab):
+///
+/// - `bind_addresses: 10.0.0.22` on imagineering is a secondary IP and silently
+///   kills the UDP relay if `rtc.node_ip` drifts from it (claude-tasks#3133).
+/// - claude-tasks#3353: one of seven relay-only connects failed unreproducibly,
+///   so a single green is an observation, not a distribution.
+///
+/// ### `deny_peer_cidrs: 100.64.0.0/10` — a THIRD value, not a reduced service
+///
+/// An earlier version of this header said the TURN's CGNAT deny meant "the
+/// population most likely to need a relay is partly the population it declines
+/// to relay for." **That was wrong, and wrong in the direction that gets a
+/// security control deleted.** Corrected by the island tab, which wrote the
+/// line:
+///
+/// `deny_peer_cidrs` governs `CreatePermission` — the addresses the relay will
+/// forward **to** — and does **not** gate allocation. A client *behind* CGNAT
+/// dials out and allocates normally; nothing on that path is denied. What is
+/// refused is asking the relay to send **into** CGNAT space, which is
+/// unroutable from the server anyway, and which ICE never usefully needs: you
+/// pair against a peer's server-reflexive or relay candidate, both public, not
+/// their raw host candidate. So the effect is **failed candidate pairs, not
+/// failed calls**.
+///
+/// And the provenance is the reason not to touch it: LiveKit's *default*
+/// restricted-CIDR deny refuses RFC1918, link-local and loopback but **allows**
+/// relay into `100.64.0.0/10`. The island tab's own behavioural probe found that
+/// as a real hole — invisible to any version or config check, because it is a
+/// property of the running deny-list logic rather than of the image tag — and
+/// this line is the patch. *"A relay that will forward into carrier-grade NAT
+/// space is an open relay into someone else's network."*
+///
+/// **What IS load-bearing here, and it is this file's own lesson landing on
+/// infrastructure:** a `CreatePermission` 403 is a **policy** answer, not a
+/// **capability** answer. Permitted / refused-by-policy / unreachable is a
+/// three-value thing. Fold refused-by-policy into unreachable and the instrument
+/// **understates relay availability — silently, in the direction that makes P2P
+/// look better than it is.** That is the same asymmetry `usedRelay` was fixed
+/// for, one layer down: the unknown case must not collapse into the flattering
+/// answer.
+///
+/// Honestly scoped: the mechanism and provenance above are the island tab's own
+/// probe findings. Whether a real call path *ever* targets a CGNAT peer address
+/// in practice is **reasoned, not measured** — settleable by allocating once and
+/// issuing `CreatePermission` at a 100.64 target to read 200-vs-403.
 library;
 
 import 'package:aiko_chat_app/features/call/data/loopback_signalling.dart';
