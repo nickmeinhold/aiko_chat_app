@@ -131,7 +131,6 @@ class P2pPeerSession {
   /// data channel is opened instead so the connection still has something to
   /// negotiate; a peer connection with no media and no data channel has nothing
   /// to gather candidates *for* and never leaves `new`.
-  /// Build the peer connection, attach handlers, and start signalling.
   ///
   /// **Failure completes [connected] with false rather than escaping.** The
   /// first version let a throw propagate with the completer untouched, so a

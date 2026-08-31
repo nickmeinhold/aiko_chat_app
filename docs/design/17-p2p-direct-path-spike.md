@@ -100,6 +100,56 @@ Neither of the two live decisions is pre-empted: whether the sender-anonymity de
 the ring path, and whether the SFU is a fallback or a deletion. This spike takes no position
 on either.
 
+## The dependency this spike declared, and what deletion would inherit
+
+Declaring `flutter_webrtc` looked free — the lockfile moved one line, `transitive` to
+`direct main`, no version moved. It is free *today*. What it also did was make this repo a
+party to a constraint it does not own, and neither arm of fallback-vs-deletion had costed
+that.
+
+**The pin is not a Dart preference; it is a linker fact.** `livekit_client-2.10.0/pubspec.yaml`
+holds an exact constraint with its reason attached:
+
+```yaml
+# Fix version to avoid version conflicts between WebRTC-SDK pods, which both
+# this package and flutter_webrtc depend on.
+flutter_webrtc: 1.6.0
+```
+
+Both packages depend on the same `WebRTC-SDK` CocoaPod, and one app binary can contain only
+one copy of a native framework. The invariant lives in CocoaPods, is expressed as a Dart
+version pin, and reaches us as a resolved line in a lockfile we did not write.
+
+**It has a live cost already.** `1.6.0+hotfix.1` published 2026-08-31 and we cannot take it
+while `livekit_client` is in the tree:
+
+```
+$ flutter pub upgrade --dry-run
+  flutter_webrtc 1.6.0 (1.6.0+hotfix.1 available)
+```
+
+Available, not taken — the exact `1.6.0` excludes the build-metadata variant. Resolved by
+running the resolver rather than by reasoning about pub's build-metadata semantics. That
+hotfix carries `fix(ios): restore simulator microphone capture` and a `WebRTC.xcframework`
+bump to 144.7559.10. A microphone regression on the platform the ring targets, one version
+away, held off by the SFU client.
+
+**What each arm inherits:**
+
+| | who holds `flutter_webrtc` at a pod-compatible version | what that costs |
+|---|---|---|
+| **SFU stays** | `livekit_client`'s exact pin | native WebRTC upgrades arrive on LiveKit's cadence, not ours — including fixes to the media path itself |
+| **SFU deleted** | **nobody, unless we pin it here** | the constraint leaves with the package that held it; a caret would float across native framework bumps on the media path |
+
+This is not an argument for either arm. It is a line that belongs in both columns and was in
+neither. The cheap half is done: this repo's constraint is now exact (`flutter_webrtc: 1.6.0`,
+not `^1.6.0`), so the pin survives the package that motivated it. Matching the constraint to
+the invariant costs nothing while LiveKit is here and is the whole thing the day it is not.
+
+Found by Nick asking why the dependency was locked at all — a question neither the spike nor
+four adversarial families had put, because everyone read `pubspec.lock` as the authority when
+it is the weakest of the three places this constraint is written.
+
 ## Provenance
 
 Claude (app tab), 2026-09-01, overnight, at Nick's request to leave something running.
