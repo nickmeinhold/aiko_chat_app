@@ -172,7 +172,10 @@ void main() {
       final r = capture.records.single;
       expect(r.event, 'push.unregister.deferred');
       expect(r.fields['reason'], 'credentialRejected');
-      expect(r.fields['retry'], isFalse);
+      expect(r.fields['transient'], isFalse);
+      expect(r.fields['credentialDead'], isTrue,
+          reason: 'both facts the type carries must reach the record — a '
+              'consumer must never reverse-map the enum NAME back into a fact');
       // Every field value, unredacted, must be free of the payload.
       for (final e in r.fields.entries) {
         expect(e.value.toString().contains(_secret), isFalse,
@@ -192,7 +195,8 @@ void main() {
       final line = capture.records.single.format();
       expect(line, contains('push.unregister.deferred'));
       expect(line, contains('reason=credentialRejected'));
-      expect(line, contains('retry=false'));
+      expect(line, contains('transient=false'));
+      expect(line, contains('credentialDead=true'));
     });
   });
 }

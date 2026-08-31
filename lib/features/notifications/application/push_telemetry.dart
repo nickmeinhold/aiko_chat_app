@@ -177,6 +177,29 @@ class PushTelemetry {
   /// as the log line this whole change exists to fix (Tesla, round 1).
   static Map<String, Object?> _why(Object? error) {
     final f = PushFailure.of(error);
-    return {'reason': f.name, 'retry': f.transient};
+    // The DOMAIN'S OWN NAMES, both facts, no reader-side inference.
+    //
+    // Two earlier shapes were wrong in the same way and Carnot flagged the class
+    // in two consecutive rounds — the tell that round 1 patched an instance
+    // instead of the class:
+    //
+    //   'retry'  renamed the domain's `transient`, so a reader who saw `retry=`
+    //            in a report found nothing grepping the codebase, and vice
+    //            versa. It also compressed three distinct states (not worth
+    //            retrying / dead credential / recoverable after user action)
+    //            into one ambiguous boolean — entropy reintroduced at exactly
+    //            the boundary this change exists to cool.
+    //   dropping `credentialIsDead` left the record carrying ONE of the two
+    //            facts the type is built to carry, so a consumer had to
+    //            reverse-map the enum NAME back into the fact — which is the
+    //            string-parsing this whole change removes, moved one layer out.
+    //
+    // Emitting the property names verbatim means log vocabulary == code
+    // vocabulary: what a reader greps is what the compiler checks.
+    return {
+      'reason': f.name,
+      'transient': f.transient,
+      'credentialDead': f.credentialIsDead,
+    };
   }
 }
