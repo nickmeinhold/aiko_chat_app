@@ -392,13 +392,14 @@ void main() {
           RingRefusal.values.where((r) => r.startGate).toSet();
       final declaredStop = RingRefusal.values.where((r) => r.stopGate).toSet();
 
-      // `anonymousSender` is declared on BOTH gates but the stop gate refuses an
-      // author-less END earlier, as `endMissingAuthor` — so it is start-only in
-      // practice. Named here rather than silently tolerated: a flag that
-      // over-claims is the same lie as a roster that over-counts.
+      // NO EXCEPTIONS. An earlier version subtracted `anonymousSender` here,
+      // because the flag said both gates and only the start gate produces it —
+      // i.e. it encoded the contradiction rather than removing it, which is the
+      // exact lie the comment above condemns. The flag is now correct, so the
+      // comparison is plain equality. Carnot + Tesla, independently, round 3.
       expect(
         producedByStop,
-        equals(declaredStop.difference({RingRefusal.anonymousSender})),
+        equals(declaredStop),
         reason: 'the STOP gate emits exactly the reasons it declares',
       );
       expect(

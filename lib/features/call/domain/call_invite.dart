@@ -545,7 +545,7 @@ class CallInvite {
 /// reasoning behind a verbosity-sounding word.
 enum RingRefusal {
   /// The body is not the invite sentinel — i.e. an ordinary message. The hot
-  /// path, and the reason [noteworthy] exists.
+  /// path, and the reason [refusedAnAttempt] exists.
   notAnInvite(refusedAnAttempt: false, startGate: true, stopGate: false),
 
   /// Our own invite, echoed back. Normal and constant during a call we placed.
@@ -583,7 +583,16 @@ enum RingRefusal {
   /// The sender has no `userId`. A malformed or hostile island row: whoever may
   /// wake you must be someone you can name and refuse, and
   /// `blockedUserIds.contains(null)` never matches (cage-match, Carnot HIGH).
-  anonymousSender(refusedAnAttempt: true),
+  ///
+  /// START GATE ONLY, though `_ringRefusalFor` can return it for either door:
+  /// the stop gate names an author-less hangup `endMissingAuthor` one clause
+  /// earlier, so this can never leave `admitCallEnd`. It defaulted to both, and
+  /// the census then SUBTRACTED it as an exception — shipping precisely the lie
+  /// that census's own comment condemns ("a flag that over-claims is the same
+  /// lie as a roster that over-counts"). Carnot and Tesla, independently, round
+  /// 3. A true sentence filed under the wrong role: the flags claim to describe
+  /// the GATES and were describing the HELPER.
+  anonymousSender(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// A non-human sender this conversation has not consented to be rung by.
   /// Expected whenever an agent calls before you allow it — and the single most

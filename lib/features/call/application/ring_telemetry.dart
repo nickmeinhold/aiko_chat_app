@@ -7,10 +7,14 @@ import '../domain/call_invite.dart';
 
 /// The ring subsystem's typed telemetry facade.
 ///
-/// Every method takes a channel id and a [RingRefusal] — an enum value, not a
-/// string — so there is no parameter through which a message body, a public key
-/// or a signature could reach a log. The invite body is a fixed sentinel and
-/// therefore safe, but nothing here needs it, so nothing here accepts it.
+/// Every method takes a channel id plus scalars — a [RingRefusal] enum value, a
+/// duration — never free text. So there is no parameter through which a message
+/// body, a public key or a signature could reach a log. The invite body is a
+/// fixed sentinel and therefore safe, but nothing here needs it, so nothing here
+/// accepts it. (An earlier version of this sentence claimed EVERY method takes a
+/// [RingRefusal]; the started / dead-on-arrival / duplicate arms do not, and a
+/// docstring that describes its own completeness wrongly is the same class of
+/// defect as the rest of this change — Tesla, round 3.)
 ///
 /// ## The channel id IS logged, deliberately
 ///
@@ -39,9 +43,9 @@ class RingTelemetry {
 
   /// A message was aimed at this handset and did not ring it.
   ///
-  /// WARNING rather than INFO: every value that reaches here is
-  /// [RingRefusal.noteworthy], meaning somebody tried to ring you and the gate
-  /// said no. That is worth surfacing distinctly from ordinary chatter even
+  /// WARNING rather than INFO: every value that reaches here has
+  /// [RingRefusal.refusedAnAttempt] set, meaning somebody tried to ring you and
+  /// the gate said no. That is worth surfacing distinctly from ordinary chatter even
   /// when the refusal is correct — a blocked caller and a skewed clock are both
   /// "working as designed" and both worth seeing in a report.
   void ringRefused(String channelId, RingRefusal reason) => _log.warning(
@@ -91,7 +95,10 @@ class RingTelemetry {
 }
 
 /// Wired to the REAL logger, never [RingTelemetry.noop] — pinned by
-/// `ring_telemetry_test`, because this project has already shipped a telemetry
+/// `test/core/logging/log_providers_test.dart` — NOT a `ring_telemetry_test`,
+/// which is what this comment used to cite and which does not exist (Tesla,
+/// round 3: a doc naming a test that is not there is a claim, not a citation).
+/// Pinned because this project has already shipped a telemetry
 /// seam that silently fell back to a no-op (PR #45, Carnot).
 final ringTelemetryProvider = Provider<RingTelemetry>(
   (ref) => RingTelemetry(ref.watch(rootLoggerProvider).child('call.ring')),

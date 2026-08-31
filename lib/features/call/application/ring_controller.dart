@@ -227,9 +227,9 @@ class RingController extends Notifier<CallInvite?> {
       case CallEndRefused(:final reason):
         // A refused END falls THROUGH to the ring gate — it is not a rejection
         // of the message, only of one reading of it. `notAnEnd` is the ordinary
-        // case for every invite that arrives. Only a refusal that is noteworthy
-        // AND not simply "this is not an end" is worth a record, or the buffer
-        // fills with the shape of every message that is not a hangup.
+        // case for every invite that arrives. Only a refusal that actually
+        // refused an attempt is worth a record, or the buffer fills with the
+        // shape of every message that is not a hangup.
         if (reason.refusedAnAttempt) {
           _telemetry.endRefused(m.channelId, reason);
         }
