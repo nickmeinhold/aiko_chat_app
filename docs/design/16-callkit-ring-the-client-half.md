@@ -302,6 +302,56 @@ human name, readable without the app running.** That is a new artifact with a ne
 small but real, and it should be stated in the visibility-boundary doc (claude-tasks#3695)
 rather than discovered by it.
 
+## §6a — The ring half is transport-agnostic, and that is a claim with a reason, not luck
+
+Added 2026-09-01, after the island tab flagged that the SFU may not be the destination for 1:1
+(claude-tasks#3740 — P2P WebRTC over a bus rendezvous) and cautioned against hardening this
+document against an SFU premise. **The caution is correct for the media half and does not reach
+the ring half**, and the reason is worth stating because it is a wall rather than a door.
+
+The island tab measured that a phone cannot reach an island's broker — no host port, by design.
+That is a **configuration** fact and someone could open it. The binding one is a level below:
+**a suspended iOS app holds no sockets at all.** The only thing that reaches a locked handset is
+APNs (or FCM), which is island → Apple → device by construction.
+
+> **The rendezvous can move to the bus. The wake cannot.**
+
+Whatever 1:1 media becomes, the first packet of any call to a phone that is not already awake
+and foregrounded leaves the island. So everything in this document — the admission gates (§4),
+the ceiling (§3), `CXAnswerCallAction`, token kinds (§5), the caller-name cache (§6) — sits
+downstream of a constraint no media topology moves. **The recast proceeds under either.** The
+island tab has withdrawn its caution for this half.
+
+### The corollary: you can foghorn a message, you cannot foghorn a ring
+
+Working this through killed a proposal neither tab was aiming at, which is recorded because the
+mechanism generalises.
+
+Sender anonymity on the ring path (Nick, 2026-08-25) means the island must not learn who is
+calling. The island must nonetheless *address* the push, so it learns who is being **woken** —
+the same limitation Signal's sealed sender has (it hides the sender but must reveal the
+recipient to deliver). The standard escape is **broadcast**: push to all N so the island
+addresses nobody in particular. At N=33 that is affordable, and smallness is exactly the lever
+the friends design uses elsewhere.
+
+**It is not available for a ring, and the reason is in §4.** Every VoIP delivery must be
+reported to CallKit before the handler returns. So each of the 32 non-recipients must report an
+incoming call and instantly end it, or be terminated by the OS — and enough of those and Apple
+revokes VoIP delivery outright (§4 flaw 9). Broadcast requires all N to wake; ringing requires
+exactly one to ring; iOS forbids a woken VoIP handler from declining to ring.
+
+**The constraint is Apple's, not scale's.** N=33 rescues the recipient half for messages and
+cannot rescue it for rings, at any N.
+
+**Scope, checked with the island tab rather than asserted.** What this falsifies is a *spark*
+(Tesla's "Foghorn Pact", in the friends `SPARK.md`), not the decision: the Foghorn Pact has zero
+occurrences in that crucible's `DESIGN.md` or `OUTCOME.md` and never entered the design of
+record. The 2026-08-25 decision's ruled scope is sender-side — *"the island cannot LINK a ring
+to an account in its own data"* — and blind wake tokens still deliver that, untouched. What dies
+is the stronger **recipient**-anonymity reading, which was live in the island tab's memory and
+never in its design. That memory has been corrected; the residual above is now named in its own
+right.
+
 ## §7 — Sequencing
 
 1. **§1 sites 2 and 3** — re-bind `_ended` retention, replace the pinned two-clock
