@@ -1,6 +1,10 @@
 # Design 16 — the CallKit ring, client half
 
-**Status:** PROPOSED. Nothing built. Written to be struck.
+**Status:** RECAST — struck 4/4 families 2026-09-01, verdict in [`16-callkit-ring-TEMPER.md`](16-callkit-ring-TEMPER.md).
+**Do not build from this document as written.** Twelve fatal flaws stand; §2, §3 and §4 are
+under recast, and the temper adopts a hard gate: no `CXProviderDelegate` line until flaw 5
+(is ringing a capability of an established relationship?) is decided — reversibility is lost
+once the phone rings.
 
 **The other half of the record:** `../aiko-chat-island/docs/design/12-native-call-ui-callkit-connectionservice.md`.
 That document is the island tab's and is deliberately not restated here. It names four
