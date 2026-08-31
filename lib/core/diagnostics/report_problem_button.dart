@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
+import '../logging/log_providers.dart';
 import '../network/network_status.dart';
 import 'error_report.dart';
 
@@ -34,12 +35,15 @@ class _ReportProblemButtonState extends ConsumerState<ReportProblemButton> {
     setState(() => _busy = true);
     try {
       final device = await ref.read(diagnosticsSourceProvider).collect();
+      final buffer = ref.read(logBufferProvider);
       final report = formatErrorReport(
         error: widget.error,
         status: ref.read(networkStatusProvider),
         host: ref.read(configProvider).httpBaseUrl,
         device: device,
         nowUtc: DateTime.now().toUtc(),
+        logTail: [for (final r in buffer.snapshot()) r.format()],
+        logDropped: buffer.dropped,
       );
       await ref.read(shareFnProvider)(report);
     } catch (_) {

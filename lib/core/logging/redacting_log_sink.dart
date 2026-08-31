@@ -84,9 +84,7 @@ class RedactingLogSink extends LogSink {
         // provisioning_token, the handle and the display name (cage-match #74).
         // A redaction regex over that string would be defence in the wrong
         // place — the fix is not to stringify it at all.
-        error: record.error == null
-            ? null
-            : record.error.runtimeType.toString(),
+        error: record.error?.runtimeType.toString(),
         stackTrace: record.stackTrace,
       ),
     );
