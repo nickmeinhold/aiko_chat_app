@@ -43,6 +43,15 @@ class PushTelemetry {
   // --- registration ------------------------------------------------------
 
   /// The terminal reach failure: the island has no routable row for us.
+  /// NOTE the two fields here describe DIFFERENT SUBJECTS, and a reader at 3am
+  /// must not fuse them: `consequence` is about the EVENT (right now this
+  /// handset will not wake), `transient` is about the ATTEMPT (an identical
+  /// retry could succeed). `device-will-not-wake` beside `transient=true` is two
+  /// true statements, not a contradiction — the retry is exactly what may clear
+  /// the consequence. Called out because it reads like the defect that was
+  /// removed from the platform sites, and is not: there the classification was
+  /// FABRICATED (a PlatformException scored `unknown`, hence `transient: true`),
+  /// whereas this site really does carry a Dio error. (Tesla, round 3.)
   void registerFailed(String tokenRef, Object error) => _log.severe(
     'push.register.failed',
     fields: {

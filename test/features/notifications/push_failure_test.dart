@@ -60,9 +60,15 @@ void main() {
       expect(
           PushFailure.of(_dio(DioExceptionType.badResponse, status: 401)),
           PushFailure.credentialRejected);
-      expect(
-          PushFailure.of(_dio(DioExceptionType.badResponse, status: 403)),
-          PushFailure.credentialRejected);
+      // 403 is NOT a dead credential — the credential is live and the island
+      // refuses the OPERATION, which re-authenticating cannot fix. The previous
+      // version of THIS test asserted 403 into credentialRejected, which is how
+      // the fold survived two rounds: the jig soldered the part it checked.
+      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 403)),
+          PushFailure.forbidden);
+      expect(PushFailure.forbidden.credentialIsDead, isFalse,
+          reason: 'a live credential refused an operation is not a dead one — '
+              'claude-tasks#3723 branches on this');
       // NOT credentialRejected — a 400 is our bug, not a dead session.
       expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 400)),
           PushFailure.rejected);
@@ -124,15 +130,12 @@ void main() {
   });
 
   group('the reason cannot carry a secret BY CONSTRUCTION', () {
-    test('every classifiable failure yields a name with no payload in it', () {
-      for (final type in DioExceptionType.values) {
-        final f = PushFailure.of(_dio(type, status: 401));
-        expect(f.name.contains(_secret), isFalse);
-        expect(f.name, matches(RegExp(r'^[a-zA-Z]+$')),
-            reason: 'a reason name must be a bare identifier — anything else '
-                'means a value reached it');
-      }
-    });
+    // REMOVED: a test asserting `f.name` never contains the secret. `name` is
+    // `Enum.name` — it cannot carry a payload unless the type stops being an
+    // enum, so the check was a closed circuit with no load and could not go red
+    // for any real leak (Tesla, rounds 1 and 3). The RAW-fields test below is
+    // the real spark gap; letting a tautology sit beside it inflates the
+    // apparent coverage of the boundary this PR convened a cage-match to defend.
 
     test('POSITIVE CONTROL: the secret really is in the exception we passed',
         () {

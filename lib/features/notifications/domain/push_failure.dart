@@ -50,7 +50,7 @@ enum PushFailure {
   /// train a client to accept one.
   badCertificate(transient: false),
 
-  /// 401/403 — the credential this call was made with is dead.
+  /// 401 — the credential this call was made with is dead.
   ///
   /// THE ONE TO WATCH, and the reason this enum exists. It is the only value
   /// that says a retry can never work without re-authenticating, which is
@@ -59,6 +59,21 @@ enum PushFailure {
   /// credential is owed and NOT payable by this client at all
   /// (claude-tasks#3723).
   credentialRejected(transient: false, credentialIsDead: true),
+
+  /// 403 — the credential is LIVE and the island refuses the OPERATION.
+  ///
+  /// Deliberately NOT [credentialRejected], and this member exists because an
+  /// earlier version folded 403 in with 401. That fold was the same defect class
+  /// as collapsing 429 into [rejected]: a status filed in the wrong bucket, and
+  /// the fold survived because the test asserting "a dead credential is
+  /// distinguishable from every other 4xx" ASSERTED 403 into it — a jig that
+  /// solders the part it is meant to check (Tesla, round 3).
+  ///
+  /// The distinction is the one [rejected] already documents: re-authenticating
+  /// fixes a 401 and cannot fix a 403. Once claude-tasks#3723 branches on
+  /// [credentialIsDead] it would drive a sovereign-key DELETE, or abandon a debt,
+  /// for a session that is perfectly alive.
+  forbidden(transient: false),
 
   /// 429 — the island is shedding load, not refusing us.
   ///
@@ -138,7 +153,8 @@ enum PushFailure {
         // re-introducing it by appending in the wrong place.
         return switch (error.response?.statusCode) {
           null => unknown,
-          401 || 403 => credentialRejected,
+          401 => credentialRejected,
+          403 => forbidden,
           408 => timedOut,
           429 => rateLimited,
           >= 500 => islandError,
