@@ -130,16 +130,21 @@ enum PushFailure {
         return badCertificate;
       case DioExceptionType.badResponse:
       case DioExceptionType.unknown:
-        final status = error.response?.statusCode;
-        if (status == null) return unknown;
-        if (status == 401 || status == 403) return credentialRejected;
-        // BEFORE the generic 4xx arm: 408 and 429 are retryable 4xx, and
-        // collapsing them into `rejected` is the defect this ladder shipped with.
-        if (status == 408) return timedOut;
-        if (status == 429) return rateLimited;
-        if (status >= 500) return islandError;
-        if (status >= 400) return rejected;
-        return unknown;
+        // A Dart 3 switch expression rather than an if-ladder: the retryable-4xx
+        // arms MUST be read before the generic `>= 400` arm, and a switch makes
+        // that ordering the structure instead of a comment asking the next
+        // editor to preserve it. Collapsing 408/429 into `rejected` was this
+        // ladder's shipped defect (Carnot + Tesla, round 1); an if-chain invites
+        // re-introducing it by appending in the wrong place.
+        return switch (error.response?.statusCode) {
+          null => unknown,
+          401 || 403 => credentialRejected,
+          408 => timedOut,
+          429 => rateLimited,
+          >= 500 => islandError,
+          >= 400 => rejected,
+          _ => unknown,
+        };
     }
   }
 }

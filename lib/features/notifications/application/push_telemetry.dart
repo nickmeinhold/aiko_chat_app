@@ -199,7 +199,7 @@ class PushTelemetry {
     return {
       'reason': f.name,
       'transient': f.transient,
-      'credentialDead': f.credentialIsDead,
+      'credentialIsDead': f.credentialIsDead,
     };
   }
 }
