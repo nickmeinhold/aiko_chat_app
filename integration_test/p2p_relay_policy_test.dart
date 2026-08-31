@@ -28,21 +28,63 @@
 /// because a harness examined for whether it can fail tends to look like it can.*
 ///
 /// **Arm 2 — the true positive**, which needs a real TURN endpoint. Gated on
-/// environment variables and **skipped loudly** rather than silently, because a
-/// test that quietly passes without its subject is a check independent of the
-/// thing it checks. Both islands run LiveKit's embedded TURN advertising
-/// `turns:<domain>:443` (island tab, verified live on `chat.imagineering.cc` and
-/// `chat.enspyr.co`), so this needs a credential, not new infrastructure.
+/// `--dart-define` and **skipped loudly** rather than silently, because a test
+/// that quietly passes without its subject is a check independent of the thing
+/// it checks.
+///
+/// ### The credential does not exist as a static secret — corrected 2026-09-01
+///
+/// The first version of this arm asked for `TURN_URL/TURN_USER/TURN_PASS` as
+/// though someone could hand them over. **They cannot.** The island tab checked
+/// the live `livekit.yaml`: both islands run LiveKit's *embedded* TURN, whose
+/// `turn:` block carries `enabled`, `domain`, `udp_port`, `tls_port: 443`,
+/// `bind_addresses`, certs and `deny_peer_cidrs` — and no credential. **LiveKit
+/// issues session-bound TURN credentials derived from the API key at JOIN
+/// time.** So the arm was armed for a shape that does not exist, which is a
+/// readiness that would never have fired: exactly the failure this file's own
+/// loud-skip exists to prevent, one level up.
+///
+/// ### The real route, and it IS reachable from Dart (checked, locked 2.10.0)
+///
+/// The island tab flagged Dart-reachability as its own unchecked question,
+/// because on their side the credential is stranded in the Rust FFI layer and
+/// never reaches Python. **In Dart it is public.** Read from the locked
+/// `livekit_client` 2.10.0:
+///
+/// - `livekit_rtc.pb.dart:3121` — `ICEServer` carries `urls`, `username`,
+///   `credential`, and `JoinResponse.iceServers` carries a list of them.
+/// - `engine.dart:1325` — the engine emits `EngineJoinResponseEvent(response:)`
+///   on its own event bus, and `src/events.dart` is exported from
+///   `livekit_client.dart`, so the event type is public.
+/// - `room.dart:119` — `final Engine engine` is a public field on `Room`.
+/// - `extensions.dart:41` → `types/other.dart:241` — the proto converts to a
+///   public `RTCIceServer` that PRESERVES `username`/`credential`, with a
+///   `toMap()` emitting exactly the shape `createPeerConnection` wants.
+///
+/// So the route is: mint a token from the island's existing endpoint, join,
+/// take the issued `iceServers` off the join response, and hand them to
+/// [P2pPeerSession] with [P2pIceTransportPolicy.relay]. **No new infrastructure
+/// and no secret changes hands** — the credential is issued to this client, for
+/// this session, by the legitimate path. That harness is not built here because
+/// it needs a live token and a person awake to authorise pointing it at a real
+/// island.
+///
+/// The `--dart-define`s below remain as the injection point for whatever
+/// produces those values (the join harness, or a standalone test TURN).
 ///
 ///     flutter test integration_test/p2p_relay_policy_test.dart -d macos
-///     # arm 2 additionally needs:
 ///     #   --dart-define=TURN_URL=turns:chat.enspyr.co:443
-///     #   --dart-define=TURN_USER=... --dart-define=TURN_PASS=...
+///     #   --dart-define=TURN_USER=<session-issued>  --dart-define=TURN_PASS=<session-issued>
 ///
-/// **Known before it runs** (island tab, claude-tasks#3353): one of seven
-/// relay-only connects failed unreproducibly. A single green here is an
-/// observation, not a distribution — arm 2 reports what it saw and claims
-/// nothing about the rate.
+/// **Two live details, before anyone reads a red as a verdict** (island tab):
+/// `bind_addresses: 10.0.0.22` on imagineering is a secondary IP and silently
+/// kills the UDP relay if `rtc.node_ip` drifts from it (claude-tasks#3133); and
+/// `deny_peer_cidrs: 100.64.0.0/10` means the TURN **refuses to relay into CGNAT
+/// space by policy**, so a relay attempt toward such a peer fails BY DESIGN.
+/// Reading that as "relay unavailable" would be a fresh instance of the very
+/// class this file exists to close. Also claude-tasks#3353: one of seven
+/// relay-only connects failed unreproducibly, so a single green is an
+/// observation, not a distribution.
 library;
 
 import 'package:aiko_chat_app/features/call/data/loopback_signalling.dart';
@@ -126,8 +168,11 @@ void main() {
       // itself was fixed for.
       // ignore: avoid_print
       print('[P2P-RELAY] TRUE-POSITIVE ARM NOT RUN — no TURN_URL provided. '
-          'The instrument has still never observed an actual relay. Supply '
-          '--dart-define=TURN_URL/TURN_USER/TURN_PASS to fire it.');
+          'The instrument has still never observed an actual relay. NOTE: the '
+          'credential is session-bound and issued at JOIN time; it is NOT a '
+          'static secret anyone can supply. See this file header for the '
+          'reachable-from-Dart route (Room.engine -> EngineJoinResponseEvent '
+          '-> response.iceServers, which preserves username/credential).');
       markTestSkipped('TURN credentials not supplied — arm did not run');
       return;
     }
