@@ -1,5 +1,6 @@
 import '../../../core/logging/aiko_log.dart';
 import '../../../core/logging/aiko_logger.dart';
+import '../domain/push_failure.dart';
 
 /// The push subsystem's typed telemetry facade — the layer where the never-log
 /// rule is a property of the SIGNATURE rather than a convention.
@@ -64,8 +65,11 @@ class PushTelemetry {
     fields: {'token': tokenRef},
   );
 
-  void rotationRegisterFailed(Object error) =>
-      _log.warning('push.rotation.register_failed', error: error);
+  void rotationRegisterFailed(Object error) => _log.warning(
+    'push.rotation.register_failed',
+    fields: _why(error),
+    error: error,
+  );
 
   // --- the unregister debt ------------------------------------------------
 
@@ -73,8 +77,11 @@ class PushTelemetry {
   void debtPaidButUnclearable(String tokenRef) =>
       _log.info('push.debt.paid_unclearable', fields: {'token': tokenRef});
 
-  void debtDrainFailed(Object error) =>
-      _log.warning('push.debt.drain_failed', error: error);
+  void debtDrainFailed(Object error) => _log.warning(
+    'push.debt.drain_failed',
+    fields: _why(error),
+    error: error,
+  );
 
   /// The debt could not be written. If the attempt also fails, the island keeps
   /// a routable row and NOTHING will retry it.
@@ -90,21 +97,28 @@ class PushTelemetry {
         fields: {'island': islandBaseUrl, 'token': tokenRef, 'cap': cap},
       );
 
-  void unregisterDeferred(Object error) =>
-      _log.info('push.unregister.deferred', error: error);
+  void unregisterDeferred(Object error) => _log.info(
+    'push.unregister.deferred',
+    fields: _why(error),
+    error: error,
+  );
 
   // --- the platform seam --------------------------------------------------
 
   void permissionRequestFailed(String platform, Object error) => _log.warning(
     'push.permission.request_failed',
-    fields: {'platform': platform},
+    fields: {'platform': platform, ..._why(error)},
     error: error,
   );
 
   /// No token from the platform — the commonest silent reach failure.
   void tokenUnavailable(String platform, Object error) => _log.severe(
     'push.token.unavailable',
-    fields: {'platform': platform, 'consequence': 'device-will-not-wake'},
+    fields: {
+      'platform': platform,
+      'consequence': 'device-will-not-wake',
+      ..._why(error),
+    },
     error: error,
   );
 
@@ -137,4 +151,15 @@ class PushTelemetry {
   static const PushTelemetry noop = PushTelemetry(
     AikoLogger(subsystem: 'aiko.push', sink: NoopLogSink()),
   );
+
+  /// The reason fields every failure log carries.
+  ///
+  /// ONE definition, so a new failure site cannot ship a differently-shaped
+  /// reason — and so `reason=` means the same thing wherever a reader meets it.
+  /// Both values come from [PushFailure], which reads only closed inputs, so
+  /// this can never widen what a record exposes.
+  static Map<String, Object?> _why(Object? error) {
+    final f = PushFailure.of(error);
+    return {'reason': f.name, 'retry': f.transient};
+  }
 }
