@@ -100,6 +100,18 @@ String formatErrorReport({
   required String host,
   required Map<String, String> device,
   required DateTime nowUtc,
+  /// Recent structured log lines, oldest first — the run-up to the failure.
+  ///
+  /// Already redacted: these come off [RingBufferLogSink], which sits behind
+  /// [RedactingLogSink] in the production graph, so a secret-shaped run was cut
+  /// before it ever reached the buffer. This function does NOT re-redact, and
+  /// that is deliberate — a second scrub here would silently paper over a
+  /// mis-wired sink instead of letting `log_providers_test` catch it.
+  List<String> logTail = const [],
+  /// How many lines fell off the back of the ring. Rendered even when zero is
+  /// not the case, because a tail that reads as complete when it is truncated
+  /// is the same lie this logging work exists to remove.
+  int logDropped = 0,
 }) {
   final b = StringBuffer()
     ..writeln('Aiko Chat — problem report')
@@ -117,6 +129,19 @@ String formatErrorReport({
     // A SAFE projection of the error for the maintainer — never the raw
     // exception string (see [describeError]).
     ..writeln('Error: ${describeError(error)}');
+  if (logTail.isNotEmpty || logDropped > 0) {
+    b
+      ..writeln('---')
+      ..writeln(
+        logDropped > 0
+            ? 'Recent log (${logTail.length} lines, $logDropped older '
+                  'lines dropped):'
+            : 'Recent log (${logTail.length} lines):',
+      );
+    for (final line in logTail) {
+      b.writeln(line);
+    }
+  }
   return b.toString();
 }
 

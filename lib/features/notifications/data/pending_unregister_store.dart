@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import '../application/push_telemetry.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// The device-token unregisters this app still OWES an island.
@@ -65,7 +66,13 @@ class PendingUnregisterStore {
   /// than guarding against it.
   Future<void> _writes = Future<void>.value();
 
-  PendingUnregisterStore(this._prefs);
+  PendingUnregisterStore(this._prefs, {this.telemetry = PushTelemetry.noop});
+
+  /// Public and final rather than private: a test asserting that an eviction is
+  /// ANNOUNCED needs to inject a capturing facade, and an eviction going
+  /// unannounced is the exact failure this class's own doc says must never
+  /// happen quietly.
+  final PushTelemetry telemetry;
 
   /// The tokens owed to [islandBaseUrl]; empty if nothing is outstanding.
   ///
@@ -93,16 +100,17 @@ class PendingUnregisterStore {
       final dropped = owed.removeAt(0);
       // REDACTED (cage-match, Tesla). A push token is a routing secret — the
       // REST layer keeps it out of URLs so it never reaches an access log or a
-      // proxy trace, and debugPrint is not stripped in release. This was the one
-      // path that dumped a whole token, and it is the path that already admits
-      // it is dropping a debt nobody can retry.
-      final shown = dropped.length <= 8
-          ? dropped
-          : '${dropped.substring(0, 8)}…[${dropped.length}]';
-      debugPrint(
-        'PendingUnregisterStore: DROPPING owed token $shown for '
-        '$islandBaseUrl — more than $_maxPerIsland debts outstanding. That '
-        "island keeps a routable row this client can no longer clear.",
+      // proxy trace. This was the one path that dumped a whole token, and it is
+      // the path that already admits it is dropping a debt nobody can retry.
+      //
+      // The hand-rolled truncation that used to sit here is gone: the facade
+      // takes a short ref by signature and `RedactingLogSink` cuts anything
+      // secret-shaped that reaches a sink regardless. What was one site's
+      // vigilance is now the type plus a scrubber that fails differently.
+      telemetry.debtDropped(
+        islandBaseUrl,
+        PushTelemetry.ref(dropped),
+        _maxPerIsland,
       );
     }
     return true;

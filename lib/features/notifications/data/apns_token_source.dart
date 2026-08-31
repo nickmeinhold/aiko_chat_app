@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../domain/device_platform.dart';
 import '../domain/apns_environment.dart';
 import '../domain/push_token_source.dart';
+import '../application/push_telemetry.dart';
 
 /// Apple's [PushTokenSource] — the RAW APNs device token, taken from Apple
 /// directly over a platform channel implemented in `ios/Runner/AppDelegate.swift`.
@@ -23,7 +24,8 @@ class ApnsTokenSource implements PushTokenSource {
     TargetPlatform? platformOverride,
     MethodChannel? methods,
     EventChannel? refreshes,
-  }) : assert(
+    PushTelemetry telemetry = PushTelemetry.noop,
+  }) : _telemetry = telemetry, assert(
          const {
            TargetPlatform.iOS,
            TargetPlatform.macOS,
@@ -37,6 +39,7 @@ class ApnsTokenSource implements PushTokenSource {
   static const _methodChannelName = 'cc.imagineering.aikoChatApp/apns';
   static const _eventChannelName = 'cc.imagineering.aikoChatApp/apns/refreshes';
 
+  final PushTelemetry _telemetry;
   final MethodChannel _methods;
   final EventChannel _refreshes;
 
@@ -53,12 +56,10 @@ class ApnsTokenSource implements PushTokenSource {
     try {
       return await _methods.invokeMethod<bool>('requestPermission') ?? false;
     } on PlatformException catch (e) {
-      debugPrint('ApnsTokenSource: permission request failed: $e');
+      _telemetry.permissionRequestFailed('apns', e);
       return false;
     } on MissingPluginException catch (e) {
-      debugPrint(
-        'ApnsTokenSource: native APNs channel is not in this build: $e',
-      );
+      _telemetry.nativeChannelMissing('apns', e);
       return false;
     }
   }
@@ -68,12 +69,10 @@ class ApnsTokenSource implements PushTokenSource {
     try {
       return await _methods.invokeMethod<String>('currentToken');
     } on PlatformException catch (e) {
-      debugPrint('ApnsTokenSource: no device token: $e');
+      _telemetry.tokenUnavailable('apns', e);
       return null;
     } on MissingPluginException catch (e) {
-      debugPrint(
-        'ApnsTokenSource: native APNs channel is not in this build: $e',
-      );
+      _telemetry.nativeChannelMissing('apns', e);
       return null;
     }
   }
@@ -90,12 +89,10 @@ class ApnsTokenSource implements PushTokenSource {
         await _methods.invokeMethod<String>('apnsEnvironment'),
       );
     } on PlatformException catch (e) {
-      debugPrint('ApnsTokenSource: no push environment: $e');
+      _telemetry.environmentUnresolved(e);
       return null;
     } on MissingPluginException catch (e) {
-      debugPrint(
-        'ApnsTokenSource: native APNs channel is not in this build: $e',
-      );
+      _telemetry.nativeChannelMissing('apns', e);
       return null;
     }
   }
@@ -109,6 +106,6 @@ class ApnsTokenSource implements PushTokenSource {
       // rotation for the life of the session — silently, since nothing surfaces
       // a dead stream. Dropping the bad event keeps the subscription alive.
       .handleError(
-        (Object e) => debugPrint('ApnsTokenSource: rotation stream error: $e'),
+        (Object e) => _telemetry.rotationStreamError('apns', e),
       );
 }
