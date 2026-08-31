@@ -254,12 +254,24 @@ CallEndDecision admitCallEnd(
   if (message.replyToId == null) {
     return const CallEndRefused(RingRefusal.endMissingTarget);
   }
-  if (!_hasVerifiedOrigin(message)) {
+  // DECOMPOSED, mirroring `admitRing` clause for clause. `_hasVerifiedOrigin` is
+  // `originCryptoValid == true && origin != null` — one bool over two different
+  // invariant breaks — so the stop gate answered `unverifiedOrigin` for an
+  // `origin == null` that the start gate answers `originMissing` for, and the
+  // clause below it could never fire. Two doors, one fault, two voices; the same
+  // start/stop divergence this file has now been struck over three times.
+  //
+  // Found by Tesla in round 2 of the #3591 cage-match, which is the tell that
+  // round 1 fixed an INSTANCE (`_isCallEndShape`) and not the CLASS. The class is
+  // "a compound predicate in an admission path hides which invariant broke", and
+  // it is now closed: the shape gate, the freshness clause, the permission gate
+  // and this one all name their own reason. `_hasVerifiedOrigin` survives for the
+  // RENDER path, which genuinely only needs a bool.
+  if (message.originCryptoValid != true) {
     return const CallEndRefused(RingRefusal.unverifiedOrigin);
   }
   final origin = message.origin;
   if (origin == null) {
-    // verified implies present
     return const CallEndRefused(RingRefusal.originMissing);
   }
   final notPermitted = _ringRefusalFor(
@@ -534,17 +546,17 @@ class CallInvite {
 enum RingRefusal {
   /// The body is not the invite sentinel — i.e. an ordinary message. The hot
   /// path, and the reason [noteworthy] exists.
-  notAnInvite(refusedAnAttempt: false),
+  notAnInvite(refusedAnAttempt: false, startGate: true, stopGate: false),
 
   /// Our own invite, echoed back. Normal and constant during a call we placed.
-  ownInvite(refusedAnAttempt: false),
+  ownInvite(refusedAnAttempt: false, startGate: true, stopGate: false),
 
   /// Our own hangup, echoed back. [admitCallEnd] only.
-  ownEnd(refusedAnAttempt: false),
+  ownEnd(refusedAnAttempt: false, startGate: false, stopGate: true),
 
   /// The body is not the end sentinel — an ordinary message. Hot path.
   /// [admitCallEnd] only.
-  notAnEnd(refusedAnAttempt: false),
+  notAnEnd(refusedAnAttempt: false, startGate: false, stopGate: true),
 
   /// A call-END sentinel with NO AUTHOR. Not hot-path chatter: something aimed
   /// call control at this handset and could not be named or refused, which is
@@ -553,12 +565,12 @@ enum RingRefusal {
   /// independently) found that folding it in made a failed hangup STRUCTURALLY
   /// unloggable — the very defect this enum exists to remove, reproduced one
   /// level down.
-  endMissingAuthor(refusedAnAttempt: true),
+  endMissingAuthor(refusedAnAttempt: true, startGate: false, stopGate: true),
 
   /// A call-END sentinel naming NO CALL (`reply_to` absent). It could never stop
   /// any ring, so a bell may still be ringing for a call the caller believes is
   /// over — the failure is silent and user-visible at once.
-  endMissingTarget(refusedAnAttempt: true),
+  endMissingTarget(refusedAnAttempt: true, startGate: false, stopGate: true),
 
   /// `originCryptoValid != true` — unsigned, or carried-but-invalid. The
   /// security-relevant refusal: a ring that could not prove who sent it.
@@ -579,17 +591,17 @@ enum RingRefusal {
   consentWithheld(refusedAnAttempt: true),
 
   /// Not a DM. Channel-wide ringing is gated until per-call consent exists.
-  notDirectMessage(refusedAnAttempt: true),
+  notDirectMessage(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// The sender is blocked.
-  senderBlocked(refusedAnAttempt: true),
+  senderBlocked(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// The conversation is muted.
-  conversationMuted(refusedAnAttempt: true),
+  conversationMuted(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// Signed in the future by a skewed clock. Refused rather than admitted: a
   /// bad clock would otherwise ring forever.
-  clockSkew(refusedAnAttempt: true),
+  clockSkew(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// Older than [kCallInviteFreshness].
   ///
@@ -597,13 +609,17 @@ enum RingRefusal {
   /// a human noticing, a cold start and a handshake in its measured age, so this
   /// firing on a real push wake is the confirmation #3588 has been waiting for.
   /// It was previously indistinguishable from every other refusal.
-  stale(refusedAnAttempt: true),
+  stale(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// No server id, so a hangup could never name it (`reply_to` is an FK onto
   /// `messages.id`). Unreachable via either production producer.
-  noServerId(refusedAnAttempt: true);
+  noServerId(refusedAnAttempt: true, startGate: true, stopGate: false);
 
-  const RingRefusal({required this.refusedAnAttempt});
+  const RingRefusal({
+    required this.refusedAnAttempt,
+    this.startGate = true,
+    this.stopGate = true,
+  });
 
   /// Whether a real attempt to reach this handset was refused, as opposed to a
   /// message that was never call control at all (or our own, echoed back).
@@ -611,6 +627,40 @@ enum RingRefusal {
   /// Callers use it to decide what to record — see the enum doc for why that
   /// inference belongs at the call site and the FACT belongs here.
   final bool refusedAnAttempt;
+
+  /// Whether [admitRing] can produce this reason.
+  ///
+  /// Carnot (round 2, #3591) correctly observed that ONE shared enum across two
+  /// gates leaves impossible states representable: `CallEndRefused(stale)` type-
+  /// checks and nothing can produce it. Its proposed fix was to split into two
+  /// enums — which is right in principle and disproportionate here: the shared
+  /// members (`unverifiedOrigin`, `originMissing`, `anonymousSender`,
+  /// `consentWithheld`) are genuinely shared, so a split needs a third enum plus
+  /// a mapping layer to keep `_ringRefusalFor` common, and it buys protection
+  /// against a miscall no code makes.
+  ///
+  /// The proportionate version: keep ONE reader-facing vocabulary (a report
+  /// naming `unverifiedOrigin` should mean the same thing whichever door it came
+  /// through) and make the constraint CHECKED — by a test that asks each gate
+  /// what it ACTUALLY produces and compares the two sets against these flags.
+  ///
+  /// ENFORCED BY TEST, NOT BY TYPE OR ASSERT, and the reason is measured rather
+  /// than lazy. A constructor assert was written first and removed: Dart cannot
+  /// const-evaluate either `Set.contains` (a method) or an enum's field access,
+  /// so the assert stripped `const` from every `RingRefused(...)` — including
+  /// `notAnInvite`, which is constructed once per inbound message. Paying a
+  /// hot-path allocation to guard the hot-path log would have been a fine joke
+  /// and a bad trade.
+  ///
+  /// Scope, stated honestly: weaker than the two-enum split Carnot asked for.
+  /// What it buys over the old state is that a cross-gate reason now FAILS A
+  /// TEST instead of being invisible — see "each gate produces exactly its own
+  /// reasons" in `call_invite_test.dart`, which drives the real gates rather
+  /// than counting names in a hand-maintained roster (Tesla, round 2).
+  final bool startGate;
+
+  /// Whether [admitCallEnd] can produce this reason.
+  final bool stopGate;
 }
 
 /// The outcome of the ring trust gate: admitted with an invitation, or refused

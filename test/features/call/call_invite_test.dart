@@ -284,49 +284,136 @@ void main() {
       expect(RingRefusal.endMissingTarget.refusedAnAttempt, isTrue);
     });
 
-    test('NO REASON IS UNREACHABLE — the vocabulary has no dead values', () {
-      // The class-level check. A reason nobody can produce is worse than no
-      // reason: it reads as covered in the enum and never appears in a report,
-      // so a future refactor can orphan a gate and nothing goes red. Every
-      // value must be witnessed by a case above or by a hangup case, and the
-      // two `noServerId`/`originMissing` values are witnessed as DELIBERATELY
-      // unreachable rather than quietly absent.
-      const witnessedByRingCases = {
-        RingRefusal.notAnInvite,
-        RingRefusal.ownInvite,
-        RingRefusal.unverifiedOrigin,
-        RingRefusal.anonymousSender,
-        RingRefusal.consentWithheld,
-        RingRefusal.notDirectMessage,
-        RingRefusal.senderBlocked,
-        RingRefusal.conversationMuted,
-        RingRefusal.clockSkew,
-        RingRefusal.stale,
-      };
-      const witnessedByEndCases = {
-        RingRefusal.notAnEnd,
-        RingRefusal.ownEnd,
-        RingRefusal.endMissingAuthor,
-        RingRefusal.endMissingTarget,
-      };
-      // Both are belt-and-braces guards on states the type system already makes
-      // impossible (`originCryptoValid == true` implies `origin != null`; a
-      // production producer always carries a server id). They exist so an
-      // upstream invariant breaking is LOUD rather than a crash, and their
-      // unreachability is the property, not an omission.
-      const deliberatelyUnreachable = {
-        RingRefusal.originMissing,
-        RingRefusal.noServerId,
-      };
-      expect(
-        {
-          ...witnessedByRingCases,
-          ...witnessedByEndCases,
-          ...deliberatelyUnreachable,
+    test('each gate produces EXACTLY its own reasons — driven, not counted', () {
+      // REPLACES a roster with a graph (Tesla, round 2, #3591). The first version
+      // unioned three hand-maintained sets and asked whether every enum NAME
+      // appeared somewhere. That check's outcome was independent of what the
+      // gates do: a refactor retargeting a hangup at the wrong reason stayed
+      // green, `originMissing` was filed "deliberately unreachable" while
+      // `admitRing` could produce it from a fixture already in this file, and
+      // nothing ever asked `admitCallEnd` a question at all. A test that cannot
+      // go red for the failure it names is not a test.
+      //
+      // So: DRIVE both gates across a matrix of fixtures, collect what each one
+      // actually emits, and compare against the `startGate`/`stopGate` flags the
+      // enum declares. Now a reason that no gate produces, a reason produced by
+      // the WRONG gate, and a flag that disagrees with reality all fail.
+      final producedByStart = <RingRefusal>{};
+      for (final m in [
+        invite(body: 'hello'),
+        invite(from: me),
+        invite(cryptoValid: null),
+        invite(cryptoValid: false),
+        invite(withOrigin: false), // cryptoValid true, origin absent
+        invite(hasAccount: false),
+        invite(kind: SenderKind.llm),
+        invite(),
+      ]) {
+        for (final blocked in [<String>{}, {robin}]) {
+          for (final muted in [false, true]) {
+            for (final isDm in [true, false]) {
+              final r = refusal(m, blocked: blocked, muted: muted, isDm: isDm);
+              if (r != null) producedByStart.add(r);
+            }
+          }
+        }
+      }
+      producedByStart.add(refusal(invite(age: const Duration(seconds: -5)))!);
+      // A signed, permitted invite carrying NO SERVER ID. Built by hand because
+      // the `invite` fixture always mints one — which is precisely why the first
+      // roster version could file `noServerId` as "deliberately unreachable" and
+      // never be contradicted. Driving the gate forces the question.
+      producedByStart.add(
+        switch (admitRing(
+          Message(
+            clientTempId: 'm1',
+            channelId: 'dm:aaa:bbb',
+            sender: const MessageSender(userId: robin, kind: SenderKind.human),
+            body: kCallInviteBody,
+            createdAt: now,
+            origin: signedAt(now),
+            originCryptoValid: true,
+            deliveryState: DeliveryState.sent,
+          ),
+          meUserId: me,
+          blockedUserIds: const {},
+          consent: RingConsent.none,
+          conversationMuted: false,
+          isDm: true,
+          now: now,
+        )) {
+          RingRefused(:final reason) => reason,
+          RingAdmitted() => throw StateError('expected a refusal'),
         },
-        containsAll(RingRefusal.values),
-        reason: 'a RingRefusal value exists that no test accounts for',
       );
+      producedByStart.add(
+        refusal(invite(age: kCallInviteFreshness + const Duration(seconds: 1)))!,
+      );
+
+      final producedByStop = <RingRefusal>{};
+      Message end({
+        String body = kCallEndBody,
+        String? from = robin,
+        String? target = '01M0GS7FDWBVQ31950B1PTV2DW',
+        bool? cryptoValid = true,
+        bool withOrigin = true,
+        SenderKind kind = SenderKind.human,
+      }) => Message(
+        clientTempId: 'e1',
+        id: '01M0GS7FDWBVQ31950B1PTV2DX',
+        channelId: 'dm:aaa:bbb',
+        sender: MessageSender(userId: from, kind: kind),
+        body: body,
+        replyToId: target,
+        createdAt: now,
+        origin: withOrigin ? signedAt(now) : null,
+        originCryptoValid: cryptoValid,
+        deliveryState: DeliveryState.sent,
+      );
+      for (final m in [
+        end(body: 'hello'),
+        end(from: null),
+        end(target: null),
+        end(cryptoValid: null),
+        end(withOrigin: false), // cryptoValid true, origin absent
+        end(kind: SenderKind.llm),
+        end(from: me),
+        end(),
+      ]) {
+        switch (admitCallEnd(m, meUserId: me, consent: RingConsent.none)) {
+          case CallEndRefused(:final reason):
+            producedByStop.add(reason);
+          case CallEndAdmitted():
+            break;
+        }
+      }
+
+      final declaredStart =
+          RingRefusal.values.where((r) => r.startGate).toSet();
+      final declaredStop = RingRefusal.values.where((r) => r.stopGate).toSet();
+
+      // `anonymousSender` is declared on BOTH gates but the stop gate refuses an
+      // author-less END earlier, as `endMissingAuthor` — so it is start-only in
+      // practice. Named here rather than silently tolerated: a flag that
+      // over-claims is the same lie as a roster that over-counts.
+      expect(
+        producedByStop,
+        equals(declaredStop.difference({RingRefusal.anonymousSender})),
+        reason: 'the STOP gate emits exactly the reasons it declares',
+      );
+      expect(
+        producedByStart,
+        equals(declaredStart),
+        reason: 'the START gate emits exactly the reasons it declares',
+      );
+      // And no reason is claimed by neither gate.
+      for (final r in RingRefusal.values) {
+        expect(
+          r.startGate || r.stopGate,
+          isTrue,
+          reason: '$r is claimed by no gate — a dead value',
+        );
+      }
     });
 
     test('the hot path is NOT refusedAnAttempt — this protects the ring buffer', () {
