@@ -21,6 +21,18 @@ artifact that can go red.
 | A candidate arriving before the remote description is buffered, not dropped | the trickle race, exercised | same |
 | The relay instrument reads a live stats report, not a fixture | `getStats()` → nominated pair | same |
 | The instrument cannot silently miscount | 12 pure-Dart tests, incl. must-not-lie arms | `test/features/call/ice_candidate_tally_test.dart` |
+| This host can discover its **public** address via STUN — the precondition for a real cross-internet direct call | `srflx` candidate gathered against two independent public STUN operators | `integration_test/p2p_stun_reflexive_test.dart` |
+
+Measured 2026-09-01 on macOS, against the locked `flutter_webrtc` 1.6.0:
+
+```
+[P2P-SPIKE] caller: selected=host/host gathered[host=21]
+[P2P-STUN]  gathered: {host: 21, srflx: 1}
+```
+
+The first line is the direct connection with no SFU. The second is the same stack reaching
+the internet and learning its own public address — `srflx=1` is the token that says a call
+to another network is *possible from here*.
 
 ## What is NOT proven — read this before quoting the green
 
