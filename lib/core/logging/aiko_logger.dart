@@ -53,8 +53,16 @@ class AikoLogger {
   void debug(String event, {Map<String, Object?> fields = const {}}) =>
       log(LogLevel.debug, event, fields: fields);
 
-  void info(String event, {Map<String, Object?> fields = const {}}) =>
-      log(LogLevel.info, event, fields: fields);
+  /// INFO takes an [error] too: a caught-and-handled exception is often the
+  /// whole content of a benign event ("unregister deferred to next sign-in"),
+  /// and forcing those callers down to `log()` would push them toward
+  /// stringifying the error into the event name instead — which is exactly the
+  /// prose-in-a-machine-name failure the [LogRecord.event] doc warns about.
+  void info(
+    String event, {
+    Map<String, Object?> fields = const {},
+    Object? error,
+  }) => log(LogLevel.info, event, fields: fields, error: error);
 
   void warning(
     String event, {

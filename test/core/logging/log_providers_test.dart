@@ -3,6 +3,8 @@ import 'package:aiko_chat_app/core/logging/aiko_log.dart';
 import 'package:aiko_chat_app/core/logging/aiko_logger.dart';
 import 'package:aiko_chat_app/core/logging/log_providers.dart';
 import 'package:aiko_chat_app/core/network/network_status.dart';
+import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
+import 'package:aiko_chat_app/features/notifications/application/push_telemetry.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -54,6 +56,25 @@ void main() {
     final sub = c.listen(logBufferProvider, (_, __) {});
     sub.close(); // last listener gone — an autoDispose provider would reset here
     expect(c.read(logBufferProvider).snapshot(), hasLength(1));
+  });
+
+  test('pushTelemetryProvider reaches the real buffer, not a no-op', () {
+    // Asserted BEHAVIOURALLY rather than by type: `isNot(PushTelemetry.noop)`
+    // would pass for a facade wired to a second, differently-broken no-op. The
+    // question that matters is "does a push failure reach the thing a user can
+    // export", so the test asks exactly that.
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+
+    c.read(pushTelemetryProvider).registerFailed('abc123', StateError('x'));
+
+    final lines = [for (final r in c.read(logBufferProvider).snapshot()) r.format()];
+    expect(lines, hasLength(1));
+    expect(lines.single, contains('aiko.push'));
+    expect(lines.single, contains('push.register.failed'));
+    // The consequence field is the point of the event: this is the terminal
+    // reach failure, and its whole symptom is a call that never rings.
+    expect(lines.single, contains('device-will-not-wake'));
   });
 
   group('formatErrorReport carries the log tail', () {

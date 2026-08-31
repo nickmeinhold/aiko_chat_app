@@ -1,7 +1,10 @@
 import 'dart:async';
 
+import '../../../core/logging/log_providers.dart';
+import 'push_telemetry.dart';
+
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
@@ -43,15 +46,30 @@ final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
   if (kIsWeb) return null;
   return switch (defaultTargetPlatform) {
     TargetPlatform.android => FcmTokenSource(),
-    TargetPlatform.iOS => ApnsTokenSource(),
+    TargetPlatform.iOS => ApnsTokenSource(
+      telemetry: ref.watch(pushTelemetryProvider),
+    ),
     _ => null,
   };
 });
 
+/// The push subsystem's telemetry facade.
+///
+/// Wired to the REAL logger, never [PushTelemetry.noop]. `provider_wiring_test`
+/// pins that, because this project has already shipped a telemetry seam that
+/// silently fell back to a no-op and swallowed every must-be-seen signal
+/// (PR #45, Carnot) — the same defect, in the same shape, one subsystem over.
+final pushTelemetryProvider = Provider<PushTelemetry>(
+  (ref) => PushTelemetry(ref.watch(rootLoggerProvider).child('push')),
+);
+
 /// The device-token debts this app still owes, keyed by island. Durable and
 /// deliberately NOT session-scoped — it is written at the moment a session ends.
 final pendingUnregisterStoreProvider = Provider<PendingUnregisterStore>(
-  (ref) => PendingUnregisterStore(ref.watch(sharedPreferencesProvider)),
+  (ref) => PendingUnregisterStore(
+    ref.watch(sharedPreferencesProvider),
+    telemetry: ref.watch(pushTelemetryProvider),
+  ),
 );
 
 /// The registrar, or null where there is no token source to drive it.
@@ -75,6 +93,7 @@ final deviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
     api: ref.watch(restApiProvider),
     pending: ref.watch(pendingUnregisterStoreProvider),
     islandBaseUrl: ref.watch(configProvider).httpBaseUrl,
+    telemetry: ref.watch(pushTelemetryProvider),
   );
   // Cancels the refresh subscription and NOTHING else. A rebuild is not a
   // sign-out, so it must not record a debt — see DeviceRegistrar.dispose.
@@ -150,7 +169,7 @@ final pushPairingProvider = Provider<void>((ref) {
             // `Unauthorized` by design (the auth controller owns that
             // transition), and with nobody awaiting this it would otherwise
             // surface as an unhandled zone error rather than a log line.
-            debugPrint('pushPairing: pairing this session failed: $e');
+            ref.read(pushTelemetryProvider).pairingFailed(e);
           }
         }());
       }

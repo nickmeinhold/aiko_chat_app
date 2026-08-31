@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/theme_presets.dart';
+import '../../../core/diagnostics/report_problem_button.dart';
 import '../../../core/widgets/reading_column.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
@@ -180,6 +181,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     )
                   : null,
               onTap: _deleting ? null : _confirmAndDelete,
+            ),
+            const _SectionHeader('Diagnostics'),
+            // THE EXPORT EXISTED AND WAS UNREACHABLE. `ReportProblemButton` had
+            // exactly two call sites, both auth screens (login, claim-handle),
+            // so a SIGNED-IN user hitting a failure — a call that never rang,
+            // say — had no path to it at all. The report was built, correct, one
+            // tap away, and absent at the only moment anyone would want it
+            // (claude-tasks#3591).
+            //
+            // No `error:` here, deliberately. This entry is for the failures
+            // that have no exception to attach — the silent ones, which are the
+            // whole reason the log tail is in the bundle. `describeError(null)`
+            // renders 'unknown', and the recent-log section carries the
+            // diagnosis instead.
+            const ListTile(
+              leading: Icon(Icons.bug_report_outlined),
+              title: Text('Report a problem'),
+              subtitle: Text(
+                'Share a diagnostic report — device details and a recent '
+                'activity log. Nothing is sent until you choose where.',
+              ),
+              trailing: ReportProblemButton(error: null),
             ),
             const _SectionHeader('Legal'),
             ListTile(

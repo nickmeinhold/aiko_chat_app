@@ -1,9 +1,10 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../chat/data/chat_rest_api.dart';
 import '../data/pending_unregister_store.dart';
+import 'push_telemetry.dart';
 import '../domain/apns_environment.dart';
 import '../domain/push_token_source.dart';
 
@@ -91,12 +92,20 @@ class DeviceRegistrar {
     required ChatRestApi api,
     required PendingUnregisterStore pending,
     required String islandBaseUrl,
+    /// Defaults to the silent no-op so existing tests stay quiet. Production
+    /// wires the real one through `pushTelemetryProvider` — pinned by
+    /// `provider_wiring_test`, because a telemetry seam that silently falls back
+    /// to a no-op in the shipped app is a failure this project has already had
+    /// once (PR #45, Carnot).
+    PushTelemetry telemetry = PushTelemetry.noop,
   }) : _source = source,
        _api = api,
        _pending = pending,
-       _islandBaseUrl = islandBaseUrl;
+       _islandBaseUrl = islandBaseUrl,
+       _telemetry = telemetry;
 
   final PushTokenSource _source;
+  final PushTelemetry _telemetry;
   final ChatRestApi _api;
   final PendingUnregisterStore _pending;
 
@@ -133,9 +142,6 @@ class DeviceRegistrar {
   /// of URLs so it never reaches an access log or a proxy trace, and a debug
   /// print that dumps it whole quietly undoes that (cage-match round 4, Carnot).
   /// Enough prefix to correlate two log lines, never enough to route with.
-  static String _redact(String token) =>
-      '${token.length <= 8 ? token : token.substring(0, 8)}…[${token.length}]';
-
   /// Whether a token is currently registered — for tests and diagnostics.
   String? get registeredToken => _registered;
 
@@ -159,13 +165,10 @@ class DeviceRegistrar {
       try {
         await _api.unregisterDevice(token);
         if (!await _pending.forget(_islandBaseUrl, token)) {
-          debugPrint(
-            'DeviceRegistrar: PAID the debt for ${_redact(token)} but could '
-            'not clear the record — it will be re-attempted, a harmless no-op.',
-          );
+          _telemetry.debtPaidButUnclearable(PushTelemetry.ref(token));
         }
       } catch (e) {
-        debugPrint('DeviceRegistrar: pending unregister still owed: $e');
+        _telemetry.debtDrainFailed(e);
       }
     }
   }
@@ -191,7 +194,7 @@ class DeviceRegistrar {
     _refreshes = _source.tokenRefreshes().listen(
       (t) => unawaited(
         _register(t, generation).catchError((Object e) {
-          debugPrint('DeviceRegistrar: a rotation could not register: $e');
+          _telemetry.rotationRegisterFailed(e);
         }),
       ),
     );
@@ -246,11 +249,7 @@ class DeviceRegistrar {
     // persistence failure by returning false rather than throwing, and a debt
     // that did not persist is a backstop that does not exist.
     if (!await _pending.remember(_islandBaseUrl, token)) {
-      debugPrint(
-        'DeviceRegistrar: COULD NOT RECORD the unregister debt for '
-        '${_redact(token)} — if the attempt below also fails, this island keeps '
-        'a routable row and nothing will retry it.',
-      );
+      _telemetry.debtRecordFailed(PushTelemetry.ref(token));
     }
     _settling = _attemptUnregister(token, credential);
   }
@@ -290,7 +289,7 @@ class DeviceRegistrar {
       await _api.unregisterDevice(token, credential: credential);
       await _pending.forget(_islandBaseUrl, token);
     } catch (e) {
-      debugPrint('DeviceRegistrar: unregister deferred to next sign-in: $e');
+      _telemetry.unregisterDeferred(e);
     }
     if (_registered == token) _restate();
   }
@@ -362,11 +361,7 @@ class DeviceRegistrar {
     // This is the same fail-toward-deletion the design's governing principle
     // names: an over-delete degrades reach, an under-delete leaks.
     if (!await _pending.remember(_islandBaseUrl, token)) {
-      debugPrint(
-        'DeviceRegistrar: could not record the register obligation for '
-        '${_redact(token)} — a lost response or a kill here leaves a row '
-        'nothing will clear.',
-      );
+      _telemetry.registerObligationUnrecorded(PushTelemetry.ref(token));
     }
     try {
       await _api.registerDevice(
@@ -382,9 +377,7 @@ class DeviceRegistrar {
       await _pending.forget(_islandBaseUrl, token);
       rethrow;
     } catch (e) {
-      debugPrint(
-        'DeviceRegistrar: register failed, this device will not wake: $e',
-      );
+      _telemetry.registerFailed(PushTelemetry.ref(token), e);
       // MAYBE-LANDED. A POST whose response was lost may still have written the
       // row, and no later event re-examines a register that threw. Everything
       // that is not a rejection is treated as ambiguous, and ambiguity settles
@@ -413,10 +406,7 @@ class DeviceRegistrar {
     try {
       return await _source.apnsEnvironment();
     } catch (e) {
-      debugPrint(
-        'DeviceRegistrar: could not resolve the push environment, letting the '
-        'island default decide: $e',
-      );
+      _telemetry.environmentUnresolved(e);
       return null;
     }
   }
@@ -470,10 +460,7 @@ class DeviceRegistrar {
       // row to the PREVIOUS session's user, and no DELETE this session can issue
       // will match it — only a POST from the current session reclaims it.
       if (generation != _generation) {
-        debugPrint(
-          'DeviceRegistrar: a late register REASSIGNED the live row for '
-          '${_redact(token)} — restating it under the current session.',
-        );
+        _telemetry.registerReassignedLiveRow(PushTelemetry.ref(token));
         _restate();
       }
       // Otherwise the staleness is EPOCH-only: a newer register for the same
@@ -497,10 +484,7 @@ class DeviceRegistrar {
     // install, so an inline delete could match a row the NEXT session already
     // registered, whereas the drain runs strictly before the next start.
     if (!await _pending.remember(_islandBaseUrl, token)) {
-      debugPrint(
-        'DeviceRegistrar: a stale register may have left a row for '
-        '${_redact(token)} and the debt could not be re-recorded.',
-      );
+      _telemetry.registerStaleRowUnrecorded(PushTelemetry.ref(token));
     }
   }
 }
