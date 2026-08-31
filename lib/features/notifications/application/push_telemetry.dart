@@ -45,7 +45,11 @@ class PushTelemetry {
   /// The terminal reach failure: the island has no routable row for us.
   void registerFailed(String tokenRef, Object error) => _log.severe(
     'push.register.failed',
-    fields: {'token': tokenRef, 'consequence': 'device-will-not-wake'},
+    fields: {
+      'token': tokenRef,
+      'consequence': 'device-will-not-wake',
+      ..._why(error),
+    },
     error: error,
   );
 
@@ -107,18 +111,14 @@ class PushTelemetry {
 
   void permissionRequestFailed(String platform, Object error) => _log.warning(
     'push.permission.request_failed',
-    fields: {'platform': platform, ..._why(error)},
+    fields: {'platform': platform},
     error: error,
   );
 
   /// No token from the platform — the commonest silent reach failure.
   void tokenUnavailable(String platform, Object error) => _log.severe(
     'push.token.unavailable',
-    fields: {
-      'platform': platform,
-      'consequence': 'device-will-not-wake',
-      ..._why(error),
-    },
+    fields: {'platform': platform, 'consequence': 'device-will-not-wake'},
     error: error,
   );
 
@@ -152,12 +152,29 @@ class PushTelemetry {
     AikoLogger(subsystem: 'aiko.push', sink: NoopLogSink()),
   );
 
-  /// The reason fields every failure log carries.
+  /// The reason fields carried by every failure log whose error comes off the
+  /// HTTP CLIENT — and deliberately not by the others.
   ///
-  /// ONE definition, so a new failure site cannot ship a differently-shaped
-  /// reason — and so `reason=` means the same thing wherever a reader meets it.
-  /// Both values come from [PushFailure], which reads only closed inputs, so
-  /// this can never widen what a record exposes.
+  /// ONE definition, so no site can ship a differently-shaped reason and
+  /// `reason=` means the same thing wherever a reader meets it. Both values come
+  /// from [PushFailure], which reads only closed inputs, so this can never widen
+  /// what a record exposes.
+  ///
+  /// ## Why the platform sites do NOT get this
+  ///
+  /// An earlier revision spread `_why` onto `permissionRequestFailed` and
+  /// `tokenUnavailable`. Those carry a `PlatformException`, which
+  /// [PushFailure.of] classifies as `unknown` — and `unknown` is `transient:
+  /// true` because weak-signal capture fails open. The result was
+  /// `push.token.unavailable consequence=device-will-not-wake retry=true`: a
+  /// handset that will not wake, beside a classifier telling the reader to try
+  /// again. Failing open is right for an unclassifiable HTTP error and is a LIE
+  /// about a permission denial, so those sites carry no reason at all rather
+  /// than a confident wrong one.
+  ///
+  /// An earlier version of this docstring claimed EVERY failure log — a
+  /// docstring asserting its own completeness wrongly is the same defect class
+  /// as the log line this whole change exists to fix (Tesla, round 1).
   static Map<String, Object?> _why(Object? error) {
     final f = PushFailure.of(error);
     return {'reason': f.name, 'retry': f.transient};

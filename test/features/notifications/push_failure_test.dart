@@ -70,6 +70,20 @@ void main() {
           PushFailure.rejected);
     });
 
+    test('the RETRYABLE 4xx are not collapsed into permanent rejection', () {
+      // Carnot + Tesla, independently, round 1. Both 408 and 429 mean an
+      // identical retry can succeed — the exact fact this enum exists to carry.
+      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 429)),
+          PushFailure.rateLimited);
+      expect(PushFailure.rateLimited.transient, isTrue);
+      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 408)),
+          PushFailure.timedOut);
+      expect(PushFailure.timedOut.transient, isTrue);
+      // ...and they must not have been fixed by making the 4xx arm transient.
+      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 400))
+          .transient, isFalse);
+    });
+
     test('5xx is the island failing, and is worth retrying', () {
       expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 500)),
           PushFailure.islandError);
@@ -131,7 +145,42 @@ void main() {
               'no-leak assertions prove nothing');
     });
 
-    test('the emitted record names the reason and leaks nothing', () {
+    // THE GUARD THAT ACTUALLY GUARDS. Captures the record BEFORE the redactor.
+    //
+    // The first version of this test wrapped the capture sink in
+    // RedactingLogSink and asserted on the rendered line. That check could not
+    // go red: if `_why` interpolated the exception, the redactor would trim the
+    // token-shaped run and the assertion would stay green. Verified empirically
+    // — a genuine `'\${f.name}:\$error'` mutation passed 9/9 through the
+    // redacted path. The verifier shared a layer with the thing it verified,
+    // which is the exact defect the PR body claimed to have avoided.
+    //
+    // (The mutation that supposedly proved the old test worked was ALSO broken:
+    // a shell-escaping slip wrote an escaped dollar, so it never interpolated
+    // and went red only by breaking a substring match. A red for the wrong
+    // reason manufactures confidence — worse than no proof at all.)
+    test('RAW fields carry no payload — asserted BEFORE redaction', () {
+      final capture = _Capture();
+      // NO RedactingLogSink. If the reason ever carries the secret, it arrives
+      // here intact and this test fails, which is the whole point.
+      final log = AikoLogger(subsystem: 'aiko', sink: capture);
+      PushTelemetry(log.child('push')).unregisterDeferred(
+        _dio(DioExceptionType.badResponse, status: 401),
+      );
+
+      expect(capture.records, hasLength(1));
+      final r = capture.records.single;
+      expect(r.event, 'push.unregister.deferred');
+      expect(r.fields['reason'], 'credentialRejected');
+      expect(r.fields['retry'], isFalse);
+      // Every field value, unredacted, must be free of the payload.
+      for (final e in r.fields.entries) {
+        expect(e.value.toString().contains(_secret), isFalse,
+            reason: 'field ${e.key} carried the token into the record');
+      }
+    });
+
+    test('and the rendered line is still correct through the real sink', () {
       final capture = _Capture();
       final log = AikoLogger(
         subsystem: 'aiko',
@@ -140,13 +189,10 @@ void main() {
       PushTelemetry(log.child('push')).unregisterDeferred(
         _dio(DioExceptionType.badResponse, status: 401),
       );
-
-      expect(capture.records, hasLength(1));
       final line = capture.records.single.format();
       expect(line, contains('push.unregister.deferred'));
       expect(line, contains('reason=credentialRejected'));
       expect(line, contains('retry=false'));
-      expect(line.contains(_secret), isFalse);
     });
   });
 }

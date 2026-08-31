@@ -60,6 +60,17 @@ enum PushFailure {
   /// (claude-tasks#3723).
   credentialRejected(transient: false, credentialIsDead: true),
 
+  /// 429 — the island is shedding load, not refusing us.
+  ///
+  /// A retryable 4xx, and the reason this member exists separately: an earlier
+  /// version of the ladder classified EVERY non-401/403 4xx as permanent, so a
+  /// rate-limited island read as `reason=rejected retry=false` and a reader
+  /// would close the diagnosis wrong. Worse downstream: once claude-tasks#3723
+  /// reads `!transient` to declare a debt unpayable, a throttled island would
+  /// mint an orphaned routable row this client never clears. Found by two
+  /// reviewer families independently, which is what a real defect looks like.
+  rateLimited(transient: true),
+
   /// Any other 4xx. Our bug or our stale assumption, not a dead session — kept
   /// distinct from [credentialRejected] so "the session expired" cannot absorb
   /// "we sent a malformed body".
@@ -87,6 +98,20 @@ enum PushFailure {
   /// also not worth retrying, but for reasons a fresh sign-in would not fix. A
   /// test pins this to exactly one member, because a flag that spreads to
   /// "roughly the bad ones" stops carrying information.
+  ///
+  /// ## NO RUNTIME CONSUMER YET — read this before relying on it
+  ///
+  /// Nothing branches on this today. `_attemptUnregister` still catches, logs
+  /// and moves on identically whichever value it gets, and this flag's only
+  /// non-test reader is the log line. It is stated here rather than left to a
+  /// PR description because "we DISTINGUISH a dead credential" is one careless
+  /// sentence away from "we HANDLE a dead credential", and the second is false.
+  ///
+  /// The consumer is claude-tasks#3723: paying a debt owed to an island whose
+  /// credential is gone needs an island-side contract change (a DELETE signed by
+  /// the sovereign key), so the branch that reads this cannot be written on this
+  /// side of the wire yet. Raised independently by Carnot and by the author's
+  /// own pass, round 1 — a capability that is tested but never driven.
   final bool credentialIsDead;
 
   /// Classify [error]. Reads only closed values — never a message or a body.
@@ -108,6 +133,10 @@ enum PushFailure {
         final status = error.response?.statusCode;
         if (status == null) return unknown;
         if (status == 401 || status == 403) return credentialRejected;
+        // BEFORE the generic 4xx arm: 408 and 429 are retryable 4xx, and
+        // collapsing them into `rejected` is the defect this ladder shipped with.
+        if (status == 408) return timedOut;
+        if (status == 429) return rateLimited;
         if (status >= 500) return islandError;
         if (status >= 400) return rejected;
         return unknown;
