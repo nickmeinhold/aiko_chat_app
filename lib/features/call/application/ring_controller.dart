@@ -230,7 +230,9 @@ class RingController extends Notifier<CallInvite?> {
         // case for every invite that arrives. Only a refusal that is noteworthy
         // AND not simply "this is not an end" is worth a record, or the buffer
         // fills with the shape of every message that is not a hangup.
-        if (reason.noteworthy) _telemetry.endRefused(m.channelId, reason);
+        if (reason.refusedAnAttempt) {
+          _telemetry.endRefused(m.channelId, reason);
+        }
     }
     final decision = admitRing(
       m,
@@ -248,7 +250,9 @@ class RingController extends Notifier<CallInvite?> {
         // as one indistinguishable `null`, which is why learning that a real
         // push-woken ring had been refused for staleness took four hours and a
         // throwaway instrumentation branch (claude-tasks#3588, #3591).
-        if (reason.noteworthy) _telemetry.ringRefused(m.channelId, reason);
+        if (reason.refusedAnAttempt) {
+          _telemetry.ringRefused(m.channelId, reason);
+        }
         return;
       case RingAdmitted(invite: final admitted):
         invite = admitted;
@@ -266,6 +270,11 @@ class RingController extends Notifier<CallInvite?> {
       // argue exactly that while the code still called `_settle(invite)`, whose
       // only remaining act is `if (_live == invite)` — a check for the state the
       // comment denies (round 8, Tesla).
+      //
+      // ANNOUNCED rather than silent: the gate said YES and the handset stays
+      // quiet, which is the one shape this whole change exists to make
+      // impossible to mistake for "nobody called" (Tesla, #3591 cage-match).
+      _telemetry.ringDeadOnArrival(invite.channelId);
       return;
     }
     // The SAME invitation, already ringing. Nothing to do — and notably nothing
@@ -274,7 +283,13 @@ class RingController extends Notifier<CallInvite?> {
     // now unrepresentable ([CallInvite.serverMsgId] is non-nullable and
     // `admitRing` refuses a message without one), so the branch defended nothing
     // and cost a HIGH review finding for a bug it made look possible.
-    if (invite == _live) return;
+    if (invite == _live) {
+      // At-least-once delivery re-delivering a live ring. Expected, so DEBUG —
+      // but recorded, so a report can show the duplicate rate rather than
+      // leaving a reader to infer it from a gap.
+      _telemetry.ringDuplicate(invite.channelId);
+      return;
+    }
     // A DIFFERENT invite while already ringing REPLACES the first (last-wins) —
     // the most recent caller is the live one, and stacking rings has no sane UI.
     // The DISPLACED invitation is settled on the way out: replacement is a third
@@ -291,7 +306,7 @@ class RingController extends Notifier<CallInvite?> {
     // record, an empty report cannot distinguish "no call arrived" from
     // "logging is broken" — and an instrument that reads the same either way is
     // not an instrument.
-    _telemetry.ringAdmitted(invite.channelId, now.difference(invite.startedAt));
+    _telemetry.ringStarted(invite.channelId, now.difference(invite.startedAt));
     // ONE equation of motion. Arming an absolute `kCallRingDuration` here while
     // `_republish` derived the remaining time from `startedAt` meant a ring's
     // length depended on whether a rebuild happened to occur: an invite signed

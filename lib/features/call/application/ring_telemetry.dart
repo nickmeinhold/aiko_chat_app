@@ -12,6 +12,19 @@ import '../domain/call_invite.dart';
 /// or a signature could reach a log. The invite body is a fixed sentinel and
 /// therefore safe, but nothing here needs it, so nothing here accepts it.
 ///
+/// ## The channel id IS logged, deliberately
+///
+/// It is the correlation key: without it a report says a ring was refused and
+/// cannot say which conversation, which makes it unactionable. It is an opaque
+/// ULID naming a conversation, not a person — a reader who does not already have
+/// this device's channel list learns nothing from it, and one who does is the
+/// device's owner. The island already treats a channel id as the one identifier
+/// worth spending on the APNs wire (`push_service._payload`) after weighing the
+/// same trade, so this is consistent with the recorded decision rather than a
+/// fresh one. `RedactingLogSink` deliberately preserves ULIDs for this reason.
+/// (Raised by Carnot, #3591 cage-match: the docstring argued only that bodies,
+/// keys and signatures cannot reach the log, and said nothing about ids.)
+///
 /// ## Why the refusal is the whole feature
 ///
 /// A ring that does not happen produces no exception, no UI change and no user-
@@ -45,12 +58,32 @@ class RingTelemetry {
   );
 
   /// The ring was admitted and the handset is ringing. INFO, and the positive
-  /// control for the two above: without it, an empty report cannot distinguish
-  /// "no call arrived" from "logging is broken".
-  void ringAdmitted(String channelId, Duration age) => _log.info(
-    'call.ring.admitted',
+  /// control for the refusals above: without it, an empty report cannot
+  /// distinguish "no call arrived" from "logging is broken".
+  void ringStarted(String channelId, Duration age) => _log.info(
+    'call.ring.started',
     fields: {'channel': channelId, 'ageMs': age.inMilliseconds},
   );
+
+  /// ADMITTED by every trust clause and then suppressed anyway, because the
+  /// caller's hangup was already remembered. Not a gate refusal — the call was
+  /// real and legitimate, it was simply already over.
+  ///
+  /// Recorded because the alternative is a vacuum, and a vacuum is the exact
+  /// shape of the hole this work exists to close: `admitRing` says yes and the
+  /// handset stays quiet. The next reader would not ask "which gate refused?" —
+  /// they would ask "the gate said yes, so where did it go?" and find nothing.
+  /// The out-of-order path is first-class here (delivery is at-least-once and
+  /// locally unordered, and push makes an end-before-invite LIKELIER), so this
+  /// is a routine event, not an exotic one. (Tesla, #3591 cage-match.)
+  void ringDeadOnArrival(String channelId) =>
+      _log.info('call.ring.dead_on_arrival', fields: {'channel': channelId});
+
+  /// The same invitation delivered again while it is already ringing. Expected
+  /// under at-least-once delivery; recorded at DEBUG so a report can show the
+  /// duplicate rate without the hot path drowning the buffer.
+  void ringDuplicate(String channelId) =>
+      _log.debug('call.ring.duplicate', fields: {'channel': channelId});
 
   static const RingTelemetry noop = RingTelemetry(
     AikoLogger(subsystem: 'aiko.call.ring', sink: NoopLogSink()),

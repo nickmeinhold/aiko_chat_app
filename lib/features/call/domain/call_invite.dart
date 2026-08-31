@@ -241,8 +241,18 @@ CallEndDecision admitCallEnd(
   /// the rule that admitted the ring — see [_isCallEndShape].
   required RingConsent consent,
 }) {
-  if (!_isCallEndShape(message)) {
+  // DECOMPOSED rather than calling [_isCallEndShape], which is a compound of
+  // three very different situations. The render path still uses the compound
+  // form (it only needs a bool); admission needs to tell them apart, because two
+  // of the three are anomalies and one is every message anyone ever sends.
+  if (!isCallEndBody(message.body)) {
     return const CallEndRefused(RingRefusal.notAnEnd);
+  }
+  if (message.sender.userId == null) {
+    return const CallEndRefused(RingRefusal.endMissingAuthor);
+  }
+  if (message.replyToId == null) {
+    return const CallEndRefused(RingRefusal.endMissingTarget);
   }
   if (!_hasVerifiedOrigin(message)) {
     return const CallEndRefused(RingRefusal.unverifiedOrigin);
@@ -504,7 +514,7 @@ class CallInvite {
 /// could not tell a freshness refusal from a signature refusal, and passed
 /// either way.
 ///
-/// ## [noteworthy] is not a logging preference — it protects the log
+/// ## [refusedAnAttempt] states a DOMAIN fact; protecting the log is its consequence
 ///
 /// The ring gate sees EVERY inbound message: [RingController] funnels the whole
 /// cross-channel stream through it, because a call must reach you in a DM you
@@ -513,55 +523,73 @@ class CallInvite {
 ///
 /// Logging that would fill a 500-record ring buffer with `notAnInvite` in
 /// seconds and evict the events worth keeping — the diagnostic tool destroying
-/// its own value on contact with the hot path. The distinction is therefore
-/// structural rather than left to each caller's judgement: [notAnInvite] and
-/// [ownInvite] mean *this was never a ring attempt*; every other value means
-/// *someone tried to ring you and we said no*, which is the whole question.
+/// its own value on contact with the hot path.
+///
+/// So the enum carries the distinction — but as the domain fact, NOT as the
+/// logging policy. [refusedAnAttempt] answers *"did somebody actually try to
+/// reach this handset, and did we say no?"*. Whether that deserves a log record
+/// is the CALLER's inference from that fact; an earlier draft named this field
+/// `noteworthy`, which put a logging decision inside a domain type and hid the
+/// reasoning behind a verbosity-sounding word.
 enum RingRefusal {
   /// The body is not the invite sentinel — i.e. an ordinary message. The hot
   /// path, and the reason [noteworthy] exists.
-  notAnInvite(noteworthy: false),
+  notAnInvite(refusedAnAttempt: false),
 
   /// Our own invite, echoed back. Normal and constant during a call we placed.
-  ownInvite(noteworthy: false),
+  ownInvite(refusedAnAttempt: false),
 
   /// Our own hangup, echoed back. [admitCallEnd] only.
-  ownEnd(noteworthy: false),
+  ownEnd(refusedAnAttempt: false),
 
-  /// The body is not the end sentinel, or carries no reply target.
+  /// The body is not the end sentinel — an ordinary message. Hot path.
   /// [admitCallEnd] only.
-  notAnEnd(noteworthy: false),
+  notAnEnd(refusedAnAttempt: false),
+
+  /// A call-END sentinel with NO AUTHOR. Not hot-path chatter: something aimed
+  /// call control at this handset and could not be named or refused, which is
+  /// the same malformed-or-hostile island row [anonymousSender] describes on the
+  /// start side. Split out of [notAnEnd] after a cage-match (Maxwell + Carnot,
+  /// independently) found that folding it in made a failed hangup STRUCTURALLY
+  /// unloggable — the very defect this enum exists to remove, reproduced one
+  /// level down.
+  endMissingAuthor(refusedAnAttempt: true),
+
+  /// A call-END sentinel naming NO CALL (`reply_to` absent). It could never stop
+  /// any ring, so a bell may still be ringing for a call the caller believes is
+  /// over — the failure is silent and user-visible at once.
+  endMissingTarget(refusedAnAttempt: true),
 
   /// `originCryptoValid != true` — unsigned, or carried-but-invalid. The
   /// security-relevant refusal: a ring that could not prove who sent it.
-  unverifiedOrigin(noteworthy: true),
+  unverifiedOrigin(refusedAnAttempt: true),
 
   /// Verified but the envelope is absent — belt-and-braces; valid implies
   /// present, so this firing at all means an upstream invariant broke.
-  originMissing(noteworthy: true),
+  originMissing(refusedAnAttempt: true),
 
   /// The sender has no `userId`. A malformed or hostile island row: whoever may
   /// wake you must be someone you can name and refuse, and
   /// `blockedUserIds.contains(null)` never matches (cage-match, Carnot HIGH).
-  anonymousSender(noteworthy: true),
+  anonymousSender(refusedAnAttempt: true),
 
   /// A non-human sender this conversation has not consented to be rung by.
   /// Expected whenever an agent calls before you allow it — and the single most
   /// useful line in a "why didn't the bot's call ring?" report.
-  consentWithheld(noteworthy: true),
+  consentWithheld(refusedAnAttempt: true),
 
   /// Not a DM. Channel-wide ringing is gated until per-call consent exists.
-  notDirectMessage(noteworthy: true),
+  notDirectMessage(refusedAnAttempt: true),
 
   /// The sender is blocked.
-  senderBlocked(noteworthy: true),
+  senderBlocked(refusedAnAttempt: true),
 
   /// The conversation is muted.
-  conversationMuted(noteworthy: true),
+  conversationMuted(refusedAnAttempt: true),
 
   /// Signed in the future by a skewed clock. Refused rather than admitted: a
   /// bad clock would otherwise ring forever.
-  clockSkew(noteworthy: true),
+  clockSkew(refusedAnAttempt: true),
 
   /// Older than [kCallInviteFreshness].
   ///
@@ -569,17 +597,20 @@ enum RingRefusal {
   /// a human noticing, a cold start and a handshake in its measured age, so this
   /// firing on a real push wake is the confirmation #3588 has been waiting for.
   /// It was previously indistinguishable from every other refusal.
-  stale(noteworthy: true),
+  stale(refusedAnAttempt: true),
 
   /// No server id, so a hangup could never name it (`reply_to` is an FK onto
   /// `messages.id`). Unreachable via either production producer.
-  noServerId(noteworthy: true);
+  noServerId(refusedAnAttempt: true);
 
-  const RingRefusal({required this.noteworthy});
+  const RingRefusal({required this.refusedAnAttempt});
 
-  /// Whether this refusal is worth a log record. See the enum doc — this
-  /// protects the ring buffer from the hot path, it is not a verbosity knob.
-  final bool noteworthy;
+  /// Whether a real attempt to reach this handset was refused, as opposed to a
+  /// message that was never call control at all (or our own, echoed back).
+  ///
+  /// Callers use it to decide what to record — see the enum doc for why that
+  /// inference belongs at the call site and the FACT belongs here.
+  final bool refusedAnAttempt;
 }
 
 /// The outcome of the ring trust gate: admitted with an invitation, or refused
@@ -666,18 +697,33 @@ RingDecision admitRing(
   if (!isCallInviteBody(message.body)) {
     return const RingRefused(RingRefusal.notAnInvite);
   }
-  if (message.sender.userId == meUserId) {
-    return const RingRefused(RingRefusal.ownInvite);
-  }
-  // The signature check — see the doc above. `originCryptoValid` is computed
-  // ONCE at ingest by the repository; `true` is the only admitting value
-  // (`null` = unsigned/unverified, `false` = carried-but-invalid).
+  // VERIFY BEFORE ANY SERVER-SUPPLIED FIELD IS CONSULTED — `userId` included.
   //
-  // MOVED AHEAD OF THE KIND GATE, and the order is now load-bearing rather than
-  // incidental: the kind gate below may consult the SIGNER'S KEY, and a key read
-  // off an unverified envelope is a key anyone can claim. Verify, then consult.
+  // `originCryptoValid` is computed ONCE at ingest by the repository; `true` is
+  // the only admitting value (`null` = unsigned/unverified, `false` =
+  // carried-but-invalid). It runs AHEAD OF EVERY OTHER CLAUSE, and the order is
+  // load-bearing rather than incidental: the kind gate below consults the
+  // SIGNER'S KEY, and a key read off an unverified envelope is a key anyone can
+  // claim.
+  //
+  // THE OWN-ECHO CHECK USED TO RUN FIRST, and that was the same mistake one
+  // field over. `sender.userId` is server-supplied and OUTSIDE the signature —
+  // this file argues exactly that a clause below — so an island can write
+  // anything into it. Staple the recipient's own id onto an UNSIGNED invite and
+  // the gate refused it as `ownInvite`, a non-attempt recorded nowhere, rather
+  // than `unverifiedOrigin`, the security-relevant line. Admission never
+  // differed; what differed is that a hostile island got to CHOOSE WHICH FIELD
+  // TO FORGE in order to pick the quieter reason — and the named reasons this
+  // change introduces would have fossilised that choice into the diagnostic.
+  //
+  // `admitCallEnd` already verified before ITS own-echo check, so the two gates
+  // disagreed: the start/stop divergence class this file has been struck over
+  // twice. Found by Tesla in the #3591 cage-match.
   if (message.originCryptoValid != true) {
     return const RingRefused(RingRefusal.unverifiedOrigin);
+  }
+  if (message.sender.userId == meUserId) {
+    return const RingRefused(RingRefusal.ownInvite);
   }
   final origin = message.origin;
   if (origin == null) {
