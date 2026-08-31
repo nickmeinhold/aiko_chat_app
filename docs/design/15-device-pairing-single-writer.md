@@ -216,3 +216,57 @@ likely to be wrong.
 
 **Design temper only. The implementation is UNPROVEN and a code cage-match is owed on whatever
 ships.**
+
+---
+
+## Residual found after temper — 2026-08-31, from live evidence
+
+**Added after the fact and deliberately kept out of the tempered body above.** The
+four-family strikes did not raise this, and the record of what they did raise should
+stay as they left it.
+
+**A debt owed to island A can only be paid by signing in to island A.**
+
+The residual list above names *"sign out offline and never sign in again on this
+handset"* and hands it to server-side expiry. That is the **never-sign-in-again**
+case. This is the **sign-in-again-somewhere-else** case, and for an app whose
+premise is island sovereignty it is not an edge:
+
+```
+device_registrar.dart:114   final String _islandBaseUrl;                       // one island per instance
+device_registrar.dart:164   for (final token in _pending.read(_islandBaseUrl))  // drain reads THIS island only
+device_registrar.dart:55    "drainPending() runs STRICTLY BEFORE start(), on every sign-in edge"
+```
+
+A gateway switch is a hard logout: `unpair` records the debt to A, then the config
+invalidates and a **new registrar is constructed for B**. B's drain reads B's debts.
+A's debt is now payable only by a registrar built for A — i.e. by going back. **The
+action that incurs the obligation is the same action that removes every occasion to
+discharge it.**
+
+Observed 2026-08-31 on a real handset:
+
+```
+05:17:15  push.unregister.deferred error=DioException        # the DELETE to imagineering threw
+imagineering  device_tokens  659738f0  production  04:32:16  # unchanged by the 15:17 switch
+enspyr        device_tokens  659738f0  production  05:17:21  # the SAME physical token
+```
+
+An APNs token is scoped to `(device, bundle id)`, never to an island — so this is not
+a stale record, it is **live push reach**. A signed invite fired from enspyr at 14:36
+lit up the locked handset while the app was connected to imagineering.
+
+**Why the design missed it rather than decided it.** Every residual above reasons about
+one island and its sequence of sessions. The debt store already models the plural case
+(`Map<islandBaseUrl, List<token>>`); the design does not. A frame handed identically to
+four adversaries is not re-derived by any of them.
+
+**Direction, not a decision.** The drain is coupled to *"am I currently signed into
+that island"*, but the obligation is to a **host**, and the store already holds host +
+token. Sweeping every owed island at any sign-in edge removes the window rather than
+guarding it — no retry to schedule, no occasion to miss. It interacts with the
+`unregister` contract (`(user_id, token)` — a credential for B cannot delete A's row),
+so it is not free, and it needs a design pass of its own.
+
+Tracked as app-tab task #11. Any implementation is a code cage-match, per this
+document's own closing line.
