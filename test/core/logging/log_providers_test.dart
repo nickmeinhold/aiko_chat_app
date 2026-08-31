@@ -1,10 +1,10 @@
 import 'package:aiko_chat_app/core/diagnostics/error_report.dart';
 import 'package:aiko_chat_app/core/logging/aiko_log.dart';
-import 'package:aiko_chat_app/core/logging/aiko_logger.dart';
 import 'package:aiko_chat_app/core/logging/log_providers.dart';
 import 'package:aiko_chat_app/core/network/network_status.dart';
+import 'package:aiko_chat_app/features/call/application/ring_telemetry.dart';
+import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
-import 'package:aiko_chat_app/features/notifications/application/push_telemetry.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -75,6 +75,20 @@ void main() {
     // The consequence field is the point of the event: this is the terminal
     // reach failure, and its whole symptom is a call that never rings.
     expect(lines.single, contains('device-will-not-wake'));
+  });
+
+  test('ringTelemetryProvider reaches the real buffer, not a no-op', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+
+    c.read(ringTelemetryProvider).ringRefused('dm:a:b', RingRefusal.stale);
+
+    final line = c.read(logBufferProvider).snapshot().single.format();
+    expect(line, contains('aiko.call.ring'));
+    expect(line, contains('call.ring.refused'));
+    // The reason is the payload. A record that said only "refused" would
+    // reproduce the exact defect this change removed.
+    expect(line, contains('reason=stale'));
   });
 
   group('formatErrorReport carries the log tail', () {
