@@ -261,12 +261,32 @@ one island and its sequence of sessions. The debt store already models the plura
 (`Map<islandBaseUrl, List<token>>`); the design does not. A frame handed identically to
 four adversaries is not re-derived by any of them.
 
-**Direction, not a decision.** The drain is coupled to *"am I currently signed into
-that island"*, but the obligation is to a **host**, and the store already holds host +
-token. Sweeping every owed island at any sign-in edge removes the window rather than
-guarding it — no retry to schedule, no occasion to miss. It interacts with the
-`unregister` contract (`(user_id, token)` — a credential for B cannot delete A's row),
-so it is not free, and it needs a design pass of its own.
+**A direction proposed and then falsified, same session — recorded because the dead
+end is the useful part.** First answer: *sweep every owed island at any sign-in edge;
+the store already holds host + token, so remove the window rather than guard it.*
+**That cannot be built client-side.** The store is `Map<islandBaseUrl, List<token>>` —
+tokens only — and `drainPending` calls `unregisterDevice(token)` on the **ambient**
+authenticated session. Paying A's debt from B needs A's credential, which `unpair`
+clears unconditionally and immediately (the contract five rounds bought), and which
+`unregister`'s `(user_id, token)` match means B's credential cannot substitute for.
+Persisting a dead island's credential would trade a push-reach leak for a
+credential-at-rest leak, in the same file #3385 says is not yet excluded from backup.
+
+**So the coupling is not the drain's island-binding.** It is that **authority to delete
+dies with the session while the row outlives it** — and no client-side scheduling fixes
+an authority gap.
+
+**Where that points (island-side, not buildable here).** The handset holds a sovereign
+Ed25519 key that survives logout and is not island-scoped. A `DELETE` authenticated by
+a signature over `(token, island_base_url, issued_at)` from the key that registered the
+row is payable forever, from anywhere, storing nothing. It needs no bearer credential,
+so it survives exactly the event that creates the debt. That is this repo's own thesis
+applied to the one surface still using session bearer auth — and it is a natural
+companion to the **conditional unregister** already proposed to the island tab above,
+which solves ordering where this solves authority.
+
+Cross-repo: an island contract change, so it is a task slugged to the island, not a
+build here.
 
 Tracked as app-tab task #11. Any implementation is a code cage-match, per this
 document's own closing line.
