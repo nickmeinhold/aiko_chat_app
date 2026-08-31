@@ -143,10 +143,30 @@ leaving it here.
 
 ### Named residuals, not fixed
 
-- **The instrument's true-positive arm has never rung.** Tesla's sharpest concern: twelve
-  fixtures and a loopback prove the tally can see `host`. It has never seen an actual TURN
-  relay against a live stack, and that is the reading the SFU decision needs. Needs a TURN
-  server; noted rather than faked.
+- **The instrument's true-positive arm has never rung — and it now says so out loud.**
+  Tesla's sharpest concern: twelve fixtures and a loopback prove the tally can see `host`.
+  It has never seen an actual TURN relay, which is the reading the SFU decision needs.
+  `integration_test/p2p_relay_policy_test.dart` holds the arm, gated on
+  `--dart-define=TURN_URL/TURN_USER/TURN_PASS` and **skipped loudly**, never silently — a
+  green suite must not imply it ran. The island tab notes both islands already advertise
+  `turns:<domain>:443` from LiveKit's embedded TURN, so this needs a credential rather than
+  new infrastructure (and warns that `bind_addresses` silently kills the UDP relay unless
+  `rtc.node_ip` is aligned, and that one of seven relay-only connects failed unreproducibly —
+  claude-tasks#3353 — so one green will be an observation, not a distribution).
+
+- **RESOLVED, and it was the precondition nobody had checked: the relay knob is real.** Before
+  the true positive can mean anything, `iceTransportPolicy` has to actually do something — an
+  inert knob would make every relay measurement worthless while looking exactly like a
+  measurement. The must-fail arm in the same file forces relay-only with **no** TURN and
+  asserts the connection does NOT form. Measured:
+
+  ```
+  [P2P-RELAY] relay-only, no TURN → settled=[] caller.gathered={}
+  ```
+
+  Zero candidates gathered, no connection. The policy is applied at gathering time, not just
+  advertised. Built before examining whether the check works, per the island tab's own lesson
+  from tonight: *a harness examined for whether it can fail tends to look like it can.*
 - **`readSelectedPair` is macOS-shaped.** A mobile `getStats()` that stringifies numbers,
   emits `googCandidatePair`, or spells the type `relayed` is a different instrument wearing
   this one's name. First mobile run must re-verify, not assume.
