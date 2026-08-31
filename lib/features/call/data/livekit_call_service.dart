@@ -111,6 +111,23 @@ class LiveKitCallService {
             maxFrameRate: 30,
             params: VideoParametersPresets.h540_169,
           ),
+          // `vp8` IS LOAD-BEARING, not a rendering preference — do not
+          // "modernise" it to AV1 without reading claude-tasks#3426 first.
+          //
+          // LiveKit REFUSES AV1 outright under end-to-end encryption
+          // (`av1 is not yet supported for end to end encryption`, thrown from
+          // the frame cryptor), and H.264/H.265 need NALU-aware handling with a
+          // fallback. So if #3426 rules media E2EE on, an AV1 pin here is a
+          // hard throw at connect time.
+          //
+          // It is also WHY that decision's cost column came out empty
+          // (verified independently by both tabs, 2026-08-31, against the
+          // LOCKED `livekit_client 2.10.0` rather than whatever is newest in
+          // the pub cache): E2EE's only publish-side effects are disabling the
+          // backup video codec and RED. The backup codec exists to fall back
+          // FROM VP9/AV1 TO VP8 — we already publish the fallback floor, so
+          // disabling it removes a path we never take. `simulcast` is untouched
+          // by E2EE, and RED is already off by default on this path.
           defaultVideoPublishOptions: VideoPublishOptions(
             simulcast: true,
             videoCodec: 'vp8',
