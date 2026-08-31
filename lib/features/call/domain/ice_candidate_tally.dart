@@ -29,7 +29,7 @@
 /// the thing it measures.
 library;
 
-/// The five ICE candidate types, as they appear in the `typ` token of a
+/// The four ICE candidate types, as they appear in the `typ` token of a
 /// candidate line and in the `candidateType` stat.
 ///
 /// A closed set gets an enum: this drives a decision, and a stringly-typed
@@ -129,45 +129,94 @@ class IceCandidateTally {
   /// spec: a `candidate-pair` names its endpoints by id, and the ids resolve to
   /// `local-candidate` / `remote-candidate` entries carrying `candidateType`.
   ///
-  /// The succeeded pair is selected by `nominated == true` where present, and
-  /// otherwise by `state == 'succeeded'` — implementations differ on which they
-  /// populate, and requiring both would silently record nothing on half of them.
+  /// ## Which pair counts, and why the obvious rule was wrong
+  ///
+  /// An earlier version took *the first pair that was nominated OR succeeded*,
+  /// breaking on the first nominated one. Two independent reviewers (Carnot,
+  /// Tesla) killed it: **stats order is not ICE priority.** `nominated == true`
+  /// on a pair whose `state` is `in-progress` or `failed` would win outright,
+  /// and where a stack never sets `nominated` — the case the OR existed for —
+  /// the winner was whichever succeeded pair the map happened to enumerate
+  /// first. Multiple succeeded pairs are ordinary (several m-lines, or an ICE
+  /// restart). That produces a confidently wrong *fraction*, which is worse than
+  /// a noisy one, on the exact number an architecture decision turns on.
+  ///
+  /// The rule now: **`state == 'succeeded'` is mandatory** — a pair that did not
+  /// succeed carried nothing. Among those, a `nominated` one wins; ties break on
+  /// bytes carried, because the pair that moved the most media is the pair that
+  /// was the call. No succeeded pair at all leaves the tally unmeasured.
   void recordSelectedPair(List<Map<String, dynamic>> stats) {
-    Map<String, dynamic>? pair;
+    num bytesOf(Map<String, dynamic> s) =>
+        (s['bytesSent'] as num? ?? 0) + (s['bytesReceived'] as num? ?? 0);
+
+    Map<String, dynamic>? best;
     for (final s in stats) {
       if (s['type'] != 'candidate-pair') continue;
-      final nominated = s['nominated'] == true;
-      final succeeded = s['state'] == 'succeeded';
-      if (nominated || succeeded) {
-        pair = s;
-        if (nominated) break; // a nominated pair outranks a merely-succeeded one
+      if (s['state'] != 'succeeded') continue; // never a pair that didn't carry
+      if (best == null) {
+        best = s;
+        continue;
       }
+      final bestNominated = best['nominated'] == true;
+      final thisNominated = s['nominated'] == true;
+      if (thisNominated != bestNominated) {
+        if (thisNominated) best = s;
+        continue;
+      }
+      if (bytesOf(s) > bytesOf(best)) best = s;
     }
-    if (pair == null) return;
+    if (best == null) return;
 
     IceCandidateType? typeOf(Object? id) {
       if (id is! String) return null;
       for (final s in stats) {
-        if (s['id'] == id) return IceCandidateType.parse(s['candidateType'] as String?);
+        if (s['id'] == id) {
+          return IceCandidateType.parse(s['candidateType'] as String?);
+        }
       }
       return null;
     }
 
-    selectedLocal = typeOf(pair['localCandidateId']);
-    selectedRemote = typeOf(pair['remoteCandidateId']);
+    selectedLocal = typeOf(best['localCandidateId']);
+    selectedRemote = typeOf(best['remoteCandidateId']);
   }
 
   /// True when this call went through TURN on either end — the fallback case.
+  /// False only when BOTH ends resolved and neither was a relay. Null otherwise.
   ///
-  /// Null (not false) while the selected pair is unknown, so an unmeasured call
-  /// can never be counted as a successful direct connection. A tri-state is the
-  /// point: the whole instrument exists to count relays, and a bool would make
-  /// "we didn't look" indistinguishable from "we didn't need one".
+  /// ## The bug this shape exists to prevent — found by review, not by me
+  ///
+  /// The first version returned null only when **both** ends were unknown
+  /// (`&&`), which meant `host` on the local side plus an unresolved remote
+  /// reported **`false`: a measured direct connection.** Carnot and Tesla found
+  /// it independently. Carnot's framing is the one to keep:
+  ///
+  /// > unknown heat loss is not zero heat loss
+  ///
+  /// A relay on *either* end is the whole thing being counted, so an unresolved
+  /// end could be exactly the case that matters — one absent `candidateType`,
+  /// one id that isn't a String, one stack spelling it `relayed`, and a call
+  /// that went through TURN is filed as direct evidence for deleting the SFU.
+  ///
+  /// **`true` needs only one relay; `false` needs both ends known.** The
+  /// asymmetry is the point: positive evidence of a relay is conclusive, absence
+  /// of evidence is not evidence of absence.
   bool? get usedRelay {
-    if (selectedLocal == null && selectedRemote == null) return null;
-    return selectedLocal == IceCandidateType.relay ||
-        selectedRemote == IceCandidateType.relay;
+    if (selectedLocal == IceCandidateType.relay ||
+        selectedRemote == IceCandidateType.relay) {
+      return true;
+    }
+    if (selectedLocal == null || selectedRemote == null) return null;
+    return false;
   }
+
+  /// True when the selected pair is fully resolved on both ends.
+  ///
+  /// Exposed so a caller can tell the two null cases apart — "no succeeded pair
+  /// at all" from "a pair, half of it unreadable" — which are different problems
+  /// with different fixes.
+  bool get selectedPairFullyResolved =>
+      selectedLocal != null && selectedRemote != null;
 
   /// A one-line summary for the ring buffer / telemetry.
   String describe() {

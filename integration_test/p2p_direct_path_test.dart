@@ -29,9 +29,12 @@
 /// about a loopback, not about the internet.
 library;
 
+import 'dart:async';
+
 import 'package:aiko_chat_app/features/call/data/loopback_signalling.dart';
 import 'package:aiko_chat_app/features/call/data/p2p_peer_session.dart';
 import 'package:aiko_chat_app/features/call/domain/call_connection_state.dart';
+import 'package:aiko_chat_app/features/call/domain/call_signalling.dart';
 import 'package:aiko_chat_app/features/call/domain/ice_candidate_tally.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -45,6 +48,19 @@ void main() {
 
     final caller = P2pPeerSession(role: P2pRole.offerer, signalling: pipe.a);
     final callee = P2pPeerSession(role: P2pRole.answerer, signalling: pipe.b);
+    // Registered IMMEDIATELY after construction, not after the expects.
+    // Carnot and Tesla both caught the original: teardown sat at the end of the
+    // body, so a red assertion or the 30s timeout skipped `close()` and left two
+    // native PeerConnections, their ICE threads and their sockets alive — and
+    // the next test in the process then runs in a different universe. For a
+    // network-dependent spike, failure is an expected measurement outcome, so
+    // cleanup cannot be on the success path.
+    addTearDown(() async {
+      await caller.dispose();
+      await callee.dispose();
+      await pipe.a.dispose();
+      await pipe.b.dispose();
+    });
 
     // The answerer starts FIRST. If the offerer sent its offer before the
     // answerer was listening, a broadcast stream would drop it and the call
@@ -64,15 +80,16 @@ void main() {
 
     await caller.readSelectedPair();
 
-    // The instrument read a REAL stack, not a fixture. This is the arm that
-    // proves the tally works against live stats — the `expect` is deliberately
-    // on non-nullness, not on a specific type, because which candidate type wins
-    // on a loopback is a property of the host, not of the design.
+    // BOTH ends asserted. The original checked only `selectedLocal`, which a
+    // half-resolved pair satisfies — the verifier sharing the instrument's blind
+    // spot (Tesla). `selectedPairFullyResolved` is the single assertion that
+    // cannot be satisfied by a partial parse.
     expect(
-      caller.tally.selectedLocal,
-      isNotNull,
-      reason: 'getStats() should yield a nominated pair once connected',
+      caller.tally.selectedPairFullyResolved,
+      isTrue,
+      reason: 'getStats() should yield a fully-resolved nominated pair',
     );
+    expect(caller.tally.selectedRemote, isNotNull);
     expect(caller.tally.usedRelay, isFalse,
         reason: 'no TURN configured, so a relay pair would be impossible');
 
@@ -85,19 +102,31 @@ void main() {
     print('[P2P-SPIKE] caller: ${caller.tally.describe()}');
     // ignore: avoid_print
     print('[P2P-SPIKE] callee gathered: ${callee.tally.gatheredLocal}');
-
-    await caller.dispose();
-    await callee.dispose();
   });
 
-  testWidgets('a candidate arriving before the remote description is buffered',
+  testWidgets('a candidate that arrives BEFORE the offer is buffered, not dropped',
       (tester) async {
-    // The trickle race, exercised rather than reasoned about: this is the arm
-    // that fails if `_pendingRemoteCandidates` is removed, and it is the direct
-    // path's twin of RingController holding a hangup that beat its invite.
+    // FORCED, not hoped for. The original version asserted only that the call
+    // connected and that some remote candidates were seen — both true whether
+    // candidates hit `_pendingRemoteCandidates` or went straight to
+    // `addCandidate`. Remove the buffer and it still passed. Carnot and Tesla
+    // both named it: a check whose result is independent of the thing it checks.
+    //
+    // This double GUARANTEES the race by holding the offer back until at least
+    // one candidate has been delivered ahead of it — the ordering a real
+    // at-least-once, locally-out-of-order transport produces, and the exact
+    // ordering `addCandidate`-before-`setRemoteDescription` throws on.
     final pipe = createLoopbackSignallingPair();
+    final reordered = _OfferDelayingSignalling(pipe.b);
+
     final caller = P2pPeerSession(role: P2pRole.offerer, signalling: pipe.a);
-    final callee = P2pPeerSession(role: P2pRole.answerer, signalling: pipe.b);
+    final callee = P2pPeerSession(role: P2pRole.answerer, signalling: reordered);
+    addTearDown(() async {
+      await caller.dispose();
+      await callee.dispose();
+      await reordered.dispose();
+      await pipe.a.dispose();
+    });
 
     await callee.start();
     await caller.start();
@@ -106,16 +135,71 @@ void main() {
       await Future.wait([caller.connected, callee.connected])
           .timeout(const Duration(seconds: 30)),
       [true, true],
+      reason: 'a candidate delivered before the offer must not break the call',
     );
-    // Candidates genuinely do race the SDP here; if any were dropped rather than
-    // buffered the connection above would not have formed. Recording the count
-    // so a future regression shows as a number, not a hang.
-    // ignore: avoid_print
-    print('[P2P-SPIKE] callee remote candidates seen: '
-        '${callee.tally.gatheredRemote}');
-    expect(callee.tally.gatheredRemote, isNotEmpty);
 
-    await caller.dispose();
-    await callee.dispose();
+    expect(
+      reordered.candidatesDeliveredBeforeOffer,
+      greaterThan(0),
+      reason: 'the double must actually have produced the race it exists to '
+          'force — zero here means this test proved nothing',
+    );
+    // ignore: avoid_print
+    print('[P2P-SPIKE] candidates delivered BEFORE the offer: '
+        '${reordered.candidatesDeliveredBeforeOffer}');
   });
+}
+
+/// Holds the offer back until at least one ICE candidate has been delivered,
+/// forcing the trickle-before-SDP ordering the session's buffer exists for.
+///
+/// A real transport produces this ordering by accident; a loopback never will,
+/// because it delivers in send order and the offer is sent first. So the race is
+/// manufactured deterministically rather than waited for.
+class _OfferDelayingSignalling implements CallSignalling {
+  _OfferDelayingSignalling(this._inner) {
+    _sub = _inner.inbound.listen(_onInbound);
+  }
+
+  final CallSignalling _inner;
+  late final StreamSubscription<CallSignal> _sub;
+  final _out = StreamController<CallSignal>.broadcast();
+
+  CallOffer? _heldOffer;
+  int candidatesDeliveredBeforeOffer = 0;
+
+  void _onInbound(CallSignal s) {
+    switch (s) {
+      case CallOffer():
+        // Hold it. It is released by the first candidate to arrive after it.
+        _heldOffer = s;
+      case CallIceCandidate():
+        if (_heldOffer != null) {
+          // Deliver the CANDIDATE first — the whole point — then the offer.
+          candidatesDeliveredBeforeOffer++;
+          _out.add(s);
+          _out.add(_heldOffer!);
+          _heldOffer = null;
+        } else {
+          _out.add(s);
+        }
+      case CallAnswer():
+        _out.add(s);
+    }
+  }
+
+  @override
+  Stream<CallSignal> get inbound => _out.stream;
+
+  @override
+  Future<void> send(CallSignal signal) => _inner.send(signal);
+
+  @override
+  Future<void> dispose() async {
+    await _sub.cancel();
+    // Release a still-held offer's memory; nothing is listening by now.
+    _heldOffer = null;
+    await _out.close();
+    await _inner.dispose();
+  }
 }

@@ -47,6 +47,30 @@ import '../domain/ice_candidate_tally.dart';
 /// a bool named `isCaller` and then acquires a third case.
 enum P2pRole { offerer, answerer }
 
+/// The ICE transport policy, as a closed type rather than a `String`.
+///
+/// Was `String?`. Carnot flagged it, and correctly refused the excuse that a
+/// spike gets a pass: *"this is exactly a policy knob whose typo changes
+/// architecture evidence."* A misspelled `'relayy'` is silently ignored by the
+/// stack, the call connects directly, and the tally records a direct connection
+/// as if relay had been requested and beaten — evidence for deleting the SFU,
+/// manufactured by a typo. The doc in this file's header says the spike takes no
+/// position on the value; that is an argument for no DEFAULT, not for no TYPE.
+enum P2pIceTransportPolicy {
+  /// Host, srflx and relay candidates — the stack default.
+  all('all'),
+
+  /// Relay only. On a direct path this is the force-relay question, which
+  /// inverts relative to the SFU: see `livekit_call_service.dart`.
+  relay('relay');
+
+  const P2pIceTransportPolicy(this.wireName);
+
+  /// The value `createPeerConnection` expects. Display-only; the enum is the
+  /// identity.
+  final String wireName;
+}
+
 class P2pPeerSession {
   P2pPeerSession({
     required this.role,
@@ -63,9 +87,9 @@ class P2pPeerSession {
   /// exactly right for a loopback test and useless on the internet.
   final List<Map<String, dynamic>> iceServers;
 
-  /// `'all'` or `'relay'`. Null leaves it unset, i.e. the stack default (`all`).
-  /// See the header: this spike takes no position.
-  final String? iceTransportPolicy;
+  /// Null leaves it unset, i.e. the stack default (`all`). See the header: this
+  /// spike takes no position on the VALUE — but it does insist on the TYPE.
+  final P2pIceTransportPolicy? iceTransportPolicy;
 
   /// How this call connected. Populated as candidates flow, and completed by
   /// [readSelectedPair].
@@ -107,37 +131,53 @@ class P2pPeerSession {
   /// data channel is opened instead so the connection still has something to
   /// negotiate; a peer connection with no media and no data channel has nothing
   /// to gather candidates *for* and never leaves `new`.
+  /// Build the peer connection, attach handlers, and start signalling.
+  ///
+  /// **Failure completes [connected] with false rather than escaping.** The
+  /// first version let a throw propagate with the completer untouched, so a
+  /// missing plugin registration or a denied permission left every caller
+  /// awaiting `connected` forever — and a hang is strictly worse than an error,
+  /// because the error names the cause while the hang gets blamed on the
+  /// network. The throw is still rethrown for a caller that awaits `start()`
+  /// itself; what changed is that the completer can no longer be stranded.
   Future<void> start({MediaStream? localStream}) async {
-    _pc = await createPeerConnection({
-      'iceServers': iceServers,
-      if (iceTransportPolicy != null) 'iceTransportPolicy': iceTransportPolicy,
-      // Unified Plan is the only plan modern stacks implement; naming it keeps
-      // the spike from inheriting whatever a future default becomes.
-      'sdpSemantics': 'unified-plan',
-    });
+    try {
+      _pc = await createPeerConnection({
+        'iceServers': iceServers,
+        if (iceTransportPolicy != null)
+          'iceTransportPolicy': iceTransportPolicy!.wireName,
+        // Unified Plan is the only plan modern stacks implement; naming it keeps
+        // the spike from inheriting whatever a future default becomes.
+        'sdpSemantics': 'unified-plan',
+      });
 
-    _pc!.onIceCandidate = _onLocalCandidate;
-    _pc!.onConnectionState = _onConnectionState;
+      _pc!.onIceCandidate = _onLocalCandidate;
+      _pc!.onConnectionState = _onConnectionState;
 
-    if (localStream != null) {
-      for (final track in localStream.getTracks()) {
-        await _pc!.addTrack(track, localStream);
+      if (localStream != null) {
+        for (final track in localStream.getTracks()) {
+          await _pc!.addTrack(track, localStream);
+        }
+      } else {
+        // Negotiation needs *something* to negotiate. A data channel is the
+        // cheapest something, and it is created only on the offerer — both sides
+        // creating one produces two channels and a needlessly larger SDP.
+        if (role == P2pRole.offerer) {
+          await _pc!.createDataChannel('spike', RTCDataChannelInit());
+        }
       }
-    } else {
-      // Negotiation needs *something* to negotiate. A data channel is the
-      // cheapest something, and it is created only on the offerer — both sides
-      // creating one produces two channels and a needlessly larger SDP.
+
+      _signalSub = _signalling.inbound.listen(_onSignal);
+
       if (role == P2pRole.offerer) {
-        await _pc!.createDataChannel('spike', RTCDataChannelInit());
+        final offer = await _pc!.createOffer();
+        await _pc!.setLocalDescription(offer);
+        await _signalling.send(CallOffer(offer.sdp!));
       }
-    }
-
-    _signalSub = _signalling.inbound.listen(_onSignal);
-
-    if (role == P2pRole.offerer) {
-      final offer = await _pc!.createOffer();
-      await _pc!.setLocalDescription(offer);
-      await _signalling.send(CallOffer(offer.sdp!));
+    } catch (_) {
+      if (!_disposed) state.value = CallConnectionState.failed;
+      if (!_connectedCompleter.isCompleted) _connectedCompleter.complete(false);
+      rethrow;
     }
   }
 
@@ -146,14 +186,24 @@ class P2pPeerSession {
     if (line == null || line.isEmpty) return; // end-of-candidates sentinel
     tally.recordLocalCandidate(line);
     // Fire-and-forget: a signalling send must never block candidate gathering.
+    //
+    // `.catchError` is NOT decoration. `unawaited` suppresses the LINT, not the
+    // ERROR — an async throw from a real transport (socket closed, island 500)
+    // would become an unhandled zone error, which in a Flutter app is a red
+    // screen or a silent FlutterError depending on where it lands. Trickle loss
+    // degrades connectivity by design (see [CallSignalling.send]), so swallowing
+    // it here is the documented contract rather than a shrug — but it has to be
+    // written, not merely intended.
     unawaited(
-      _signalling.send(
-        CallIceCandidate(
-          candidate: line,
-          sdpMid: c.sdpMid,
-          sdpMLineIndex: c.sdpMLineIndex,
-        ),
-      ),
+      _signalling
+          .send(
+            CallIceCandidate(
+              candidate: line,
+              sdpMid: c.sdpMid,
+              sdpMLineIndex: c.sdpMLineIndex,
+            ),
+          )
+          .catchError((Object _) {}),
     );
   }
 
@@ -223,15 +273,27 @@ class P2pPeerSession {
     if (pc == null) return;
     final reports = await pc.getStats();
     tally.recordSelectedPair([
-      for (final r in reports)
-        {'id': r.id, 'type': r.type, ...r.values},
+      // The spread comes FIRST so `id` and `type` cannot be clobbered by a
+      // report whose own `values` map happens to carry those keys. With the
+      // spread last, such a report would silently lose its `type`, no
+      // `candidate-pair` would be found, and the tally would read unmeasured —
+      // the honest failure, but a failure, and caused by key ordering.
+      for (final r in reports) {...r.values, 'id': r.id, 'type': r.type},
     ]);
   }
 
+  /// Tear down this session.
+  ///
+  /// **Does NOT dispose [_signalling].** It was passed in through the
+  /// constructor, so its lifetime belongs to whoever built it — a session that
+  /// closed it would surprise any caller sharing one channel across a
+  /// renegotiation, or holding it open to send a final "call ended". Ownership
+  /// follows construction. The subscription, which this session DID create, is
+  /// cancelled here.
   Future<void> dispose() async {
     _disposed = true;
     await _signalSub?.cancel();
-    await _signalling.dispose();
+    _signalSub = null;
     await _pc?.close();
     _pc = null;
     if (!_connectedCompleter.isCompleted) _connectedCompleter.complete(false);

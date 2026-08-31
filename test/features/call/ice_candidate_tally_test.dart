@@ -151,5 +151,78 @@ void main() {
       expect(t.selectedLocal, isNull);
       expect(t.usedRelay, isNull);
     });
+
+    // THE ARM THAT COULD NOT GO RED, and the bug it was missing.
+    //
+    // Carnot and Tesla found this independently. The dangling-id test above
+    // dangles BOTH ids, so both sides read null and the old `&&` returned null
+    // by luck. With only ONE side unresolved the old getter returned FALSE — a
+    // measured direct connection — on a call whose other end could have been a
+    // relay. Tesla: "the verifier shares the instrument's blind spot."
+    test('ONE unresolved end is unmeasured, never a direct connection', () {
+      final t = IceCandidateTally()
+        ..recordSelectedPair([
+          {'id': 'cp1', 'type': 'candidate-pair', 'state': 'succeeded', 'nominated': true,
+           'localCandidateId': 'lc1', 'remoteCandidateId': 'danglingRemote'},
+          {'id': 'lc1', 'type': 'local-candidate', 'candidateType': 'host'},
+        ]);
+      expect(t.selectedLocal, IceCandidateType.host);
+      expect(t.selectedRemote, isNull);
+      expect(t.selectedPairFullyResolved, isFalse);
+      expect(t.usedRelay, isNull,
+          reason: 'unknown heat loss is not zero heat loss (Carnot)');
+    });
+
+    test('a KNOWN relay still reports true even when the other end is unknown', () {
+      // The asymmetry is deliberate: positive evidence of a relay is
+      // conclusive; absence of evidence is not evidence of absence.
+      final t = IceCandidateTally()
+        ..recordSelectedPair([
+          {'id': 'cp1', 'type': 'candidate-pair', 'state': 'succeeded', 'nominated': true,
+           'localCandidateId': 'lc1', 'remoteCandidateId': 'dangling'},
+          {'id': 'lc1', 'type': 'local-candidate', 'candidateType': 'relay'},
+        ]);
+      expect(t.usedRelay, isTrue);
+      expect(t.selectedPairFullyResolved, isFalse);
+    });
+
+    test('a NOMINATED but not-succeeded pair is ignored', () {
+      // Stats order is not ICE priority. A nominated pair that never succeeded
+      // carried nothing, and the old first-nominated-wins rule took it anyway.
+      final t = IceCandidateTally()
+        ..recordSelectedPair([
+          {'id': 'cpBad', 'type': 'candidate-pair', 'state': 'in-progress', 'nominated': true,
+           'localCandidateId': 'lcR', 'remoteCandidateId': 'rcR'},
+          {'id': 'cpGood', 'type': 'candidate-pair', 'state': 'succeeded', 'nominated': false,
+           'localCandidateId': 'lcD', 'remoteCandidateId': 'rcD'},
+          {'id': 'lcR', 'type': 'local-candidate', 'candidateType': 'relay'},
+          {'id': 'rcR', 'type': 'remote-candidate', 'candidateType': 'relay'},
+          {'id': 'lcD', 'type': 'local-candidate', 'candidateType': 'srflx'},
+          {'id': 'rcD', 'type': 'remote-candidate', 'candidateType': 'srflx'},
+        ]);
+      expect(t.usedRelay, isFalse,
+          reason: 'the in-progress nominated pair never carried media');
+      expect(t.selectedLocal, IceCandidateType.srflx);
+    });
+
+    test('among succeeded non-nominated pairs, the one carrying bytes wins', () {
+      // Multiple succeeded pairs are ordinary (several m-lines, or an ICE
+      // restart). Enumeration order is not a tiebreak.
+      final t = IceCandidateTally()
+        ..recordSelectedPair([
+          {'id': 'cpIdle', 'type': 'candidate-pair', 'state': 'succeeded',
+           'bytesSent': 0, 'bytesReceived': 0,
+           'localCandidateId': 'lcD', 'remoteCandidateId': 'rcD'},
+          {'id': 'cpBusy', 'type': 'candidate-pair', 'state': 'succeeded',
+           'bytesSent': 900000, 'bytesReceived': 120000,
+           'localCandidateId': 'lcR', 'remoteCandidateId': 'rcR'},
+          {'id': 'lcD', 'type': 'local-candidate', 'candidateType': 'srflx'},
+          {'id': 'rcD', 'type': 'remote-candidate', 'candidateType': 'srflx'},
+          {'id': 'lcR', 'type': 'local-candidate', 'candidateType': 'relay'},
+          {'id': 'rcR', 'type': 'remote-candidate', 'candidateType': 'relay'},
+        ]);
+      expect(t.usedRelay, isTrue,
+          reason: 'the pair that moved the media is the pair that was the call');
+    });
   });
 }

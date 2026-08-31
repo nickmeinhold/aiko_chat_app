@@ -61,6 +61,15 @@ void main() {
       iceServers: _stunServers,
     );
 
+    // Teardown registered before anything can fail — a red STUN assertion or a
+    // timeout must still close two native PeerConnections (Carnot + Tesla).
+    addTearDown(() async {
+      await caller.dispose();
+      await callee.dispose();
+      await pipe.a.dispose();
+      await pipe.b.dispose();
+    });
+
     await callee.start();
     await caller.start();
 
@@ -91,8 +100,5 @@ void main() {
           'it cannot discover its public address — which would mean direct '
           'calls across the internet are not available from here at all.',
     );
-
-    await caller.dispose();
-    await callee.dispose();
   }, timeout: const Timeout(Duration(minutes: 2)));
 }

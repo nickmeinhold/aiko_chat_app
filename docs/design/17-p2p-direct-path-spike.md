@@ -107,3 +107,54 @@ Grounded in `pubspec.lock` (not the pub cache), the locked `flutter_webrtc` 1.6.
 `call_session.dart` / `livekit_call_service.dart` for the shape the direct path mirrors.
 Claims about the island's broker and registrar are the island tab's, attributed as such and
 not re-measured here.
+
+---
+
+## Round 1 cage-match ledger (2026-09-01)
+
+Seats: Maxwell + Kelvin + Carnot + Tesla — 4/4. Diff 58KB at `-U9999` (lockfile cut to
+`-U3` to keep every seat inside its validated range).
+
+| Verdict | |
+|---|---|
+| Kelvin | APPROVE (one style nit) |
+| Carnot | REQUEST_CHANGES |
+| Tesla | REQUEST_CHANGES |
+| Maxwell | COMMENT |
+
+| Finding | Raised by | Real? | Disposition |
+|---|---|---|---|
+| `usedRelay` reports **false** from a half-resolved pair | Carnot + Tesla (independently) | **yes** | fixed — `true` needs one relay, `false` needs both ends known; RED arm proven by reverting |
+| Selected pair took first nominated-**or**-succeeded in stats order | Tesla | **yes** | fixed — `succeeded` mandatory, nominated preferred, ties break on bytes carried |
+| The dangling-id test dangles BOTH ids, so it cannot catch the one-sided case | Tesla | **yes** | fixed — one-sided arm added; live test now asserts `selectedPairFullyResolved` |
+| Trickle-buffer test passes with the buffer deleted | Carnot + Tesla | **yes** | fixed — `_OfferDelayingSignalling` forces the race; run reports `candidates delivered BEFORE the offer: 1` |
+| `dispose()` after the expects leaks native PeerConnections on any red | Carnot + Tesla | **yes** | fixed — `addTearDown` at construction, both integration tests |
+| `iceTransportPolicy` is a `String?` on a knob whose typo changes architecture evidence | Carnot | **yes** | fixed — `P2pIceTransportPolicy` enum |
+| `start()` failure strands `_connectedCompleter` → caller hangs | Maxwell | **yes** | fixed — completes false and rethrows |
+| `dispose()` closes a signalling channel it did not create | Maxwell | **yes** | fixed — ownership follows construction |
+| `unawaited(send)` leaves an unhandled zone error | Maxwell | **yes** | fixed — explicit `catchError`, contract written not merely intended |
+| `{...r.values}` spread last could clobber `id`/`type` | Maxwell | **yes** | fixed — spread first |
+| Doc said "five ICE candidate types", enum holds four | Tesla | **yes** | fixed |
+
+**Round 1 was NOT clean** — eleven findings survived verification as real, which is the
+point of running it. A second round is owed before this could be called closed by the
+Round 9.7 bar; it is a spike nothing calls, so that is a gate on *promoting* it, not on
+leaving it here.
+
+### Named residuals, not fixed
+
+- **The instrument's true-positive arm has never rung.** Tesla's sharpest concern: twelve
+  fixtures and a loopback prove the tally can see `host`. It has never seen an actual TURN
+  relay against a live stack, and that is the reading the SFU decision needs. Needs a TURN
+  server; noted rather than faked.
+- **`readSelectedPair` is macOS-shaped.** A mobile `getStats()` that stringifies numbers,
+  emits `googCandidatePair`, or spells the type `relayed` is a different instrument wearing
+  this one's name. First mobile run must re-verify, not assume.
+- **Multiple m-lines.** One data channel means one pair. When `localStream` grows a second
+  media section, "the pair that carried the most bytes" is a heuristic, not a definition.
+- **`p2p_stun_reflexive_test.dart` is comment-gated, not glob-gated** — a run of the whole
+  `integration_test/` folder inherits Google/Cloudflare uptime. (CI is closed in this repo,
+  so nothing runs it today.)
+- Kelvin returned **APPROVE with zero real findings** on a round where two other families
+  found a genuine instrument bug. Per the skill's own rule that is a coverage gap, not
+  agreement, and it is recorded as such rather than banked.
