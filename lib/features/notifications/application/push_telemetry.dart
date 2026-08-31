@@ -1,5 +1,6 @@
 import '../../../core/logging/aiko_log.dart';
 import '../../../core/logging/aiko_logger.dart';
+import '../domain/push_failure.dart';
 
 /// The push subsystem's typed telemetry facade — the layer where the never-log
 /// rule is a property of the SIGNATURE rather than a convention.
@@ -42,9 +43,22 @@ class PushTelemetry {
   // --- registration ------------------------------------------------------
 
   /// The terminal reach failure: the island has no routable row for us.
+  /// NOTE the two fields here describe DIFFERENT SUBJECTS, and a reader at 3am
+  /// must not fuse them: `consequence` is about the EVENT (right now this
+  /// handset will not wake), `transient` is about the ATTEMPT (an identical
+  /// retry could succeed). `device-will-not-wake` beside `transient=true` is two
+  /// true statements, not a contradiction — the retry is exactly what may clear
+  /// the consequence. Called out because it reads like the defect that was
+  /// removed from the platform sites, and is not: there the classification was
+  /// FABRICATED (a PlatformException scored `unknown`, hence `transient: true`),
+  /// whereas this site really does carry a Dio error. (Tesla, round 3.)
   void registerFailed(String tokenRef, Object error) => _log.severe(
     'push.register.failed',
-    fields: {'token': tokenRef, 'consequence': 'device-will-not-wake'},
+    fields: {
+      'token': tokenRef,
+      'consequence': 'device-will-not-wake',
+      ..._why(error),
+    },
     error: error,
   );
 
@@ -64,8 +78,11 @@ class PushTelemetry {
     fields: {'token': tokenRef},
   );
 
-  void rotationRegisterFailed(Object error) =>
-      _log.warning('push.rotation.register_failed', error: error);
+  void rotationRegisterFailed(Object error) => _log.warning(
+    'push.rotation.register_failed',
+    fields: _why(error),
+    error: error,
+  );
 
   // --- the unregister debt ------------------------------------------------
 
@@ -73,8 +90,11 @@ class PushTelemetry {
   void debtPaidButUnclearable(String tokenRef) =>
       _log.info('push.debt.paid_unclearable', fields: {'token': tokenRef});
 
-  void debtDrainFailed(Object error) =>
-      _log.warning('push.debt.drain_failed', error: error);
+  void debtDrainFailed(Object error) => _log.warning(
+    'push.debt.drain_failed',
+    fields: _why(error),
+    error: error,
+  );
 
   /// The debt could not be written. If the attempt also fails, the island keeps
   /// a routable row and NOTHING will retry it.
@@ -90,8 +110,11 @@ class PushTelemetry {
         fields: {'island': islandBaseUrl, 'token': tokenRef, 'cap': cap},
       );
 
-  void unregisterDeferred(Object error) =>
-      _log.info('push.unregister.deferred', error: error);
+  void unregisterDeferred(Object error) => _log.info(
+    'push.unregister.deferred',
+    fields: _why(error),
+    error: error,
+  );
 
   // --- the platform seam --------------------------------------------------
 
@@ -137,4 +160,55 @@ class PushTelemetry {
   static const PushTelemetry noop = PushTelemetry(
     AikoLogger(subsystem: 'aiko.push', sink: NoopLogSink()),
   );
+
+  /// The reason fields carried by every failure log whose error comes off the
+  /// HTTP CLIENT — and deliberately not by the others.
+  ///
+  /// ONE definition, so no site can ship a differently-shaped reason and
+  /// `reason=` means the same thing wherever a reader meets it. Both values come
+  /// from [PushFailure], which reads only closed inputs, so this can never widen
+  /// what a record exposes.
+  ///
+  /// ## Why the platform sites do NOT get this
+  ///
+  /// An earlier revision spread `_why` onto `permissionRequestFailed` and
+  /// `tokenUnavailable`. Those carry a `PlatformException`, which
+  /// [PushFailure.of] classifies as `unknown` — and `unknown` is `transient:
+  /// true` because weak-signal capture fails open. The result was
+  /// `push.token.unavailable consequence=device-will-not-wake retry=true`: a
+  /// handset that will not wake, beside a classifier telling the reader to try
+  /// again. Failing open is right for an unclassifiable HTTP error and is a LIE
+  /// about a permission denial, so those sites carry no reason at all rather
+  /// than a confident wrong one.
+  ///
+  /// An earlier version of this docstring claimed EVERY failure log — a
+  /// docstring asserting its own completeness wrongly is the same defect class
+  /// as the log line this whole change exists to fix (Tesla, round 1).
+  static Map<String, Object?> _why(Object? error) {
+    final f = PushFailure.of(error);
+    // The DOMAIN'S OWN NAMES, both facts, no reader-side inference.
+    //
+    // Two earlier shapes were wrong in the same way and Carnot flagged the class
+    // in two consecutive rounds — the tell that round 1 patched an instance
+    // instead of the class:
+    //
+    //   'retry'  renamed the domain's `transient`, so a reader who saw `retry=`
+    //            in a report found nothing grepping the codebase, and vice
+    //            versa. It also compressed three distinct states (not worth
+    //            retrying / dead credential / recoverable after user action)
+    //            into one ambiguous boolean — entropy reintroduced at exactly
+    //            the boundary this change exists to cool.
+    //   dropping `credentialIsDead` left the record carrying ONE of the two
+    //            facts the type is built to carry, so a consumer had to
+    //            reverse-map the enum NAME back into the fact — which is the
+    //            string-parsing this whole change removes, moved one layer out.
+    //
+    // Emitting the property names verbatim means log vocabulary == code
+    // vocabulary: what a reader greps is what the compiler checks.
+    return {
+      'reason': f.name,
+      'transient': f.transient,
+      'credentialIsDead': f.credentialIsDead,
+    };
+  }
 }
