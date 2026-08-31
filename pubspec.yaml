@@ -38,6 +38,13 @@ dependencies:
   riverpod_annotation: ^4.0.3
   go_router: ^17.3.0
   livekit_client: ^2.10.0
+  # DECLARED, not new. It was already in the tree transitively via
+  # livekit_client and is pinned to the same 1.6.0 the lock already resolved —
+  # this line adds no package and moves no version, it just makes a direct
+  # import legal (`depend_on_referenced_packages`). The P2P direct-path spike
+  # uses PeerConnection outside LiveKit's wrapper; see
+  # features/call/data/p2p_peer_session.dart and claude-tasks#3740.
+  flutter_webrtc: ^1.6.0
   # ANDROID ONLY at runtime, deliberately. `initializeApp` is never called on
   # Apple platforms — iOS takes its APNs device token natively, so Google is not
   # an intermediary there. See features/notifications/domain/device_platform.dart.
