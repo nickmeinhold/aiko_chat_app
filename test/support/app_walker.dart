@@ -42,14 +42,24 @@ import 'package:flutter_test/flutter_test.dart';
 /// own scripted suite, and matching is on the visible label precisely so a rail
 /// here can never silently hide a screen from the walker without a human
 /// reading this list and seeing why.
+/// TRAILING SPACES ARE LOAD-BEARING. `'block'` also matches *"Blocked users"*,
+/// the Settings row — so the rail meant to stop the walker BLOCKING A PERSON was
+/// silently stopping it NAVIGATING TO A SCREEN, and `/settings/blocked` sat
+/// unreachable and uncounted. `'block '` matches "Block Alice" and not "Blocked
+/// users", because the character after `block` is `e`. Same for `'report '`,
+/// which admits the "Reports" operator row while still refusing both "Report
+/// message" and "Report a problem" (the latter opens a platform share sheet).
+///
+/// Verified by asserting each pattern against real labels rather than by
+/// reading them — the route-coverage test is what surfaced the mistake, and an
+/// over-broad rail is invisible until something counts what it excluded.
 const kWalkerAvoids = <String>[
-  'delete account',
   'delete',
   'sign out',
   'log out',
   'logout',
-  'block',
-  'report',
+  'block ',
+  'report ',
   'suspend',
   'unregister',
 ];
@@ -81,6 +91,11 @@ class WalkTrail {
 
   final int seed;
   final List<String> steps = [];
+
+  /// Route PATTERNS visited (`/settings/gateway`, `/call/:channelId`), not
+  /// concrete locations — so they can be compared against the router's own
+  /// table without re-deriving which segments were parameters.
+  final Set<String> routes = {};
 
   /// A copy-pasteable reproduction, printed on any failure. Without this a
   /// random walk reports "something broke somewhere", which is worse than no
@@ -186,6 +201,12 @@ Future<WalkTrail> walkApp(
   WidgetTester tester, {
   required int seed,
   int steps = 40,
+
+  /// Where the app currently is, as a route PATTERN. Supplied by the caller
+  /// because the walker has no container of its own; when given, every step
+  /// records the route it landed on, which is what lets a test assert the
+  /// walker can actually REACH each screen the router registers.
+  String? Function()? locationOf,
 }) async {
   final rng = Random(seed);
   final trail = WalkTrail(seed);
@@ -266,6 +287,9 @@ Future<WalkTrail> walkApp(
             'BLANK FRAME after $pick — the screen rendered no '
             'visible text at all.\n${trail.describe()}',
       );
+
+      final where = locationOf?.call();
+      if (where != null) trail.routes.add(where);
 
       checkCaptured('Driving $pick');
     }

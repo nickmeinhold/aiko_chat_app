@@ -15,6 +15,7 @@
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'test_helpers.dart';
@@ -56,7 +57,14 @@ List<Message> _seedMessages() => [
 ];
 
 /// Mount the real app, signed in, with a populated world, at [size].
-Future<void> pumpWalkableApp(WidgetTester tester, Size size) async {
+///
+/// Returns the container so a caller can read the live `routerProvider` — the
+/// route-coverage test needs the app's OWN route table as its denominator, not
+/// a list someone maintained by hand beside it.
+Future<ProviderContainer> pumpWalkableApp(
+  WidgetTester tester,
+  Size size,
+) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.resetPhysicalSize);
@@ -78,4 +86,5 @@ Future<void> pumpWalkableApp(WidgetTester tester, Size size) async {
     transport.emitMessage(m);
   }
   await tester.pumpAndSettle();
+  return container;
 }
