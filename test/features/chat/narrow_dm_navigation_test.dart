@@ -598,6 +598,44 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('the CARET opens the menu, and the control is a full-size tap '
+      'target', (tester) async {
+    setNarrow(tester);
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    // Found on a phone, not here: the caret and the aggregate badge were drawn
+    // BESIDE the DropdownButton in a Row, so the one part of the control that
+    // looks like "press me to open this" had no hit area at all — you had to
+    // hit the word. Every test in this file tapped the button by type or the
+    // name by text, so all of them passed against a control whose most obvious
+    // affordance was dead. Tap the caret the way a thumb does: by position.
+    await tester.tapAt(tester.getCenter(find.byIcon(Icons.arrow_drop_down)));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('alice'),
+      findsWidgets,
+      reason: 'tapping the caret must open the switcher',
+    );
+
+    // And the other half of "too small": `isDense` collapsed the button under
+    // Material's minimum touch target, so even the half that DID work needed an
+    // accurate press.
+    await tester.tap(find.text('alice').last);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byType(DropdownButton<String>)).height,
+      greaterThanOrEqualTo(kMinInteractiveDimension),
+    );
+  });
+
   testWidgets('collapsed, non-active rows are NOT in the tree (so a phone pays '
       'no per-DM roster fetch until the menu opens)', (tester) async {
     setNarrow(tester);
