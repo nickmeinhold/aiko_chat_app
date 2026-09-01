@@ -32,10 +32,19 @@ the familiar distribution terms do the work. See [`LICENSE`](LICENSE) for the ac
 the summary here is orientation, not legal advice.
 
 **Commons-owned — there is no contributor licence agreement and no copyright assignment**
-(the Linux model). Contributions stay owned by whoever wrote them, which makes the licence
-effectively permanent once outside contributions arrive: nobody, including the original
-authors, can later take it proprietary. That is deliberate, and it is the point. Anyone
-proposing a CLA later is proposing to reverse a decision, not to fill a gap.
+(the Linux model). Contributions stay owned by whoever wrote them. The intent is that the
+licence becomes effectively permanent once outside contributions arrive, so that nobody,
+including the original authors, can later take it proprietary. That intent is deliberate,
+and it is the point. Anyone proposing a CLA later is proposing to reverse a decision, not
+to fill a gap.
+
+How completely that intent binds in practice is **untested**, and the honest version is
+worth stating rather than hiding: much of this codebase was written by an AI agent under
+human direction, and whether — and how far — copyright subsists in such work is unsettled
+and jurisdiction-dependent. This is an Australian project, and Australian law has no ruling
+on it. That question belongs with counsel, not with this README, and nothing here should be
+read as a legal opinion. The licence was chosen for the culture it sets, which is what the
+decision was actually about, rather than for the strength of its enforcement.
 
 **A linking exception is intended and not yet written.** The agreement was "AGPL-3.0 with a
 ClassPath-style exception (or similar)", so that genuinely independent work — Agents,
