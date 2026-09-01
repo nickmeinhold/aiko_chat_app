@@ -138,6 +138,19 @@ class IceCandidateTally {
   bool _relayEverSeen = false;
   bool _directFullySeen = false;
 
+  /// How many samples produced an observable pool. A `false` from ONE sample
+  /// is a fact about that instant, not about the call — and nothing in this
+  /// spike schedules sampling, so the relay fraction a caller quotes is a
+  /// function of a cadence that does not yet exist. Exposed so a reading can be
+  /// weighted rather than quoted flat (Tesla).
+  int sampleCount = 0;
+
+  /// A transport NAMED a selected pair that is not in the report. The
+  /// authoritative answer existed and could not be read, so it may have been a
+  /// relay. Blocks `false` permanently — distinct from having no transport
+  /// report at all, which is merely an absence of evidence.
+  bool _selectionUnresolved = false;
+
   /// A relay pair SUCCEEDED but was never named as selected — so it may or may
   /// not have carried anything. Blocks `false` without asserting `true`.
   bool _relayAmbiguous = false;
@@ -256,6 +269,15 @@ class IceCandidateTally {
       if (isNamed || s['state'] == 'succeeded') pool.add(s);
     }
 
+    // THE STACK SPOKE AND WE COULD NOT HEAR IT. A transport that names a pair
+    // absent from the report is NOT the same unknown as a report with no
+    // transport at all: in the first case the authoritative answer exists and
+    // this parser failed to read it, so the selected pair could have been a
+    // relay and we would never know. Falling through to the succeeded heuristic
+    // and reporting `false` off host/srflx pairs is the same fold again, at the
+    // one place that looks most like graceful degradation (Carnot).
+    if (selectedIds.isNotEmpty && named.isEmpty) _selectionUnresolved = true;
+
     // Nothing observable this sample. Say nothing: do not erase what an earlier
     // sample established, and do not claim to have measured.
     if (pool.isEmpty) return;
@@ -335,13 +357,20 @@ class IceCandidateTally {
       if (bytesOf(s) > bytesOf(best)) best = s;
     }
 
+    sampleCount++;
     selectedUnparsed += sampleUnparsed;
     if (namedRelay) _relayEverSeen = true;
     if (namedAllResolved && !namedRelay && !_relayAmbiguous && sampleUnparsed == 0) {
       _directFullySeen = true;
     }
-    selectedLocal = typeOf(best['localCandidateId']) ?? selectedLocal;
-    selectedRemote = typeOf(best['remoteCandidateId']) ?? selectedRemote;
+    // NOT `?? selectedLocal`. Carrying the previous sample's endpoints forward
+    // while `selectedPairSource` advances to the latest source produces a
+    // summary line that reads `selected=host/host via=transportSelectedId`
+    // about a sample whose endpoints could not be parsed — stale and flattering
+    // in the field most likely to land in a log (Carnot). The representative
+    // pair describes THIS sample or says it does not know.
+    selectedLocal = typeOf(best['localCandidateId']);
+    selectedRemote = typeOf(best['remoteCandidateId']);
     selectedPairSource = named.isNotEmpty
         ? SelectedPairSource.transportSelectedId
         : SelectedPairSource.succeededHeuristic;
@@ -365,13 +394,24 @@ class IceCandidateTally {
   ///   absence, so this is deliberately the demanding branch.
   /// - `null` — unmeasured. Never conflate with `false`.
   ///
+  /// **`false` is bounded by the sampling cadence, and this class does not set
+  /// one.** A single sample taken at `connected` cannot see a failover that
+  /// happens later; `true` latches so it survives a sparse cadence, but `false`
+  /// can only ever mean "no relay in any sample TAKEN". [sampleCount] is
+  /// exposed so a one-sample `false` is not quoted as a call-lifetime fact —
+  /// the asymmetry is real and is the honest limit of the instrument, not a
+  /// defect to be argued away (Tesla).
+  ///
   /// The original bug this asymmetry was written for: returning `null` only
   /// when BOTH ends were unknown, so `host` locally plus an unresolved remote
   /// reported a measured direct connection. Carnot's framing is still the one
   /// to keep — *unknown heat loss is not zero heat loss*.
   bool? get usedRelay {
     if (_relayEverSeen) return true;
-    if (_directFullySeen && !_relayAmbiguous && selectedUnparsed == 0) {
+    if (_directFullySeen &&
+        !_relayAmbiguous &&
+        !_selectionUnresolved &&
+        selectedUnparsed == 0) {
       return false;
     }
     return null;
@@ -392,7 +432,10 @@ class IceCandidateTally {
     final g = _gatheredLocal.entries
         .map((e) => '${e.key.wireName}=${e.value}')
         .join(' ');
-    return 'selected=$l/$r via=${selectedPairSource.name} gathered[$g]'
-        '${unparsed > 0 ? ' unparsed=$unparsed' : ''}';
+    return 'selected=$l/$r via=${selectedPairSource.name} '
+        'relay=${usedRelay ?? '?'} samples=$sampleCount gathered[$g]'
+        '${unparsed > 0 ? ' unparsed=$unparsed' : ''}'
+        '${selectedUnparsed > 0 ? ' selectedUnparsed=$selectedUnparsed' : ''}'
+        '${_selectionUnresolved ? ' selectionUnresolved' : ''}';
   }
 }

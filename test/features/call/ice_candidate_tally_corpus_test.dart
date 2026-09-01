@@ -200,11 +200,19 @@ void main() {
         stringified.add({
           ...r,
           if (promote) 'state': 'succeeded',
+          if (promote) 'localCandidateId': 'decoyL',
+          if (promote) 'remoteCandidateId': 'decoyR',
           'bytesSent': '${r['bytesSent']}',
           'bytesReceived': '${r['bytesReceived']}',
         });
       }
       expect(promoted, isTrue, reason: 'the pool must hold two pairs');
+      // Distinguishable endpoints for the decoy — without these the winner and
+      // the loser look identical and the assertion below cannot discriminate.
+      stringified.addAll(const [
+        {'id': 'decoyL', 'type': 'local-candidate', 'candidateType': 'srflx'},
+        {'id': 'decoyR', 'type': 'remote-candidate', 'candidateType': 'srflx'},
+      ]);
 
       final tally = IceCandidateTally();
       expect(() => tally.recordSelectedPair(stringified), returnsNormally);
@@ -225,7 +233,40 @@ void main() {
       expect(byteCarrying, isNotEmpty,
           reason: 'the fixture must contain a byte-carrying pair or the '
               'tiebreak is never exercised and this arm is decorative');
+      // AND IT MUST NAME THE WINNER (Carnot, twice). Asserting `host/host` is
+      // independent of the tiebreak while every pair in the harvest is
+      // host/host — a parser that zeroes all string bytes and takes enumeration
+      // order still passes. The decoy promoted above is re-pointed at synthetic
+      // `srflx` endpoints, so the summary can only read `host/host` if the
+      // byte-carrying pair actually won.
+      expect(tally.describe(), contains('selected=host/host'),
+          reason: 'the byte-carrying host pair must beat the srflx decoy; a '
+              'tiebreak that never ran would surface srflx here');
+    });
+
+    test('a later UNPARSABLE sample must not leave a stale representative pair '
+        'in the summary line', () {
+      // The field most likely to land in a log is `describe()`. Carrying the
+      // previous sample's endpoints forward while `selectedPairSource` advances
+      // to the latest source prints `selected=host/host via=transportSelectedId`
+      // about a sample whose endpoints could not be parsed — stale, confident,
+      // and wrong in the flattering direction (Carnot).
+      final tally = IceCandidateTally()
+        ..recordSelectedPair(_load('getstats_macos_caller'));
       expect(tally.describe(), contains('selected=host/host'));
+
+      tally.recordSelectedPair(const [
+        {'id': 't', 'type': 'transport', 'selectedCandidatePairId': 'cpX'},
+        {'id': 'cpX', 'type': 'candidate-pair', 'state': 'succeeded',
+         'localCandidateId': 'gone', 'remoteCandidateId': 'alsoGone'},
+      ]);
+
+      expect(tally.describe(), isNot(contains('selected=host/host')),
+          reason: 'the representative pair describes THIS sample or says it '
+              'does not know');
+      expect(tally.usedRelay, isNull,
+          reason: 'unresolvable endpoints on the selected pair cannot support '
+              'a confident verdict either');
     });
 
     test('RED ARM (across TIME): direct first, relay second — the call NEEDED a '
@@ -249,6 +290,11 @@ void main() {
       expect(tally.usedRelay, isTrue,
           reason: 'failover to TURN must be visible; a thermometer that cannot '
               'get warmer again is not an instrument');
+      // HONEST LABEL (Tesla): this arm does NOT pin the latch. Delete the
+      // latching and it still passes, because the last sample wins and the last
+      // sample is the relay one. It pins "a later relay IS seen". The arm below
+      // is the one that pins latching, and it is the one that goes red when
+      // `_relayEverSeen` stops latching — verified by reverting exactly that.
     });
 
     test('RED ARM (the other direction): once true, a later direct sample must '
@@ -337,6 +383,21 @@ void main() {
       expect(intact.selectedPairSource, SelectedPairSource.transportSelectedId,
           reason: 'same fixture, valid id — the transport path MUST be live, '
               'or the fallback assertion above is vacuous');
+
+      // AND THE READING IS WITHHELD (Carnot). A transport naming a pair absent
+      // from the report is not the same unknown as no transport at all: the
+      // authoritative answer EXISTED and this parser could not read it, so the
+      // selected pair could have been a relay. Falling through to the succeeded
+      // heuristic and reporting a confident `false` off host pairs is the same
+      // fold wearing graceful degradation. The heuristic may still describe a
+      // representative pair; it may not mint a verdict.
+      expect(tally.usedRelay, isNull,
+          reason: 'the stack spoke and we could not hear it — that is not '
+              'evidence of a direct call');
+      expect(intact.usedRelay, isFalse,
+          reason: 'PAIRED: the identical fixture with a resolvable id DOES '
+              'yield a verdict, so the null above is about the dangling id '
+              'and not about an instrument that never decides');
     });
   });
 }

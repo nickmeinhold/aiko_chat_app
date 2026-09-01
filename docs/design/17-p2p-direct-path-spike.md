@@ -150,6 +150,42 @@ Found by Nick asking why the dependency was locked at all — a question neither
 four adversarial families had put, because everyone read `pubspec.lock` as the authority when
 it is the weakest of the three places this constraint is written.
 
+## The unknown lattice — why three review rounds each found the same class
+
+Three adversarial rounds produced 11, 8 and 6 real findings. The counts decayed; the CLASS did
+not. Every round found a new *state* in which an unknown folded toward the answer that flatters
+the measurement — `false`, the reading that argues for deleting the SFU. That is not a run of
+bad luck, it is the signature of a state space discovered one review round at a time instead of
+enumerated once. So it is enumerated here, and this table — not the count of rounds — is what a
+future change to this instrument should be graded against.
+
+**Every way a reading can be unknown, and what each one is allowed to conclude:**
+
+| # | State | `usedRelay` | Enforced by | Red arm |
+|---|---|---|---|---|
+| 1 | No stats at all / no pool this sample | unchanged | `if (pool.isEmpty) return` | second-read-sees-nothing |
+| 2 | One end of the selected pair unreadable | `null` | `false` needs both ends | half-resolved-pair |
+| 3 | Transport names a pair ABSENT from the report | `null` | `_selectionUnresolved` | dangling-id + paired intact control |
+| 4 | Candidate type token unrecognised (`relayed`) | `null` | `selectedUnparsed > 0` | unrecognised-type |
+| 5 | Relay pair succeeded but was never NAMED | `null` | `_relayAmbiguous` | unnamed-succeeded-relay |
+| 6 | No transport report, mixed succeeded set, no bytes moved | `null` | ambiguity branch | mixed-set-is-unmeasured |
+| 7 | No transport report, a relay pair carried bytes | `true` | bytes as carrying evidence | (legacy suite) |
+| 8 | Relay on any NAMED pair, any sample | `true`, latching | `_relayEverSeen` | once-true-stays-true |
+| 9 | Several selected pairs, only one relayed | `true` | EXISTS over pairs | (multi-transport) |
+
+**The two limits that are NOT closed by the table, stated because they bound every number this
+instrument will ever produce:**
+
+- **`false` is bounded by sampling cadence, and nothing here schedules one.** `true` latches, so
+  it survives a sparse cadence; `false` can only ever mean *no relay in any sample TAKEN*. A
+  single sample at `connected` cannot see a failover at minute forty. `sampleCount` is exposed so
+  a one-sample `false` is not quoted as a call-lifetime fact. Whoever wires this to telemetry owns
+  the cadence, and the cadence is part of the measurement.
+- **The true-positive arm has still never rung.** Every state above is about not lying when a
+  relay IS present. None of them is evidence that we would see one. Until a real relayed call is
+  harvested, every green `usedRelay == false` is a fact about a loopback wearing the clothes of an
+  architecture number.
+
 ## Provenance
 
 Claude (app tab), 2026-09-01, overnight, at Nick's request to leave something running.

@@ -150,25 +150,37 @@ void main() {
               'ambiguous; it must block a false without asserting a true');
     });
 
-    test('POSITIVE CONTROL for the test above: name the direct pair and the '
-        'same data resolves to false', () {
-      // Without this, the assertion above is satisfied by an instrument that
-      // returns null for everything. The ONLY difference is the transport
-      // report — which is exactly the mechanism under test.
-      final stats = [
+    test('POSITIVE CONTROL for the test above: ONE knob — add the transport '
+        'report and the same data stops being undecidable', () {
+      // Tesla caught the first version of this control turning TWO knobs: it
+      // added a transport report AND rewrote the relay pair to host, so it
+      // could not isolate which change produced the verdict. One knob now.
+      //
+      // Note what follows, because it is not `false`: naming the direct pair
+      // resolves WHICH pair carried the call, but the relay pair still
+      // succeeded without being named, so the reading is ambiguous rather than
+      // direct. The control proves the transport report is READ — the source
+      // advances and the representative pair resolves — not that it manufactures
+      // a convenient answer.
+      const stats = [
         {'id': 'tr0', 'type': 'transport', 'selectedCandidatePairId': 'cp1'},
         {'id': 'cp0', 'type': 'candidate-pair', 'state': 'succeeded', 'nominated': false,
-         'localCandidateId': 'lcD2', 'remoteCandidateId': 'rcD2'},
+         'localCandidateId': 'lcR', 'remoteCandidateId': 'rcR'},
         {'id': 'cp1', 'type': 'candidate-pair', 'state': 'succeeded', 'nominated': true,
          'localCandidateId': 'lcD', 'remoteCandidateId': 'rcD'},
-        {'id': 'lcD2', 'type': 'local-candidate', 'candidateType': 'host'},
-        {'id': 'rcD2', 'type': 'remote-candidate', 'candidateType': 'host'},
+        {'id': 'lcR', 'type': 'local-candidate', 'candidateType': 'relay'},
+        {'id': 'rcR', 'type': 'remote-candidate', 'candidateType': 'relay'},
         {'id': 'lcD', 'type': 'local-candidate', 'candidateType': 'srflx'},
         {'id': 'rcD', 'type': 'remote-candidate', 'candidateType': 'srflx'},
       ];
       final t = IceCandidateTally()..recordSelectedPair(stats);
-      expect(t.usedRelay, isFalse);
-      expect(t.selectedPairSource, SelectedPairSource.transportSelectedId);
+      expect(t.selectedPairSource, SelectedPairSource.transportSelectedId,
+          reason: 'the ONE knob turned: the transport report is read');
+      expect(t.selectedLocal, IceCandidateType.srflx,
+          reason: 'and it resolved the NAMED pair, not the relay one');
+      expect(t.usedRelay, isNull,
+          reason: 'an unnamed relay that succeeded is still ambiguous — the '
+              'control must not manufacture a false');
     });
 
     test('stats with no succeeded pair leave the tally UNMEASURED', () {
