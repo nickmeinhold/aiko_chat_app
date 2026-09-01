@@ -7,6 +7,7 @@ import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:aiko_chat_app/app/feature_flags.dart';
 import 'package:aiko_chat_app/app/router.dart';
 import 'package:go_router/go_router.dart';
 
@@ -46,6 +47,10 @@ void main() {
     );
     return ProviderScope(
       overrides: [
+        // Calling ships gated OFF (`app/feature_flags.dart`); this file is about
+        // the overlay's PLACEMENT, so it opts the capability on. The gated-off
+        // shape is proven in `call_gating_test.dart`.
+        callingEnabledProvider.overrideWithValue(true),
         incomingRingProvider.overrideWith(() => _FakeRing(initial)),
         // The overlay reaches the router through the PROVIDER (it lives above
         // the Router, outside InheritedGoRouter — cage-match #139), so the test
