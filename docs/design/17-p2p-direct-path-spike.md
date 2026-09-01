@@ -150,6 +150,36 @@ Found by Nick asking why the dependency was locked at all — a question neither
 four adversarial families had put, because everyone read `pubspec.lock` as the authority when
 it is the weakest of the three places this constraint is written.
 
+## Round ledger — and why it stops at three
+
+| Round | Seats | Context | Diff (excl. fixtures) | Real findings | Verdicts |
+|---|---|---|---|---|---|
+| 1 | 4/4 | -U9999 | 58KB | 11 | Kelvin APPROVE (0 findings), Carnot + Tesla RC, Maxwell COMMENT |
+| 2 | 4/4 | -U9999 | 74KB | 8 | **4/4 REQUEST_CHANGES** |
+| 3 | 3.5/4 | -U80 | 89KB | 6 | Kelvin APPROVE (0 findings), Carnot RC, Tesla RC (stalled, nearly dark) |
+
+**Not closed by the Round 9.7 bar.** Round 3 produced six findings that survived verification as
+real. The counts decay — 11, 8, 6 — and a decaying count is explicitly *not* closure: it is a
+curve fit over small-N noise, and one real finding in the last round falsifies it.
+
+**Stopped at three because the cap says so, and because two stop signals fired before it:**
+
+1. *"My own last round's fix generated this finding."* Round 2's monotonic guard is what all
+   three families attacked in round 2→3.
+2. *A repeated finding CLASS across rounds.* Every round found a new state in which an unknown
+   folded toward `false`. That is a state space being discovered one round at a time — which is
+   why the lattice below exists, and why a fourth round would have found a tenth state rather
+   than none.
+
+**The loop was also re-arming itself.** The diff grew 58 → 74 → 89KB as each round's fixes added
+tested surface, and at a 98KB prompt Tesla stalled long enough to nearly count as a dark seat.
+Reviewers degrade past their validated range in ways that read as verdicts; round 3 ran at -U80
+rather than -U9999 to keep the panel seated, so its findings are not strictly comparable to
+rounds 1-2.
+
+**Kelvin returned zero findings in rounds 1 and 3** — in round 3 on a diff where Carnot and Tesla
+each found three real defects. Recorded as a coverage gap, never banked as agreement.
+
 ## The unknown lattice — why three review rounds each found the same class
 
 Three adversarial rounds produced 11, 8 and 6 real findings. The counts decayed; the CLASS did
