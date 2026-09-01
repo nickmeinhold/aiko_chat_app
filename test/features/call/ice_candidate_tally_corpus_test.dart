@@ -141,6 +141,78 @@ void main() {
       expect(withTransport.usedRelay, isFalse);
     });
 
+    test('SECOND READ SEEING NOTHING must not leave a resolved pair beside a '
+        '`none` source — unknown cannot overwrite known', () {
+      // The self-review find, and the third instance in this file of the same
+      // defect class. `readSelectedPair()` has no once-guard and any periodic
+      // sampling of a live call calls it repeatedly. The first version assigned
+      // `selectedPairSource` ABOVE the early return, so a good read followed by
+      // an empty one left `selectedLocal/Remote` populated and the source at
+      // `none` — `usedRelay` reporting **false**, a measured direct connection,
+      // on a tally that says it never measured anything. False is the reading
+      // that argues for deleting the SFU, which is what makes it the flattering
+      // fold rather than a harmless inconsistency.
+      final tally = IceCandidateTally()
+        ..recordSelectedPair(_load('getstats_macos_caller'));
+      expect(tally.selectedPairSource, SelectedPairSource.transportSelectedId);
+      expect(tally.usedRelay, isFalse);
+
+      tally.recordSelectedPair(const []);
+
+      expect(tally.selectedPairSource, SelectedPairSource.transportSelectedId,
+          reason: 'a read that saw nothing must not downgrade a read that saw '
+              'a pair');
+      expect(tally.selectedLocal, IceCandidateType.host,
+          reason: 'and it must not erase it either');
+      expect(tally.usedRelay, isFalse);
+    });
+
+    test('a stringified byte count is a TIEBREAK input, not a reason to lose '
+        'the whole measurement', () {
+      // Darwin passes `report.values` to the channel untransformed, so the
+      // types are whatever the ObjC SDK put there. `as num?` on a String throws
+      // a TypeError out of the entire read — over a value used only to break a
+      // tie between two pairs that both already qualify.
+      // TWO pairs must reach the pool or `bytesOf` is never called and this
+      // arm cannot fail — which is exactly what the first version of this test
+      // did. It passed with the fix reverted, because the transport names one
+      // pair, a one-element pool never enters the tiebreak, and a check whose
+      // outcome is independent of the thing it checks is not a check. So: drop
+      // the transport report to take the heuristic path, and promote a second
+      // pair to `succeeded` so the comparison actually runs.
+      final base = _load('getstats_macos_caller');
+      final selectedId = base
+          .firstWhere((r) => r['type'] == 'transport')['selectedCandidatePairId']
+          as String;
+      var promoted = false;
+      final stringified = <Map<String, dynamic>>[];
+      for (final r in base) {
+        if (r['type'] == 'transport') continue;
+        if (r['type'] != 'candidate-pair') {
+          stringified.add(r);
+          continue;
+        }
+        final isWinner = r['id'] == selectedId;
+        // A second succeeded pair, deliberately carrying FEWER bytes than the
+        // real winner, so a working tiebreak still picks the right one.
+        final promote = !isWinner && !promoted && r['state'] != 'succeeded';
+        if (promote) promoted = true;
+        stringified.add({
+          ...r,
+          if (promote) 'state': 'succeeded',
+          'bytesSent': '${r['bytesSent']}',
+          'bytesReceived': '${r['bytesReceived']}',
+        });
+      }
+      expect(promoted, isTrue, reason: 'the pool must hold two pairs');
+
+      final tally = IceCandidateTally();
+      expect(() => tally.recordSelectedPair(stringified), returnsNormally);
+      expect(tally.selectedPairSource, SelectedPairSource.succeededHeuristic);
+      expect(tally.selectedPairFullyResolved, isTrue);
+      expect(tally.usedRelay, isFalse);
+    });
+
     test('a transport naming a pair that is not in the report falls back rather '
         'than reporting nothing', () {
       final base = _load('getstats_macos_caller');

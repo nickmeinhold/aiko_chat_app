@@ -195,8 +195,17 @@ class IceCandidateTally {
   /// The heuristic therefore stays as a FALLBACK for a stack that omits the
   /// transport report, with its asymmetry written down rather than implied.
   void recordSelectedPair(List<Map<String, dynamic>> stats) {
-    num bytesOf(Map<String, dynamic> s) =>
-        (s['bytesSent'] as num? ?? 0) + (s['bytesReceived'] as num? ?? 0);
+    // Tolerant of a stringified number rather than throwing on one. Darwin
+    // hands `report.values` to the channel untransformed, so what arrives is
+    // whatever the ObjC SDK put there; a `as num?` cast would throw a
+    // TypeError out of the whole read over a value used only as a TIEBREAK.
+    // Losing the entire measurement because a tiebreak input was a String is
+    // not proportionate — and an unreadable byte count sorts as 0, which can
+    // only ever cost this pair a tie, never win it one.
+    num bytesOf(Map<String, dynamic> s) {
+      num one(Object? v) => v is num ? v : (v is String ? num.tryParse(v) ?? 0 : 0);
+      return one(s['bytesSent']) + one(s['bytesReceived']);
+    }
 
     // Every id the transport reports as selected. A set, not a single value:
     // without BUNDLE there is one transport per m-line, and picking "the first"
@@ -221,11 +230,23 @@ class IceCandidateTally {
     // named IS the proof, and requiring `succeeded` on top is what blinded the
     // controlled side.
     final pool = named.isNotEmpty ? named : succeeded;
-    selectedPairSource = named.isNotEmpty
-        ? SelectedPairSource.transportSelectedId
-        : (succeeded.isNotEmpty
-            ? SelectedPairSource.succeededHeuristic
-            : SelectedPairSource.none);
+
+    // NOTHING IS ASSIGNED UNTIL THERE IS SOMETHING TO ASSIGN, and a later read
+    // that sees nothing must not erase an earlier one that saw a pair.
+    //
+    // The first version set `selectedPairSource` here, ABOVE the `best == null`
+    // early return. Call this twice — which nothing prevents, and which any
+    // periodic sampling of a live call does — with a good report then an empty
+    // one, and the object ends up holding `selectedLocal/Remote` from the good
+    // read alongside `selectedPairSource == none`. `usedRelay` then returns
+    // **false**, a measured direct connection, on a tally that simultaneously
+    // reports it never measured anything.
+    //
+    // That is the third instance in this file of the same defect: the unknown
+    // folding toward the answer that flatters the thing being measured, `false`
+    // being the reading that argues for deleting the SFU. Unknown must never
+    // overwrite known, and the two fields must never be able to disagree.
+    if (pool.isEmpty) return;
 
     Map<String, dynamic>? best;
     for (final s in pool) {
@@ -253,8 +274,13 @@ class IceCandidateTally {
       return null;
     }
 
+    // Committed together, so no reader can ever observe a source that
+    // disagrees with the pair it claims to describe.
     selectedLocal = typeOf(best['localCandidateId']);
     selectedRemote = typeOf(best['remoteCandidateId']);
+    selectedPairSource = named.isNotEmpty
+        ? SelectedPairSource.transportSelectedId
+        : SelectedPairSource.succeededHeuristic;
   }
 
   /// True when this call went through TURN on either end — the fallback case.
