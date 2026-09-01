@@ -30,6 +30,14 @@ that order, because CallKit rings before Dart exists — so the client's job cha
 gates is the signature check, a product built on signed-at-birth would be shipping a ring
 that fires before proof.
 
+> **STATUS, 2026-09-01: the largest open question in this document is DECIDED**, and one of
+> its stated costs was wrong. Read `16-callkit-ring-TEMPER.md`'s post-strike addendum before
+> this file. Short version: ring-capability follows per-conversation consent (default-off for
+> groups, default-on for DMs with friends); that consent is **device-local and always was**,
+> so nothing is published to the island; and the signature-before-ring flaw dissolves into
+> Swift-side Ed25519 against the locally-known consented keys. The recast is owed; this
+> document is the record that earned it, not the design to build from.
+
 ## What this supersedes
 
 **claude-tasks#3588 is answered here, not fixed there.** #3588 is "the notification tap
@@ -367,13 +375,23 @@ mirroring design 12's own sequencing note for its Decisions 4/5/7.
 
 ## Open questions
 
-- **§4's signature ordering is the largest open question in this document** and it is not
-  a product call — it is a trust-boundary call, and neither arm is comfortable: ring before
-  proof, or move proof to the island. It may also be the strongest argument for arm (iii),
-  since a VoIP push restricted to established relationships bounds who can fire an
-  unverified ring at all.
-- **§4's consent arms are the product question**, separately. (i), (ii) and
-  (iii) have different privacy costs and (iii) may be right on its own merits.
+- ~~**§4's signature ordering is the largest open question in this document**~~ — **LARGELY
+  CLOSED, 2026-09-01**, by the decision below rather than by anything in this document. The
+  arms were "ring before proof" or "move proof to the island", and the third arm the doc
+  reasoned itself out of is the one that survives: with the consented key set device-local,
+  small, and known before the push lands, **Swift verifies Ed25519 against it before
+  reporting to CallKit**. The doc argued Dart-doesn't-exist-yet therefore
+  verification-can't-happen, which is a claim about a runtime wearing the costume of a claim
+  about a capability. Proof moves neither later nor to the island; it moves to the layer that
+  is actually awake. What remains open is narrower and belongs in the recast: key-set
+  freshness at wake time, and what a *newly* consented caller's first ring does.
+- ~~**§4's consent arms are the product question**~~ — **DECIDED (Nick, 2026-09-01):**
+  *"default-off for groups, default-on for DMs with friends."* Arm (iii). The privacy cost
+  this bullet weighed was mispriced: it assumed the consent fact reaches the island, and
+  `ring_allowlist_store.dart` has been device-local by design since 2026-08-26. Reach
+  (friends), wake (per-conversation ring consent) and admit (`admitRing`) are three layers,
+  not one — collapsing them is what made this look like a single product call. Only the
+  reach layer is still undesigned (claude-tasks#3420).
 - **`kPushDeliverySlack` has no value and no derivation.** It is the honest name for a
   number this design needs and has not earned.
 - **The in-app ring path under arm (b) of §3** is unexamined — whether it is genuinely the

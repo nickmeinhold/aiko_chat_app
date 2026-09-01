@@ -6,6 +6,50 @@
 
 Bundle: design 16 (under strike) + island design 12 (context, the co-owned peer record).
 
+> ## POST-STRIKE ADDENDUM — flaw 5 is DECIDED, and its stated cost was wrong
+>
+> **Nick, 2026-09-01:** *"Yeah default-off for groups, default-on for DMs with friends I
+> reckon."*
+>
+> Flaw 5 — the one this disposition names as the single thing gating a `CXProviderDelegate`
+> line — is answered. Arm (iii) is the spine.
+>
+> **And the reason the strike gave for it being Nick's call does not exist.** The disposition
+> below says (iii) *"publishes a per-conversation consent fact to the island."* It does not.
+> `lib/features/call/data/ring_allowlist_store.dart` has shipped since Nick's 2026-08-26
+> ruling and is **device-local by design**, argued from the same mute-vs-block doctrine the
+> ring gates already use: a block is server-side moderation, a mute is device-local
+> attention, and *"may this agent wake me at 3am"* is attention. The store's own docstring
+> rejects the island-held roster explicitly — it would put a person's sleep under an
+> operator's control and contradict ADR-0004's refusal of a central directory.
+>
+> So the privacy cost that made (iii) a product question was priced against a mechanism
+> nobody was going to build. **Nothing is published. The island learns nothing.**
+>
+> Nobody in a 4/4 strike flagged this, because the sentence reasons correctly from its
+> premise — the premise simply was never checked against a file in the same feature
+> directory. A reviewer interrogates the argument; nobody re-measures the premise.
+>
+> **What it unblocks, carried into the v2 recast:**
+> - Flaw 1 (*the ring fires before the signature is proven*) drops from a trust-boundary
+>   dilemma to an implementation detail. The consented key set is small, local and known
+>   before the push arrives, so Swift verifies Ed25519 with CryptoKit against those keys
+>   **before** reporting to CallKit. Nothing rides in the payload.
+> - Flaw 2 loosens with it — design 12's payload stays opaque *and* the proof happens
+>   on-device, because the proof does not need the payload to name anyone. Tesla's
+>   *"opacity and on-device proof cannot both be true"* was true only while verification
+>   had to read the payload.
+> - **New consequence to handle, not settled here:** `notDirectMessage` currently refuses
+>   channel-wide rings outright. Default-off-for-groups is not never-for-groups — a
+>   consented group ring is now expressible, and that gate needs re-deriving from the
+>   consent store rather than from the channel kind. `call_invite.dart` says *"channel-wide
+>   calls need their own consent model, not this door"*; per-conversation ring consent **is**
+>   that model, and the two have sat in one directory unconnected.
+>
+> Everything below is the strike as it was struck, unedited apart from the marked
+> correction at flaw 5. A temper is a record of what four families said at a moment; it is
+> not rewritten when the world moves under it.
+
 ## Per-family verdicts
 
 | Family | Verdict | One-line |
@@ -81,7 +125,14 @@ framing: separate *signed call invite as message* from *ring-capability as deliv
 and never let `body == sentinel` alone imply PushKit eligibility.
 
 **DISPOSITION: this is the recast's centre — and it is still Nick's call**, because (iii)
-publishes a per-conversation consent fact to the island. What changes is that the doc must
+publishes a per-conversation consent fact to the island.
+
+> **CORRECTION, 2026-09-01 (post-strike).** The clause after "because" is false — the shipped
+> `RingAllowlistStore` is device-local by design and publishes nothing. And the call has since
+> been made: default-off for groups, default-on for DMs with friends. See the addendum at the
+> top of this file. The rest of this disposition stands, and its last sentence turned out to
+> be the important one.
+ What changes is that the doc must
 present it as *the design*, with the others as rejected alternatives and their rejection
 argued, rather than as three equal doors. Note it also **bounds** flaw 1 rather than solving
 it (Kelvin is explicit: the ring still precedes the check, but only for vetted callers) —
@@ -185,9 +236,10 @@ iOS-first or give ConnectionService its own inversion table.**
 Two things must happen before a Swift `CXProviderDelegate` line is written, and Carnot's
 gate is adopted verbatim: **reversibility is already lost once the phone rings.**
 
-1. **Nick decides flaw 5** — is ringing a capability of an established relationship (alert for
-   first contact, VoIP once consented), and does the island get to know that? Everything else
-   branches off it.
+1. ~~**Nick decides flaw 5**~~ — **DECIDED 2026-09-01**, and the second half of the question
+   was malformed: the island does not get to know, because the consent store is device-local
+   and always was. Default-off for groups, default-on for DMs with friends. Arm (iii) is the
+   spine. See the addendum at the top of this file.
 2. **Flaws 2, 3, 7 and 10 go to the island tab as cross-repo findings** — the opacity/proof
    collision, Decision 1c's possibly-un-takeable ceiling, the end-as-VoIP dispatch problem,
    and the Recents ruling whose premise has changed.
