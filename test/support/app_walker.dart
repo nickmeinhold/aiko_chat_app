@@ -21,7 +21,7 @@
 //   real `AikoChatApp` with faked seams. No device, no emulator; it belongs in
 //   the normal suite rather than in a nightly job nobody reads.
 //
-// Deliberately NOT covered yet: text entry, gestures other than tap, and the
+// Deliberately NOT covered yet: text entry, drag/scroll, and the
 // sign-out/sign-in cycle (the "recover" verb). Sign-out is excluded because it
 // ends the session and truncates every walk that finds it — it deserves its own
 // walk that starts there, not a rail that makes ordinary walks short.
@@ -54,15 +54,25 @@ const kWalkerAvoids = <String>[
   'unregister',
 ];
 
-/// One interactive element the walker could tap, with the label it will record.
+/// How the walker will drive a control.
+///
+/// Tap is not enough for this app: the moderation sheet — Message, Call, Mute,
+/// Report, Block — hangs off `onLongPress` on a message bubble and is reachable
+/// no other way, so a tap-only walker is structurally blind to the entire UGC
+/// surface however many seeds it runs.
+enum WalkAction { tap, longPress }
+
+/// One interactive element the walker could drive, with the label it records.
 class WalkCandidate {
-  WalkCandidate(this.finder, this.label);
+  WalkCandidate(this.finder, this.label, this.action);
 
   final Finder finder;
   final String label;
+  final WalkAction action;
 
   @override
-  String toString() => label;
+  String toString() =>
+      action == WalkAction.longPress ? 'long-press $label' : label;
 }
 
 /// The record of a walk — enough to replay it exactly.
@@ -109,17 +119,30 @@ List<WalkCandidate> walkCandidates(WidgetTester tester) {
       )
       .hitTestable();
 
+  // Anything that declares a long-press handler. Targeted rather than generic:
+  // this is how a message bubble offers the moderation sheet, and a walker that
+  // cannot press-and-hold cannot see Mute, Report, Block or Message at all.
+  final longPressFinder = find
+      .byWidgetPredicate((w) => w is GestureDetector && w.onLongPress != null)
+      .hitTestable();
+
   final out = <WalkCandidate>[];
-  final elements = finder.evaluate().toList();
-  for (var i = 0; i < elements.length; i++) {
-    final label = _labelOf(elements[i]);
-    if (kWalkerAvoids.any(label.toLowerCase().contains)) continue;
-    // Address by INDEX into the same predicate, not by the element: tapping
-    // rebuilds the tree, and a captured Element is stale the moment it does.
-    out.add(
-      WalkCandidate(finder.at(i), label.isEmpty ? '<unlabelled>' : label),
-    );
+
+  void collect(Finder f, WalkAction action) {
+    final elements = f.evaluate().toList();
+    for (var i = 0; i < elements.length; i++) {
+      final label = _labelOf(elements[i]);
+      if (kWalkerAvoids.any(label.toLowerCase().contains)) continue;
+      // Address by INDEX into the same predicate, not by the element: acting
+      // rebuilds the tree, and a captured Element is stale the moment it does.
+      out.add(
+        WalkCandidate(f.at(i), label.isEmpty ? '<unlabelled>' : label, action),
+      );
+    }
   }
+
+  collect(finder, WalkAction.tap);
+  collect(longPressFinder, WalkAction.longPress);
   return out;
 }
 
@@ -167,54 +190,87 @@ Future<WalkTrail> walkApp(
   final rng = Random(seed);
   final trail = WalkTrail(seed);
 
-  for (var step = 0; step < steps; step++) {
-    var candidates = walkCandidates(tester);
+  // Own error reporting for the duration of the walk.
+  //
+  // A framework assertion (`setState() called during build`, a failed layout) is
+  // dispatched to `FlutterError.onError` from inside the frame — it is not
+  // thrown from `tap` or `pumpAndSettle`, so it never travels through the code
+  // below and the default handler fails the test with a stack trace and NO
+  // trail. That is the difference between "the app broke somewhere in 60 taps"
+  // and a one-line reproduction, which is the entire value of a random walk.
+  FlutterErrorDetails? captured;
+  final previousOnError = FlutterError.onError;
+  // Deliberately NOT chaining to `previousOnError`: it would fail the test
+  // immediately with its own message, and the failure the developer reads
+  // should be the one carrying the trail.
+  FlutterError.onError = (details) => captured ??= details;
 
-    // Before calling it a dead end, try to LEAVE. The distinction is the whole
-    // value of this invariant: "there is nothing to tap" and "there is nothing
-    // the walker RECOGNISES to tap" produce an identical empty list, and only
-    // the first is a bug. A screen the user can back out of is not a trap, so
-    // the claim is only made once the escape hatch has also failed.
-    if (candidates.isEmpty) {
-      await tester.binding.handlePopRoute();
-      await settleOrAdvance(tester);
-      candidates = walkCandidates(tester);
-      if (candidates.isNotEmpty) trail.steps.add('<system back>');
+  void checkCaptured(String context) {
+    final d = captured;
+    if (d == null) return;
+    FlutterError.onError = previousOnError;
+    fail('$context raised ${d.exception}\n${trail.describe()}');
+  }
+
+  try {
+    for (var step = 0; step < steps; step++) {
+      var candidates = walkCandidates(tester);
+
+      // Before calling it a dead end, try to LEAVE. The distinction is the whole
+      // value of this invariant: "there is nothing to tap" and "there is nothing
+      // the walker RECOGNISES to tap" produce an identical empty list, and only
+      // the first is a bug. A screen the user can back out of is not a trap, so
+      // the claim is only made once the escape hatch has also failed.
+      if (candidates.isEmpty) {
+        await tester.binding.handlePopRoute();
+        await settleOrAdvance(tester);
+        candidates = walkCandidates(tester);
+        if (candidates.isNotEmpty) trail.steps.add('<system back>');
+      }
+
+      expect(
+        candidates,
+        isNotEmpty,
+        reason:
+            'DEAD END after ${trail.steps.length} steps — nothing to tap and the '
+            'system back gesture did not restore anything, so a user is stranded '
+            'here.\n${trail.describe()}',
+      );
+
+      final pick = candidates[rng.nextInt(candidates.length)];
+      trail.steps.add(pick.toString());
+
+      try {
+        switch (pick.action) {
+          case WalkAction.tap:
+            await tester.tap(pick.finder, warnIfMissed: false);
+          case WalkAction.longPress:
+            await tester.longPress(pick.finder, warnIfMissed: false);
+        }
+        await settleOrAdvance(tester);
+      } catch (e) {
+        fail('Driving $pick threw: $e\n${trail.describe()}');
+      }
+
+      final thrown = tester.takeException();
+      expect(
+        thrown,
+        isNull,
+        reason: 'Driving $pick raised $thrown\n${trail.describe()}',
+      );
+
+      expect(
+        find.byType(Text).hitTestable(),
+        findsWidgets,
+        reason:
+            'BLANK FRAME after $pick — the screen rendered no '
+            'visible text at all.\n${trail.describe()}',
+      );
+
+      checkCaptured('Driving $pick');
     }
-
-    expect(
-      candidates,
-      isNotEmpty,
-      reason:
-          'DEAD END after ${trail.steps.length} steps — nothing to tap and the '
-          'system back gesture did not restore anything, so a user is stranded '
-          'here.\n${trail.describe()}',
-    );
-
-    final pick = candidates[rng.nextInt(candidates.length)];
-    trail.steps.add(pick.label);
-
-    try {
-      await tester.tap(pick.finder, warnIfMissed: false);
-      await settleOrAdvance(tester);
-    } catch (e) {
-      fail('Tapping ${pick.label} threw: $e\n${trail.describe()}');
-    }
-
-    final thrown = tester.takeException();
-    expect(
-      thrown,
-      isNull,
-      reason: 'Tapping ${pick.label} raised $thrown\n${trail.describe()}',
-    );
-
-    expect(
-      find.byType(Text).hitTestable(),
-      findsWidgets,
-      reason:
-          'BLANK FRAME after tapping ${pick.label} — the screen rendered no '
-          'visible text at all.\n${trail.describe()}',
-    );
+  } finally {
+    FlutterError.onError = previousOnError;
   }
   return trail;
 }
@@ -234,7 +290,13 @@ Future<WalkTrail> walkApp(
 Future<void> settleOrAdvance(WidgetTester tester) async {
   try {
     await tester.pumpAndSettle(const Duration(milliseconds: 100));
-  } on FlutterError {
+  } on FlutterError catch (e) {
+    // ONLY the timeout. Catching every FlutterError here silently swallowed a
+    // real framework assertion (`setState() called during build`) and left the
+    // walk to fail later with no trail attached — the instrument hiding the
+    // exact class of bug it exists to surface. Anything that is not the
+    // perpetual-animation timeout is the app's, and is rethrown.
+    if (!e.message.contains('pumpAndSettle timed out')) rethrow;
     // Perpetual animation in flight. Advance real frames instead so any
     // post-frame callback, navigation, or future still runs.
     for (var i = 0; i < 5; i++) {

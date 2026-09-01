@@ -24,8 +24,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/app_walker.dart';
-import '../support/fake_chat_transport.dart';
 import '../support/test_helpers.dart';
+import '../support/walk_harness.dart';
 
 void main() {
   setUpAll(() async {
@@ -34,26 +34,9 @@ void main() {
 
   final seen = <String>{};
 
-  Future<void> pumpAt(WidgetTester tester, Size size) async {
-    tester.view.physicalSize = size;
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final container = makeContainer(
-      rest: FakeRestApi(),
-      transport: FakeChatTransport(),
-    );
-    addTearDown(container.dispose);
-    await pumpApp(tester, container);
-    await signIn(tester);
-  }
-
   for (var seed = 300; seed < 320; seed++) {
     testWidgets('coverage seed=$seed', (tester) async {
-      await pumpAt(
-        tester,
-        seed.isEven ? const Size(400, 900) : const Size(1400, 900),
-      );
+      await pumpWalkableApp(tester, seed.isEven ? walkPhone : walkDesktop);
       final t = await walkApp(tester, seed: seed, steps: 60);
       seen.addAll(t.steps);
     });
