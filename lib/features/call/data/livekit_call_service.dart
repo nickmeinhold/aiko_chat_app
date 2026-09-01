@@ -8,20 +8,62 @@ import '../domain/video_token.dart';
 
 /// The ICE transport policy for A/V calls: **always relay-only** (`.relay`).
 ///
-/// Peer-IP privacy is a HARD requirement (Nick, 2026-08-11): media must never
-/// traverse a direct path that exposes participant IPs, so all media is forced
-/// through TURN. This is NOT flippable and NOT per-island adaptive — `.all`
-/// (direct UDP/srflx alongside relay) leaks peer IPs and is an explicitly
-/// REJECTED fallback (this rejects the island tab's "default ICE / don't force
-/// relay" Correction 2 on claude-tasks#2726, which traded the privacy property
-/// away).
+/// KEEP THE CONSTANT. THE REASON IS SCOPED TO A TOPOLOGY — READ WHICH ONE.
 ///
-/// Consequence: force-relay makes **TURN a hard dependency of any video-enabled
-/// island**. An island without TURN (e.g. enspyr as of 2026-08-11) cannot offer
-/// privacy-preserving video and must fail CLOSED server-side (503
-/// video-not-enabled), never mint a token that can't connect. TURN-provisioning
-/// + the fail-closed 503 are tracked in the island handoff; see
-/// claude-tasks#2726 and ADR-0005 grounding note.
+/// **This reasoning describes the SFU path, which is what exists today.** It is
+/// not a general fact about `.relay`, and it stops applying the moment a direct
+/// `PeerConnection` exists — see the note at the end, because that may be where
+/// 1:1 calls are going (claude-tasks#3740).
+///
+/// The reason printed here until 2026-08-31 said `.all` leaks peer IPs. That is
+/// a mesh/P2P rationale applied to an SFU, and it does not survive that
+/// topology. LiveKit's signalling proto carries
+/// `TrickleRequest { candidateInit, SignalTarget target }` with exactly two
+/// targets — `PUBLISHER` and `SUBSCRIBER`, the client's own two peer connections
+/// — and `ParticipantInfo`, the struct the server broadcasts about you, has no
+/// address field at all. **There is no channel by which another participant
+/// could learn your address**, under either policy. Under `.all` the party that
+/// learns it is the operator's SFU; under `.relay` it is the operator's TURN,
+/// which on both live islands is the *same process* (LiveKit's embedded TURN in
+/// `livekit.yaml`, one container per box, no coturn). Both tabs agree; the
+/// reasoning is island design 13 Decision 9f, strengthened 2026-08-31.
+///
+/// What `.relay` actually buys, and why it stays: **NAT traversal from
+/// restrictive networks**, and on our boxes **forcing media over 443 through the
+/// SNI mux** so it reads as HTTPS to a middlebox. Reachability and traffic
+/// shape, not peer-IP privacy. Recorded at the constant because the inversion is
+/// more dangerous than a wrong comment — the next reader to correctly falsify
+/// "it protects peer IPs" would have a clean-looking argument for deleting
+/// something we need.
+///
+/// Still not flippable and not per-island adaptive, and this still rejects the
+/// island tab's "default ICE / don't force relay" Correction 2 on
+/// claude-tasks#2726 — now on the reachability grounds, not the privacy ones.
+/// The cost is real and unpriced: 100% of media egress crosses the operator
+/// (claude-tasks#3699, #3716).
+///
+/// Consequence, unchanged: force-relay makes **TURN a hard dependency of any
+/// video-enabled island**. An island without TURN cannot connect a call at all
+/// and must fail CLOSED server-side (503 video-not-enabled), never mint a token
+/// that can't connect. See claude-tasks#2726 and the ADR-0005 grounding note.
+///
+/// ## The reason above INVERTS on a direct path, and that path is being designed
+///
+/// The whole argument rests on one structural fact — an SFU has no
+/// participant-to-participant channel, so no peer can learn another's address.
+/// **On a direct `PeerConnection` that channel is the entire mechanism**: peers
+/// trade host and srflx ICE candidates with each other, so `.all` would expose
+/// peer IPs exactly as the old docstring claimed. The retired rationale is not
+/// wrong in general — it was **premature**, describing a topology the system
+/// does not have yet and may grow into (claude-tasks#3740: 1:1 media over a
+/// registrar/bus rendezvous instead of the SFU).
+///
+/// So the next reader gets the trap named rather than sprung: **do not carry
+/// "force-relay buys nothing on peer-IP privacy" across into a P2P design.** It
+/// is a fact about the topology it was measured in. Under a direct path this
+/// constant becomes load-bearing for the reason it was originally given, and
+/// forcing relay there also forfeits the egress saving that motivates P2P at
+/// all — which makes it a genuine fork to price, not a constant to inherit.
 const RTCIceTransportPolicy kCallIceTransportPolicy =
     RTCIceTransportPolicy.relay;
 
