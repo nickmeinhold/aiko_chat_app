@@ -1,0 +1,511 @@
+<title>Aiko Survey Chart</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+:root{
+  --sea:#dce7ea; --shoal:#b9d4dc; --deep:#f4f8f9;
+  --land:#efe3b4; --land-edge:#c9b477;
+  --ink:#17303a; --ink-soft:#4d6a75; --ink-faint:#8ba3ac;
+  --rule:#b6c8ce;
+  --magenta:#b0217c; --magenta-soft:#e9c6dd;
+  --green:#2f6b4f; --amber:#a86a12;
+  --paper:#f7f4ec; --panel:#ffffff;
+  --focus:#b0217c;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --sea:#12242c; --shoal:#1b3541; --deep:#0c191f;
+    --land:#2c3320; --land-edge:#5c6338;
+    --ink:#dbe7ea; --ink-soft:#93aeb7; --ink-faint:#5f7c86;
+    --rule:#26424e;
+    --magenta:#ff6cc0; --magenta-soft:#4a1436;
+    --green:#63c193; --amber:#e0a44a;
+    --paper:#0b171c; --panel:#10222a;
+    --focus:#ff6cc0;
+  }
+  :root:not([data-theme="light"]) button.mark[aria-pressed="true"]{color:#0b171c}
+}
+:root[data-theme="dark"]{
+  --sea:#12242c; --shoal:#1b3541; --deep:#0c191f;
+  --land:#2c3320; --land-edge:#5c6338;
+  --ink:#dbe7ea; --ink-soft:#93aeb7; --ink-faint:#5f7c86;
+  --rule:#26424e;
+  --magenta:#ff6cc0; --magenta-soft:#4a1436;
+  --green:#63c193; --amber:#e0a44a;
+  --paper:#0b171c; --panel:#10222a;
+  --focus:#ff6cc0;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"IBM Plex Sans Condensed","Helvetica Neue",sans-serif;
+  font-size:17px; line-height:1.5;
+  -webkit-text-size-adjust:100%;
+}
+.wrap{max-width:44rem;margin:0 auto;padding:0 1.1rem 5rem}
+header{padding:2.2rem 0 1.2rem}
+.eyebrow{
+  font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--ink-soft);font-weight:600;margin:0 0 .7rem
+}
+h1{
+  font-family:"IBM Plex Serif",Georgia,serif;font-weight:600;
+  font-size:clamp(2rem,8vw,2.9rem);line-height:1.05;margin:0 0 .6rem;
+  text-wrap:balance;letter-spacing:-.01em
+}
+h1 em{font-style:italic;color:var(--magenta)}
+.standfirst{
+  font-family:"IBM Plex Serif",Georgia,serif;font-size:1.05rem;
+  color:var(--ink-soft);margin:0;max-width:34rem
+}
+.brief{
+  margin:1.6rem 0 0;padding:1.1rem 1.2rem;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--magenta)
+}
+.brief p{margin:0 0 .7rem;font-size:.95rem}
+.brief p:last-child{margin:0}
+.brief strong{font-weight:600}
+/* ---- chart ---- */
+.chartbox{
+  margin:1.8rem 0 0;border:1px solid var(--rule);background:var(--deep);
+  position:relative;overflow:hidden
+}
+.chartbox svg{display:block;width:100%;height:auto}
+.chart-cap{
+  display:flex;flex-wrap:wrap;gap:.4rem 1rem;align-items:baseline;
+  padding:.6rem .8rem;border-top:1px solid var(--rule);
+  font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)
+}
+.chart-cap b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.key{display:flex;gap:.9rem;flex-wrap:wrap;font-size:.74rem;color:var(--ink-soft);
+  letter-spacing:.06em;text-transform:uppercase;padding:.55rem .8rem;
+  border-top:1px solid var(--rule)}
+.key span{display:inline-flex;align-items:center;gap:.32rem}
+.key i{width:.62rem;height:.62rem;display:inline-block;border-radius:50%;font-style:normal}
+.k-un{background:var(--ink-faint)} .k-la{background:var(--green)}
+.k-ci{background:var(--amber)} .k-st{background:var(--magenta)}
+/* ---- sections ---- */
+section{margin:2.6rem 0 0}
+.coast{
+  display:flex;align-items:baseline;gap:.7rem;
+  border-bottom:1px solid var(--rule);padding-bottom:.45rem;margin-bottom:.2rem
+}
+.coast h2{
+  font-family:"IBM Plex Serif",Georgia,serif;font-style:italic;font-weight:400;
+  font-size:1.35rem;margin:0;letter-spacing:.01em
+}
+.coast .gloss{font-size:.76rem;color:var(--ink-soft);letter-spacing:.08em;
+  text-transform:uppercase;margin-left:auto;white-space:nowrap}
+/* ---- rows ---- */
+.row{
+  display:grid;grid-template-columns:2.1rem 1fr;gap:.1rem .7rem;
+  padding:.85rem 0 .7rem;border-bottom:1px solid var(--rule);
+  scroll-margin-top:1rem
+}
+.num{
+  font-family:"IBM Plex Mono",monospace;font-size:.82rem;color:var(--ink-faint);
+  padding-top:.16rem;font-variant-numeric:tabular-nums
+}
+.cap{margin:0;font-size:1rem}
+.marks{grid-column:2;display:flex;gap:.4rem;margin-top:.6rem;flex-wrap:wrap}
+button.mark{
+  font-family:"IBM Plex Sans Condensed",sans-serif;font-size:.74rem;
+  letter-spacing:.09em;text-transform:uppercase;font-weight:600;
+  padding:.42rem .7rem;min-height:2.15rem;cursor:pointer;
+  background:transparent;color:var(--ink-soft);
+  border:1px solid var(--rule);border-radius:0;
+  transition:background .14s,color .14s,border-color .14s
+}
+button.mark:hover{border-color:var(--ink-faint);color:var(--ink)}
+button.mark:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.row[data-state="landed"] .num{color:var(--green)}
+.row[data-state="circled"] .num{color:var(--amber)}
+.row[data-state="struck"] .num{color:var(--magenta)}
+.row[data-state="na"] .cap{color:var(--ink-faint);text-decoration:line-through;
+  text-decoration-color:var(--ink-faint)}
+button.mark[aria-pressed="true"][data-m="landed"]{background:var(--green);border-color:var(--green);color:#fff}
+button.mark[aria-pressed="true"][data-m="circled"]{background:var(--amber);border-color:var(--amber);color:#fff}
+button.mark[aria-pressed="true"][data-m="struck"]{background:var(--magenta);border-color:var(--magenta);color:#fff}
+button.mark[aria-pressed="true"][data-m="na"]{background:var(--ink-faint);border-color:var(--ink-faint);color:var(--paper)}
+:root[data-theme="dark"] button.mark[aria-pressed="true"]{color:#0b171c}
+.note{grid-column:2;margin-top:.5rem;display:none}
+.row[data-state="circled"] .note,.row[data-state="struck"] .note{display:block}
+.note input{
+  width:100%;font-family:"IBM Plex Sans Condensed",sans-serif;font-size:.9rem;
+  padding:.45rem .55rem;background:var(--panel);color:var(--ink);
+  border:1px solid var(--rule);border-radius:0
+}
+.note input:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+/* ---- callouts ---- */
+.caution{
+  margin:1rem 0 0;padding:.85rem 1rem;border:1px solid var(--magenta);
+  background:var(--magenta-soft);font-size:.92rem
+}
+:root[data-theme="dark"] .caution{background:var(--magenta-soft)}
+.caution b{font-weight:600}
+/* ---- log ---- */
+.log{margin:3rem 0 0;border:1px solid var(--rule);background:var(--panel)}
+.log h2{
+  font-family:"IBM Plex Serif",Georgia,serif;font-size:1.15rem;margin:0;
+  padding:.9rem 1rem;border-bottom:1px solid var(--rule);font-weight:600
+}
+.log-body{padding:1rem}
+.log-body p{margin:.2rem 0 .9rem;font-size:.92rem;color:var(--ink-soft)}
+#hazards{margin:0;padding:0;list-style:none;font-size:.95rem}
+#hazards li{padding:.5rem 0;border-bottom:1px dotted var(--rule);
+  display:grid;grid-template-columns:2.2rem 1fr;gap:.6rem}
+#hazards li:last-child{border-bottom:0}
+#hazards .h-n{font-family:"IBM Plex Mono",monospace;font-size:.82rem}
+#hazards .h-n.struck{color:var(--magenta)} #hazards .h-n.circled{color:var(--amber)}
+#hazards .h-note{display:block;color:var(--ink-soft);font-size:.85rem}
+.actions{display:flex;gap:.5rem;flex-wrap:wrap;padding:0 1rem 1rem}
+.actions button{
+  font-family:"IBM Plex Sans Condensed",sans-serif;font-size:.76rem;font-weight:600;
+  letter-spacing:.09em;text-transform:uppercase;padding:.55rem .85rem;min-height:2.4rem;
+  background:transparent;border:1px solid var(--rule);color:var(--ink-soft);cursor:pointer
+}
+.actions button:hover{border-color:var(--ink-faint);color:var(--ink)}
+.actions button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+/* ---- pilot book ---- */
+details.pilot{margin:2.4rem 0 0;border:1px solid var(--magenta);background:var(--panel)}
+details.pilot summary{
+  padding:1rem;cursor:pointer;font-family:"IBM Plex Serif",Georgia,serif;
+  font-size:1.05rem;font-weight:600;color:var(--magenta);list-style:none;
+  display:flex;align-items:center;gap:.6rem
+}
+details.pilot summary::-webkit-details-marker{display:none}
+details.pilot summary::before{content:"⚑";font-size:1.1rem}
+details.pilot summary span{font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-size:.76rem;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-soft);font-weight:400;margin-left:auto;text-align:right}
+.pilot-body{padding:0 1rem 1.2rem;border-top:1px solid var(--rule)}
+.pilot-body p{font-size:.93rem}
+table{width:100%;border-collapse:collapse;font-size:.9rem;margin:.8rem 0}
+th,td{text-align:left;padding:.5rem .4rem;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);font-weight:600}
+.tablewrap{overflow-x:auto}
+footer{margin:3rem 0 0;padding-top:1.2rem;border-top:1px solid var(--rule);
+  font-size:.88rem;color:var(--ink-soft)}
+footer em{font-style:italic}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">Aiko Chat · release survey · 0.0.4</p>
+  <h1>An uncharted island, and the <em>rocks</em> nobody drew</h1>
+  <p class="standfirst">Fifty-four landings this app owes a person. Take the handset, make each one, and mark what you find. What you cannot reach goes on the chart as a hazard.</p>
+</header>
+
+<div class="brief">
+  <p><strong>Why a survey and not a test run.</strong> Two release-relevant defects turned up in one evening, and every automated instrument we own was blind to both.</p>
+  <p>The unread badge sat six pixels from the mute bell, so <code>▼ general (3) 🔕</code> read as one compound signal meaning the opposite of what it said — composed at <code>AppBar.title</code> across two files that never appear in a single diff.</p>
+  <p>And long-pressing a row in the conversation dropdown does nothing: no handler was ever wired. <code>showConversationMuteMenu</code> has exactly one caller, while the comment claiming the dropdown rows "call this directly instead" describes something that was never built.</p>
+  <p><strong>Route coverage proves everything built is reachable.</strong> It cannot see either of these. The first is geometry; the second has no route to be unreachable. A capability nobody built has nothing to go red. That is the water this chart covers.</p>
+</div>
+
+<div class="chartbox">
+  <svg id="chart" viewBox="0 0 720 460" role="img" aria-label="Survey chart. Each numbered sounding is one capability; its colour shows whether it has been reached.">
+    <defs>
+      <clipPath id="seaclip"><rect x="0" y="0" width="720" height="460"/></clipPath>
+    </defs>
+    <rect width="720" height="460" fill="var(--sea)"/>
+    <g clip-path="url(#seaclip)" opacity=".55">
+      <path d="M-20 372 C 120 352 210 392 330 372 C 450 352 560 392 740 366" fill="none" stroke="var(--shoal)" stroke-width="1.2"/>
+      <path d="M-20 404 C 140 386 230 420 350 402 C 470 384 580 418 740 398" fill="none" stroke="var(--shoal)" stroke-width="1.2"/>
+      <path d="M-20 92 C 130 74 250 108 360 88 C 470 68 600 100 740 82" fill="none" stroke="var(--shoal)" stroke-width="1.2"/>
+    </g>
+    <!-- shoal band then coastline -->
+    <path d="M196 76 C 300 44 452 60 528 122 C 596 178 606 268 540 330 C 470 396 318 412 236 356 C 152 300 132 130 196 76 Z"
+          fill="var(--shoal)" opacity=".7"/>
+    <path d="M214 96 C 310 68 440 82 508 136 C 570 186 578 264 520 318 C 456 378 322 392 250 342 C 176 292 158 144 214 96 Z"
+          fill="var(--land)" stroke="var(--land-edge)" stroke-width="1.4"/>
+    <!-- compass rose -->
+    <g transform="translate(646,84)" stroke="var(--ink-soft)" fill="none">
+      <circle r="26" stroke-width="1"/><circle r="17" stroke-width=".6"/>
+      <path d="M0 -30 L0 30 M-30 0 L30 0" stroke-width=".7"/>
+      <path d="M0 -30 L5 -6 L0 0 L-5 -6 Z" fill="var(--magenta)" stroke="none"/>
+    </g>
+    <text x="646" y="126" text-anchor="middle" fill="var(--ink-soft)"
+          style="font:600 9px 'IBM Plex Sans Condensed',sans-serif;letter-spacing:.14em">N</text>
+    <text x="366" y="238" text-anchor="middle" fill="var(--land-edge)"
+          style="font:italic 600 19px 'IBM Plex Serif',serif;letter-spacing:.06em">AIKO</text>
+    <text x="366" y="258" text-anchor="middle" fill="var(--land-edge)"
+          style="font:400 9px 'IBM Plex Sans Condensed',sans-serif;letter-spacing:.26em">UNSURVEYED</text>
+    <g id="soundings"></g>
+  </svg>
+  <div class="chart-cap">
+    <span>Soundings taken <b id="done">0</b> of <b>54</b></span>
+    <span>Hazards charted <b id="hz">0</b></span>
+  </div>
+  <div class="key">
+    <span><i class="k-un"></i>Unsounded</span>
+    <span><i class="k-la"></i>Landed</span>
+    <span><i class="k-ci"></i>Circled</span>
+    <span><i class="k-st"></i>Struck a rock</span>
+  </div>
+</div>
+
+<div class="caution">
+  <b>Read only the landings.</b> The gestures are sealed in the pilot's book at the foot of the chart. Open it early and you can no longer find out whether you would have known where to look — which is the entire measurement. Both of tonight's defects were things that worked perfectly once you knew.
+</div>
+
+<main id="coasts"></main>
+
+<div class="log" id="log">
+  <h2>The ship's log</h2>
+  <div class="log-body">
+    <p id="log-empty">Nothing charted yet. Hazards appear here as you find them, ready to hand back.</p>
+    <ul id="hazards"></ul>
+  </div>
+  <div class="actions">
+    <button id="copy" type="button">Copy the log</button>
+    <button id="reset" type="button">Clear the survey</button>
+  </div>
+</div>
+
+<details class="pilot">
+  <summary>The pilot's book <span>Do not open until the survey is done</span></summary>
+  <div class="pilot-body">
+    <p>What the survey should have found, as of 0.0.4 on 1 September 2026.</p>
+    <p><strong>Deliberately absent.</strong> Calling is gated off entirely — three doors shut (the long-press sheet, the ring banner, and the <code>/call/:channelId</code> route, which was never registered). Media crosses the island SFU in the clear with nothing disclosing it, and CallKit is designed-not-built, so an invite to a backgrounded app is silence. Taking back a sent message is also absent: retractions are consumed from the wire, but nothing app-side originates one.</p>
+    <div class="tablewrap">
+    <table>
+      <tr><th>Landing</th><th>How it is actually done</th></tr>
+      <tr><td>33 · silence this conversation</td><td>Long-press the app-bar title</td></tr>
+      <tr><td>34 · silence another one</td><td><strong>No path on a phone.</strong> Switch to it first, then 33. Long-press on a dropdown row is dead</td></tr>
+      <tr><td>35 · silence a person</td><td>Long-press one of their messages</td></tr>
+      <tr><td>38, 39 · block, report</td><td>Long-press one of their messages</td></tr>
+      <tr><td>20 · move between conversations</td><td>The app-bar dropdown; the sidebar on a wide screen</td></tr>
+      <tr><td>40, 41 · blocked list</td><td>Settings → Blocked users</td></tr>
+      <tr><td>45 · what is recorded about me</td><td>Settings → Carried Record</td></tr>
+      <tr><td>46 · search</td><td>The magnifier in the app bar</td></tr>
+      <tr><td>47 · change island</td><td>The server switcher — <strong>wide layout only</strong>, no phone path</td></tr>
+    </table>
+    </div>
+    <p>Every one of those but the last two is a long-press. The whole moderation and attention surface hides behind an invisible gesture, on the platform where there is no right-click to fall back on. That pattern is the finding, not any single row of it.</p>
+  </div>
+</details>
+
+<footer>
+  <p>This chart is hand-drawn, so it is exactly as complete as whoever drew it. It will not find a capability nobody thought to name — the same blindness it exists to catch, one level up. Add a landing whenever a real person wants something that is not here. <em>That</em>, and not a passing test run, is what keeps it honest.</p>
+</footer>
+</div>
+
+<script>
+const GROUPS=[
+ {name:"Landfall",gloss:"Arriving",items:[
+  "Install the app and reach a usable screen without being told anything",
+  "Understand what this is before being asked to create an account",
+  "Create an identity, on this device, with no password",
+  "Choose what other people will call me",
+  "Find and read the terms before agreeing, not only after"]},
+ {name:"The Roads",gloss:"Returning",items:[
+  "Close the app and come back to where I was",
+  "Come back after a week and still be signed in",
+  "Get back in after being signed out, without creating a second identity",
+  "Use the same identity on a second device"]},
+ {name:"The Lookout",gloss:"Orienting",items:[
+  "See every conversation available to me",
+  "Tell at a glance which conversations want my attention",
+  "Tell which of those is a room and which is a person",
+  "Know which island I am connected to",
+  "Know when I am offline, and know when I am back"]},
+ {name:"The Anchorage",gloss:"Reading",items:[
+  "Open a room and read what has been said",
+  "Scroll back through history without it losing my place",
+  "Tell who said each thing",
+  "Tell which messages are mine",
+  "Leave a conversation and get back to the list",
+  "Move to a different conversation without going back to a home screen"]},
+ {name:"The Signal Station",gloss:"Speaking",items:[
+  "Send a message",
+  "Know it was actually sent",
+  "Know when it was not sent, and get it sent",
+  "Reply to one specific message",
+  "React to a message without saying anything",
+  "Mention a specific person so they notice",
+  "Write more than one line before sending",
+  "Take back something I just sent"]},
+ {name:"The Passage",gloss:"Reaching a person",items:[
+  "Find out who else is here",
+  "Start a private conversation with one of them",
+  "Get back to a private conversation started earlier",
+  "Tell a private conversation apart from a room at a glance"]},
+ {name:"Quiet Ground",gloss:"Attention",items:[
+  "Silence a conversation I am reading right now",
+  "Silence a conversation I am not currently in",
+  "Silence one particular person, everywhere",
+  "Tell that something is silenced rather than merely quiet",
+  "Undo any of the above"]},
+ {name:"The Breakwater",gloss:"Safety",items:[
+  "Stop a specific person reaching me",
+  "Report something to whoever runs this island",
+  "See who I have blocked",
+  "Unblock someone",
+  "Do the first two in an empty room, with no messages on screen"]},
+ {name:"Home Waters",gloss:"Myself",items:[
+  "Change how my name appears",
+  "Change my picture",
+  "See what this app has recorded about me",
+  "Search for something said earlier",
+  "Change which island I use"]},
+ {name:"The Open Sea",gloss:"Leaving",items:[
+  "Sign out",
+  "Delete my account and know what that destroyed",
+  "Get help from a human"]},
+ {name:"The Lee Shore",gloss:"Recovering",items:[
+  "Understand what is wrong when the network is down, and what to do",
+  "Understand what is wrong when my session expires",
+  "Understand what is wrong when my account is suspended, and how to appeal",
+  "Get out of any screen I can get into"]}
+];
+const NOTE42="This is not hypothetical. It is the exact state that got 0.0.1 rejected under Guideline 2.1: a reviewer's fresh account made block and report structurally unreachable, because both hang off long-pressing someone else's message and there were none.";
+const MARKS=[["landed","Landed"],["circled","Circled"],["struck","Struck"],["na","Not this release"]];
+const KEY="aiko-survey-0.0.4";
+let state=JSON.parse(localStorage.getItem(KEY)||"{}");
+const flat=[];
+GROUPS.forEach(g=>g.items.forEach(t=>flat.push({n:flat.length+1,t,g:g.name})));
+
+/* ---- rows ---- */
+const host=document.getElementById("coasts");
+let n=0;
+for(const g of GROUPS){
+  const s=document.createElement("section");
+  s.innerHTML='<div class="coast"><h2></h2><span class="gloss"></span></div>';
+  s.querySelector("h2").textContent=g.name;
+  s.querySelector(".gloss").textContent=g.gloss;
+  for(const t of g.items){
+    n++;
+    const id=n;
+    const row=document.createElement("div");
+    row.className="row"; row.id="s"+id;
+    row.dataset.state=state[id]?.m||"";
+    const num=document.createElement("div");
+    num.className="num"; num.textContent=String(id).padStart(2,"0");
+    const cap=document.createElement("p");
+    cap.className="cap"; cap.textContent=t;
+    const marks=document.createElement("div");
+    marks.className="marks";
+    for(const [m,label] of MARKS){
+      const b=document.createElement("button");
+      b.type="button"; b.className="mark"; b.dataset.m=m; b.textContent=label;
+      b.setAttribute("aria-pressed",String(state[id]?.m===m));
+      b.setAttribute("aria-label",label+", landing "+id);
+      b.addEventListener("click",()=>{
+        const cur=state[id]?.m;
+        if(cur===m){delete state[id];}
+        else{state[id]={m,note:state[id]?.note||""};}
+        row.dataset.state=state[id]?.m||"";
+        marks.querySelectorAll("button").forEach(x=>
+          x.setAttribute("aria-pressed",String(state[id]?.m===x.dataset.m)));
+        save();
+      });
+      marks.appendChild(b);
+    }
+    const note=document.createElement("div");
+    note.className="note";
+    const inp=document.createElement("input");
+    inp.type="text"; inp.value=state[id]?.note||"";
+    inp.placeholder="What happened? Where did you look first?";
+    inp.setAttribute("aria-label","Note for landing "+id);
+    inp.addEventListener("input",()=>{
+      if(state[id]){state[id].note=inp.value;save();}
+    });
+    note.appendChild(inp);
+    row.append(num,cap,marks,note);
+    s.appendChild(row);
+    if(id===42){
+      const c=document.createElement("div");
+      c.className="caution"; c.textContent=NOTE42;
+      s.appendChild(c);
+    }
+  }
+  host.appendChild(s);
+}
+
+/* ---- soundings plotted on the chart ---- */
+const SEA=[[52,60],[118,140],[62,232],[104,318],[176,398],[280,420],[392,428],
+           [498,404],[586,352],[634,272],[652,186],[598,116],[520,58],[420,36],
+           [316,32],[214,40]];
+const g=document.getElementById("soundings");
+let seed=7;
+const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;};
+flat.forEach((it,i)=>{
+  const a=SEA[i%SEA.length];
+  const ring=Math.floor(i/SEA.length);
+  const x=a[0]+(rnd()-.5)*30+ring*(a[0]<360?26:-26);
+  const y=a[1]+(rnd()-.5)*26+ring*(a[1]<230?18:-18);
+  const t=document.createElementNS("http://www.w3.org/2000/svg","text");
+  t.setAttribute("x",x.toFixed(1)); t.setAttribute("y",y.toFixed(1));
+  t.setAttribute("text-anchor","middle");
+  t.setAttribute("data-n",it.n);
+  t.style.font="500 11px 'IBM Plex Mono',monospace";
+  t.style.cursor="pointer";
+  t.addEventListener("click",()=>{
+    document.getElementById("s"+it.n).scrollIntoView({behavior:"smooth",block:"center"});
+  });
+  const title=document.createElementNS("http://www.w3.org/2000/svg","title");
+  title.textContent=it.n+". "+it.t;
+  t.appendChild(title);
+  g.appendChild(t);
+});
+
+const GLYPH={landed:"⚓",circled:"◌",struck:"✳",na:"·"};
+const COLOR={landed:"var(--green)",circled:"var(--amber)",struck:"var(--magenta)",na:"var(--ink-faint)"};
+
+function paint(){
+  g.querySelectorAll("text").forEach(t=>{
+    const id=t.dataset.n, st=state[id]?.m;
+    const label=t.firstChild;
+    t.textContent="";
+    t.append(st?GLYPH[st]:String(id).padStart(2,"0"));
+    t.appendChild(label);
+    t.setAttribute("fill",st?COLOR[st]:"var(--ink-faint)");
+    t.style.fontSize=st?"14px":"11px";
+  });
+  const marked=Object.values(state).filter(v=>v.m!=="na").length;
+  const haz=Object.values(state).filter(v=>v.m==="struck"||v.m==="circled").length;
+  document.getElementById("done").textContent=marked;
+  document.getElementById("hz").textContent=haz;
+  const ul=document.getElementById("hazards"); ul.textContent="";
+  const rows=flat.filter(f=>["struck","circled"].includes(state[f.n]?.m));
+  document.getElementById("log-empty").style.display=rows.length?"none":"block";
+  for(const f of rows){
+    const s=state[f.n];
+    const li=document.createElement("li");
+    const a=document.createElement("span");
+    a.className="h-n "+s.m; a.textContent=(s.m==="struck"?"✳ ":"◌ ")+String(f.n).padStart(2,"0");
+    const b=document.createElement("span");
+    b.textContent=f.t;
+    if(s.note){const e=document.createElement("em");e.className="h-note";e.textContent=s.note;b.appendChild(e);}
+    li.append(a,b); ul.appendChild(li);
+  }
+}
+function save(){localStorage.setItem(KEY,JSON.stringify(state));paint();}
+paint();
+
+document.getElementById("copy").addEventListener("click",async e=>{
+  const rows=flat.filter(f=>["struck","circled"].includes(state[f.n]?.m));
+  const txt="Aiko survey 0.0.4 — "+rows.length+" hazard(s)\n\n"+
+    (rows.map(f=>{const s=state[f.n];
+      return (s.m==="struck"?"STRUCK":"CIRCLED")+" "+f.n+". "+f.t+(s.note?"\n   "+s.note:"");
+    }).join("\n")||"none");
+  try{await navigator.clipboard.writeText(txt);e.target.textContent="Copied";}
+  catch{e.target.textContent="Select the log above";}
+  setTimeout(()=>{e.target.textContent="Copy the log";},1800);
+});
+document.getElementById("reset").addEventListener("click",e=>{
+  if(e.target.dataset.armed){
+    state={};localStorage.removeItem(KEY);
+    document.querySelectorAll(".row").forEach(r=>r.dataset.state="");
+    document.querySelectorAll("button.mark").forEach(b=>b.setAttribute("aria-pressed","false"));
+    document.querySelectorAll(".note input").forEach(i=>i.value="");
+    delete e.target.dataset.armed;e.target.textContent="Clear the survey";paint();
+  } else {
+    e.target.dataset.armed="1";e.target.textContent="Tap again to clear";
+    setTimeout(()=>{delete e.target.dataset.armed;e.target.textContent="Clear the survey";},4000);
+  }
+});
+</script>
