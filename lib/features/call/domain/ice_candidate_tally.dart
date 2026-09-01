@@ -83,6 +83,26 @@ IceCandidateType? iceTypeOfCandidateLine(String candidate) {
   return null;
 }
 
+
+/// How a tally resolved its selected pair.
+///
+/// A closed set, so an enum: this rides alongside the relay fraction, and a
+/// reading whose provenance is a bare string is a reading nobody can filter on
+/// later.
+enum SelectedPairSource {
+  /// Not resolved — no transport named a pair and no pair succeeded.
+  none,
+
+  /// The connection's own `transport.selectedCandidatePairId`. Authoritative.
+  transportSelectedId,
+
+  /// Reconstructed from `state == 'succeeded'` because no transport report
+  /// named a pair. Known to be blind on the controlled ICE role against
+  /// libwebrtc via flutter_webrtc 1.6.0 on Darwin — a reading from here is
+  /// weaker evidence and should be filterable as such.
+  succeededHeuristic,
+}
+
 /// What one call's connectivity looked like.
 class IceCandidateTally {
   IceCandidateTally();
@@ -101,6 +121,9 @@ class IceCandidateTally {
   /// is "not yet measured". Callers must not collapse the two.
   IceCandidateType? selectedLocal;
   IceCandidateType? selectedRemote;
+
+  /// How the pair above was resolved. See [SelectedPairSource].
+  SelectedPairSource selectedPairSource = SelectedPairSource.none;
 
   Map<IceCandidateType, int> get gatheredLocal => Map.unmodifiable(_gatheredLocal);
   Map<IceCandidateType, int> get gatheredRemote =>
@@ -121,38 +144,91 @@ class IceCandidateTally {
     into[t] = (into[t] ?? 0) + 1;
   }
 
-  /// Record the nominated pair, from `RTCPeerConnection.getStats()`.
+  /// Record the pair the connection actually used, from
+  /// `RTCPeerConnection.getStats()`.
   ///
   /// [stats] is the raw report as a list of `{id, type, ...}` maps — passed in
   /// rather than fetched here so this class stays platform-free and directly
-  /// testable without a live PeerConnection. The shape follows the W3C stats
-  /// spec: a `candidate-pair` names its endpoints by id, and the ids resolve to
-  /// `local-candidate` / `remote-candidate` entries carrying `candidateType`.
+  /// testable without a live PeerConnection.
   ///
-  /// ## Which pair counts, and why the obvious rule was wrong
+  /// ## Ask the stack; do not reconstruct what it already answered
   ///
-  /// An earlier version took *the first pair that was nominated OR succeeded*,
-  /// breaking on the first nominated one. Two independent reviewers (Carnot,
-  /// Tesla) killed it: **stats order is not ICE priority.** `nominated == true`
-  /// on a pair whose `state` is `in-progress` or `failed` would win outright,
-  /// and where a stack never sets `nominated` — the case the OR existed for —
-  /// the winner was whichever succeeded pair the map happened to enumerate
-  /// first. Multiple succeeded pairs are ordinary (several m-lines, or an ICE
-  /// restart). That produces a confidently wrong *fraction*, which is worse than
-  /// a noisy one, on the exact number an architecture decision turns on.
+  /// `RTCTransportStats.selectedCandidatePairId` is the connection's OWN answer
+  /// to "which pair is carrying this call". It was measured present and
+  /// populated on both ICE roles (see `test/features/call/fixtures/` — harvested
+  /// from a live macOS stack, not authored). Reading it is not an optimisation
+  /// over the heuristic below; it is the difference between reading the answer
+  /// and re-deriving it from the evidence the answer was derived from.
   ///
-  /// The rule now: **`state == 'succeeded'` is mandatory** — a pair that did not
-  /// succeed carried nothing. Among those, a `nominated` one wins; ties break on
-  /// bytes carried, because the pair that moved the most media is the pair that
-  /// was the call. No succeeded pair at all leaves the tally unmeasured.
+  /// ## Why the heuristic below is no longer the primary path
+  ///
+  /// It selected on `state == 'succeeded'`, mandatory — a round-1 review fix,
+  /// and correct against the bug it was written for (a `nominated` pair whose
+  /// state was `in-progress` winning outright). Harvesting a live connection
+  /// showed what it cost, and the shape of the cost matters:
+  ///
+  /// **Across four harvested runs on macOS, both ICE roles (n=8 captures):**
+  ///
+  /// - `transport.selectedCandidatePairId` was present and named a real pair in
+  ///   **8 of 8**.
+  /// - `nominated == true` appeared on **0 of ~200** candidate pairs. The
+  ///   nominated-preference tiebreak has never fired against a real stack; it
+  ///   is exercised only by fixtures this repo wrote.
+  /// - The controlled role (`iceRole: controlled`, i.e. the ANSWERING side)
+  ///   reported **zero succeeded pairs in 1 of 4 runs**, while its transport
+  ///   was `connected`, had moved 1234 bytes, and was naming the pair the whole
+  ///   time. The other three runs had one succeeded pair.
+  ///
+  /// That last line is the finding, and **intermittent is worse than
+  /// deterministic here**. A rule that always failed on the answering side
+  /// would show up as a suspicious zero. A rule that fails on some answered
+  /// calls yields a relay fraction gathered from a biased, drifting subset —
+  /// which reads as noise, on the exact number an architecture decision turns
+  /// on. It failed *honest* (`usedRelay` returns null, not false), which is why
+  /// nothing looked broken: the tri-state absorbed the loss and reported it as
+  /// unmeasured.
+  ///
+  /// Round 1 fixed a real bug and opened this one. Neither the author nor four
+  /// adversarial families saw it, because every one of us was reasoning from
+  /// the W3C stats spec rather than from what the stack emits.
+  ///
+  /// The heuristic therefore stays as a FALLBACK for a stack that omits the
+  /// transport report, with its asymmetry written down rather than implied.
   void recordSelectedPair(List<Map<String, dynamic>> stats) {
     num bytesOf(Map<String, dynamic> s) =>
         (s['bytesSent'] as num? ?? 0) + (s['bytesReceived'] as num? ?? 0);
 
-    Map<String, dynamic>? best;
+    // Every id the transport reports as selected. A set, not a single value:
+    // without BUNDLE there is one transport per m-line, and picking "the first"
+    // would be enumeration order deciding an architecture number again.
+    final selectedIds = <String>{};
+    for (final s in stats) {
+      if (s['type'] != 'transport') continue;
+      final id = s['selectedCandidatePairId'];
+      if (id is String && id.isNotEmpty) selectedIds.add(id);
+    }
+
+    final named = <Map<String, dynamic>>[];
+    final succeeded = <Map<String, dynamic>>[];
     for (final s in stats) {
       if (s['type'] != 'candidate-pair') continue;
-      if (s['state'] != 'succeeded') continue; // never a pair that didn't carry
+      final id = s['id'];
+      if (id is String && selectedIds.contains(id)) named.add(s);
+      if (s['state'] == 'succeeded') succeeded.add(s);
+    }
+
+    // A pair the transport NAMED does not have to prove itself by state — being
+    // named IS the proof, and requiring `succeeded` on top is what blinded the
+    // controlled side.
+    final pool = named.isNotEmpty ? named : succeeded;
+    selectedPairSource = named.isNotEmpty
+        ? SelectedPairSource.transportSelectedId
+        : (succeeded.isNotEmpty
+            ? SelectedPairSource.succeededHeuristic
+            : SelectedPairSource.none);
+
+    Map<String, dynamic>? best;
+    for (final s in pool) {
       if (best == null) {
         best = s;
         continue;
@@ -225,7 +301,7 @@ class IceCandidateTally {
     final g = _gatheredLocal.entries
         .map((e) => '${e.key.wireName}=${e.value}')
         .join(' ');
-    return 'selected=$l/$r gathered[$g]'
+    return 'selected=$l/$r via=${selectedPairSource.name} gathered[$g]'
         '${unparsed > 0 ? ' unparsed=$unparsed' : ''}';
   }
 }

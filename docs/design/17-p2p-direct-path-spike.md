@@ -217,9 +217,24 @@ leaving it here.
   Zero candidates gathered, no connection. The policy is applied at gathering time, not just
   advertised. Built before examining whether the check works, per the island tab's own lesson
   from tonight: *a harness examined for whether it can fail tends to look like it can.*
-- **`readSelectedPair` is macOS-shaped.** A mobile `getStats()` that stringifies numbers,
-  emits `googCandidatePair`, or spells the type `relayed` is a different instrument wearing
-  this one's name. First mobile run must re-verify, not assume.
+- ~~**`readSelectedPair` is macOS-shaped.**~~ **PARTLY ADDRESSED, and the assumption was
+  worse than the residual said.** Rather than guess at mobile shapes, the report is now
+  *harvested* from a live stack — `integration_test/stats_shape_harvest_test.dart` emits a
+  pseudonymised, replayable corpus, and `ice_candidate_tally_corpus_test.dart` replays it.
+  The first harvest contradicted the parser: across four runs on both ICE roles, `nominated`
+  was true on **zero** of ~200 pairs (so that tiebreak has never fired against a real stack),
+  and the **answering** side reported **no succeeded pair at all in 1 run of 4** while its
+  transport was connected and naming the pair. The parser now reads
+  `transport.selectedCandidatePairId` — the stack's own answer — and keeps the
+  succeeded-heuristic as a labelled fallback (`SelectedPairSource`), so a reading's
+  provenance travels with it.
+
+  Still open, and now stated as coverage rather than assumed away: **Android is unharvested
+  and differs in kind.** Darwin passes `report.values` through untransformed; Android
+  (`PeerConnectionObserver.java:231-277`) filters members through an allowlist type-switch
+  and silently DROPS anything unlisted — so an unexpected type is an ABSENT key there and a
+  surprising type here. No relayed pair has ever been harvested either; that is still the
+  true-positive arm.
 - **Multiple m-lines.** One data channel means one pair. When `localStream` grows a second
   media section, "the pair that carried the most bytes" is a heuristic, not a definition.
 - **`p2p_stun_reflexive_test.dart` is comment-gated, not glob-gated** — a run of the whole
