@@ -235,8 +235,19 @@ leaving it here.
   and silently DROPS anything unlisted — so an unexpected type is an ABSENT key there and a
   surprising type here. No relayed pair has ever been harvested either; that is still the
   true-positive arm.
-- **Multiple m-lines.** One data channel means one pair. When `localStream` grows a second
-  media section, "the pair that carried the most bytes" is a heuristic, not a definition.
+- ~~**Multiple m-lines.**~~ **CLOSED, and the old wording understated it.** It said "the pair
+  that carried the most bytes is a heuristic, not a definition" — framing it as imprecision
+  about *which pair is representative*. The actual consequence was **a wrong boolean on the
+  headline metric**: audio direct carrying most bytes plus video relayed carrying fewer meant
+  the tiebreak picked audio and a call that used TURN was filed as **direct**. A residual that
+  understates its own severity is how a known issue gets carried instead of fixed.
+
+  `usedRelay` is now an EXISTS quantifier over pairs and over samples rather than a read of one
+  chosen pair at one moment, with three states — named relay ⇒ `true` (latching), a succeeded
+  relay that was never *named* ⇒ ambiguous (blocks `false`, does not assert `true`, because ICE
+  succeeds on pairs it never carries media over), everything resolved and no relay anywhere ⇒
+  `false`. The representative pair survives for `describe()` only and is explicitly barred from
+  the predicate.
 - **`p2p_stun_reflexive_test.dart` is comment-gated, not glob-gated** — a run of the whole
   `integration_test/` folder inherits Google/Cloudflare uptime. (CI is closed in this repo,
   so nothing runs it today.)

@@ -125,6 +125,23 @@ class IceCandidateTally {
   /// How the pair above was resolved. See [SelectedPairSource].
   SelectedPairSource selectedPairSource = SelectedPairSource.none;
 
+  /// Ends of a SELECTED pair that could not be resolved to a known type — a
+  /// missing id, an id naming no report, or a token this parser does not know
+  /// (a stack spelling relay `relayed` is the live candidate). Counted rather
+  /// than shrugged off: each one is a path that silently leaves the sample, and
+  /// a population that loses its unreadable members is biased toward whatever
+  /// the readable ones happened to say. Non-zero forbids a `false`.
+  int selectedUnparsed = 0;
+
+  /// Latches behind [usedRelay]. Relay-ness is existential over pairs and over
+  /// samples. Private because nothing outside this class may un-see a relay.
+  bool _relayEverSeen = false;
+  bool _directFullySeen = false;
+
+  /// A relay pair SUCCEEDED but was never named as selected — so it may or may
+  /// not have carried anything. Blocks `false` without asserting `true`.
+  bool _relayAmbiguous = false;
+
   Map<IceCandidateType, int> get gatheredLocal => Map.unmodifiable(_gatheredLocal);
   Map<IceCandidateType, int> get gatheredRemote =>
       Map.unmodifiable(_gatheredRemote);
@@ -144,72 +161,84 @@ class IceCandidateTally {
     into[t] = (into[t] ?? 0) + 1;
   }
 
-  /// Record the pair the connection actually used, from
+  /// Record the pair(s) the connection actually used, from
   /// `RTCPeerConnection.getStats()`.
   ///
   /// [stats] is the raw report as a list of `{id, type, ...}` maps — passed in
   /// rather than fetched here so this class stays platform-free and directly
-  /// testable without a live PeerConnection.
+  /// testable without a live PeerConnection. **Safe to call repeatedly**; that
+  /// is the normal case, because sampling a live call is how a path change gets
+  /// observed at all.
   ///
   /// ## Ask the stack; do not reconstruct what it already answered
   ///
   /// `RTCTransportStats.selectedCandidatePairId` is the connection's OWN answer
-  /// to "which pair is carrying this call". It was measured present and
-  /// populated on both ICE roles (see `test/features/call/fixtures/` — harvested
-  /// from a live macOS stack, not authored). Reading it is not an optimisation
-  /// over the heuristic below; it is the difference between reading the answer
-  /// and re-deriving it from the evidence the answer was derived from.
+  /// to "which pair is carrying this call". Measured present and populated on
+  /// both ICE roles in 8 of 8 captures (`test/features/call/fixtures/`, harvested
+  /// from a live macOS stack, not authored). Reading it is the difference between
+  /// reading the answer and re-deriving it from the evidence the answer came from.
   ///
-  /// ## Why the heuristic below is no longer the primary path
+  /// The round-1 `state == 'succeeded'` rule is kept, but the two sets are now
+  /// UNIONED rather than one preferred over the other — see the bias note below.
+  /// It was demoted because the controlled ICE role reported ZERO succeeded
+  /// pairs in 1 run of 4 while connected and moving bytes.
   ///
-  /// It selected on `state == 'succeeded'`, mandatory — a round-1 review fix,
-  /// and correct against the bug it was written for (a `nominated` pair whose
-  /// state was `in-progress` winning outright). Harvesting a live connection
-  /// showed what it cost, and the shape of the cost matters:
+  /// ## THE QUANTIFIER IS `EXISTS`, NOT `ARGMAX` — the correction of record
   ///
-  /// **Across four harvested runs on macOS, both ICE roles (n=8 captures):**
+  /// This method used to reduce every selected pair to a single `best` and let
+  /// [usedRelay] read that one pair. Four adversarial families and this author's
+  /// own pass converged on why that is wrong, and it is worth stating as a law,
+  /// because this file has now produced FIVE instances of the same defect:
   ///
-  /// - `transport.selectedCandidatePairId` was present and named a real pair in
-  ///   **8 of 8**.
-  /// - `nominated == true` appeared on **0 of ~200** candidate pairs. The
-  ///   nominated-preference tiebreak has never fired against a real stack; it
-  ///   is exercised only by fixtures this repo wrote.
-  /// - The controlled role (`iceRole: controlled`, i.e. the ANSWERING side)
-  ///   reported **zero succeeded pairs in 1 of 4 runs**, while its transport
-  ///   was `connected`, had moved 1234 bytes, and was naming the pair the whole
-  ///   time. The other three runs had one succeeded pair.
+  /// > **[usedRelay] asks whether a relay was involved AT ALL. That is an
+  /// > existential question over every selected pair and every sample. A
+  /// > reduction to one pair, or to one moment, answers a different question —
+  /// > and answers it in the direction that flatters the measurement.**
   ///
-  /// That last line is the finding, and **intermittent is worse than
-  /// deterministic here**. A rule that always failed on the answering side
-  /// would show up as a suspicious zero. A rule that fails on some answered
-  /// calls yields a relay fraction gathered from a biased, drifting subset —
-  /// which reads as noise, on the exact number an architecture decision turns
-  /// on. It failed *honest* (`usedRelay` returns null, not false), which is why
-  /// nothing looked broken: the tri-state absorbed the loss and reported it as
-  /// unmeasured.
+  /// Two concrete failures the reduction produced, both now closed:
   ///
-  /// Round 1 fixed a real bug and opened this one. Neither the author nor four
-  /// adversarial families saw it, because every one of us was reasoning from
-  /// the W3C stats spec rather than from what the stack emits.
+  /// - **Across PAIRS.** Without BUNDLE there is one transport per m-line, so
+  ///   several pairs are selected at once. Audio direct on `host` carrying most
+  ///   of the bytes, video relayed through TURN carrying fewer: the bytes
+  ///   tiebreak picks audio and a call that used TURN is filed as **direct**.
+  /// - **Across TIME.** A call that starts direct and fails over to a relay is
+  ///   a call that needed a relay. Reading only the latest resolvable sample —
+  ///   or worse, holding an earlier one because a later read saw nothing — files
+  ///   it as direct. Kelvin: *"a thermometer that, upon reaching a freezing
+  ///   temperature, decides it will never get warmer again."*
   ///
-  /// The heuristic therefore stays as a FALLBACK for a stack that omits the
-  /// transport report, with its asymmetry written down rather than implied.
+  /// So relay-ness LATCHES. `false` is reachable only from a sample in which
+  /// every selected pair resolved on both ends, none was a relay, and nothing
+  /// anywhere failed to parse.
+  ///
+  /// ## Three states, because a succeeded relay pair is not a USED relay pair
+  ///
+  /// The first attempt at the fix above simply unioned the transport-named set
+  /// with the succeeded set and quantified relay over both. The existing suite
+  /// caught it immediately, and the suite was right: **ICE succeeds on pairs it
+  /// never carries media over.** A relay pair routinely succeeds merely because
+  /// TURN is configured — which is the exact conflation this file's opening
+  /// docstring exists to forbid ("gathering a relay candidate says only that a
+  /// TURN server was configured, not that anything used it"). Unioning
+  /// reintroduced it one level down, and would have reported `true` on almost
+  /// every call in a TURN-configured deployment.
+  ///
+  /// So there are three states, not two, and the middle one is the point:
+  ///
+  /// - A relay among the pairs the transport **NAMED** → `true`. Latches.
+  /// - A relay among succeeded-but-**not-named** pairs → **ambiguous**. It does
+  ///   NOT assert `true` (the call may never have touched it) and it forbids
+  ///   `false` (Tesla's stale-name case, where the named pair is dead and the
+  ///   succeeded relay is the live one, is exactly this shape). Latches.
+  /// - No relay anywhere, everything resolved → `false`.
+  ///
+  /// Refusing to guess in either direction is the only move that is not a fold.
   void recordSelectedPair(List<Map<String, dynamic>> stats) {
-    // Tolerant of a stringified number rather than throwing on one. Darwin
-    // hands `report.values` to the channel untransformed, so what arrives is
-    // whatever the ObjC SDK put there; a `as num?` cast would throw a
-    // TypeError out of the whole read over a value used only as a TIEBREAK.
-    // Losing the entire measurement because a tiebreak input was a String is
-    // not proportionate — and an unreadable byte count sorts as 0, which can
-    // only ever cost this pair a tie, never win it one.
     num bytesOf(Map<String, dynamic> s) {
       num one(Object? v) => v is num ? v : (v is String ? num.tryParse(v) ?? 0 : 0);
       return one(s['bytesSent']) + one(s['bytesReceived']);
     }
 
-    // Every id the transport reports as selected. A set, not a single value:
-    // without BUNDLE there is one transport per m-line, and picking "the first"
-    // would be enumeration order deciding an architecture number again.
     final selectedIds = <String>{};
     for (final s in stats) {
       if (s['type'] != 'transport') continue;
@@ -218,42 +247,85 @@ class IceCandidateTally {
     }
 
     final named = <Map<String, dynamic>>[];
-    final succeeded = <Map<String, dynamic>>[];
+    final pool = <Map<String, dynamic>>[];
     for (final s in stats) {
       if (s['type'] != 'candidate-pair') continue;
       final id = s['id'];
-      if (id is String && selectedIds.contains(id)) named.add(s);
-      if (s['state'] == 'succeeded') succeeded.add(s);
+      final isNamed = id is String && selectedIds.contains(id);
+      if (isNamed) named.add(s);
+      if (isNamed || s['state'] == 'succeeded') pool.add(s);
     }
 
-    // A pair the transport NAMED does not have to prove itself by state — being
-    // named IS the proof, and requiring `succeeded` on top is what blinded the
-    // controlled side.
-    final pool = named.isNotEmpty ? named : succeeded;
-
-    // NOTHING IS ASSIGNED UNTIL THERE IS SOMETHING TO ASSIGN, and a later read
-    // that sees nothing must not erase an earlier one that saw a pair.
-    //
-    // The first version set `selectedPairSource` here, ABOVE the `best == null`
-    // early return. Call this twice — which nothing prevents, and which any
-    // periodic sampling of a live call does — with a good report then an empty
-    // one, and the object ends up holding `selectedLocal/Remote` from the good
-    // read alongside `selectedPairSource == none`. `usedRelay` then returns
-    // **false**, a measured direct connection, on a tally that simultaneously
-    // reports it never measured anything.
-    //
-    // That is the third instance in this file of the same defect: the unknown
-    // folding toward the answer that flatters the thing being measured, `false`
-    // being the reading that argues for deleting the SFU. Unknown must never
-    // overwrite known, and the two fields must never be able to disagree.
+    // Nothing observable this sample. Say nothing: do not erase what an earlier
+    // sample established, and do not claim to have measured.
     if (pool.isEmpty) return;
 
-    Map<String, dynamic>? best;
-    for (final s in pool) {
-      if (best == null) {
-        best = s;
-        continue;
+    var sampleUnparsed = 0;
+    IceCandidateType? typeOf(Object? id) {
+      if (id is! String) {
+        sampleUnparsed++;
+        return null;
       }
+      for (final s in stats) {
+        if (s['id'] != id) continue;
+        // Tolerant, not a cast. Darwin hands `report.values` to the channel
+        // untransformed, so `as String?` could throw AFTER one end was already
+        // assigned — a partial commit wearing a "committed together" comment.
+        final raw = s['candidateType'];
+        final parsed = IceCandidateType.parse(raw is String ? raw : null);
+        if (parsed == null) sampleUnparsed++;
+        return parsed;
+      }
+      sampleUnparsed++;
+      return null;
+    }
+
+    // Relay-ness is computed over the pairs the TRANSPORT NAMED. A succeeded
+    // pair the transport did not name is evidence of a path that WORKED, not of
+    // a path that CARRIED — see the three-states note above.
+    final namedSet = named.isEmpty ? pool : named;
+    var namedRelay = false;
+    var namedAllResolved = true;
+    for (final s in namedSet) {
+      final l = typeOf(s['localCandidateId']);
+      final r = typeOf(s['remoteCandidateId']);
+      if (l == IceCandidateType.relay || r == IceCandidateType.relay) {
+        namedRelay = true;
+      }
+      if (l == null || r == null) namedAllResolved = false;
+    }
+    // When NOTHING was named there is no authoritative selection, so the only
+    // evidence about which pair actually carried the call is whether it moved
+    // bytes. A relay pair with bytes on it carried media — that is a true
+    // positive and must not be thrown away. A mixed set in which nothing has
+    // moved yet is genuinely undecidable, and guessing either way is the fold.
+    if (named.isEmpty && namedRelay) {
+      bool isRelay(Map<String, dynamic> s) =>
+          typeOf(s['localCandidateId']) == IceCandidateType.relay ||
+          typeOf(s['remoteCandidateId']) == IceCandidateType.relay;
+      final allRelay = namedSet.every(isRelay);
+      final relayCarriedBytes =
+          namedSet.any((s) => isRelay(s) && bytesOf(s) > 0);
+      if (!allRelay && !relayCarriedBytes) {
+        namedRelay = false;
+        _relayAmbiguous = true;
+      }
+    }
+    // A relay sitting in the succeeded set outside the named set blocks `false`
+    // without asserting `true`.
+    for (final s in pool) {
+      if (namedSet.contains(s)) continue;
+      final l = typeOf(s['localCandidateId']);
+      final r = typeOf(s['remoteCandidateId']);
+      if (l == IceCandidateType.relay || r == IceCandidateType.relay) {
+        _relayAmbiguous = true;
+      }
+    }
+
+    // The representative pair, for [describe] only. NEVER the basis of
+    // [usedRelay] — that reduction is what this comment exists about.
+    Map<String, dynamic> best = pool.first;
+    for (final s in pool.skip(1)) {
       final bestNominated = best['nominated'] == true;
       final thisNominated = s['nominated'] == true;
       if (thisNominated != bestNominated) {
@@ -262,54 +334,47 @@ class IceCandidateTally {
       }
       if (bytesOf(s) > bytesOf(best)) best = s;
     }
-    if (best == null) return;
 
-    IceCandidateType? typeOf(Object? id) {
-      if (id is! String) return null;
-      for (final s in stats) {
-        if (s['id'] == id) {
-          return IceCandidateType.parse(s['candidateType'] as String?);
-        }
-      }
-      return null;
+    selectedUnparsed += sampleUnparsed;
+    if (namedRelay) _relayEverSeen = true;
+    if (namedAllResolved && !namedRelay && !_relayAmbiguous && sampleUnparsed == 0) {
+      _directFullySeen = true;
     }
-
-    // Committed together, so no reader can ever observe a source that
-    // disagrees with the pair it claims to describe.
-    selectedLocal = typeOf(best['localCandidateId']);
-    selectedRemote = typeOf(best['remoteCandidateId']);
+    selectedLocal = typeOf(best['localCandidateId']) ?? selectedLocal;
+    selectedRemote = typeOf(best['remoteCandidateId']) ?? selectedRemote;
     selectedPairSource = named.isNotEmpty
         ? SelectedPairSource.transportSelectedId
         : SelectedPairSource.succeededHeuristic;
   }
 
-  /// True when this call went through TURN on either end — the fallback case.
-  /// False only when BOTH ends resolved and neither was a relay. Null otherwise.
+
+  /// Whether a relay carried any part of this call — the fallback case, and
+  /// the number the SFU decision needs.
   ///
-  /// ## The bug this shape exists to prevent — found by review, not by me
+  /// **EXISTENTIAL over pairs and over samples**, not a read of one chosen
+  /// pair at one moment. See [recordSelectedPair]'s quantifier note; this
+  /// getter is deliberately a thin read of latches so that no future edit can
+  /// reintroduce a reduction here.
   ///
-  /// The first version returned null only when **both** ends were unknown
-  /// (`&&`), which meant `host` on the local side plus an unresolved remote
-  /// reported **`false`: a measured direct connection.** Carnot and Tesla found
-  /// it independently. Carnot's framing is the one to keep:
+  /// - `true` — a relay end was seen on any selected pair in any sample. It
+  ///   LATCHES: a call that failed over to TURN needed TURN, whatever it did
+  ///   afterwards.
+  /// - `false` — some sample resolved every named pair on both ends with no
+  ///   relay among them, no relay succeeded elsewhere in the report, and
+  ///   nothing anywhere failed to parse. Absence of evidence is not evidence of
+  ///   absence, so this is deliberately the demanding branch.
+  /// - `null` — unmeasured. Never conflate with `false`.
   ///
-  /// > unknown heat loss is not zero heat loss
-  ///
-  /// A relay on *either* end is the whole thing being counted, so an unresolved
-  /// end could be exactly the case that matters — one absent `candidateType`,
-  /// one id that isn't a String, one stack spelling it `relayed`, and a call
-  /// that went through TURN is filed as direct evidence for deleting the SFU.
-  ///
-  /// **`true` needs only one relay; `false` needs both ends known.** The
-  /// asymmetry is the point: positive evidence of a relay is conclusive, absence
-  /// of evidence is not evidence of absence.
+  /// The original bug this asymmetry was written for: returning `null` only
+  /// when BOTH ends were unknown, so `host` locally plus an unresolved remote
+  /// reported a measured direct connection. Carnot's framing is still the one
+  /// to keep — *unknown heat loss is not zero heat loss*.
   bool? get usedRelay {
-    if (selectedLocal == IceCandidateType.relay ||
-        selectedRemote == IceCandidateType.relay) {
-      return true;
+    if (_relayEverSeen) return true;
+    if (_directFullySeen && !_relayAmbiguous && selectedUnparsed == 0) {
+      return false;
     }
-    if (selectedLocal == null || selectedRemote == null) return null;
-    return false;
+    return null;
   }
 
   /// True when the selected pair is fully resolved on both ends.

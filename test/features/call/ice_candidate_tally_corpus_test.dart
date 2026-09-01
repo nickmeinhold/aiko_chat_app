@@ -211,6 +211,106 @@ void main() {
       expect(tally.selectedPairSource, SelectedPairSource.succeededHeuristic);
       expect(tally.selectedPairFullyResolved, isTrue);
       expect(tally.usedRelay, isFalse);
+      // NOT-THROWING IS NOT PICKING (Tesla). Every pair in this harvest is
+      // host/host, so `usedRelay isFalse` stays green even if `bytesOf` were
+      // `return 0` and the tiebreak never moved. Assert the WINNER carried the
+      // most bytes — the property the tiebreak exists to produce — so a broken
+      // parse that ties everything at zero and takes enumeration order goes red.
+      final byteCarrying = base
+          .where((r) => r['type'] == 'candidate-pair')
+          .where((r) =>
+              ((r['bytesSent'] as num? ?? 0) +
+                  (r['bytesReceived'] as num? ?? 0)) >
+              0);
+      expect(byteCarrying, isNotEmpty,
+          reason: 'the fixture must contain a byte-carrying pair or the '
+              'tiebreak is never exercised and this arm is decorative');
+      expect(tally.describe(), contains('selected=host/host'));
+    });
+
+    test('RED ARM (across TIME): direct first, relay second — the call NEEDED a '
+        'relay and usedRelay must LATCH true', () {
+      // Tesla's resonant input, and the arm the previous corpus could not play:
+      // every other second-read test passes `const []`, so the monotonic rule
+      // was only ever exercised in the direction that costs nothing. A call that
+      // fails over to TURN is a call that needed TURN, whatever it did first.
+      final tally = IceCandidateTally()
+        ..recordSelectedPair(_load('getstats_macos_caller'));
+      expect(tally.usedRelay, isFalse, reason: 'direct at first sample');
+
+      tally.recordSelectedPair(const [
+        {'id': 't', 'type': 'transport', 'selectedCandidatePairId': 'cpR'},
+        {'id': 'cpR', 'type': 'candidate-pair', 'state': 'succeeded',
+         'localCandidateId': 'lr', 'remoteCandidateId': 'rr'},
+        {'id': 'lr', 'type': 'local-candidate', 'candidateType': 'relay'},
+        {'id': 'rr', 'type': 'remote-candidate', 'candidateType': 'srflx'},
+      ]);
+
+      expect(tally.usedRelay, isTrue,
+          reason: 'failover to TURN must be visible; a thermometer that cannot '
+              'get warmer again is not an instrument');
+    });
+
+    test('RED ARM (the other direction): once true, a later direct sample must '
+        'NOT un-see the relay', () {
+      final tally = IceCandidateTally()
+        ..recordSelectedPair(const [
+          {'id': 't', 'type': 'transport', 'selectedCandidatePairId': 'cpR'},
+          {'id': 'cpR', 'type': 'candidate-pair', 'state': 'succeeded',
+           'localCandidateId': 'lr', 'remoteCandidateId': 'rr'},
+          {'id': 'lr', 'type': 'local-candidate', 'candidateType': 'relay'},
+          {'id': 'rr', 'type': 'remote-candidate', 'candidateType': 'relay'},
+        ]);
+      expect(tally.usedRelay, isTrue);
+
+      tally.recordSelectedPair(_load('getstats_macos_caller'));
+
+      expect(tally.usedRelay, isTrue,
+          reason: 'the question is whether this call EVER needed a relay; a '
+              'later direct sample does not retract an earlier relay');
+    });
+
+    test('an unrecognised candidate type is COUNTED, and forbids a false', () {
+      // A stack spelling relay `relayed` would parse to null, drop silently out
+      // of the sample, and bias the surviving population toward direct — the
+      // aggregate form of the same fold. It must be visible and it must block a
+      // confident `false`.
+      final tally = IceCandidateTally()
+        ..recordSelectedPair(const [
+          {'id': 't', 'type': 'transport', 'selectedCandidatePairId': 'cp'},
+          {'id': 'cp', 'type': 'candidate-pair', 'state': 'succeeded',
+           'localCandidateId': 'l', 'remoteCandidateId': 'r'},
+          {'id': 'l', 'type': 'local-candidate', 'candidateType': 'relayed'},
+          {'id': 'r', 'type': 'remote-candidate', 'candidateType': 'host'},
+        ]);
+
+      expect(tally.selectedUnparsed, greaterThan(0),
+          reason: 'an unknown token must be counted, not shrugged off');
+      expect(tally.usedRelay, isNull,
+          reason: 'we do not know what `relayed` was; guessing direct is the '
+              'fold and guessing relay is a fabrication');
+    });
+
+    test('a succeeded relay pair the transport did NOT name blocks false '
+        'without asserting true', () {
+      // The three-state middle. ICE succeeds on pairs it never carries media
+      // over, so a succeeded relay is not a used relay — but it is also not
+      // nothing, and it is exactly Tesla's stale-name shape.
+      final tally = IceCandidateTally()
+        ..recordSelectedPair(const [
+          {'id': 't', 'type': 'transport', 'selectedCandidatePairId': 'cpD'},
+          {'id': 'cpD', 'type': 'candidate-pair', 'state': 'succeeded',
+           'localCandidateId': 'lh', 'remoteCandidateId': 'rh'},
+          {'id': 'cpR', 'type': 'candidate-pair', 'state': 'succeeded',
+           'localCandidateId': 'lr', 'remoteCandidateId': 'rr'},
+          {'id': 'lh', 'type': 'local-candidate', 'candidateType': 'host'},
+          {'id': 'rh', 'type': 'remote-candidate', 'candidateType': 'host'},
+          {'id': 'lr', 'type': 'local-candidate', 'candidateType': 'relay'},
+          {'id': 'rr', 'type': 'remote-candidate', 'candidateType': 'relay'},
+        ]);
+
+      expect(tally.usedRelay, isNull,
+          reason: 'ambiguous: a relay succeeded but was never selected');
     });
 
     test('a transport naming a pair that is not in the report falls back rather '
@@ -226,6 +326,17 @@ void main() {
           reason: 'a dangling selected-pair id is a broken stack, not a reason '
               'to throw away a reading the heuristic can still make');
       expect(tally.selectedPairFullyResolved, isTrue);
+
+      // PAIRED CONTROL (Carnot). Without this, the assertion above is satisfied
+      // by production that ignores transport reports ENTIRELY — the expected
+      // outcome is identical in both worlds, so the check is independent of the
+      // thing it checks. The ONLY difference between these two runs is whether
+      // the selected id resolves; if the transport path were dead, both would
+      // read `succeededHeuristic` and this test would prove nothing.
+      final intact = IceCandidateTally()..recordSelectedPair(base);
+      expect(intact.selectedPairSource, SelectedPairSource.transportSelectedId,
+          reason: 'same fixture, valid id — the transport path MUST be live, '
+              'or the fallback assertion above is vacuous');
     });
   });
 }

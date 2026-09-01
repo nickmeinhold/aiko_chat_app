@@ -116,7 +116,24 @@ void main() {
       expect(t.usedRelay, isTrue);
     });
 
-    test('a nominated pair outranks a merely-succeeded one', () {
+    test('a MIXED succeeded set with no transport report and no bytes moved is '
+        'UNMEASURED — this assertion used to be the bug', () {
+      // CHANGED DELIBERATELY, and the change is the finding. This test used to
+      // assert `usedRelay == false` here, with the reason "the nominated pair is
+      // the one that carried media". Two things killed it:
+      //
+      //  1. `nominated == true` appeared on ZERO of ~200 pairs across four live
+      //     macOS captures on both ICE roles. The rule this test enshrined has
+      //     never fired against a real stack; it was a belief about the W3C spec.
+      //  2. Asserting `false` on this data IS the flattering fold. A relay pair
+      //     succeeded. Nothing here says which pair carried the call — there is
+      //     no transport report and no pair has moved a byte. Answering "direct"
+      //     is a guess in the direction that argues for deleting the SFU.
+      //
+      // The honest answer is `null`: unmeasured. A test that asserted otherwise
+      // was not protecting the behaviour, it was pinning the defect in place —
+      // which is why this file's own suite could stay green through three
+      // instances of the same bug.
       final stats = [
         {'id': 'cp0', 'type': 'candidate-pair', 'state': 'succeeded', 'nominated': false,
          'localCandidateId': 'lcR', 'remoteCandidateId': 'rcR'},
@@ -128,7 +145,30 @@ void main() {
         {'id': 'rcD', 'type': 'remote-candidate', 'candidateType': 'srflx'},
       ];
       final t = IceCandidateTally()..recordSelectedPair(stats);
-      expect(t.usedRelay, isFalse, reason: 'the nominated pair is the one that carried media');
+      expect(t.usedRelay, isNull,
+          reason: 'a succeeded relay pair with no selection and no bytes is '
+              'ambiguous; it must block a false without asserting a true');
+    });
+
+    test('POSITIVE CONTROL for the test above: name the direct pair and the '
+        'same data resolves to false', () {
+      // Without this, the assertion above is satisfied by an instrument that
+      // returns null for everything. The ONLY difference is the transport
+      // report — which is exactly the mechanism under test.
+      final stats = [
+        {'id': 'tr0', 'type': 'transport', 'selectedCandidatePairId': 'cp1'},
+        {'id': 'cp0', 'type': 'candidate-pair', 'state': 'succeeded', 'nominated': false,
+         'localCandidateId': 'lcD2', 'remoteCandidateId': 'rcD2'},
+        {'id': 'cp1', 'type': 'candidate-pair', 'state': 'succeeded', 'nominated': true,
+         'localCandidateId': 'lcD', 'remoteCandidateId': 'rcD'},
+        {'id': 'lcD2', 'type': 'local-candidate', 'candidateType': 'host'},
+        {'id': 'rcD2', 'type': 'remote-candidate', 'candidateType': 'host'},
+        {'id': 'lcD', 'type': 'local-candidate', 'candidateType': 'srflx'},
+        {'id': 'rcD', 'type': 'remote-candidate', 'candidateType': 'srflx'},
+      ];
+      final t = IceCandidateTally()..recordSelectedPair(stats);
+      expect(t.usedRelay, isFalse);
+      expect(t.selectedPairSource, SelectedPairSource.transportSelectedId);
     });
 
     test('stats with no succeeded pair leave the tally UNMEASURED', () {
