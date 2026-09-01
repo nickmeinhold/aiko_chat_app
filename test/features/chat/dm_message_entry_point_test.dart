@@ -26,6 +26,7 @@ import 'package:aiko_chat_app/features/moderation/presentation/message_actions.d
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:aiko_chat_app/app/feature_flags.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../support/test_helpers.dart';
@@ -76,6 +77,10 @@ void main() {
       overrides: [
         restApiProvider.overrideWithValue(fake),
         blockedUserIdsProvider.overrideWithValue(blocked),
+        // Calling ships gated OFF (see `feature_flags.dart`). This suite asserts
+        // the sheet's OTHER entries are unaffected by the DM gate, so it keeps
+        // calling on — the shipped-off shape is proven in `call_gating_test`.
+        callingEnabledProvider.overrideWithValue(true),
         currentUserProvider.overrideWithValue(me),
         channelsProvider.overrideWith((ref) async => const [generalChannel]),
         dmsProvider.overrideWith((ref) async => dms),

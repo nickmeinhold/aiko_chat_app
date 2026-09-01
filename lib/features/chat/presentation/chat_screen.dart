@@ -358,6 +358,27 @@ class _ConversationSwitcher extends ConsumerWidget {
         // "on the left" a one-line change instead of a rebuild of how the
         // collapsed state is composed.
         const Icon(Icons.arrow_drop_down),
+        // The aggregate unread count travels WITH the caret, not at the far end
+        // of the title.
+        //
+        // It used to sit last in this Row — which put it flush against the mute
+        // bell that `ConversationTitleMuteGesture` appends immediately after,
+        // six pixels away. The two mean opposite things: this number is
+        // attention wanted in OTHER conversations, the bell is attention
+        // suppressed in THIS one. Adjacent, they read as one compound signal
+        // ("3 muted notifications"), which is wrong in a way that is worse than
+        // either being unclear alone. Nobody wrote that adjacency: it emerged
+        // from `title:` composing a switcher that ended in a badge with a
+        // wrapper that appends a bell, so no single diff ever showed it and it
+        // survived review and 1185 tests until a human looked at a phone.
+        //
+        // Beside the caret it belongs to the thing it is ABOUT — the switcher,
+        // "other conversations you could go to" — and the two opposite meanings
+        // are separated by the width of the title.
+        if (otherUnread > 0) ...[
+          const SizedBox(width: 3),
+          UnreadBadge(key: const Key('unread-aggregate'), count: otherUnread),
+        ],
         const SizedBox(width: 2),
         Expanded(
           child: DropdownButtonHideUnderline(
@@ -441,14 +462,6 @@ class _ConversationSwitcher extends ConsumerWidget {
             ),
           ),
         ),
-        if (otherUnread > 0)
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: UnreadBadge(
-              key: const Key('unread-aggregate'),
-              count: otherUnread,
-            ),
-          ),
       ],
     );
   }

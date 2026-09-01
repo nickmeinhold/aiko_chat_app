@@ -9,6 +9,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/feature_flags.dart' show callingEnabledProvider;
 import '../../../app/router.dart';
 import '../application/ring_controller.dart';
 import '../domain/call_invite.dart';
@@ -23,6 +24,12 @@ class RingOverlay extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // The gate lives HERE, not at the mount site in `main.dart`, because this
+    // widget is the only thing that answers a ring: a banner whose Accept
+    // pushes `/call/...` while that route is unregistered would offer a button
+    // that goes nowhere, which is worse than not ringing. One door, one
+    // decision (see `app/feature_flags.dart`).
+    if (!ref.watch(callingEnabledProvider)) return child;
     final invite = ref.watch(incomingRingProvider);
     return Stack(
       children: [

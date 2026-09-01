@@ -772,6 +772,27 @@ void main() {
           .count,
       greaterThan(0),
     );
+
+    // WHERE it sits, not merely that it exists — the assertion this file was
+    // missing. The badge used to render LAST in the switcher row, which put it
+    // flush against the mute bell `ConversationTitleMuteGesture` appends right
+    // after it. The two mean opposite things (attention wanted ELSEWHERE versus
+    // attention suppressed HERE) and six pixels apart they read as one compound
+    // signal. Presence-only assertions were all green throughout, because
+    // nothing pinned the arrangement; a human on a real phone found it in
+    // minutes. So the arrangement is pinned now.
+    final badgeX = tester
+        .getCenter(find.byKey(const Key('unread-aggregate')))
+        .dx;
+    final nameX = tester.getCenter(find.byType(DropdownButton<String>)).dx;
+    expect(
+      badgeX,
+      lessThan(nameX),
+      reason:
+          'The aggregate unread count must sit LEFT of the conversation name, '
+          'beside the caret it belongs to — not at the far right of the title '
+          'where it collides with the mute bell.',
+    );
   });
 
   testWidgets('a PEER-muted DM renders muted in the menu (peer-aware, like the '

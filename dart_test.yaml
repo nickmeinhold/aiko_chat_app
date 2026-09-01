@@ -11,6 +11,16 @@
 # silently passing. Run them deliberately:
 #
 #   flutter test test/live --run-skipped --tags live
+# `deep` marks the wide-sample app walks — the pre-submission sweep. Same walker
+# and same invariants as the fast walks that run every time; only the sample is
+# bigger (50 walks x 60 taps, ~2 minutes). That is the right trade before a store
+# submission and the wrong one on every save, so it is skipped by default for the
+# same reason `live` is: reported honestly as not-run rather than quietly
+# dropped. Run it deliberately:
+#
+#   flutter test --run-skipped --tags deep
 tags:
+  deep:
+    skip: "pre-submission sweep — flutter test --run-skipped --tags deep"
   live:
     skip: "needs a live island + credentials — flutter test test/live --run-skipped --tags live"
