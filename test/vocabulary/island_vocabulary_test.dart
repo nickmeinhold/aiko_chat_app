@@ -66,21 +66,57 @@ const _permittedInFile = <String, Set<String>>{};
 /// Identifiers that may carry "gateway" because they NAME THE BRIDGE SERVICE
 /// the client speaks to — ADR-0001's Gateway, not its Island — plus the legacy
 /// storage-key constants, which are strings-as-names and cannot move.
-const _permittedIdentifiers = <String>{
-  // The RENAMED-AWAY dart-define, read only so a stale build flag becomes a
-  // loud error instead of a silent fall-back to production. Retires with the
-  // tripwire in IslandConfig.fromEnvironment.
-  'GATEWAY_BASE_URL',
-  // The bridge service and everything that talks to it.
-  'GatewayRestApi', 'buildGatewayBackend', 'gateway_rest_api',
-  'GatewayTransport', 'gateway_transport',
-  'GatewayCapabilities', 'gateway_capabilities', 'gatewayCapabilities',
-  'GatewayFrame',
-  // Legacy pref keys, read-only until task #25 retires them.
-  'kLegacyIslandBaseUrlPrefKey', 'kLegacyKnownIslandsPrefKey',
-  'aiko_gateway_base_url', 'aiko_known_gateways',
-  // The Drift column on disk; the Dart constant is `islandUlid`.
-  'server_ulid',
+/// Identifiers exempt from the vocabulary rule, EACH WITH ITS REASON.
+///
+/// THERE ARE THREE MEANINGS, and until 2026-09-02 only two had a rule:
+///
+///   1. ISLAND  — the sovereign deployment. The user-facing word (ADR-0001).
+///   2. GATEWAY — the bridge service INSIDE an island. Kept deliberately: an
+///      island HAS a gateway, and the client dials it.
+///   3. SERVER  — the physical or virtual HOST the thing runs on. NO RULE WAS
+///      EVER WRITTEN for this one, and its absence caused a real defect.
+///
+/// The proof that the gap was structural rather than careless: one sweep made
+/// the same call twice and split. `closeFromServer` became `closeFromGateway`
+/// (correct — a close frame comes from the bridge service) while
+/// `_parseServerTime` became `_parseIslandTime` (wrong — it parses a field of an
+/// AckFrame, which IS a GatewayFrame). Same category, opposite bins. Neither the
+/// guard nor a four-family cage-match could have caught it, because both were
+/// handed the two-bin taxonomy as a premise.
+///
+/// The asymmetry that produced it: STRINGS could always exempt `server` with a
+/// reason, but IDENTIFIERS banned it outright with no escape — so anyone needing
+/// meaning 3 (`serverClockSkew`, `serverDiskFull`) had to pick island or gateway
+/// by feel, and the coin lands wrong about half the time. Nick's call,
+/// 2026-09-02: give identifiers the same reason-carrying escape. A name meaning
+/// THE HOST is legitimate; it just has to say so here.
+///
+/// A bare allowlist is what let two local variables named `servers` sail through
+/// for a week, so this is a map: no entry without a reason.
+const _permittedIdentifiers = <String, String>{
+  // Meaning 2 — the bridge service and everything that speaks to it.
+  'GatewayRestApi': 'the REST client for the bridge service',
+  'buildGatewayBackend': 'constructs GatewayRestApi',
+  'gateway_rest_api': 'file for the above',
+  'GatewayTransport': 'the WSS transport to the bridge service',
+  'gateway_transport': 'file for the above',
+  'GatewayCapabilities': 'what the bridge service advertises it carries',
+  'gateway_capabilities': 'file for the above',
+  'gatewayCapabilities': 'field holding the above',
+  'GatewayFrame': 'a frame arriving on the gateway socket',
+  '_parseGatewayTime':
+      'parses a timestamp field of an AckFrame, which IS a GatewayFrame — the '
+      'bin its sibling closeFromGateway landed in',
+  // Legacy storage keys, read-only until task #25 retires the migration.
+  'kLegacyIslandBaseUrlPrefKey': 'names the pre-vocabulary pref key',
+  'kLegacyKnownIslandsPrefKey': 'names the pre-vocabulary pref key',
+  'aiko_gateway_base_url': 'the pref key itself; renaming strands installs',
+  'aiko_known_gateways': 'the pref key itself; renaming strands installs',
+  'GATEWAY_BASE_URL':
+      'the renamed-away dart-define, read only so a stale build flag throws '
+      'instead of silently resolving to production',
+  // Meaning 3 has no entries yet. When one is needed it belongs HERE, with a
+  // reason naming the HOST — not bent into island or gateway to get past this.
 };
 
 /// Strings a person reads must use the product's word.
@@ -261,7 +297,7 @@ void main() {
             .replaceAll(RegExp(r'//.*'), '');
         for (final m in ident.allMatches(code)) {
           final name = m.group(0)!;
-          if (_permittedIdentifiers.contains(name)) continue;
+          if (_permittedIdentifiers.containsKey(name)) continue;
           // MATCH ON THE IDENTIFIER'S OWN WORDS, not a substring and not a
           // regex word boundary — both are wrong here, in opposite directions.
           // A substring flags `observer` (ob|server) as saying "server"; a `\b`
