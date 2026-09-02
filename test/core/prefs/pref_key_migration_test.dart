@@ -91,6 +91,46 @@ void main() {
     expect(prefs.getString(_new), 'https://chosen.example.com');
   });
 
+  test('an UNUSABLE new value does not shadow a usable legacy one', () async {
+    // Carnot's finding, generalised: presence is not usability. The island
+    // config rejects a blank string, so a blank under the new key must not stop
+    // the legacy value being adopted — otherwise the caller falls through to the
+    // compiled-in default while a perfectly good choice sits one key away.
+    final prefs = await prefsWith({
+      _new: '   ',
+      _old: 'https://legacy.example.com',
+    });
+    final v = readAndAdopt(
+      prefs,
+      key: _new,
+      legacyKey: _old,
+      isUsable: (s) => s.trim().isNotEmpty,
+    );
+    expect(v, 'https://legacy.example.com');
+    await Future<void>.delayed(Duration.zero);
+    expect(prefs.getString(_new), 'https://legacy.example.com');
+  });
+
+  test('an unusable LEGACY value is not adopted over an unusable new one — the '
+      'caller still sees what it had', () async {
+    final prefs = await prefsWith({_new: '  ', _old: ''});
+    final v = readAndAdopt(
+      prefs,
+      key: _new,
+      legacyKey: _old,
+      isUsable: (s) => s.trim().isNotEmpty,
+    );
+    expect(
+      v,
+      '  ',
+      reason:
+          'nothing usable anywhere — return what was there '
+          'and let the caller apply its own fallback',
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(prefs.getString(_new), '  ', reason: 'no junk written forward');
+  });
+
   test(
     'an empty legacy value is adopted verbatim, not treated as absent',
     () async {
