@@ -622,7 +622,7 @@ enum RingRefusal {
 
   /// No server id, so a hangup could never name it (`reply_to` is an FK onto
   /// `messages.id`). Unreachable via either production producer.
-  noServerId(refusedAnAttempt: true, startGate: true, stopGate: false);
+  noIslandId(refusedAnAttempt: true, startGate: true, stopGate: false);
 
   const RingRefusal({
     required this.refusedAnAttempt,
@@ -819,7 +819,7 @@ RingDecision admitRing(
   // hope. A ring with no server id could never be stilled by a hangup anyway:
   // `reply_to` is an FK onto `messages.id`, so there would be nothing to name.
   final islandMsgId = message.id;
-  if (islandMsgId == null) return const RingRefused(RingRefusal.noServerId);
+  if (islandMsgId == null) return const RingRefused(RingRefusal.noIslandId);
   return RingAdmitted(
     CallInvite(
       inviteId: origin.clientMsgId,

@@ -782,7 +782,7 @@ void main() {
         );
         await t.connect();
         final subF = t.subscribe(['c1']); // no suback emitted
-        fake.closeFromServer(); // drop before the ack arrives
+        fake.closeFromGateway(); // drop before the ack arrives
         await expectLater(subF, throwsA(isA<TransportError>()));
       },
     );

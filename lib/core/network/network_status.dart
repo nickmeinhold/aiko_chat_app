@@ -10,7 +10,7 @@
 ///  - logged IN: the live WSS socket is the free reachability probe
 ///      (`connectionStateProvider`): connected → online, else islandUnreachable
 ///  - logged OUT (login screen — no socket yet): an on-demand HTTP reachability
-///      probe of the current gateway ([gatewayReachableProvider])
+///      probe of the current gateway ([islandReachableProvider])
 library;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -118,7 +118,7 @@ final reachabilityProbeProvider = Provider<ReachabilityProbe>(
 /// point probing with no interface). `autoDispose` stops the loop when nothing
 /// watches it (login screen unmounted). Cadence stays under the prompt-cache /
 /// battery threshold — this only runs while the login screen is foregrounded.
-final gatewayReachableProvider = StreamProvider.autoDispose<bool>((ref) async* {
+final islandReachableProvider = StreamProvider.autoDispose<bool>((ref) async* {
   final online = ref.watch(deviceOnlineProvider).value ?? true;
   if (!online) {
     yield false;
@@ -154,6 +154,6 @@ final networkStatusProvider = Provider<NetworkStatus>((ref) {
         : NetworkStatus.online;
   }
 
-  final reachable = ref.watch(gatewayReachableProvider).value ?? true;
+  final reachable = ref.watch(islandReachableProvider).value ?? true;
   return reachable ? NetworkStatus.online : NetworkStatus.islandUnreachable;
 });

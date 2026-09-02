@@ -28,16 +28,30 @@ import '../domain/island_entry.dart';
 /// from `islandBaseUrlPrefKey` (the single SELECTED island).
 const kKnownIslandsPrefKey = 'aiko_known_islands';
 
-/// Whether [raw] is a JSON array — the shape [IslandSeedStore.load] can use.
-/// Passed to `readAndAdopt` so an unusable new value cannot hide a usable legacy
-/// one; the decode is cheap and happens once per load.
-bool _decodesToList(String raw) {
-  if (raw.trim().isEmpty) return false;
+/// The ONE door from stored bytes to islands. [IslandSeedStore.load] returns it
+/// and `readAndAdopt` asks it whether a value is usable, so the migration
+/// predicate and the reader can never disagree about what "usable" means.
+///
+/// Carnot's round-3 catch: the first cut asked only whether the blob decoded to
+/// a LIST, which is container shape, not usable content. A syntactically valid
+/// list of entries that all fail validation — `[{"base_url":"file:///tmp"}]` —
+/// counted as usable, kept the new key, and left a perfectly good legacy set
+/// unconsulted. The variable that matters is the remembered SET, not the
+/// brackets around it.
+List<IslandEntry> _parseEntries(String raw) {
+  if (raw.trim().isEmpty) return const [];
+  final Object? decoded;
   try {
-    return jsonDecode(raw) is List;
+    decoded = jsonDecode(raw);
   } on FormatException {
-    return false;
+    return const [];
   }
+  if (decoded is! List) return const [];
+  return decoded
+      .whereType<Map<String, dynamic>>()
+      .map(IslandEntry.tryFromJson) // re-validate: the security invariant
+      .whereType<IslandEntry>()
+      .toList(growable: false);
 }
 
 class IslandSeedStore {
@@ -59,21 +73,9 @@ class IslandSeedStore {
       legacyKey: kLegacyKnownIslandsPrefKey,
       // A blob that will not decode into a list is not a remembered set, so it
       // must not shadow a legacy one that would.
-      isUsable: _decodesToList,
+      isUsable: (raw) => _parseEntries(raw).isNotEmpty,
     );
-    if (raw == null || raw.trim().isEmpty) return const [];
-    late final dynamic decoded;
-    try {
-      decoded = jsonDecode(raw);
-    } on FormatException {
-      return const [];
-    }
-    if (decoded is! List) return const [];
-    return decoded
-        .whereType<Map<String, dynamic>>()
-        .map(IslandEntry.tryFromJson) // re-validate: the security invariant
-        .whereType<IslandEntry>()
-        .toList(growable: false);
+    return raw == null ? const [] : _parseEntries(raw);
   }
 
   /// Union [discovered] into the persisted set (dedup on the normalized base URL,

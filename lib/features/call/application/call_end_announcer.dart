@@ -198,7 +198,7 @@ class CallEndAnnouncer {
           final slice = left < _attemptSlice ? left : _attemptSlice;
           final repo = await _repositoryWithin(slice);
           if (repo != null) {
-            final islandId = await repo.serverIdFor(inviteId);
+            final islandId = await repo.islandIdFor(inviteId);
             if (islandId != null) {
               // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
               // identity check and then awaited twice; a liveness test does not

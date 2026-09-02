@@ -25,7 +25,7 @@ void main() {
     required bool deviceOnline,
     AppUser? loggedInUser,
     ConnectionState? socket,
-    bool gatewayReachable = true,
+    bool islandReachable = true,
   }) {
     return ProviderContainer(
       overrides: [
@@ -33,8 +33,8 @@ void main() {
         connectionStateProvider.overrideWith(
           (ref) => Stream.value(socket ?? ConnectionState.disconnected),
         ),
-        gatewayReachableProvider.overrideWith(
-          (ref) => Stream.value(gatewayReachable),
+        islandReachableProvider.overrideWith(
+          (ref) => Stream.value(islandReachable),
         ),
         authControllerProvider.overrideWith(() => _FixedAuth(loggedInUser)),
       ],
@@ -48,7 +48,7 @@ void main() {
     // a listen + microtask drain reflects the settled values reliably.)
     c.listen(deviceOnlineProvider, (_, _) {}, fireImmediately: true);
     c.listen(authControllerProvider, (_, _) {}, fireImmediately: true);
-    c.listen(gatewayReachableProvider, (_, _) {}, fireImmediately: true);
+    c.listen(islandReachableProvider, (_, _) {}, fireImmediately: true);
     c.listen(connectionStateProvider, (_, _) {}, fireImmediately: true);
     c.listen(networkStatusProvider, (_, _) {}, fireImmediately: true);
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -114,7 +114,7 @@ void main() {
   );
 
   test('logged out + gateway reachable → online', () async {
-    final c = container(deviceOnline: true, gatewayReachable: true);
+    final c = container(deviceOnline: true, islandReachable: true);
     addTearDown(c.dispose);
     expect(await status(c), NetworkStatus.online);
   });
@@ -122,7 +122,7 @@ void main() {
   test(
     'logged out + gateway unreachable → islandUnreachable (the DNS case)',
     () async {
-      final c = container(deviceOnline: true, gatewayReachable: false);
+      final c = container(deviceOnline: true, islandReachable: false);
       addTearDown(c.dispose);
       expect(await status(c), NetworkStatus.islandUnreachable);
     },

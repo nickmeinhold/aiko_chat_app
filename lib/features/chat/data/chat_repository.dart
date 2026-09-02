@@ -505,10 +505,10 @@ class ChatRepository {
   /// something it sent — the hangup naming the invitation it ends — has to
   /// resolve one to the other, and only the ack can do that. Null means the
   /// send has not been acked (offline, or still in flight).
-  Future<String?> serverIdFor(String clientTempId) async {
+  Future<String?> islandIdFor(String clientTempId) async {
     if (_disposed) return null;
     try {
-      return await _cache.serverUlidFor(clientTempId);
+      return await _cache.islandUlidFor(clientTempId);
     } catch (_) {
       return null; // teardown race; the caller degrades to sending nothing.
     }
@@ -568,7 +568,7 @@ class ChatRepository {
       outcome = await _cache.reconcileAck(
         a.clientMsgId,
         a.msgId,
-        _parseServerTime(a.createdAt),
+        _parseIslandTime(a.createdAt),
       );
     } catch (e, st) {
       // A write already past the guard can land as the cache closes during
@@ -988,7 +988,7 @@ class ChatRepository {
 
   // --- helpers ---------------------------------------------------------------
 
-  DateTime _parseServerTime(String? iso) =>
+  DateTime _parseIslandTime(String? iso) =>
       (iso != null ? DateTime.tryParse(iso)?.toUtc() : null) ??
       DateTime.now().toUtc();
 

@@ -1075,7 +1075,7 @@ class DriftCache extends GeneratedDatabase {
   /// Needed because the two ids are not interchangeable on the wire: the
   /// gateway's `reply_to` is an FK onto `messages.id`, so it resolves a SERVER
   /// id and refuses a client one outright (`no_reply_target`, verified live).
-  Future<String?> serverUlidFor(String clientTempId) async =>
+  Future<String?> islandUlidFor(String clientTempId) async =>
       (await _messageBy(_M.clientTempId, clientTempId))?.islandUlid;
 
   /// Invariant O — the outbox is a QUERY, not a table: every un-acked,

@@ -15,7 +15,7 @@
 //  - the picker renders directory entries when the directory has them.
 //
 // The GROWING persisted seed set (discovered islands remembered across launches)
-// is pinned separately in gateway_seed_store_test.dart.
+// is pinned separately in island_seed_store_test.dart.
 
 import 'dart:convert';
 import 'dart:typed_data';
@@ -293,7 +293,7 @@ void main() {
         retry: (_, _) => null,
         overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
-          gatewayDirectoryClientProvider.overrideWithValue(client),
+          islandDirectoryClientProvider.overrideWithValue(client),
         ],
       );
     }
@@ -395,7 +395,7 @@ void main() {
       // PERSIST: a fresh store over the same prefs sees it → survives a restart.
       expect(
         container
-            .read(gatewaySeedStoreProvider)
+            .read(islandSeedStoreProvider)
             .load()
             .map((e) => _norm(e.httpBaseUrl)),
         contains(_norm('https://chat.newisland.example')),

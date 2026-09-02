@@ -50,15 +50,41 @@ import 'package:flutter_test/flutter_test.dart';
 /// hunts user-facing PROSE, and a snake_case token is never prose), but it is a
 /// boundary, and it is now written down instead of hidden behind exemptions.
 const _permitted = <String>{
-  // Wire: the island's own directory endpoint and its JSON field names. The
-  // island repo owns this shape; we do not rename it unilaterally.
   r'$base/v1/gateways',
-  'gateways',
-  'servers',
   // A developer `assert` about the gateway service's own REST contract (is
   // `after` exclusive?). Aimed at us, and "gateway" is the CORRECT word — the
   // cursor belongs to the bridge service, not to the island.
   '— is the gateway `after` cursor exclusive?',
+};
+
+/// Exemptions SCOPED TO A FILE. Carnot's catch: a bare `'servers'` on the global
+/// allowlist exempts that word ANYWHERE, so a future user-facing `Text('servers')`
+/// would sail through the very policy that exists to stop it. These are the
+/// island directory's own wire field names, and they are legitimate in exactly
+/// one file.
+const _permittedInFile = <String, Set<String>>{
+  'lib/features/settings/data/island_directory_client.dart': {
+    'gateways',
+    'servers',
+  },
+};
+
+/// Identifiers that may carry "gateway" because they NAME THE BRIDGE SERVICE
+/// the client speaks to — ADR-0001's Gateway, not its Island — plus the legacy
+/// storage-key constants, which are strings-as-names and cannot move.
+const _permittedIdentifiers = <String>{
+  // The bridge service and everything that talks to it.
+  'GatewayRestApi', 'buildGatewayBackend', 'gateway_rest_api',
+  'GatewayTransport', 'gateway_transport',
+  'GatewayCapabilities', 'gateway_capabilities', 'gatewayCapabilities',
+  'GatewayFrame',
+  // Legacy pref keys, read-only until task #25 retires them.
+  'kLegacyIslandBaseUrlPrefKey', 'kLegacyKnownIslandsPrefKey',
+  'aiko_gateway_base_url', 'aiko_known_gateways',
+  // The island directory's own wire path and field names.
+  'v1', 'gateways', 'servers',
+  // The Drift column on disk; the Dart constant is `islandUlid`.
+  'server_ulid',
 };
 
 /// Strings a person reads must use the product's word.
@@ -88,6 +114,11 @@ final _tripleLiteral = RegExp(
   r'|"""([\s\S]*?)"""',
 );
 
+/// Global exemptions plus any scoped to [path].
+bool _isPermitted(String path, String value) =>
+    _permitted.contains(value) ||
+    (_permittedInFile[path]?.contains(value) ?? false);
+
 /// An import/export path is machine-facing by construction.
 bool _isPath(String s) =>
     s.startsWith('package:') ||
@@ -114,7 +145,7 @@ void main() {
       for (final m in _tripleLiteral.allMatches(source)) {
         final value = m.group(1) ?? m.group(2) ?? '';
         if (!_banned.hasMatch(value)) continue;
-        if (_permitted.contains(value)) continue;
+        if (_isPermitted(entity.path, value)) continue;
         final line = '\n'.allMatches(source.substring(0, m.start)).length + 1;
         offenders.add('${entity.path}:$line  (triple-quoted) "$value"');
       }
@@ -140,7 +171,7 @@ void main() {
         for (final m in _literal.allMatches(scannable)) {
           final value = m.group(1) ?? m.group(2) ?? '';
           if (!_banned.hasMatch(value)) continue;
-          if (_isPath(value) || _permitted.contains(value)) continue;
+          if (_isPath(value) || _isPermitted(entity.path, value)) continue;
           offenders.add('${entity.path}:${i + 1}  "$value"');
         }
       }
@@ -174,7 +205,8 @@ void main() {
     // A corpus-wide rename edits this file too. An entry whose banned word was
     // renamed away can never match again: not policy, residue that LOOKS like
     // policy, and it will quietly permit any future string equal to it.
-    final dead = _permitted.where((e) => !_banned.hasMatch(e)).toList();
+    final all = {..._permitted, ..._permittedInFile.values.expand((e) => e)};
+    final dead = all.where((e) => !_banned.hasMatch(e)).toList();
     expect(
       dead,
       isEmpty,
@@ -190,7 +222,8 @@ void main() {
     // an open door: valid forever, reread by nobody. Requiring a live occurrence
     // means an exemption dies with the code that earned it.
     final corpus = _dartFilesUnderLib().map((f) => f.readAsStringSync()).join();
-    final orphans = _permitted.where((e) => !corpus.contains(e)).toList();
+    final all = {..._permitted, ..._permittedInFile.values.expand((e) => e)};
+    final orphans = all.where((e) => !corpus.contains(e)).toList();
     expect(
       orphans,
       isEmpty,
@@ -198,6 +231,59 @@ void main() {
           'These allowlist entries no longer appear anywhere under lib/, so '
           'the exemption has outlived its reason. Delete them:\n'
           '${orphans.join('\n')}',
+    );
+  });
+
+  test('no IDENTIFIER under lib/ says "server", and "gateway" only names the '
+      'bridge service', () {
+    // THE FINDING THIS TEST EXISTS FOR. The 470-site rename that introduced this
+    // vocabulary used a word-boundary pattern, so any identifier where the token
+    // sat INSIDE a longer name was silently skipped: `serverUlidFor`,
+    // `serverIdFor`, `noServerId`, `_parseServerTime`, `_GatewayPickerScreenState`,
+    // `gatewaySeedStoreProvider` and five more survived, and `flutter analyze`
+    // stayed green the whole time because they are internally consistent. A
+    // reviewer found ONE of them by reading; this finds all of them, and stops
+    // the next sweep from having the same blind spot.
+    //
+    // Strings are guarded above; this is the same policy one layer down, where a
+    // rename actually goes wrong.
+    final ident = RegExp(r'[A-Za-z_][A-Za-z0-9_]*');
+    final offenders = <String>[];
+
+    for (final file in _dartFilesUnderLib()) {
+      final lines = file.readAsStringSync().split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        final line = lines[i];
+        final trimmed = line.trimLeft();
+        if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
+        // Strip string literals first: their CONTENTS are prose, policed by the
+        // string test above, and leaving them in makes this guard double-report
+        // every finding that one already owns. An identifier check must look at
+        // identifiers.
+        final code = line
+            .replaceAll(_literal, '""')
+            .replaceAll(RegExp(r'//.*'), '');
+        for (final m in ident.allMatches(code)) {
+          final name = m.group(0)!;
+          if (_permittedIdentifiers.contains(name)) continue;
+          final lower = name.toLowerCase();
+          if (lower.contains('server')) {
+            offenders.add('${file.path}:${i + 1}  $name  (says "server")');
+          } else if (lower.contains('gateway')) {
+            offenders.add('${file.path}:${i + 1}  $name  (says "gateway")');
+          }
+        }
+      }
+    }
+
+    expect(
+      offenders.toSet().toList()..sort(),
+      isEmpty,
+      reason:
+          'Identifiers must follow ADR-0001 too. "server" is banned outright; '
+          '"gateway" is allowed only for the bridge service the client speaks '
+          'to, and each such name is listed in _permittedIdentifiers with its '
+          'reason.\n\n${(offenders.toSet().toList()..sort()).join('\n')}',
     );
   });
 }
