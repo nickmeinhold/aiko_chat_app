@@ -41,12 +41,12 @@ const kDirectoryEnvelopeKeysByPriority = <String>[
   'directory',
 ];
 
-/// Optional fixed directory origin (`--dart-define=GATEWAY_DIRECTORY_URL`). Empty
+/// Optional fixed directory origin (`--dart-define=ISLAND_DIRECTORY_URL`). Empty
 /// = the shipped default: discover from the currently-selected island instead of
 /// any fixed host. An override is a dev/staging convenience, NOT the production
 /// path — pinning it back to one host would re-create the SPOF this removed.
 const kIslandDirectoryUrl = String.fromEnvironment(
-  'GATEWAY_DIRECTORY_URL',
+  'ISLAND_DIRECTORY_URL',
   defaultValue: '',
 );
 
