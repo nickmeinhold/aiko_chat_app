@@ -64,7 +64,7 @@ class RingController extends Notifier<CallInvite?> {
   /// wakes a handset on the INVITE body only, so a cold start processes the
   /// invitation first by construction and the end is an ordinary afterthought.
   ///
-  /// A LIST per target, not one slot. Keying `_ended[targetServerMsgId] = end`
+  /// A LIST per target, not one slot. Keying `_ended[targetIslandMsgId] = end`
   /// made the newest end for a ULID evict every earlier one, and the match
   /// clauses run at LOOKUP time — so a stop this device would ultimately refuse
   /// could still displace the genuine one that arrived before it. Order: the
@@ -220,7 +220,7 @@ class RingController extends Notifier<CallInvite?> {
         .consentIn(m.channelId);
     switch (admitCallEnd(m, meUserId: me, consent: consent)) {
       case CallEndAdmitted(:final end):
-        (_ended[end.targetServerMsgId] ??= []).add((end: end, at: now));
+        (_ended[end.targetIslandMsgId] ??= []).add((end: end, at: now));
         final live = _live;
         if (live != null && endsInvite(end, live)) stopRinging();
         return;
@@ -261,7 +261,7 @@ class RingController extends Notifier<CallInvite?> {
     // ring, so an at-least-once replay cannot ring either. Matched through the
     // SAME predicate the live path uses, so a remembered end can never suppress
     // a ring that an in-order end would not have.
-    final owed = _ended[invite.serverMsgId];
+    final owed = _ended[invite.islandMsgId];
     if (owed != null && owed.any((e) => endsInvite(e.end, invite))) {
       // Dead on arrival: its hangup got here first, so it never rings. `_live`
       // cannot be this invitation — it is only being admitted now, so the end
@@ -280,7 +280,7 @@ class RingController extends Notifier<CallInvite?> {
     // The SAME invitation, already ringing. Nothing to do — and notably nothing
     // to UPGRADE: an earlier round grew a branch here that re-published `_live`
     // when a replay carried a server id the first sighting lacked. That state is
-    // now unrepresentable ([CallInvite.serverMsgId] is non-nullable and
+    // now unrepresentable ([CallInvite.islandMsgId] is non-nullable and
     // `admitRing` refuses a message without one), so the branch defended nothing
     // and cost a HIGH review finding for a bug it made look possible.
     if (invite == _live) {

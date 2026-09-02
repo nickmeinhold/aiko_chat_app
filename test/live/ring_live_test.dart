@@ -196,11 +196,11 @@ void main() {
     );
     final live = container.read(incomingRingProvider)!;
     // ignore: avoid_print
-    print('RINGING: invite=${live.inviteId} server=${live.serverMsgId}');
+    print('RINGING: invite=${live.inviteId} server=${live.islandMsgId}');
 
     // --- the other party hangs up ---------------------------------------------
     final stoppedAt = DateTime.now();
-    await _probe(['end', live.serverMsgId]);
+    await _probe(['end', live.islandMsgId]);
 
     final stopped = await _await(
       () => container.read(incomingRingProvider) == null,

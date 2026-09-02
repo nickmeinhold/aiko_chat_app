@@ -92,6 +92,7 @@ class DeviceRegistrar {
     required ChatRestApi api,
     required PendingUnregisterStore pending,
     required String islandBaseUrl,
+
     /// Defaults to the silent no-op so existing tests stay quiet. Production
     /// wires the real one through `pushTelemetryProvider` — pinned by
     /// `provider_wiring_test`, because a telemetry seam that silently falls back
@@ -260,7 +261,7 @@ class DeviceRegistrar {
   /// not a sign-out: the user is still signed in and the island's row is still
   /// the correct one, so owing ourselves a DELETE here would drain at the next
   /// sign-in edge and unregister a pairing nobody ended. The genuine end-of-
-  /// session path is [unpair], and `switchGateway` calls it explicitly before
+  /// session path is [unpair], and `switchIsland` calls it explicitly before
   /// invalidating the config that disposes this.
   void dispose() {
     unawaited(_refreshes?.cancel().catchError((_) {}));

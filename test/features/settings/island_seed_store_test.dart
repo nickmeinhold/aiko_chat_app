@@ -7,25 +7,25 @@
 //  - UNION + dedup: remember() accumulates across calls and dedups on the
 //    normalized base URL (a trailing-slash variant is the SAME island);
 //  - SECURITY (the load-bearing one): load() re-validates every stored entry
-//    through ServerEntry.tryFromJson, so a TAMPERED prefs blob (a file:// URL, a
+//    through IslandEntry.tryFromJson, so a TAMPERED prefs blob (a file:// URL, a
 //    hostless URL, a non-http scheme, junk) is dropped on read — never surfaced
-//    as a tile that would bypass the picker's URL validation into switchGateway;
+//    as a tile that would bypass the picker's URL validation into switchIsland;
 //  - robustness: a malformed/mis-typed blob yields [] rather than crashing.
 
 import 'dart:convert';
 
 import 'package:aiko_chat_app/app/config.dart';
-import 'package:aiko_chat_app/features/settings/data/gateway_seed_store.dart';
-import 'package:aiko_chat_app/features/settings/domain/server_entry.dart';
+import 'package:aiko_chat_app/features/settings/data/island_seed_store.dart';
+import 'package:aiko_chat_app/features/settings/domain/island_entry.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-String _norm(String url) => GatewayConfig.normalized(url).httpBaseUrl;
+String _norm(String url) => IslandConfig.normalized(url).httpBaseUrl;
 
-Future<GatewaySeedStore> storeWith(Map<String, Object> initial) async {
+Future<IslandSeedStore> storeWith(Map<String, Object> initial) async {
   SharedPreferences.setMockInitialValues(initial);
   final prefs = await SharedPreferences.getInstance();
-  return GatewaySeedStore(prefs: prefs, normalize: _norm);
+  return IslandSeedStore(prefs: prefs, normalize: _norm);
 }
 
 void main() {
@@ -39,7 +39,7 @@ void main() {
     () async {
       final store = await storeWith({});
       await store.remember(const [
-        ServerEntry(
+        IslandEntry(
           label: 'Enspyr',
           httpBaseUrl: 'https://chat.enspyr.co',
           id: 'enspyr',
@@ -56,17 +56,17 @@ void main() {
   test('remember unions across calls and dedups on the normalized URL', () async {
     final store = await storeWith({});
     await store.remember(const [
-      ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co'),
+      IslandEntry(label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co'),
     ]);
     // Second call: one NEW island + a re-advertisement of Enspyr with a trailing
     // slash (same island) and a different label. The existing entry must win and
     // the set must not double up.
     final merged = await store.remember(const [
-      ServerEntry(
+      IslandEntry(
         label: 'Enspyr RENAMED',
         httpBaseUrl: 'https://chat.enspyr.co/',
       ),
-      ServerEntry(
+      IslandEntry(
         label: 'Imagineering',
         httpBaseUrl: 'https://chat.imagineering.cc',
       ),
@@ -91,7 +91,7 @@ void main() {
       // Simulate a prefs blob an attacker (or a corrupted write) planted: a mix
       // of a good island and several that must NEVER become a tappable tile —
       // each would otherwise bypass the picker's custom-URL validation straight
-      // into switchGateway.
+      // into switchIsland.
       final tampered = jsonEncode([
         {
           'base_url': 'https://chat.enspyr.co',
@@ -103,7 +103,7 @@ void main() {
         {'base_url': 'garbage', 'display_name': 'junk'}, // unparseable
         {'display_name': 'no url at all'}, // no url
       ]);
-      final store = await storeWith({kKnownGatewaysPrefKey: tampered});
+      final store = await storeWith({kKnownIslandsPrefKey: tampered});
 
       final loaded = store.load();
       expect(loaded.map((e) => e.httpBaseUrl), [
@@ -113,17 +113,17 @@ void main() {
 
     test('a non-JSON / mis-typed blob yields [] (no crash)', () async {
       expect(
-        (await storeWith({kKnownGatewaysPrefKey: 'not json {['})).load(),
+        (await storeWith({kKnownIslandsPrefKey: 'not json {['})).load(),
         isEmpty,
       );
       // A JSON value that isn't a list of objects is also just "nothing".
       expect(
-        (await storeWith({kKnownGatewaysPrefKey: jsonEncode(42)})).load(),
+        (await storeWith({kKnownIslandsPrefKey: jsonEncode(42)})).load(),
         isEmpty,
       );
       expect(
         (await storeWith({
-          kKnownGatewaysPrefKey: jsonEncode({'x': 1}),
+          kKnownIslandsPrefKey: jsonEncode({'x': 1}),
         })).load(),
         isEmpty,
       );

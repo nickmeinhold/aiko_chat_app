@@ -22,9 +22,9 @@ import 'package:go_router/go_router.dart';
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
-import '../../settings/application/gateway_directory_provider.dart';
-import '../../settings/data/gateway_directory_client.dart';
-import '../../settings/presentation/gateway_switch_action.dart';
+import '../../settings/application/island_directory_provider.dart';
+import '../../settings/data/island_directory_client.dart';
+import '../../settings/presentation/island_switch_action.dart';
 import '../application/chat_providers.dart';
 import '../application/mute_controller.dart';
 import '../domain/channel.dart';
@@ -309,7 +309,7 @@ class ChatSidebar extends ConsumerWidget {
           right: false,
           child: Column(
             children: [
-              const _ServerSwitcher(),
+              const _IslandSwitcher(),
               const Divider(height: 1),
               Expanded(
                 // The SAME readiness predicate as the app bar and the pane: the
@@ -503,12 +503,12 @@ class _SidebarDmTile extends ConsumerWidget {
 }
 
 /// The top-of-rail server switcher. Shows the current gateway; opens a menu of
-/// `knownGatewaysProvider` ∪ `gatewayDirectoryProvider` (same source as the
+/// `knownIslandsProvider` ∪ `islandDirectoryProvider` (same source as the
 /// picker), plus a "Custom / other islands…" escape to the full picker. A
-/// different selection routes through the shared [confirmAndSwitchGateway] so the
+/// different selection routes through the shared [confirmAndSwitchIsland] so the
 /// confirm dialog can't drift from the picker's.
-class _ServerSwitcher extends ConsumerWidget {
-  const _ServerSwitcher();
+class _IslandSwitcher extends ConsumerWidget {
+  const _IslandSwitcher();
 
   static const _customValue = '__custom__';
 
@@ -518,20 +518,20 @@ class _ServerSwitcher extends ConsumerWidget {
     final current = ref.watch(configProvider).httpBaseUrl;
     // Seed-first: render the known set immediately, overlay the live directory
     // once it lands — identical to the picker so the two lists agree.
-    final known = ref.watch(knownGatewaysProvider);
+    final known = ref.watch(knownIslandsProvider);
     final servers = ref
-        .watch(gatewayDirectoryProvider)
+        .watch(islandDirectoryProvider)
         .maybeWhen(
           data: (directory) => mergeDirectory(
             directory,
             known,
-            normalize: (url) => GatewayConfig.normalized(url).httpBaseUrl,
+            normalize: (url) => IslandConfig.normalized(url).httpBaseUrl,
           ),
           orElse: () => known,
         );
     final currentEntry = servers
         .where(
-          (e) => GatewayConfig.normalized(e.httpBaseUrl).httpBaseUrl == current,
+          (e) => IslandConfig.normalized(e.httpBaseUrl).httpBaseUrl == current,
         )
         .firstOrNull;
     final currentLabel = currentEntry?.label ?? _hostOf(current);
@@ -546,7 +546,7 @@ class _ServerSwitcher extends ConsumerWidget {
         }
         final entry = servers.where((e) => e.httpBaseUrl == value).firstOrNull;
         if (entry == null) return;
-        confirmAndSwitchGateway(
+        confirmAndSwitchIsland(
           context,
           ref,
           url: entry.httpBaseUrl,
@@ -558,7 +558,7 @@ class _ServerSwitcher extends ConsumerWidget {
           CheckedPopupMenuItem<String>(
             value: e.httpBaseUrl,
             checked:
-                GatewayConfig.normalized(e.httpBaseUrl).httpBaseUrl == current,
+                IslandConfig.normalized(e.httpBaseUrl).httpBaseUrl == current,
             child: Text(e.label, overflow: TextOverflow.ellipsis),
           ),
         const PopupMenuDivider(),

@@ -1,11 +1,11 @@
 /// The shared "switch island (and re-login)" flow.
 ///
-/// Switching gateway is a hard logout by design: [AuthController.switchGateway]
-/// clears tokens + cached user, disconnects, and bounces to the new gateway's
-/// `/login` (JWTs are gateway-specific). Two surfaces trigger it — the full
-/// gateway picker ([GatewayPickerScreen]) and the wide-layout sidebar server
+/// Switching island is a hard logout by design: [AuthController.switchIsland]
+/// clears tokens + cached user, disconnects, and bounces to the new island's
+/// `/login` (JWTs are island-specific). Two surfaces trigger it — the full
+/// island picker ([IslandPickerScreen]) and the wide-layout sidebar island
 /// switcher ([ChatSidebar]) — so the no-op guard, the confirm dialog, the
-/// [GatewaySwitchFailed] error copy, and the post-switch `/login` landing all
+/// [IslandSwitchFailed] error copy, and the post-switch `/login` landing all
 /// live HERE, once, so the two entry points can never drift.
 library;
 
@@ -19,12 +19,12 @@ import '../../auth/application/auth_controller.dart';
 
 /// Guard → confirm → switch → land on `/login`.
 ///
-/// - No-op guard: selecting the ALREADY-active server shows a snackbar and
-///   returns without a dialog (a switch to the current gateway would needlessly
+/// - No-op guard: selecting the ALREADY-active island shows a snackbar and
+///   returns without a dialog (a switch to the current island would needlessly
 ///   destroy a live session — normalized compare so a trailing slash can't hide
 ///   the match).
 /// - Confirm: a single shared dialog naming [label]; Cancel returns silently.
-/// - Switch: [AuthController.switchGateway]. A persistence failure throws BEFORE
+/// - Switch: [AuthController.switchIsland]. A persistence failure throws BEFORE
 ///   any teardown (session intact) — surfaced inline, stay put.
 /// - Land: `GoRouter.go('/login')` (we're logged out now, so `/login` is always
 ///   correct — see the picker's rationale; `maybeOf` keeps a bare-widget test a
@@ -33,7 +33,7 @@ import '../../auth/application/auth_controller.dart';
 /// [onSwitching] lets a caller drive a local busy indicator (the picker's
 /// AbsorbPointer spinner) around the awaited switch; it is optional so the
 /// sidebar can call this with no local state.
-Future<void> confirmAndSwitchGateway(
+Future<void> confirmAndSwitchIsland(
   BuildContext context,
   WidgetRef ref, {
   required String url,
@@ -41,7 +41,7 @@ Future<void> confirmAndSwitchGateway(
   void Function(bool switching)? onSwitching,
 }) async {
   final current = ref.read(configProvider).httpBaseUrl;
-  if (GatewayConfig.normalized(url).httpBaseUrl == current) {
+  if (IslandConfig.normalized(url).httpBaseUrl == current) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Already connected to this island.')),
     );
@@ -71,11 +71,11 @@ Future<void> confirmAndSwitchGateway(
   if (confirmed != true || !context.mounted) return;
 
   onSwitching?.call(true);
-  // switchGateway publishes `loading` (router → /splash) then logs the user out
-  // on the new gateway. A persistence failure throws BEFORE any teardown
+  // switchIsland publishes `loading` (router → /splash) then logs the user out
+  // on the new island. A persistence failure throws BEFORE any teardown
   // (session intact) — surface it and stay put.
   try {
-    await ref.read(authControllerProvider.notifier).switchGateway(url);
+    await ref.read(authControllerProvider.notifier).switchIsland(url);
   } catch (e) {
     if (!context.mounted) return;
     onSwitching?.call(false);
@@ -84,7 +84,7 @@ Future<void> confirmAndSwitchGateway(
     ).showSnackBar(SnackBar(content: Text(_switchError(e))));
     return;
   }
-  // Land deterministically on the new gateway's /login. Since #35 made
+  // Land deterministically on the new island's /login. Since #35 made
   // /settings/island reachable while logged out, the redirect treats it as a
   // valid logged-out resting state — so without an explicit nav the picker stays
   // on screen after the switch. maybeOf keeps a bare-widget unit test (no
@@ -94,6 +94,6 @@ Future<void> confirmAndSwitchGateway(
 }
 
 String _switchError(Object e) {
-  if (e is GatewaySwitchFailed) return e.message;
+  if (e is IslandSwitchFailed) return e.message;
   return 'Could not switch islands. Please try again.';
 }

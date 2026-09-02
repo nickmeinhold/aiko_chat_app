@@ -170,10 +170,7 @@ void main() {
     });
 
     test('a blocked sender', () {
-      expect(
-        refusal(invite(), blocked: {robin}),
-        RingRefusal.senderBlocked,
-      );
+      expect(refusal(invite(), blocked: {robin}), RingRefusal.senderBlocked);
     });
 
     test('a muted conversation', () {
@@ -258,31 +255,33 @@ void main() {
       expect(RingRefusal.endMissingAuthor.refusedAnAttempt, isTrue);
     });
 
-    test('a hangup NAMING NO CALL is observable — a bell may still be ringing',
-        () {
-      // The nastier of the two: it could never stop any ring, so the caller
-      // believes the call is over while the callee's handset is still going.
-      final noTarget = Message(
-        clientTempId: 'e1',
-        id: '01M0GS7FDWBVQ31950B1PTV2DX',
-        channelId: 'dm:aaa:bbb',
-        sender: const MessageSender(userId: robin, kind: SenderKind.human),
-        body: kCallEndBody,
-        createdAt: now,
-        origin: signedAt(now),
-        originCryptoValid: true,
-        deliveryState: DeliveryState.sent,
-      );
-      expect(
-        admitCallEnd(noTarget, meUserId: me, consent: RingConsent.none),
-        isA<CallEndRefused>().having(
-          (r) => r.reason,
-          'reason',
-          RingRefusal.endMissingTarget,
-        ),
-      );
-      expect(RingRefusal.endMissingTarget.refusedAnAttempt, isTrue);
-    });
+    test(
+      'a hangup NAMING NO CALL is observable — a bell may still be ringing',
+      () {
+        // The nastier of the two: it could never stop any ring, so the caller
+        // believes the call is over while the callee's handset is still going.
+        final noTarget = Message(
+          clientTempId: 'e1',
+          id: '01M0GS7FDWBVQ31950B1PTV2DX',
+          channelId: 'dm:aaa:bbb',
+          sender: const MessageSender(userId: robin, kind: SenderKind.human),
+          body: kCallEndBody,
+          createdAt: now,
+          origin: signedAt(now),
+          originCryptoValid: true,
+          deliveryState: DeliveryState.sent,
+        );
+        expect(
+          admitCallEnd(noTarget, meUserId: me, consent: RingConsent.none),
+          isA<CallEndRefused>().having(
+            (r) => r.reason,
+            'reason',
+            RingRefusal.endMissingTarget,
+          ),
+        );
+        expect(RingRefusal.endMissingTarget.refusedAnAttempt, isTrue);
+      },
+    );
 
     test('each gate produces EXACTLY its own reasons — driven, not counted', () {
       // REPLACES a roster with a graph (Tesla, round 2, #3591). The first version
@@ -309,7 +308,10 @@ void main() {
         invite(kind: SenderKind.llm),
         invite(),
       ]) {
-        for (final blocked in [<String>{}, {robin}]) {
+        for (final blocked in [
+          <String>{},
+          {robin},
+        ]) {
           for (final muted in [false, true]) {
             for (final isDm in [true, false]) {
               final r = refusal(m, blocked: blocked, muted: muted, isDm: isDm);
@@ -321,33 +323,33 @@ void main() {
       producedByStart.add(refusal(invite(age: const Duration(seconds: -5)))!);
       // A signed, permitted invite carrying NO SERVER ID. Built by hand because
       // the `invite` fixture always mints one — which is precisely why the first
-      // roster version could file `noServerId` as "deliberately unreachable" and
+      // roster version could file `noIslandId` as "deliberately unreachable" and
       // never be contradicted. Driving the gate forces the question.
+      producedByStart.add(switch (admitRing(
+        Message(
+          clientTempId: 'm1',
+          channelId: 'dm:aaa:bbb',
+          sender: const MessageSender(userId: robin, kind: SenderKind.human),
+          body: kCallInviteBody,
+          createdAt: now,
+          origin: signedAt(now),
+          originCryptoValid: true,
+          deliveryState: DeliveryState.sent,
+        ),
+        meUserId: me,
+        blockedUserIds: const {},
+        consent: RingConsent.none,
+        conversationMuted: false,
+        isDm: true,
+        now: now,
+      )) {
+        RingRefused(:final reason) => reason,
+        RingAdmitted() => throw StateError('expected a refusal'),
+      });
       producedByStart.add(
-        switch (admitRing(
-          Message(
-            clientTempId: 'm1',
-            channelId: 'dm:aaa:bbb',
-            sender: const MessageSender(userId: robin, kind: SenderKind.human),
-            body: kCallInviteBody,
-            createdAt: now,
-            origin: signedAt(now),
-            originCryptoValid: true,
-            deliveryState: DeliveryState.sent,
-          ),
-          meUserId: me,
-          blockedUserIds: const {},
-          consent: RingConsent.none,
-          conversationMuted: false,
-          isDm: true,
-          now: now,
-        )) {
-          RingRefused(:final reason) => reason,
-          RingAdmitted() => throw StateError('expected a refusal'),
-        },
-      );
-      producedByStart.add(
-        refusal(invite(age: kCallInviteFreshness + const Duration(seconds: 1)))!,
+        refusal(
+          invite(age: kCallInviteFreshness + const Duration(seconds: 1)),
+        )!,
       );
 
       final producedByStop = <RingRefusal>{};
@@ -388,8 +390,9 @@ void main() {
         }
       }
 
-      final declaredStart =
-          RingRefusal.values.where((r) => r.startGate).toSet();
+      final declaredStart = RingRefusal.values
+          .where((r) => r.startGate)
+          .toSet();
       final declaredStop = RingRefusal.values.where((r) => r.stopGate).toSet();
 
       // NO EXCEPTIONS. An earlier version subtracted `anonymousSender` here,
@@ -428,10 +431,11 @@ void main() {
       expect(RingRefusal.ownEnd.refusedAnAttempt, isFalse);
       // Everything else means somebody tried to ring you and the gate said no.
       for (final r in RingRefusal.values) {
-        if (r case RingRefusal.notAnInvite ||
-            RingRefusal.ownInvite ||
-            RingRefusal.notAnEnd ||
-            RingRefusal.ownEnd) {
+        if (r
+            case RingRefusal.notAnInvite ||
+                RingRefusal.ownInvite ||
+                RingRefusal.notAnEnd ||
+                RingRefusal.ownEnd) {
           continue;
         }
         expect(
@@ -937,7 +941,7 @@ void main() {
           'CORRELATION is scoped, not just the stop ADMISSION', () {
         // Tesla asked for this at the confirming round, and was right to: the
         // per-conversation change scoped what `admitCallEnd` ADMITS, while the
-        // `_ended` ledger is keyed on `targetServerMsgId` alone. If correlation
+        // `_ended` ledger is keyed on `targetIslandMsgId` alone. If correlation
         // were unscoped, an agent consented only in room B could pass the stop
         // gate there and silence — or pre-poison — a ring living in room A.
         //
@@ -946,13 +950,13 @@ void main() {
         // the memory path run it, so this pins the property both share.
         final ringInA = CallInvite(
           inviteId: 'c-1',
-          serverMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+          islandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
           channelId: here,
           from: const MessageSender(userId: 'agent', kind: SenderKind.llm),
           startedAt: now,
         );
         const endFromB = CallEnd(
-          targetServerMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+          targetIslandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
           fromUserId: 'agent',
           channelId: elsewhere,
         );
@@ -967,7 +971,7 @@ void main() {
         expect(
           endsInvite(
             const CallEnd(
-              targetServerMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
+              targetIslandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
               fromUserId: 'agent',
               channelId: here,
             ),
@@ -1077,7 +1081,7 @@ void main() {
         );
         expect(decision, isA<CallEndAdmitted>());
         final judged = (decision as CallEndAdmitted).end;
-        expect(judged.targetServerMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
+        expect(judged.targetIslandMsgId, '01M0GS7FDWBVQ31950B1PTV2DW');
         expect(judged.fromUserId, robin);
         expect(judged.channelId, 'dm:aaa:bbb');
       },

@@ -73,9 +73,7 @@ class RedactingLogSink extends LogSink {
         event: record.event,
         fields: {
           for (final e in record.fields.entries)
-            e.key: e.value is String
-                ? redact(e.value! as String)
-                : e.value,
+            e.key: e.value is String ? redact(e.value! as String) : e.value,
         },
         // The error is projected to its TYPE NAME, never its string. This is the
         // same invariant `describeError` enforces on the problem-report path,

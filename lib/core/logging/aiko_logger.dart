@@ -92,9 +92,6 @@ class AikoLogger {
 
   /// A logger for a child subsystem, e.g. `forSubsystem('ring')` on
   /// `aiko.call` gives `aiko.call.ring`.
-  AikoLogger child(String suffix) => AikoLogger(
-    subsystem: '$subsystem.$suffix',
-    sink: _sink,
-    clock: _clock,
-  );
+  AikoLogger child(String suffix) =>
+      AikoLogger(subsystem: '$subsystem.$suffix', sink: _sink, clock: _clock);
 }

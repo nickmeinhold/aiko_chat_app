@@ -44,7 +44,7 @@ class LoginScreen extends ConsumerWidget {
     // Choosing a server is a PRE-LOGIN act (#35): surface the active gateway and
     // a way to change it, so a user stranded on an unreachable server can switch
     // away without reinstalling. The route is logged-out-reachable (see router).
-    final gatewayHost = gatewayHostLabel(ref.watch(configProvider).httpBaseUrl);
+    final islandHost = islandHostLabel(ref.watch(configProvider).httpBaseUrl);
 
     void passkeySignIn() {
       ref.read(loginActionProvider.notifier).set(AuthAction.signIn);
@@ -103,7 +103,7 @@ class LoginScreen extends ConsumerWidget {
                           Text(
                             authErrorText(
                               auth.error,
-                              host: gatewayHost,
+                              host: islandHost,
                               action: ref.watch(loginActionProvider),
                             ),
                             style: TextStyle(
@@ -117,7 +117,7 @@ class LoginScreen extends ConsumerWidget {
                         ],
                         const SizedBox(height: 28),
                         Text(
-                          'Island: $gatewayHost',
+                          'Island: $islandHost',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(

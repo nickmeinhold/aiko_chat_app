@@ -415,7 +415,7 @@ void main() {
       await pump();
 
       final after = await rawRow();
-      expect(after.serverUlid, '01U', reason: 'collapsed onto the server ULID');
+      expect(after.islandUlid, '01U', reason: 'collapsed onto the server ULID');
       expect(
         after.sig,
         signed.sig,

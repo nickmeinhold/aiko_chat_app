@@ -328,7 +328,7 @@ class GatewayTransport implements ChatTransport {
 
   void _onFrame(dynamic raw) {
     final text = raw is String ? raw : raw.toString();
-    final frame = ServerFrame.parse(text);
+    final frame = GatewayFrame.parse(text);
     switch (frame) {
       case AckFrame f:
         _acks.add(

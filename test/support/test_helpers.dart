@@ -5,7 +5,7 @@ import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
 import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
 import 'package:aiko_chat_app/features/notifications/domain/push_token_source.dart';
-import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
+import 'package:aiko_chat_app/features/settings/application/island_directory_provider.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/services.dart' show rootBundle, MethodChannel;
@@ -136,10 +136,10 @@ ProviderContainer makeContainer({
       // unchanged for existing tests.
       connectivityServiceProvider.overrideWithValue(FakeConnectivityService()),
       reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
-      // The real gatewayReachableProvider polls on a 5s Timer loop; stub it with a
+      // The real islandReachableProvider polls on a 5s Timer loop; stub it with a
       // one-shot reachable stream so widget tests don't trip "pending timer" at
       // teardown. (Its derived logic is covered in network_status_test.)
-      gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
+      islandReachableProvider.overrideWith((ref) => Stream.value(true)),
       // The real cacheProvider is now file-backed via path_provider, which has no
       // platform channel under flutter_test. Widget tests get an in-memory cache
       // that, like the real provider, is disposed and recreated across auth
@@ -157,7 +157,7 @@ ProviderContainer makeContainer({
       // exercise navigation/UI, not discovery — stub it empty so no real network
       // fires (which would leak a pending timer past widget disposal). The picker
       // then renders the bundled seed set.
-      gatewayDirectoryProvider.overrideWith((ref) async => const []),
+      islandDirectoryProvider.overrideWith((ref) async => const []),
       pushTokenSourceProvider.overrideWithValue(pushSource),
     ],
   );

@@ -59,10 +59,10 @@ class _GatingCache extends DriftCache {
 
   @override
   Future<({bool inserted, bool newlyInvalid})> upsertInbound(
-    Message serverMsg,
+    Message islandMsg,
   ) async {
     if (gate != null) await gate!.future;
-    return super.upsertInbound(serverMsg);
+    return super.upsertInbound(islandMsg);
   }
 }
 

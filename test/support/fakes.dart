@@ -151,7 +151,7 @@ class FakeWebSocketChannel implements WebSocketChannel {
   void emit(dynamic frame) => incoming.add(frame);
 
   /// Simulate the socket closing (onDone).
-  void closeFromServer() => incoming.close();
+  void closeFromGateway() => incoming.close();
 
   @override
   Stream<dynamic> get stream => incoming.stream;

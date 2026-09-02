@@ -8,7 +8,7 @@ import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// The derived, three-state network status (offline / serverUnreachable /
+/// The derived, three-state network status (offline / islandUnreachable /
 /// online) picks the right reachability source per auth state, and the banner
 /// shows only on trouble.
 void main() {
@@ -25,7 +25,7 @@ void main() {
     required bool deviceOnline,
     AppUser? loggedInUser,
     ConnectionState? socket,
-    bool gatewayReachable = true,
+    bool islandReachable = true,
   }) {
     return ProviderContainer(
       overrides: [
@@ -33,8 +33,8 @@ void main() {
         connectionStateProvider.overrideWith(
           (ref) => Stream.value(socket ?? ConnectionState.disconnected),
         ),
-        gatewayReachableProvider.overrideWith(
-          (ref) => Stream.value(gatewayReachable),
+        islandReachableProvider.overrideWith(
+          (ref) => Stream.value(islandReachable),
         ),
         authControllerProvider.overrideWith(() => _FixedAuth(loggedInUser)),
       ],
@@ -48,7 +48,7 @@ void main() {
     // a listen + microtask drain reflects the settled values reliably.)
     c.listen(deviceOnlineProvider, (_, _) {}, fireImmediately: true);
     c.listen(authControllerProvider, (_, _) {}, fireImmediately: true);
-    c.listen(gatewayReachableProvider, (_, _) {}, fireImmediately: true);
+    c.listen(islandReachableProvider, (_, _) {}, fireImmediately: true);
     c.listen(connectionStateProvider, (_, _) {}, fireImmediately: true);
     c.listen(networkStatusProvider, (_, _) {}, fireImmediately: true);
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -71,14 +71,14 @@ void main() {
     expect(await status(c), NetworkStatus.online);
   });
 
-  test('logged in + socket DISCONNECTED → serverUnreachable', () async {
+  test('logged in + socket DISCONNECTED → islandUnreachable', () async {
     final c = container(
       deviceOnline: true,
       loggedInUser: user,
       socket: ConnectionState.disconnected,
     );
     addTearDown(c.dispose);
-    expect(await status(c), NetworkStatus.serverUnreachable);
+    expect(await status(c), NetworkStatus.islandUnreachable);
   });
 
   test(
@@ -114,17 +114,17 @@ void main() {
   );
 
   test('logged out + gateway reachable → online', () async {
-    final c = container(deviceOnline: true, gatewayReachable: true);
+    final c = container(deviceOnline: true, islandReachable: true);
     addTearDown(c.dispose);
     expect(await status(c), NetworkStatus.online);
   });
 
   test(
-    'logged out + gateway unreachable → serverUnreachable (the DNS case)',
+    'logged out + gateway unreachable → islandUnreachable (the DNS case)',
     () async {
-      final c = container(deviceOnline: true, gatewayReachable: false);
+      final c = container(deviceOnline: true, islandReachable: false);
       addTearDown(c.dispose);
-      expect(await status(c), NetworkStatus.serverUnreachable);
+      expect(await status(c), NetworkStatus.islandUnreachable);
     },
   );
 
@@ -146,8 +146,8 @@ void main() {
       expect(find.text("You're offline"), findsOneWidget);
     });
 
-    testWidgets('serverUnreachable → amber cannot-reach text', (t) async {
-      await pump(t, NetworkStatus.serverUnreachable);
+    testWidgets('islandUnreachable → amber cannot-reach text', (t) async {
+      await pump(t, NetworkStatus.islandUnreachable);
       expect(find.text("Can't reach the island"), findsOneWidget);
     });
   });

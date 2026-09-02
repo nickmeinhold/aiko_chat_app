@@ -27,7 +27,7 @@ const _me = AppUser(
 );
 const _chan = 'chan';
 
-Message _server(
+Message _fromIsland(
   String ulid,
   String body, {
   String at = '2026-01-01T12:00:01Z',
@@ -149,7 +149,7 @@ void main() {
       final om = transport.sent.single;
       transport.emitAck(om.clientTempId, '01U');
       await pump();
-      transport.emitMessage(_server('01U', 'hi')); // own fanout echo
+      transport.emitMessage(_fromIsland('01U', 'hi')); // own fanout echo
       await pump();
       expect(await rows(), hasLength(1));
     });
@@ -159,7 +159,9 @@ void main() {
       () async {
         await repo.sendMessage(_chan, 'hi');
         final om = transport.sent.single;
-        transport.emitMessage(_server('01U', 'hi')); // echo arrives first (W3)
+        transport.emitMessage(
+          _fromIsland('01U', 'hi'),
+        ); // echo arrives first (W3)
         await pump();
         transport.emitAck(om.clientTempId, '01U'); // ack collapses
         await pump();
@@ -191,7 +193,7 @@ void main() {
         transport.fences = {_chan: '01U'};
         rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan,
-          messages: [_server('01U', 'hi')],
+          messages: [_fromIsland('01U', 'hi')],
           nextAfter: '01U',
         );
 
@@ -225,7 +227,7 @@ void main() {
         transport.fences = {_chan: '01U'};
         rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan,
-          messages: [_server('01U', 'hi')],
+          messages: [_fromIsland('01U', 'hi')],
           nextAfter: '01U',
         );
 
@@ -246,7 +248,7 @@ void main() {
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01U', 'hi')],
+        messages: [_fromIsland('01U', 'hi')],
         nextAfter: '01U',
       );
       transport.emitConn(ConnectionState.connected);
@@ -268,7 +270,7 @@ void main() {
         transport.fences = {_chan: '01U'};
         rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan,
-          messages: [_server('01U', 'hi')],
+          messages: [_fromIsland('01U', 'hi')],
           nextAfter: '01U',
         );
         transport.emitConn(ConnectionState.connected);
@@ -302,12 +304,12 @@ void main() {
       transport.fences = {_chan: '01D'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01A', 'a'), _server('01B', 'b')],
+        messages: [_fromIsland('01A', 'a'), _fromIsland('01B', 'b')],
         nextAfter: '01B',
       );
       rest.pagesByAfter['01B'] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01C', 'c'), _server('01D', 'd')],
+        messages: [_fromIsland('01C', 'c'), _fromIsland('01D', 'd')],
         nextAfter: '01D',
       );
       // First sync crashes mid-paging (page 2 fails).
@@ -343,21 +345,21 @@ void main() {
     });
 
     test('live-W3-watermark — resume uses historyContiguousThrough, NOT '
-        'MAX(serverUlid)', () async {
+        'MAX(islandUlid)', () async {
       // Sync 1 completes: watermark = 01B.
       transport.fences = {_chan: '01B'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01A', 'a'), _server('01B', 'b')],
+        messages: [_fromIsland('01A', 'a'), _fromIsland('01B', 'b')],
         nextAfter: '01B',
       );
       transport.emitConn(ConnectionState.connected);
       await pump();
       expect(await cache.historyContiguousThrough(_chan), '01B');
 
-      // A LIVE message Z lands far ahead — MAX(serverUlid) jumps to 01Z. W3 only;
+      // A LIVE message Z lands far ahead — MAX(islandUlid) jumps to 01Z. W3 only;
       // it must NOT touch the watermark.
-      transport.emitMessage(_server('01Z', 'live'));
+      transport.emitMessage(_fromIsland('01Z', 'live'));
       await pump();
 
       // Reconnect: the 01C..01D gap must refill. The resume cursor MUST be the
@@ -365,7 +367,7 @@ void main() {
       transport.fences = {_chan: '01D'};
       rest.pagesByAfter['01B'] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01C', 'c'), _server('01D', 'd')],
+        messages: [_fromIsland('01C', 'c'), _fromIsland('01D', 'd')],
         nextAfter: '01D',
       );
       rest.getHistoryCalls.clear();
@@ -494,7 +496,7 @@ void main() {
       // it is the third consecutive gap overall.
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01A', 'a')],
+        messages: [_fromIsland('01A', 'a')],
         nextAfter: '01A',
       );
       await reconnectCycle();
@@ -602,7 +604,7 @@ void main() {
         transport.fences = {_chan: '01U'};
         rest.pagesByAfter[''] = HistoryPage.ofMessages(
           channelId: _chan,
-          messages: [_server('01U', 'hi')],
+          messages: [_fromIsland('01U', 'hi')],
           nextAfter: '01U',
         );
         transport.emitConn(ConnectionState.connected);
@@ -631,7 +633,7 @@ void main() {
       transport.fences = {_chan: '01A'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01A', 'a')],
+        messages: [_fromIsland('01A', 'a')],
         nextAfter: '01A',
       );
       rest.getHistoryGate = Completer<void>(); // wedge the first paging
@@ -668,7 +670,7 @@ void main() {
       transport.fences = {_chan: '01A'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01A', 'a')],
+        messages: [_fromIsland('01A', 'a')],
         nextAfter: '01A',
       );
       rest.getHistoryGate = Completer<void>();
@@ -694,7 +696,7 @@ void main() {
       transport.fences = {_chan: '01B'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01A', 'a'), _server('01B', 'b')],
+        messages: [_fromIsland('01A', 'a'), _fromIsland('01B', 'b')],
         nextAfter: '01B',
       );
       rest.getHistoryGate = Completer<void>();
@@ -755,7 +757,7 @@ void main() {
       rest.throwOnGetHistory = null;
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01A', 'a')],
+        messages: [_fromIsland('01A', 'a')],
         nextAfter: '01A',
       );
       transport.emitConn(ConnectionState.disconnected);
@@ -787,7 +789,7 @@ void main() {
       transport.fences = {_chan: '01A'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01A', 'a')],
+        messages: [_fromIsland('01A', 'a')],
         nextAfter: '01A',
       );
       rest.getHistoryGate = Completer<void>();
@@ -820,9 +822,9 @@ void main() {
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
         messages: [
-          _server('01C', 'c'),
-          _server('01E', 'z'), // the quiet-channel message
-          _server('01F', 'f'),
+          _fromIsland('01C', 'c'),
+          _fromIsland('01E', 'z'), // the quiet-channel message
+          _fromIsland('01F', 'f'),
         ],
         nextAfter: '01F',
       );
@@ -886,7 +888,7 @@ void main() {
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01U', 'hi')],
+        messages: [_fromIsland('01U', 'hi')],
         nextAfter: '01U',
       );
       rest.getHistoryCalls.clear();
@@ -904,12 +906,12 @@ void main() {
 
     test('counter-case — a self-echo alone does NOT early-complete the waiter '
         '(round-3 distinction)', () async {
-      // W3 echo writes R_u keyed by serverUlid, but the optimistic row stays
-      // serverUlid==NULL (collapse happens on ACK, not echo). So the row is
+      // W3 echo writes R_u keyed by islandUlid, but the optimistic row stays
+      // islandUlid==NULL (collapse happens on ACK, not echo). So the row is
       // still in the outbox on reconnect, and the drain MUST wait for the real
       // ack — history is gated behind the ackTimeout, not the echo.
       await repo.sendMessage(_chan, 'hi');
-      transport.emitMessage(_server('01U', 'hi')); // echo only, no ack
+      transport.emitMessage(_fromIsland('01U', 'hi')); // echo only, no ack
       await pump();
       expect(
         await cache.outbox(),
@@ -922,7 +924,7 @@ void main() {
       transport.fences = {_chan: '01U'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01U', 'hi')],
+        messages: [_fromIsland('01U', 'hi')],
         nextAfter: '01U',
       );
       rest.getHistoryCalls.clear();
@@ -976,7 +978,7 @@ void main() {
       // After dispose, the inbound streams still exist but the repo cancelled its
       // subscriptions — a leaked W3 listener would upsert this; it must NOT appear.
       await repo.dispose();
-      transport.emitMessage(_server('02Z', 'after dispose'));
+      transport.emitMessage(_fromIsland('02Z', 'after dispose'));
       await pump();
       expect(
         (await rows()).any((m) => m.id == '02Z'),
@@ -1105,7 +1107,7 @@ void main() {
 
     test('an inbound W3 write that throws is OWNED via telemetry, not leaked '
         'as an unhandled async error', () async {
-      // A message with a null serverUlid violates the cache contract
+      // A message with a null islandUlid violates the cache contract
       // (upsertInbound requires id != null) → it throws. The handler must catch
       // it and surface it, leaving the stream alive.
       transport.emitMessage(
@@ -1131,7 +1133,7 @@ void main() {
         reason: 'the failed inbound write is observed, not an unowned throw',
       );
       // The stream is still alive: a subsequent valid message lands fine.
-      transport.emitMessage(_server('01U', 'ok'));
+      transport.emitMessage(_fromIsland('01U', 'ok'));
       await pump();
       expect((await rows()).any((m) => m.id == '01U'), isTrue);
     });
@@ -1232,7 +1234,7 @@ void main() {
       // Emit a message (its upsert will block on the gate) THEN an ack. Without
       // the FIFO, the ack's reconcile could interleave ahead of the stuck
       // upsert. With it, the ack cannot start until the upsert completes.
-      t.emitMessage(_server('01B', 'theirs'));
+      t.emitMessage(_fromIsland('01B', 'theirs'));
       t.emitAck('tmp', '01A');
       await pump();
 
@@ -1280,7 +1282,7 @@ void main() {
         newTempId: () => 'tmp',
       );
       r.start();
-      t.emitMessage(_server('01B', 'wedged')); // upsert blocks forever
+      t.emitMessage(_fromIsland('01B', 'wedged')); // upsert blocks forever
       await pump();
       expect(order, [
         'upsert:01B-start',
@@ -1320,7 +1322,7 @@ void main() {
       r.start();
       await r.sendMessage(_chan, 'mine'); // seed optimistic row for the ack
       t.emitAck('tmp', '01A'); // ack first
-      t.emitMessage(_server('01B', 'theirs')); // then a message
+      t.emitMessage(_fromIsland('01B', 'theirs')); // then a message
       await pump();
       expect(order, [
         'ack:tmp',
@@ -1371,7 +1373,7 @@ void main() {
     test(
       'live retraction (WS frame) removes the target message from the view',
       () async {
-        transport.emitMessage(_server('01A', 'objectionable'));
+        transport.emitMessage(_fromIsland('01A', 'objectionable'));
         await pump();
         expect((await rows()).map((m) => m.id), contains('01A'));
 
@@ -1391,7 +1393,7 @@ void main() {
       // recorded with no target present; the later message is suppressed at Door A.
       transport.emitRetraction(_chan, '01Z', '01A');
       await pump();
-      transport.emitMessage(_server('01A', 'late arrival'));
+      transport.emitMessage(_fromIsland('01A', 'late arrival'));
       await pump();
       expect(
         await rows(),
@@ -1406,7 +1408,7 @@ void main() {
       transport.fences = {_chan: '01M'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
         channelId: _chan,
-        messages: [_server('01M', 'hi')],
+        messages: [_fromIsland('01M', 'hi')],
         nextAfter: '01M',
       );
       transport.emitConn(ConnectionState.connected);
@@ -1434,8 +1436,8 @@ void main() {
         rest.pagesByAfter[''] = HistoryPage(
           channelId: _chan,
           items: [
-            MessageHistoryItem(_server('01A', 'objectionable')),
-            MessageHistoryItem(_server('01B', 'fine')),
+            MessageHistoryItem(_fromIsland('01A', 'objectionable')),
+            MessageHistoryItem(_fromIsland('01B', 'fine')),
             RetractionHistoryItem(
               const Retraction(channelId: _chan, id: '01Z', targetMsgId: '01A'),
             ),
@@ -1469,7 +1471,7 @@ void main() {
         rest.pagesByAfter[''] = HistoryPage(
           channelId: _chan,
           items: [
-            MessageHistoryItem(_server('01A', 'hi')),
+            MessageHistoryItem(_fromIsland('01A', 'hi')),
             UnknownHistoryItem(
               '01D',
             ), // a future event type, newest, at the fence
@@ -1506,25 +1508,25 @@ class _GatedCache extends DriftCache {
 
   @override
   Future<({bool inserted, bool newlyInvalid})> upsertInbound(
-    Message serverMsg,
+    Message islandMsg,
   ) async {
-    log.add('upsert:${serverMsg.id}-start');
+    log.add('upsert:${islandMsg.id}-start');
     if (!_gated) {
       _gated = true;
       await firstUpsertGate.future; // freeze the first message write
     }
-    final result = await super.upsertInbound(serverMsg);
-    log.add('upsert:${serverMsg.id}-done');
+    final result = await super.upsertInbound(islandMsg);
+    log.add('upsert:${islandMsg.id}-done');
     return result;
   }
 
   @override
   Future<AckOutcome> reconcileAck(
     String clientTempId,
-    String serverUlid,
-    DateTime serverCreatedAt,
+    String islandUlid,
+    DateTime islandCreatedAt,
   ) {
     log.add('ack:$clientTempId');
-    return super.reconcileAck(clientTempId, serverUlid, serverCreatedAt);
+    return super.reconcileAck(clientTempId, islandUlid, islandCreatedAt);
   }
 }

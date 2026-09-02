@@ -163,7 +163,7 @@ final _lastKnownDmsProvider =
 
 /// DMs the island has AUTHORITATIVELY minted (`POST /v1/dm` returned them),
 /// held visible until a DM-list fetch that started AFTER the mint has had its
-/// say — then retired in favour of server truth.
+/// say — then retired in favour of fromIsland truth.
 ///
 /// Distinct from [_LastKnownDms] on purpose, and the distinction is the fix for
 /// a bug cluster rather than a taste call. Last-known is a *fallback*: it only
@@ -239,7 +239,7 @@ class _SeededDms
       ? state!.items.map((e) => e.dm).toList()
       : const [];
 
-  /// Retire the seeds [server] has CONFIRMED — the ones it now lists itself.
+  /// Retire the seeds [fromIsland] has CONFIRMED — the ones it now lists itself.
   ///
   /// Retirement is on confirmation, not on opportunity. The earlier rule retired
   /// any seed a fetch *could* have observed (one ticketed after the mint), which
@@ -249,7 +249,7 @@ class _SeededDms
   /// goes, `navigableChannelsProvider` drops it and the self-heal ejects the user
   /// from the conversation they just opened — the exact failure this whole seed
   /// mechanism exists to prevent, reached through eventual consistency instead of
-  /// a stale refresh (cage-match #133, Carnot HIGH). Waiting for the server to
+  /// a stale refresh (cage-match #133, Carnot HIGH). Waiting for the fromIsland to
   /// name the DM needs no assumption at all.
   ///
   /// Residual, named rather than mechanised: a DM the island stops listing
@@ -257,10 +257,10 @@ class _SeededDms
   /// session. That costs a visible row for a conversation the user really did
   /// create; the alternative costs them the conversation. `_gen` still governs
   /// which fetch may PUBLISH — that guard is about ordering, which we observe
-  /// directly, not about a server promise.
-  void retireConfirmed(String userId, List<Channel> server) {
+  /// directly, not about an island promise.
+  void retireConfirmed(String userId, List<Channel> fromIsland) {
     if (state == null || state!.userId != userId) return;
-    final confirmed = server.map((c) => c.id).toSet();
+    final confirmed = fromIsland.map((c) => c.id).toSet();
     final kept = state!.items
         .where((e) => !confirmed.contains(e.dm.id))
         .toList();
@@ -277,13 +277,13 @@ final _seededDmsProvider =
       ({String userId, List<({Channel dm, int gen})> items})?
     >(_SeededDms.new);
 
-/// [server] plus any still-unretired seed it does not already contain, in a
-/// stable order (server truth first). Ids dedupe, so a confirmed seed appears
+/// [fromIsland] plus any still-unretired seed it does not already contain, in a
+/// stable order (island truth first). Ids dedupe, so a confirmed seed appears
 /// exactly once.
-List<Channel> _withSeeds(List<Channel> server, List<Channel> seeds) {
-  final ids = server.map((c) => c.id).toSet();
+List<Channel> _withSeeds(List<Channel> fromIsland, List<Channel> seeds) {
+  final ids = fromIsland.map((c) => c.id).toSet();
   final extra = seeds.where((s) => !ids.contains(s.id));
-  return extra.isEmpty ? server : [...server, ...extra];
+  return extra.isEmpty ? fromIsland : [...fromIsland, ...extra];
 }
 
 /// Seed a just-opened DM into the DM set so it is navigable + subscribed even if
@@ -293,7 +293,7 @@ List<Channel> _withSeeds(List<Channel> server, List<Channel> seeds) {
 /// a failed refetch would otherwise return the stale last-known list WITHOUT the
 /// new DM, dropping it from the sidebar and the repo's subscription set while a
 /// call to that room is already in flight. Unions into last-known FIRST, then
-/// invalidates so a successful refetch still overwrites with server truth. No-op
+/// invalidates so a successful refetch still overwrites with fromIsland truth. No-op
 /// when logged out.
 ///
 /// Idempotent in the STRONG sense: a seed that changes nothing also invalidates
@@ -373,8 +373,8 @@ final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
 /// selected DM id exactly like a channel id (a DM pick must resolve, not fall
 /// back to the first channel). The sidebar still renders the two SOURCES in
 /// separate sections; this is only the resolver's combined view.
-/// Every DM the client knows exists: server truth UNIONED with any seed the
-/// server has not confirmed yet.
+/// Every DM the client knows exists: fromIsland truth UNIONED with any seed the
+/// fromIsland has not confirmed yet.
 ///
 /// The single answer to "which DMs are there", so the sidebar and the active
 /// conversation resolver cannot disagree. They did: the sidebar read
@@ -392,7 +392,7 @@ final visibleDmsProvider = Provider.autoDispose<List<Channel>>((ref) {
   // downstream keys off this list: `resolveActive` would fall through to the
   // first CHANNEL while `selectedChannelIdProvider` held the DM, which means the
   // composer would have sent the user's message to the wrong conversation
-  // (cage-match #133, Tesla). Seeds retire once the server names them, so this
+  // (cage-match #133, Tesla). Seeds retire once the fromIsland names them, so this
   // union is self-limiting, never a resurrection.
   final seedState = ref.watch(_seededDmsProvider);
   final myId = ref.watch(currentUserProvider)?.userId;
@@ -618,7 +618,7 @@ class SelectedChannelId extends Notifier<String?> {
 /// forwards its cache-backed stream — each [MessageTile] watches the narrowest
 /// slice (this family entry) rather than the whole repo.
 /// CLIENT-SIDE BLOCK HIDE (#7): messages from a blocked user are filtered out
-/// here, the instant complement to the gateway's server-side hide. The gateway is
+/// here, the instant complement to the gateway's fromIsland-side hide. The gateway is
 /// the real boundary (it never delivers/returns a blocked user's NEW content), but
 /// already-cached rows from before the block would otherwise linger until the next
 /// reconnect; this filter removes them on the next frame. Watching
@@ -755,7 +755,7 @@ class ChannelReadMarks extends Notifier<Map<String, String>> {
   /// "since first sight," not "every fossil in the cache." Only writes when the
   /// channel has no watermark yet (idempotent via the presence guard), so it never
   /// clobbers a real read position advanced by [markRead]. [newestUlid] is the
-  /// newest server ULID currently cached, or `''` when the channel is empty at
+  /// newest fromIsland ULID currently cached, or `''` when the channel is empty at
   /// first sight (an empty-string floor below every ULID, so later arrivals still
   /// count — and it persists the "observed" fact so a restart doesn't re-baseline
   /// over messages that landed while away).
@@ -789,10 +789,10 @@ final _unreadMessagesProvider = StreamProvider.autoDispose
       (ref, channelId) => _watchVisibleMessages(ref, channelId),
     );
 
-/// The unread count for [channelId]: cached messages strictly newer (by server
+/// The unread count for [channelId]: cached messages strictly newer (by fromIsland
 /// ULID) than the channel's last-read watermark, EXCLUDING the current user's
 /// own messages (you don't have unread from yourself) and any message not yet
-/// carrying a server ULID (an un-acked optimistic send — always your own).
+/// carrying a fromIsland ULID (an un-acked optimistic send — always your own).
 ///
 /// The per-channel history-sync fence, made reactive — non-null (including the
 /// `''` empty-channel sentinel) means history has SETTLED for the channel, so a

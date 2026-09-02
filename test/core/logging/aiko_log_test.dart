@@ -34,7 +34,9 @@ void main() {
   group('RingBufferLogSink — the tier a release build reports through', () {
     test('keeps records oldest-first', () {
       final buf = RingBufferLogSink(capacity: 10);
-      buf..add(_rec(event: 'a'))..add(_rec(event: 'b'));
+      buf
+        ..add(_rec(event: 'a'))
+        ..add(_rec(event: 'b'));
       expect(buf.snapshot().map((r) => r.event), ['a', 'b']);
       expect(buf.dropped, 0);
     });
@@ -65,13 +67,16 @@ void main() {
     // A scrubber proved only by "the output looked fine" is a check that cannot
     // go red; these force the bad state and assert it was caught.
 
-    test('cuts a 64-hex APNs device token, keeping 12 chars for correlation', () {
-      const token =
-          'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
-      final out = RedactingLogSink.redact('token=$token');
-      expect(out, 'token=a1b2c3d4e5f6…');
-      expect(out.contains(token), isFalse, reason: 'the full token leaked');
-    });
+    test(
+      'cuts a 64-hex APNs device token, keeping 12 chars for correlation',
+      () {
+        const token =
+            'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+        final out = RedactingLogSink.redact('token=$token');
+        expect(out, 'token=a1b2c3d4e5f6…');
+        expect(out.contains(token), isFalse, reason: 'the full token leaked');
+      },
+    );
 
     test('cuts a long FCM-shaped registration token', () {
       const token =
@@ -110,9 +115,9 @@ void main() {
       // provisioning_token, the handle and the display name. Redacting that
       // string would be defence in the wrong place — it must not be stringified.
       final inner = _CapturingSink();
-      RedactingLogSink(inner).add(
-        _rec(error: FormatException('secret-value-in-here')),
-      );
+      RedactingLogSink(
+        inner,
+      ).add(_rec(error: FormatException('secret-value-in-here')));
       final logged = inner.records.single.error.toString();
       expect(logged, 'FormatException');
       expect(logged, isNot(contains('secret-value-in-here')));
@@ -133,8 +138,11 @@ void main() {
   group('AikoLogger', () {
     test('stamps subsystem, level and injected clock', () {
       final sink = _CapturingSink();
-      AikoLogger(subsystem: 'aiko.call', sink: sink, clock: () => _at)
-          .warning('ring.refused', fields: {'reason': 'stale'});
+      AikoLogger(
+        subsystem: 'aiko.call',
+        sink: sink,
+        clock: () => _at,
+      ).warning('ring.refused', fields: {'reason': 'stale'});
       final r = sink.records.single;
       expect(r.subsystem, 'aiko.call');
       expect(r.level, LogLevel.warning);
@@ -145,9 +153,11 @@ void main() {
 
     test('child() nests the subsystem name', () {
       final sink = _CapturingSink();
-      AikoLogger(subsystem: 'aiko.call', sink: sink, clock: () => _at)
-          .child('ring')
-          .info('x');
+      AikoLogger(
+        subsystem: 'aiko.call',
+        sink: sink,
+        clock: () => _at,
+      ).child('ring').info('x');
       expect(sink.records.single.subsystem, 'aiko.call.ring');
     });
 

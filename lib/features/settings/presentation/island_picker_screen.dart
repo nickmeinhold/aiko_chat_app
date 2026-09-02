@@ -1,10 +1,10 @@
-/// The gateway picker (#4) — choose which server the app talks to.
+/// The island picker (#4) — choose which island the app talks to.
 ///
-/// Lists the available gateways plus a custom-URL field, marks the active
-/// gateway, and routes a selection through [AuthController.switchGateway] — which
-/// signs the user out first, because JWTs are gateway-specific. The list source
-/// is the live directory fetched from the CURRENT gateway ([gatewayDirectoryProvider],
-/// #36) merged over the known-islands seed set ([knownGatewaysProvider] = bundled
+/// Lists the available islands plus a custom-URL field, marks the active
+/// island, and routes a selection through [AuthController.switchIsland] — which
+/// signs the user out first, because JWTs are island-specific. The list source
+/// is the live directory fetched from the CURRENT island ([islandDirectoryProvider],
+/// #36) merged over the known-islands seed set ([knownIslandsProvider] = bundled
 /// presets ∪ the persisted ever-seen set): the known set renders instantly and is
 /// the fallback while the directory loads / on error, so the screen is never
 /// blocked on the network — and discovery has no single point of failure.
@@ -16,19 +16,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
 import '../../../core/widgets/reading_column.dart';
-import '../application/gateway_directory_provider.dart';
-import '../data/gateway_directory_client.dart';
-import 'gateway_switch_action.dart';
+import '../application/island_directory_provider.dart';
+import '../data/island_directory_client.dart';
+import 'island_switch_action.dart';
 
-class GatewayPickerScreen extends ConsumerStatefulWidget {
-  const GatewayPickerScreen({super.key});
+class IslandPickerScreen extends ConsumerStatefulWidget {
+  const IslandPickerScreen({super.key});
 
   @override
-  ConsumerState<GatewayPickerScreen> createState() =>
-      _GatewayPickerScreenState();
+  ConsumerState<IslandPickerScreen> createState() => _IslandPickerScreenState();
 }
 
-class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
+class _IslandPickerScreenState extends ConsumerState<IslandPickerScreen> {
   final _customController = TextEditingController();
   bool _switching = false;
 
@@ -45,14 +44,14 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
     // Seed-first: render the known set (presets ∪ ever-seen) immediately, upgrade
     // to the merged live directory once it loads. Loading/error all fall back to
     // the known set — a slow or absent directory never blocks the screen.
-    final known = ref.watch(knownGatewaysProvider);
+    final known = ref.watch(knownIslandsProvider);
     final servers = ref
-        .watch(gatewayDirectoryProvider)
+        .watch(islandDirectoryProvider)
         .maybeWhen(
           data: (directory) => mergeDirectory(
             directory,
             known,
-            normalize: (url) => GatewayConfig.normalized(url).httpBaseUrl,
+            normalize: (url) => IslandConfig.normalized(url).httpBaseUrl,
           ),
           orElse: () => known,
         );
@@ -77,7 +76,7 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
               ),
               const _SectionHeader('Islands'),
               for (final entry in servers)
-                _ServerTile(
+                _IslandTile(
                   label: entry.label,
                   url: entry.httpBaseUrl,
                   selected: _isCurrent(entry.httpBaseUrl, current),
@@ -121,10 +120,10 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
     );
   }
 
-  /// True when [candidate] resolves to the same gateway as the active [current]
+  /// True when [candidate] resolves to the same island as the active [current]
   /// (after normalization, so a stored trailing slash doesn't hide the match).
   bool _isCurrent(String candidate, String current) =>
-      GatewayConfig.normalized(candidate).httpBaseUrl == current;
+      IslandConfig.normalized(candidate).httpBaseUrl == current;
 
   void _selectCustom() {
     final raw = _customController.text.trim();
@@ -151,12 +150,12 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
     return null;
   }
 
-  /// Route through the shared [confirmAndSwitchGateway] so this picker and the
+  /// Route through the shared [confirmAndSwitchIsland] so this picker and the
   /// wide-layout sidebar switcher present the identical no-op guard, confirm
   /// dialog, error copy, and post-switch `/login` landing — they can't drift.
   /// The picker owns only its local AbsorbPointer spinner, driven via
   /// [onSwitching].
-  Future<void> _select(String url, String label) => confirmAndSwitchGateway(
+  Future<void> _select(String url, String label) => confirmAndSwitchIsland(
     context,
     ref,
     url: url,
@@ -167,8 +166,8 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
   );
 }
 
-class _ServerTile extends StatelessWidget {
-  const _ServerTile({
+class _IslandTile extends StatelessWidget {
+  const _IslandTile({
     required this.label,
     required this.url,
     required this.selected,

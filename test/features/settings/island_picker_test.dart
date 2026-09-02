@@ -1,7 +1,7 @@
 // Gateway picker (#4): the persisted config resolution + the security-critical
-// switchGateway contract.
+// switchIsland contract.
 //
-// switchGateway is the load-bearing correctness point: JWTs are minted by and
+// switchIsland is the load-bearing correctness point: JWTs are minted by and
 // valid only at the issuing gateway, so re-pointing the app is a SESSION
 // boundary. The contract these tests pin (and RED-prove):
 //   - a switch to a DIFFERENT gateway tears the session down — tokens cleared,
@@ -16,8 +16,8 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
-import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
-import 'package:aiko_chat_app/features/settings/presentation/gateway_picker_screen.dart';
+import 'package:aiko_chat_app/features/settings/application/island_directory_provider.dart';
+import 'package:aiko_chat_app/features/settings/presentation/island_picker_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -27,10 +27,13 @@ import '../../support/fake_chat_transport.dart';
 import '../../support/fakes.dart';
 import '../../support/ui_fakes.dart';
 
-const _kKey = 'aiko_gateway_base_url';
+// The key the app WRITES. A pre-vocabulary install's value under
+// `aiko_gateway_base_url` is adopted forward on read — see
+// `test/core/prefs/pref_key_migration_test.dart`.
+const _kKey = 'aiko_island_base_url';
 
 void main() {
-  group('GatewayConfigController resolution order', () {
+  group('IslandConfigController resolution order', () {
     test('with nothing persisted, resolves the prod default', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
@@ -39,7 +42,7 @@ void main() {
       );
       addTearDown(c.dispose);
 
-      expect(c.read(configProvider).httpBaseUrl, kDefaultGatewayBaseUrl);
+      expect(c.read(configProvider).httpBaseUrl, kDefaultIslandBaseUrl);
     });
 
     test('a persisted choice WINS over the default', () async {
@@ -55,7 +58,7 @@ void main() {
     });
   });
 
-  group('AuthController.switchGateway', () {
+  group('AuthController.switchIsland', () {
     /// A logged-in container: real config + real auth controller, leaf seams
     /// faked. Seeded tokens + FakeRestApi.me() restore the session to logged-in.
     Future<
@@ -98,10 +101,7 @@ void main() {
         reason: 'precondition: session restored to logged-in',
       );
       // Initial gateway is the prod default (nothing persisted).
-      expect(
-        container.read(configProvider).httpBaseUrl,
-        kDefaultGatewayBaseUrl,
-      );
+      expect(container.read(configProvider).httpBaseUrl, kDefaultIslandBaseUrl);
       return (
         container: container,
         store: store,
@@ -111,14 +111,14 @@ void main() {
     }
 
     test(
-      'switching to a DIFFERENT gateway tears down the session AND switches',
+      'switching to a DIFFERENT island tears down the session AND switches',
       () async {
         final h = await loggedInContainer();
         addTearDown(h.container.dispose);
 
         await h.container
             .read(authControllerProvider.notifier)
-            .switchGateway('http://localhost:8095');
+            .switchIsland('http://localhost:8095');
 
         // Session torn down — the JWT for the old gateway is gone before any call
         // could fire it at the new host.
@@ -152,7 +152,7 @@ void main() {
         // Carnot F1: a plain logout() publishes data(null) before teardown +
         // config-flip, exposing a window where the router lands on /login against
         // the OLD gateway. The switch must instead pass through `loading` (router
-        // → /splash) until the config has flipped. RED-prove: revert switchGateway
+        // → /splash) until the config has flipped. RED-prove: revert switchIsland
         // to `await logout()` and the loading state never appears → this fails.
         final h = await loggedInContainer();
         addTearDown(h.container.dispose);
@@ -166,7 +166,7 @@ void main() {
 
         await h.container
             .read(authControllerProvider.notifier)
-            .switchGateway('http://localhost:8095');
+            .switchIsland('http://localhost:8095');
 
         expect(
           sawLoading.contains(true),
@@ -219,7 +219,7 @@ void main() {
       // Does not throw (teardown error swallowed — the switch still completed).
       await container
           .read(authControllerProvider.notifier)
-          .switchGateway('http://localhost:8095');
+          .switchIsland('http://localhost:8095');
 
       expect(
         transport.disconnectCalls,
@@ -270,7 +270,7 @@ void main() {
         await expectLater(
           container
               .read(authControllerProvider.notifier)
-              .switchGateway('http://localhost:8095'),
+              .switchIsland('http://localhost:8095'),
           throwsA(isA<Exception>()),
           reason: 'a token-clear failure surfaces instead of being swallowed',
         );
@@ -294,7 +294,7 @@ void main() {
         // no-op and NOT log the user out.
         await h.container
             .read(authControllerProvider.notifier)
-            .switchGateway('$kDefaultGatewayBaseUrl/');
+            .switchIsland('$kDefaultIslandBaseUrl/');
 
         expect(
           await h.store.read(),
@@ -313,7 +313,7 @@ void main() {
     );
   });
 
-  group('GatewayPickerScreen', () {
+  group('IslandPickerScreen', () {
     Future<ProviderContainer> pumpPicker(WidgetTester tester) async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
@@ -339,14 +339,14 @@ void main() {
           // No live directory here — these tests exercise the picker/switch flow,
           // not discovery. An empty result makes the screen render the known seed
           // set and fires no real network (which would leak a pending timer).
-          gatewayDirectoryProvider.overrideWith((ref) async => const []),
+          islandDirectoryProvider.overrideWith((ref) async => const []),
         ],
       );
       await container.read(authControllerProvider.future);
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(home: GatewayPickerScreen()),
+          child: const MaterialApp(home: IslandPickerScreen()),
         ),
       );
       await tester.pumpAndSettle();
@@ -398,16 +398,13 @@ void main() {
 
       // No confirm dialog, gateway unchanged.
       expect(find.text('Switch island?'), findsNothing);
-      expect(
-        container.read(configProvider).httpBaseUrl,
-        kDefaultGatewayBaseUrl,
-      );
+      expect(container.read(configProvider).httpBaseUrl, kDefaultIslandBaseUrl);
     });
   });
 }
 
 /// A transport whose `disconnect` throws AFTER recording the attempt — to drive
-/// the teardown-error path of `switchGateway` (Carnot re-review).
+/// the teardown-error path of `switchIsland` (Carnot re-review).
 class _ThrowingDisconnectTransport extends FakeChatTransport {
   @override
   Future<void> disconnect() async {
@@ -417,7 +414,7 @@ class _ThrowingDisconnectTransport extends FakeChatTransport {
 }
 
 /// A token store whose `clear` throws — to drive the security-critical
-/// token-clear failure path of `switchGateway` (Carnot final re-review).
+/// token-clear failure path of `switchIsland` (Carnot final re-review).
 class _ThrowingClearStore extends InMemoryTokenStore {
   _ThrowingClearStore(AuthTokens initial) : super(initial);
   @override

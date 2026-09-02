@@ -1,0 +1,143 @@
+// Renaming a SharedPreferences key is a data migration. These tests are the
+// difference between "the constant reads nicely" and "the person who upgrades
+// still lands on their own island".
+import 'package:aiko_chat_app/core/prefs/pref_key_migration.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+Future<SharedPreferences> prefsWith(Map<String, Object> values) async {
+  SharedPreferences.setMockInitialValues(values);
+  return SharedPreferences.getInstance();
+}
+
+const _new = 'aiko_island_base_url';
+const _old = 'aiko_gateway_base_url';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('an install that predates the rename keeps its island', () async {
+    final prefs = await prefsWith({_old: 'https://chat.example.com'});
+    expect(
+      readAndAdopt(prefs, key: _new, legacyKey: _old),
+      'https://chat.example.com',
+      reason:
+          'without the fallback this returns null and the app silently '
+          'moves the user to the compiled-in default island',
+    );
+  });
+
+  test('reading ADOPTS the legacy value forward — this is what lets the '
+      'fallback ever be deleted', () async {
+    final prefs = await prefsWith({_old: 'https://chat.example.com'});
+    readAndAdopt(prefs, key: _new, legacyKey: _old);
+    await Future<void>.delayed(Duration.zero); // the write is fire-and-forget
+
+    expect(prefs.getString(_new), 'https://chat.example.com');
+    // The base-url key is written ONLY when someone switches island, which most
+    // people never do. Read-legacy-without-adopting would leave those installs
+    // on the old key forever, so removing the fallback would reset them — the
+    // migration would look finished while never completing for anyone who
+    // simply uses the app.
+  });
+
+  test(
+    'the legacy key survives adoption, so a downgrade is not destructive',
+    () async {
+      final prefs = await prefsWith({_old: 'https://chat.example.com'});
+      readAndAdopt(prefs, key: _new, legacyKey: _old);
+      await Future<void>.delayed(Duration.zero);
+      expect(prefs.getString(_old), 'https://chat.example.com');
+    },
+  );
+
+  test(
+    'the new key wins when both exist, and nothing is overwritten',
+    () async {
+      final prefs = await prefsWith({
+        _old: 'https://old.example.com',
+        _new: 'https://new.example.com',
+      });
+      expect(
+        readAndAdopt(prefs, key: _new, legacyKey: _old),
+        'https://new.example.com',
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(prefs.getString(_new), 'https://new.example.com');
+    },
+  );
+
+  test('a fresh install reads null and writes nothing', () async {
+    final prefs = await prefsWith({});
+    expect(readAndAdopt(prefs, key: _new, legacyKey: _old), isNull);
+    await Future<void>.delayed(Duration.zero);
+    expect(prefs.getString(_new), isNull);
+    expect(prefs.getString(_old), isNull);
+  });
+
+  test('a switch issued right after adoption WINS — the fire-and-forget write '
+      'cannot land late and clobber it', () async {
+    // The adopt write is unawaited, issued from inside a provider build. If
+    // SharedPreferences reordered it against a later write, a legacy install
+    // whose owner switched island in the same breath would be dragged silently
+    // back to the old value. Reasoning says the in-memory cache updates
+    // synchronously and platform writes queue in call order; this asserts it
+    // instead of trusting the reasoning.
+    final prefs = await prefsWith({_old: 'https://legacy.example.com'});
+    readAndAdopt(prefs, key: _new, legacyKey: _old); // issues the adopt write
+    await prefs.setString(_new, 'https://chosen.example.com'); // the user
+    await Future<void>.delayed(Duration.zero);
+
+    expect(prefs.getString(_new), 'https://chosen.example.com');
+  });
+
+  test('an UNUSABLE new value does not shadow a usable legacy one', () async {
+    // Carnot's finding, generalised: presence is not usability. The island
+    // config rejects a blank string, so a blank under the new key must not stop
+    // the legacy value being adopted — otherwise the caller falls through to the
+    // compiled-in default while a perfectly good choice sits one key away.
+    final prefs = await prefsWith({
+      _new: '   ',
+      _old: 'https://legacy.example.com',
+    });
+    final v = readAndAdopt(
+      prefs,
+      key: _new,
+      legacyKey: _old,
+      isUsable: (s) => s.trim().isNotEmpty,
+    );
+    expect(v, 'https://legacy.example.com');
+    await Future<void>.delayed(Duration.zero);
+    expect(prefs.getString(_new), 'https://legacy.example.com');
+  });
+
+  test('an unusable LEGACY value is not adopted over an unusable new one — the '
+      'caller still sees what it had', () async {
+    final prefs = await prefsWith({_new: '  ', _old: ''});
+    final v = readAndAdopt(
+      prefs,
+      key: _new,
+      legacyKey: _old,
+      isUsable: (s) => s.trim().isNotEmpty,
+    );
+    expect(
+      v,
+      '  ',
+      reason:
+          'nothing usable anywhere — return what was there '
+          'and let the caller apply its own fallback',
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(prefs.getString(_new), '  ', reason: 'no junk written forward');
+  });
+
+  test(
+    'an empty legacy value is adopted verbatim, not treated as absent',
+    () async {
+      // The CALLER decides what an empty string means (config treats blank as
+      // unset). Deciding it here would put that policy in two places.
+      final prefs = await prefsWith({_old: ''});
+      expect(readAndAdopt(prefs, key: _new, legacyKey: _old), '');
+    },
+  );
+}

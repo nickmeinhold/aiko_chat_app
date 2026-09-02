@@ -75,7 +75,7 @@ final pendingUnregisterStoreProvider = Provider<PendingUnregisterStore>(
 /// The registrar, or null where there is no token source to drive it.
 ///
 /// IT IS REBUILT BY A GATEWAY SWITCH, which is not obvious from here: it watches
-/// [restApiProvider] → `backendProvider` → `configProvider`, and `switchGateway`
+/// [restApiProvider] → `backendProvider` → `configProvider`, and `switchIsland`
 /// invalidates that config. Without the dispose below, the outgoing registrar
 /// would be dropped while still holding a live `tokenRefreshes` subscription
 /// closed over the OLD island's REST client — so a token rotation after the
