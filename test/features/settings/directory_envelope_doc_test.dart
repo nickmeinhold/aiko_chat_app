@@ -24,7 +24,10 @@
 // date and source such claims in the comment, not to try to assert them here.
 import 'package:aiko_chat_app/features/settings/data/island_directory_client.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:convert';
 import 'dart:io';
+
+import 'package:aiko_chat_app/features/settings/domain/island_entry.dart';
 
 void main() {
   test('the envelope-priority doc names every key, in the list order', () {
@@ -57,16 +60,53 @@ void main() {
     }
   });
 
-  test('the keys the island actually serves are still accepted, in the '
-      'documented order', () {
-    // `islands` is what both live islands serve today; `gateways` is the
-    // deprecated alias they still answer. Both must stay accepted, and
-    // `islands` must win when an island serves both during its compat window.
+  test('the canonical key is first, and no legacy key survives', () {
+    // `islands` is what both live islands serve. The `gateways`/`servers` compat
+    // keys were removed on 2026-09-02 (Nick): they existed for a rename the
+    // island completed in its PR#62, and we operate every island in existence,
+    // so there was nothing left to be compatible with. This pins the removal so
+    // a later "tolerant" instinct cannot quietly re-add the banned vocabulary.
     expect(kDirectoryEnvelopeKeysByPriority.first, 'islands');
-    expect(kDirectoryEnvelopeKeysByPriority, contains('gateways'));
+    expect(kDirectoryEnvelopeKeysByPriority, isNot(contains('gateways')));
+    expect(kDirectoryEnvelopeKeysByPriority, isNot(contains('servers')));
+  });
+
+  test('the REAL /v1/islands payload parses — captured live, not imagined', () {
+    // Every other test in this area feeds the client a canned string I wrote,
+    // which proves the parser handles MY idea of the island's response. This
+    // fixture was captured from https://chat.imagineering.cc/v1/islands on
+    // 2026-09-02, the day the app swapped to that endpoint, so it pins the
+    // shape the island actually serves rather than the shape I assumed.
+    //
+    // If the island changes its payload, this goes red with a real diff instead
+    // of the app silently discovering an empty directory in someone's hands.
+    final raw = File(
+      'test/fixtures/v1_islands_live_2026-09-02.json',
+    ).readAsStringSync();
+    final decoded = jsonDecode(raw) as Map<String, dynamic>;
+
     expect(
-      kDirectoryEnvelopeKeysByPriority.indexOf('islands'),
-      lessThan(kDirectoryEnvelopeKeysByPriority.indexOf('gateways')),
+      decoded.keys.first,
+      kDirectoryEnvelopeKeysByPriority.first,
+      reason: 'the live envelope key must be the one we try first',
+    );
+
+    final entries = (decoded['islands'] as List)
+        .whereType<Map<String, dynamic>>()
+        .map(IslandEntry.tryFromJson)
+        .whereType<IslandEntry>()
+        .toList();
+
+    expect(
+      entries.length,
+      (decoded['islands'] as List).length,
+      reason:
+          'every island the live directory serves must survive validation — '
+          'a dropped entry is an island the user cannot reach',
+    );
+    expect(
+      entries.map((e) => e.httpBaseUrl),
+      everyElement(startsWith('https://')),
     );
   });
 }

@@ -1,7 +1,7 @@
 /// Fetches the live island directory (#36) — the layer ABOVE per-island
 /// community discovery: "which independent operators exist to connect to?".
 ///
-/// Every island serves the FULL known-peer set from `/v1/gateways`, so there is
+/// Every island serves the FULL known-peer set from `/v1/islands`, so there is
 /// NO privileged "directory host": the app discovers from whichever island it is
 /// currently pointed at (see [islandDirectoryProvider]), and reaching any one
 /// island teaches it about all the others. Removing the old single fixed origin
@@ -11,7 +11,7 @@
 ///
 /// [kIslandDirectoryUrl] remains as an OPTIONAL build-time override (dev/staging
 /// can pin a fixed directory); when empty (the shipped default) the provider
-/// composes `<current island>/v1/gateways`.
+/// composes `<current island>/v1/islands`.
 library;
 
 import 'package:dio/dio.dart';
@@ -20,28 +20,23 @@ import 'package:flutter/foundation.dart';
 import '../domain/island_entry.dart';
 
 /// The directory-array envelope keys we accept, in PRIORITY order. `islands` is
-/// the canonical island-vocabulary key (Design 10) and is tried FIRST;
-/// `gateways` is the legacy key; `servers`/`entries`/`directory` are tolerant
-/// fallbacks. ORDER IS SEMANTIC — a guard-contract test pins that `islands` wins
-/// over `gateways` when both are present, so this is not a set to reorder
-/// casually.
+/// the canonical key and is tried FIRST; `entries`/`directory` are tolerant
+/// fallbacks for a differently-shaped directory. ORDER IS SEMANTIC — a
+/// guard-contract test pins it, so this is not a set to reorder casually.
 ///
-/// Measured 2026-09-02: both live islands (chat.imagineering.cc,
-/// chat.enspyr.co) serve the `islands` envelope key, and answer `gateways` as a
-/// deprecated alias with no removal date. So accepting `islands` is not a
-/// widening-in-advance — it is the CURRENT key, and the order above is what
-/// carries an island through its own compat window.
+/// THE LEGACY KEYS ARE GONE, deliberately (Nick, 2026-09-02): `gateways` and
+/// `servers` were compat for a rename the island completed in its PR#62, and we
+/// operate both islands in existence, so there is nothing left to be compatible
+/// WITH. Measured 2026-09-02: chat.imagineering.cc and chat.enspyr.co both serve
+/// `/v1/islands` returning an `islands` envelope.
 ///
-/// The sentence this replaces said "no island serves `islands` yet", which had
-/// been false since island PR#62. It survived because a claim about the live
-/// world cannot be held by any test here, so it could only ever rot — and it
-/// came back when a vocabulary sweep corrupted this paragraph and the restore
-/// was faithful rather than correct. A world-claim in a comment gets a DATE and
-/// a SOURCE, or it does not get written.
+/// The cost of dropping them, stated so it is a choice and not a surprise: an
+/// island that served only a `gateways` envelope would now parse to an EMPTY
+/// directory rather than an error — silent degradation to the seed list, not a
+/// crash. Acceptable while we run every island; revisit if a third-party
+/// operator ever appears (the AGPL licence exists for exactly that future).
 const kDirectoryEnvelopeKeysByPriority = <String>[
   'islands',
-  'gateways',
-  'servers',
   'entries',
   'directory',
 ];
@@ -76,7 +71,7 @@ class IslandDirectoryClient {
   /// Accept either a bare JSON array of entries, or an envelope object holding the
   /// array under a conventional key (see [kDirectoryEnvelopeKeysByPriority]:
   /// `islands` first, then legacy `gateways`, then tolerant fallbacks). This reads
-  /// both a legacy directory and a future island that renames `/v1/gateways`'s
+  /// a future island that renames `/v1/islands`'s
   /// payload during its compat window. Anything else yields an empty list rather
   /// than throwing — a shape we don't recognise is "no directory", not a crash.
   static List<IslandEntry> _parse(dynamic data) => switch (data) {
