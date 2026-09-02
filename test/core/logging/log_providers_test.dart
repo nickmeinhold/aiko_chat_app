@@ -68,7 +68,9 @@ void main() {
 
     c.read(pushTelemetryProvider).registerFailed('abc123', StateError('x'));
 
-    final lines = [for (final r in c.read(logBufferProvider).snapshot()) r.format()];
+    final lines = [
+      for (final r in c.read(logBufferProvider).snapshot()) r.format(),
+    ];
     expect(lines, hasLength(1));
     expect(lines.single, contains('aiko.push'));
     expect(lines.single, contains('push.register.failed'));
@@ -114,14 +116,17 @@ void main() {
       expect(out, contains('line-two'));
     });
 
-    test('NAMES the dropped count — a truncated tail must read as truncated', () {
-      // A tail that reads as complete when it is truncated is the same lie the
-      // whole logging change exists to remove.
-      expect(
-        report(tail: ['x'], dropped: 17),
-        contains('Recent log (1 lines, 17 older lines dropped):'),
-      );
-    });
+    test(
+      'NAMES the dropped count — a truncated tail must read as truncated',
+      () {
+        // A tail that reads as complete when it is truncated is the same lie the
+        // whole logging change exists to remove.
+        expect(
+          report(tail: ['x'], dropped: 17),
+          contains('Recent log (1 lines, 17 older lines dropped):'),
+        );
+      },
+    );
 
     test('reports truncation even if every line was dropped', () {
       expect(report(dropped: 3), contains('3 older lines dropped'));

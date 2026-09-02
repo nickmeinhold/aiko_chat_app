@@ -134,7 +134,7 @@ String authErrorText(
 /// (cage-match #74, Tesla: two tunings of one host seam). The port is
 /// load-bearing: two gateways differing only by port would otherwise be
 /// indistinguishable (Carnot, cage-match #53).
-String gatewayHostLabel(String httpBaseUrl) {
+String islandHostLabel(String httpBaseUrl) {
   final uri = Uri.tryParse(httpBaseUrl);
   final host = uri?.host;
   if (host == null || host.isEmpty) return httpBaseUrl;

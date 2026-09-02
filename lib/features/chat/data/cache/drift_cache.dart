@@ -3,7 +3,7 @@
 /// The on-device SQLite store the repository / B4 reconcile engine writes
 /// through. This file owns *storage, atomic operations, and invariant
 /// enforcement*; B4 owns *policy* (ordering, when to drain). The load-bearing
-/// invariant is **U**: every NON-NULL `serverUlid` is UNIQUE, so duplication —
+/// invariant is **U**: every NON-NULL `islandUlid` is UNIQUE, so duplication —
 /// the app's worst failure — is structurally impossible at rest.
 ///
 /// Writer census (every path that mutates a `messages` row):
@@ -67,7 +67,13 @@ enum AckOutcome { reconciled, collapsed, orphaned, retracted }
 abstract final class _M {
   static const table = 'messages';
   static const clientTempId = 'client_temp_id';
-  static const serverUlid = 'server_ulid';
+
+  /// NAME AND VALUE DIVERGE ON PURPOSE. The Dart name follows ADR-0001; the
+  /// string is the column on disk, written by every install that already exists.
+  /// Renaming the column needs a Drift migration and buys nothing — Drift maps
+  /// the two independently, so the vocabulary is correct in the code without
+  /// touching a byte of anyone's cache. Do not "fix" this to match.
+  static const islandUlid = 'server_ulid';
   static const channelId = 'channel_id';
   static const senderUserId = 'sender_user_id';
   static const senderKind = 'sender_kind';
@@ -87,7 +93,7 @@ abstract final class _M {
 
   static const schema = <String, String>{
     clientTempId: 'TEXT NOT NULL',
-    serverUlid: 'TEXT UNIQUE',
+    islandUlid: 'TEXT UNIQUE',
     channelId: 'TEXT NOT NULL',
     senderUserId: 'TEXT',
     senderKind: 'TEXT NOT NULL',
@@ -171,7 +177,7 @@ String _createTable(
 class MessageRow {
   const MessageRow({
     required this.clientTempId,
-    this.serverUlid,
+    this.islandUlid,
     required this.channelId,
     this.senderUserId,
     required this.senderKind,
@@ -191,7 +197,7 @@ class MessageRow {
   });
 
   final String clientTempId;
-  final String? serverUlid;
+  final String? islandUlid;
   final String channelId;
   final String? senderUserId;
   final String senderKind;
@@ -211,7 +217,7 @@ class MessageRow {
 
   factory MessageRow.fromRow(QueryRow r) => MessageRow(
     clientTempId: r.read<String>(_M.clientTempId),
-    serverUlid: r.readNullable<String>(_M.serverUlid),
+    islandUlid: r.readNullable<String>(_M.islandUlid),
     channelId: r.read<String>(_M.channelId),
     senderUserId: r.readNullable<String>(_M.senderUserId),
     senderKind: r.read<String>(_M.senderKind),
@@ -325,7 +331,7 @@ class DriftCache extends GeneratedDatabase {
   /// build [set] conditionally, exactly as they built companions.
   ///
   /// Returns the number of rows changed (via `customUpdate`), so a writer whose
-  /// WHERE may match nothing — an already-sent row under `serverUlid IS NULL` —
+  /// WHERE may match nothing — an already-sent row under `islandUlid IS NULL` —
   /// can gate its `notifyUpdates` on a real mutation, the "no spurious emit on a
   /// zero-row no-op" half of the manual-notify contract PR #130 made explicit.
   Future<int> _update(
@@ -450,7 +456,7 @@ class DriftCache extends GeneratedDatabase {
 
   Message _toDomain(MessageRow r) => Message(
     clientTempId: r.clientTempId,
-    id: r.serverUlid,
+    id: r.islandUlid,
     channelId: r.channelId,
     sender: MessageSender(
       userId: r.senderUserId,
@@ -540,7 +546,7 @@ class DriftCache extends GeneratedDatabase {
     final o = m.origin;
     return {
       _M.clientTempId: m.clientTempId,
-      _M.serverUlid: m.id,
+      _M.islandUlid: m.id,
       _M.channelId: m.channelId,
       _M.senderUserId: m.sender.userId,
       _M.senderKind: m.sender.kind.wire,
@@ -606,14 +612,14 @@ class DriftCache extends GeneratedDatabase {
   // --- W2: ack reconcile -----------------------------------------------------
 
   /// W2 — reconcile the optimistic row for [clientTempId] with its server
-  /// [serverUlid]. Happy path stamps the ULID; on collision (history fetched
+  /// [islandUlid]. Happy path stamps the ULID; on collision (history fetched
   /// the row first) it collapses, merging server truth INTO the optimistic row
   /// and keeping `clientTempId`/`localSeq` for UI continuity. Guard: only a row
-  /// still `serverUlid IS NULL` is reconciled (never regress a sent row).
+  /// still `islandUlid IS NULL` is reconciled (never regress a sent row).
   Future<AckOutcome> reconcileAck(
     String clientTempId,
-    String serverUlid,
-    DateTime serverCreatedAt,
+    String islandUlid,
+    DateTime islandCreatedAt,
   ) async {
     var wrote = false;
     final outcome = await transaction(() async {
@@ -622,24 +628,24 @@ class DriftCache extends GeneratedDatabase {
         // Door B of two-door retraction suppression (island #104). No optimistic
         // row matched. Ordinarily unreachable (see AckOutcome.orphaned), but a
         // retraction of an own-message that had ALREADY been acked+stamped
-        // hard-deletes the row (keyed by serverUlid), so a late/duplicate ack now
+        // hard-deletes the row (keyed by islandUlid), so a late/duplicate ack now
         // finds nothing. That is EXPECTED, not an invariant violation — classify
         // it as [retracted] so B4 doesn't fire the orphan tripwire.
-        if (await _isRetracted(serverUlid)) return AckOutcome.retracted;
+        if (await _isRetracted(islandUlid)) return AckOutcome.retracted;
         return AckOutcome.orphaned; // see AckOutcome.orphaned.
       }
       // Already reconciled (idempotent re-ack) — reconciled, never a regression.
       // (A retracted row would have been hard-deleted, landing in the rc == null
       // branch above; the inbound FIFO serializes ack vs retraction, so a stamped
       // row is never concurrently a live dead id here.)
-      if (rc.serverUlid != null) return AckOutcome.reconciled;
+      if (rc.islandUlid != null) return AckOutcome.reconciled;
 
-      // The optimistic row is still pending (serverUlid NULL). If its server id
+      // The optimistic row is still pending (islandUlid NULL). If its server id
       // was taken down while the ack was in flight, DO NOT stamp it — that would
       // resurrect a taken-down message. Hard-delete the optimistic row instead
-      // (applyRetraction's delete-by-serverUlid never reached it — serverUlid was
+      // (applyRetraction's delete-by-islandUlid never reached it — islandUlid was
       // NULL), same transaction as the dead-id read (no TOCTOU).
-      if (await _isRetracted(serverUlid)) {
+      if (await _isRetracted(islandUlid)) {
         await customStatement(
           'DELETE FROM ${_M.table} WHERE ${_M.clientTempId} = ?',
           [clientTempId],
@@ -648,15 +654,15 @@ class DriftCache extends GeneratedDatabase {
         return AckOutcome.retracted;
       }
 
-      final ru = await _messageBy(_M.serverUlid, serverUlid);
+      final ru = await _messageBy(_M.islandUlid, islandUlid);
 
       if (ru == null) {
         // Happy path: stamp the ULID + server time, mark sent.
         await _update(
           _M.table,
           {
-            _M.serverUlid: serverUlid,
-            _M.createdAt: serverCreatedAt.toUtc().millisecondsSinceEpoch,
+            _M.islandUlid: islandUlid,
+            _M.createdAt: islandCreatedAt.toUtc().millisecondsSinceEpoch,
             _M.deliveryState: DeliveryState.sent.wire,
           },
           '${_M.clientTempId} = ?',
@@ -668,7 +674,7 @@ class DriftCache extends GeneratedDatabase {
         // Collapse: merge ALL server-authoritative fields from R_u onto R_c,
         // keeping R_c's clientTempId + localSeq. DELETE R_u FIRST to free the
         // ULID — SQLite checks UNIQUE per-statement (immediate), so claiming
-        // serverUlid=u on R_c while R_u still holds u would violate U
+        // islandUlid=u on R_c while R_u still holds u would violate U
         // mid-transaction. Order is load-bearing; both statements are in one
         // txn (Invariant A), so no intermediate state is ever observed.
         await customStatement(
@@ -692,7 +698,7 @@ class DriftCache extends GeneratedDatabase {
             !signedFieldChanged && ru.originCryptoValid != null;
 
         final set = <String, Object?>{
-          _M.serverUlid: serverUlid,
+          _M.islandUlid: islandUlid,
           _M.channelId: ru.channelId,
           _M.senderUserId: ru.senderUserId,
           _M.senderKind: ru.senderKind,
@@ -700,12 +706,12 @@ class DriftCache extends GeneratedDatabase {
           _M.kind: ru.kind,
           _M.body: ru.body,
           _M.replyToId: ru.replyToId,
-          // createdAt from the ACK (serverCreatedAt), NOT ru.createdAt — so the
+          // createdAt from the ACK (islandCreatedAt), NOT ru.createdAt — so the
           // collapse path and the happy path stamp the SAME value for the same
           // reconciliation. They are provably equal anyway (the gateway sends
           // ack.created_at = view["created_at"] from one row, ws.py:82), but
           // using one source removes the path-dependent asymmetry.
-          _M.createdAt: serverCreatedAt.toUtc().millisecondsSinceEpoch,
+          _M.createdAt: islandCreatedAt.toUtc().millisecondsSinceEpoch,
           _M.deliveryState: DeliveryState.sent.wire,
         };
         // Signature columns (cage-match Carnot/Tesla): diverged → drop the stale
@@ -744,7 +750,7 @@ class DriftCache extends GeneratedDatabase {
   // --- W3: inbound dedup-upsert ----------------------------------------------
 
   /// W3 — ingest an inbound server message (fanout echo or history). Dedups on
-  /// `serverUlid`: if present, UPDATE with server fields (never blind-drop);
+  /// `islandUlid`: if present, UPDATE with server fields (never blind-drop);
   /// else INSERT. Identity guard: a matched row in a *different* channel is
   /// corruption (ULIDs are globally unique) — fail loudly, never overwrite.
   /// Returns `true` iff this write NEWLY recorded a carried-but-invalid origin —
@@ -755,11 +761,11 @@ class DriftCache extends GeneratedDatabase {
   /// once per message instead of once per delivery (PR #93 R1, cage-match
   /// Carnot + Tesla).
   Future<({bool inserted, bool newlyInvalid})> upsertInbound(
-    Message serverMsg,
+    Message islandMsg,
   ) async {
-    final u = serverMsg.id;
+    final u = islandMsg.id;
     if (u == null) {
-      throw ArgumentError('upsertInbound requires a server ULID (id != null)');
+      throw ArgumentError('upsertInbound requires an island ULID (id != null)');
     }
     // Invariant (production-true via the single door `_persistInbound`, which
     // computes the verdict before persisting): a CARRIED origin arrives WITH its
@@ -768,7 +774,7 @@ class DriftCache extends GeneratedDatabase {
     // state (new origin fields but no verdict for them) has no coherent storage,
     // and every attempt to paper over it leaked a different bug (cage-match R2–R4).
     // Making it unrepresentable dissolves the class (consistent with the id guard).
-    if (serverMsg.origin != null && serverMsg.originCryptoValid == null) {
+    if (islandMsg.origin != null && islandMsg.originCryptoValid == null) {
       throw ArgumentError(
         'upsertInbound: a carried origin must arrive with its '
         'ingest-time verdict (verify runs before persist in _persistInbound); '
@@ -785,12 +791,12 @@ class DriftCache extends GeneratedDatabase {
       // transaction as the insert/update below, so no TOCTOU. Returns false: no
       // row was written, so no per-message origin probe should fire either.
       if (await _isRetracted(u)) return false;
-      final existing = await _messageBy(_M.serverUlid, u);
+      final existing = await _messageBy(_M.islandUlid, u);
       if (existing != null) {
-        if (existing.channelId != serverMsg.channelId) {
+        if (existing.channelId != islandMsg.channelId) {
           throw StateError(
-            'serverUlid $u matched a row in channel ${existing.channelId} '
-            '!= ${serverMsg.channelId} — corruption, refusing to overwrite',
+            'islandUlid $u matched a row in channel ${existing.channelId} '
+            '!= ${islandMsg.channelId} — corruption, refusing to overwrite',
           );
         }
         // Origin coherence (wire-half T4 — the FULL law). The origin follows the
@@ -804,18 +810,18 @@ class DriftCache extends GeneratedDatabase {
         //     signed the old body we're overwriting (absent = unverified, no lie);
         //   * no incoming origin + unchanged → absent = preserve the still-valid sig.
         final signedFieldChanged =
-            existing.body != serverMsg.body ||
-            existing.replyToId != serverMsg.replyToId;
-        final o = serverMsg.origin;
+            existing.body != islandMsg.body ||
+            existing.replyToId != islandMsg.replyToId;
+        final o = islandMsg.origin;
 
         final set = <String, Object?>{
-          _M.senderUserId: serverMsg.sender.userId,
-          _M.senderKind: serverMsg.sender.kind.wire,
-          _M.senderLabel: serverMsg.sender.label,
-          _M.kind: serverMsg.kind.wire,
-          _M.body: serverMsg.body,
-          _M.replyToId: serverMsg.replyToId,
-          _M.createdAt: serverMsg.createdAt.toUtc().millisecondsSinceEpoch,
+          _M.senderUserId: islandMsg.sender.userId,
+          _M.senderKind: islandMsg.sender.kind.wire,
+          _M.senderLabel: islandMsg.sender.label,
+          _M.kind: islandMsg.kind.wire,
+          _M.body: islandMsg.body,
+          _M.replyToId: islandMsg.replyToId,
+          _M.createdAt: islandMsg.createdAt.toUtc().millisecondsSinceEpoch,
         };
         // Precedence: SET-from-origin wins; else clear-on-diverge; else keep (absent).
         void originCol(String col, Object? Function(OriginEnvelope) f) {
@@ -839,12 +845,12 @@ class DriftCache extends GeneratedDatabase {
         // ingest-time verdict; an incoming origin REPLACES, and the verdict is
         // cleared only when no origin arrives and a signed field changed.
         if (o != null) {
-          set[_M.originCryptoValid] = serverMsg.originCryptoValid! ? 1 : 0;
+          set[_M.originCryptoValid] = islandMsg.originCryptoValid! ? 1 : 0;
         } else if (signedFieldChanged) {
           set[_M.originCryptoValid] = null;
         }
 
-        await _update(_M.table, set, '${_M.serverUlid} = ?', [u]);
+        await _update(_M.table, set, '${_M.islandUlid} = ?', [u]);
         wrote = true;
         // Newly-invalid: the row's stored verdict transitions INTO false (origin
         // present + verdict false) AND was not already false. A re-echo of an
@@ -852,15 +858,15 @@ class DriftCache extends GeneratedDatabase {
         // suppressed — the unit is the server ULID (one count per message), by
         // design for a base-rate meter.
         return o != null &&
-            serverMsg.originCryptoValid == false &&
+            islandMsg.originCryptoValid == false &&
             existing.originCryptoValid != 0;
       } else {
-        await _insert(_M.table, _cols(serverMsg, localSeq: 0));
+        await _insert(_M.table, _cols(islandMsg, localSeq: 0));
         wrote = true;
         inserted = true;
         // First insert: newly-invalid iff a carried origin verified false (origin
         // present ⟹ verdict non-null, guarded at method entry).
-        return serverMsg.origin != null && serverMsg.originCryptoValid == false;
+        return islandMsg.origin != null && islandMsg.originCryptoValid == false;
       }
     });
     // A dead-id suppression (early return) writes nothing — don't signal watchers
@@ -883,7 +889,7 @@ class DriftCache extends GeneratedDatabase {
   /// atomically — no TOCTOU between "is it retracted?" and the insert/stamp.
   /// String-identity match on the CANONICAL id — canonical-ULID is a debug-asserted
   /// cross-repo contract throughout this component (the watermark, the history
-  /// cursor, and serverUlid dedup all assume it), so both sides are the same case
+  /// cursor, and islandUlid dedup all assume it), so both sides are the same case
   /// by contract. See [applyRetraction] for why this path does NOT do a bespoke
   /// release-time case-normalization.
   Future<bool> _isRetracted(String ulid) async {
@@ -898,9 +904,9 @@ class DriftCache extends GeneratedDatabase {
   ///   1. RECORD the dead id (presence-independent, idempotent via PK) so both
   ///      write doors ([upsertInbound], [reconcileAck]) suppress it thereafter,
   ///      whether or not the target row currently exists;
-  ///   2. HARD-DELETE the present target row (matched by `serverUlid`). The
+  ///   2. HARD-DELETE the present target row (matched by `islandUlid`). The
   ///      reactive `watchChannel` read has no hide-filter, so a delete disappears
-  ///      from the UI with zero query change. An optimistic (`serverUlid NULL`)
+  ///      from the UI with zero query change. An optimistic (`islandUlid NULL`)
   ///      own-message row is intentionally NOT matched here — it is handled at
   ///      Door B when its ack lands (the dead id above makes that safe).
   ///
@@ -910,9 +916,9 @@ class DriftCache extends GeneratedDatabase {
   /// The same retraction also arrives as a history item and re-applies harmlessly.
   Future<void> applyRetraction(Retraction r) async {
     // Dead-id suppression + the hard-delete are STRING-IDENTITY equality against a
-    // serverUlid. Canonical-ULID (UPPERCASE Crockford) is a CROSS-REPO CONTRACT the
+    // islandUlid. Canonical-ULID (UPPERCASE Crockford) is a CROSS-REPO CONTRACT the
     // whole component already relies on via DEBUG asserts — the watermark
-    // (advanceHistoryContiguous), the history cursor, and serverUlid dedup all
+    // (advanceHistoryContiguous), the history cursor, and islandUlid dedup all
     // assume it and none release-normalize. So assert canonical here too (loud in
     // dev on a contract violation) and store/compare the id as-is, matching that
     // discipline on ALL THREE surfaces (dead-id store, _isRetracted lookup,
@@ -920,9 +926,9 @@ class DriftCache extends GeneratedDatabase {
     //
     // NOT a bespoke release-time toUpperCase() on this path (reverted after
     // cage-match Tesla, PR #102): normalizing only the dead-id table left
-    // messages.serverUlid raw, so the hard-delete could MISS a case-skewed present
+    // messages.islandUlid raw, so the hard-delete could MISS a case-skewed present
     // row — a half-wound coil worse than raw-vs-raw. The complete fix is to
-    // canonicalize serverUlid at the INGEST stamp (W2/W3) so the identity string is
+    // canonicalize islandUlid at the INGEST stamp (W2/W3) so the identity string is
     // canonical system-wide; that is a whole-component change tracked as a follow-up
     // (claude-tasks), not a retraction-local patch. Under the island's canonical
     // contract, raw-vs-raw matches exactly and the debug assert guards dev.
@@ -936,7 +942,7 @@ class DriftCache extends GeneratedDatabase {
         [r.targetMsgId, r.channelId, r.id],
       );
       await customStatement(
-        'DELETE FROM ${_M.table} WHERE ${_M.serverUlid} = ?',
+        'DELETE FROM ${_M.table} WHERE ${_M.islandUlid} = ?',
         [r.targetMsgId],
       );
     });
@@ -957,7 +963,7 @@ class DriftCache extends GeneratedDatabase {
   // --- W4: error handler -----------------------------------------------------
 
   /// W4 — a gateway `ErrorFrame`. A per-message error ([refClientMsgId] != null)
-  /// fails that row ONLY while `serverUlid IS NULL` (a late error must never
+  /// fails that row ONLY while `islandUlid IS NULL` (a late error must never
   /// regress a sent row). A null ref is a *systemic* error (rate-limit,
   /// channel-readonly) — returns the affected pending rows for B4 to act on,
   /// never a silent drop.
@@ -966,20 +972,20 @@ class DriftCache extends GeneratedDatabase {
     String? systemicChannelId,
   }) async {
     if (refClientMsgId != null) {
-      // Gate notify on a real change: the `serverUlid IS NULL` guard means a late
+      // Gate notify on a real change: the `islandUlid IS NULL` guard means a late
       // error for an already-sent row matches zero rows — finishing the octave
       // with reconcileAck/upsertInbound/advanceHistoryContiguous (cage-match Tesla).
       final changed = await _update(
         _M.table,
         {_M.deliveryState: DeliveryState.failed.wire},
-        '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
+        '${_M.clientTempId} = ? AND ${_M.islandUlid} IS NULL',
         [refClientMsgId],
       );
       if (changed > 0) notifyUpdates({const TableUpdate(_M.table)});
       return const [];
     }
     // Systemic: surface the affected pending rows to B4 (it decides policy).
-    final where = StringBuffer('${_M.serverUlid} IS NULL');
+    final where = StringBuffer('${_M.islandUlid} IS NULL');
     final args = <Object?>[];
     if (systemicChannelId != null) {
       where.write(' AND ${_M.channelId} = ?');
@@ -995,7 +1001,7 @@ class DriftCache extends GeneratedDatabase {
   // --- W5: manual retry ------------------------------------------------------
 
   /// W5 — retry a `failed` row: flip `failed → sending`, only while
-  /// `serverUlid IS NULL`. **Preserves `createdAt` and `localSeq`** so the
+  /// `islandUlid IS NULL`. **Preserves `createdAt` and `localSeq`** so the
   /// message keeps its place in the conversation timeline — a retry must NOT
   /// teleport the message to the bottom of the view. (The earlier "bump
   /// localSeq → bottom of pending" contract was wrong: `createdAt` dominates
@@ -1003,12 +1009,12 @@ class DriftCache extends GeneratedDatabase {
   /// moving a retried message past later ones is the wrong UX. Cage-match
   /// caught the incoherent contract.)
   Future<void> retry(String clientTempId) async {
-    // Same zero-row gate as markFailed: a retry of an already-sent row (serverUlid
+    // Same zero-row gate as markFailed: a retry of an already-sent row (islandUlid
     // no longer NULL) matches nothing and must not emit a spurious re-query.
     final changed = await _update(
       _M.table,
       {_M.deliveryState: DeliveryState.sending.wire},
-      '${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
+      '${_M.clientTempId} = ? AND ${_M.islandUlid} IS NULL',
       [clientTempId],
     );
     if (changed > 0) notifyUpdates({const TableUpdate(_M.table)});
@@ -1017,7 +1023,7 @@ class DriftCache extends GeneratedDatabase {
   // --- reads -----------------------------------------------------------------
 
   /// Reactive ordered message list for a channel. Ordering key:
-  /// `(createdAt, localSeq, COALESCE(serverUlid, clientTempId))` — see design.
+  /// `(createdAt, localSeq, COALESCE(islandUlid, clientTempId))` — see design.
   Stream<List<Message>> watchChannel(String channelId) {
     return _watch(_M.table, () => _readChannel(channelId));
   }
@@ -1026,7 +1032,7 @@ class DriftCache extends GeneratedDatabase {
     final rows = await customSelect(
       'SELECT * FROM ${_M.table} WHERE ${_M.channelId} = ? '
       'ORDER BY ${_M.createdAt}, ${_M.localSeq}, '
-      'COALESCE(${_M.serverUlid}, ${_M.clientTempId})',
+      'COALESCE(${_M.islandUlid}, ${_M.clientTempId})',
       variables: [Variable(channelId)],
     ).get();
     return rows.map((r) => _toDomain(MessageRow.fromRow(r))).toList();
@@ -1070,13 +1076,13 @@ class DriftCache extends GeneratedDatabase {
   /// gateway's `reply_to` is an FK onto `messages.id`, so it resolves a SERVER
   /// id and refuses a client one outright (`no_reply_target`, verified live).
   Future<String?> serverUlidFor(String clientTempId) async =>
-      (await _messageBy(_M.clientTempId, clientTempId))?.serverUlid;
+      (await _messageBy(_M.clientTempId, clientTempId))?.islandUlid;
 
   /// Invariant O — the outbox is a QUERY, not a table: every un-acked,
   /// not-failed row, in send order.
   Future<List<Message>> outbox() async {
     final rows = await customSelect(
-      'SELECT * FROM ${_M.table} WHERE ${_M.serverUlid} IS NULL '
+      'SELECT * FROM ${_M.table} WHERE ${_M.islandUlid} IS NULL '
       "AND ${_M.deliveryState} != ? "
       'ORDER BY ${_M.createdAt}, ${_M.localSeq}',
       variables: [Variable(DeliveryState.failed.wire)],

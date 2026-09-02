@@ -90,11 +90,8 @@ class PushTelemetry {
   void debtPaidButUnclearable(String tokenRef) =>
       _log.info('push.debt.paid_unclearable', fields: {'token': tokenRef});
 
-  void debtDrainFailed(Object error) => _log.warning(
-    'push.debt.drain_failed',
-    fields: _why(error),
-    error: error,
-  );
+  void debtDrainFailed(Object error) =>
+      _log.warning('push.debt.drain_failed', fields: _why(error), error: error);
 
   /// The debt could not be written. If the attempt also fails, the island keeps
   /// a routable row and NOTHING will retry it.
@@ -110,11 +107,8 @@ class PushTelemetry {
         fields: {'island': islandBaseUrl, 'token': tokenRef, 'cap': cap},
       );
 
-  void unregisterDeferred(Object error) => _log.info(
-    'push.unregister.deferred',
-    fields: _why(error),
-    error: error,
-  );
+  void unregisterDeferred(Object error) =>
+      _log.info('push.unregister.deferred', fields: _why(error), error: error);
 
   // --- the platform seam --------------------------------------------------
 

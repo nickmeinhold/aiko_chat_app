@@ -58,7 +58,7 @@ void main() {
 
   final invite = CallInvite(
     inviteId: 'inv-1',
-    serverMsgId: 'srv-1',
+    islandMsgId: 'srv-1',
     channelId: 'dm:me:robin',
     from: const MessageSender(
       userId: 'robin-key',

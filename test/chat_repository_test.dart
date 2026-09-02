@@ -343,7 +343,7 @@ void main() {
     });
 
     test('live-W3-watermark — resume uses historyContiguousThrough, NOT '
-        'MAX(serverUlid)', () async {
+        'MAX(islandUlid)', () async {
       // Sync 1 completes: watermark = 01B.
       transport.fences = {_chan: '01B'};
       rest.pagesByAfter[''] = HistoryPage.ofMessages(
@@ -355,7 +355,7 @@ void main() {
       await pump();
       expect(await cache.historyContiguousThrough(_chan), '01B');
 
-      // A LIVE message Z lands far ahead — MAX(serverUlid) jumps to 01Z. W3 only;
+      // A LIVE message Z lands far ahead — MAX(islandUlid) jumps to 01Z. W3 only;
       // it must NOT touch the watermark.
       transport.emitMessage(_server('01Z', 'live'));
       await pump();
@@ -904,8 +904,8 @@ void main() {
 
     test('counter-case — a self-echo alone does NOT early-complete the waiter '
         '(round-3 distinction)', () async {
-      // W3 echo writes R_u keyed by serverUlid, but the optimistic row stays
-      // serverUlid==NULL (collapse happens on ACK, not echo). So the row is
+      // W3 echo writes R_u keyed by islandUlid, but the optimistic row stays
+      // islandUlid==NULL (collapse happens on ACK, not echo). So the row is
       // still in the outbox on reconnect, and the drain MUST wait for the real
       // ack — history is gated behind the ackTimeout, not the echo.
       await repo.sendMessage(_chan, 'hi');
@@ -1105,7 +1105,7 @@ void main() {
 
     test('an inbound W3 write that throws is OWNED via telemetry, not leaked '
         'as an unhandled async error', () async {
-      // A message with a null serverUlid violates the cache contract
+      // A message with a null islandUlid violates the cache contract
       // (upsertInbound requires id != null) → it throws. The handler must catch
       // it and surface it, leaving the stream alive.
       transport.emitMessage(
@@ -1506,25 +1506,25 @@ class _GatedCache extends DriftCache {
 
   @override
   Future<({bool inserted, bool newlyInvalid})> upsertInbound(
-    Message serverMsg,
+    Message islandMsg,
   ) async {
-    log.add('upsert:${serverMsg.id}-start');
+    log.add('upsert:${islandMsg.id}-start');
     if (!_gated) {
       _gated = true;
       await firstUpsertGate.future; // freeze the first message write
     }
-    final result = await super.upsertInbound(serverMsg);
-    log.add('upsert:${serverMsg.id}-done');
+    final result = await super.upsertInbound(islandMsg);
+    log.add('upsert:${islandMsg.id}-done');
     return result;
   }
 
   @override
   Future<AckOutcome> reconcileAck(
     String clientTempId,
-    String serverUlid,
-    DateTime serverCreatedAt,
+    String islandUlid,
+    DateTime islandCreatedAt,
   ) {
     log.add('ack:$clientTempId');
-    return super.reconcileAck(clientTempId, serverUlid, serverCreatedAt);
+    return super.reconcileAck(clientTempId, islandUlid, islandCreatedAt);
   }
 }

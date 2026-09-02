@@ -122,13 +122,13 @@ bool isCallEndBody(String body) => body == kCallEndBody;
 /// both consumers run [endsInvite].
 class CallEnd {
   const CallEnd({
-    required this.targetServerMsgId,
+    required this.targetIslandMsgId,
     required this.fromUserId,
     required this.channelId,
   });
 
   /// The island ULID of the invitation being ended — the signed `replyTo`.
-  final String targetServerMsgId;
+  final String targetIslandMsgId;
   final String fromUserId;
   final String channelId;
 }
@@ -286,7 +286,7 @@ CallEndDecision admitCallEnd(
   final target = message.replyToId!;
   return CallEndAdmitted(
     CallEnd(
-      targetServerMsgId: target,
+      targetIslandMsgId: target,
       fromUserId: from,
       channelId: message.channelId,
     ),
@@ -311,7 +311,7 @@ bool endsInvite(CallEnd end, CallInvite invite) {
   // the signature, so this is exactly as strong as the app's trust root and no
   // stronger — see admitRing. What IS signed is the end body and its reply
   // binding; the claim is not cryptographic caller identity.)
-  return end.targetServerMsgId == invite.serverMsgId &&
+  return end.targetIslandMsgId == invite.islandMsgId &&
       end.fromUserId == invite.from.userId &&
       end.channelId == invite.channelId;
 }
@@ -320,7 +320,7 @@ bool endsInvite(CallEnd end, CallInvite invite) {
 class CallInvite {
   const CallInvite({
     required this.inviteId,
-    required this.serverMsgId,
+    required this.islandMsgId,
     required this.channelId,
     required this.from,
     required this.startedAt,
@@ -362,7 +362,7 @@ class CallInvite {
   /// three defended a state the cast above makes unrepresentable, and the dead
   /// branch went on to generate a HIGH review finding for a bug that could not
   /// occur. Refusing the null at the door deletes all three.
-  final String serverMsgId;
+  final String islandMsgId;
 
   /// The LiveKit room to join. The room IS the channel id (#2726).
   final String channelId;
@@ -814,16 +814,16 @@ RingDecision admitRing(
   if (age.isNegative) return const RingRefused(RingRefusal.clockSkew);
   if (age > kCallInviteFreshness) return const RingRefused(RingRefusal.stale);
   // The island's id is REFUSED here rather than carried as a null. Unreachable
-  // via either production producer (see [CallInvite.serverMsgId]) — so this is
+  // via either production producer (see [CallInvite.islandMsgId]) — so this is
   // the door where an impossible state stops being representable, not a runtime
   // hope. A ring with no server id could never be stilled by a hangup anyway:
   // `reply_to` is an FK onto `messages.id`, so there would be nothing to name.
-  final serverMsgId = message.id;
-  if (serverMsgId == null) return const RingRefused(RingRefusal.noServerId);
+  final islandMsgId = message.id;
+  if (islandMsgId == null) return const RingRefused(RingRefusal.noServerId);
   return RingAdmitted(
     CallInvite(
       inviteId: origin.clientMsgId,
-      serverMsgId: serverMsgId,
+      islandMsgId: islandMsgId,
       channelId: message.channelId,
       from: message.sender,
       startedAt: signedAt,

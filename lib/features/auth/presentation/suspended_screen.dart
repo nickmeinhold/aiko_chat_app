@@ -14,7 +14,7 @@ import 'auth_error_text.dart';
 /// dedicated surface and the two real ways out:
 ///   - "Try signing in again" — clears the soft gate → /login. If the ban lifted
 ///     the user signs back in; if not, the attempt re-flags and returns here.
-///   - "Use a different island" — the gateway picker; switchGateway clears the
+///   - "Use a different island" — the gateway picker; switchIsland clears the
 ///     flag, so a different (non-banning) island lands cleanly on its /login.
 ///
 /// The host is read from [configProvider] (single owner for the active gateway),
@@ -24,7 +24,7 @@ class SuspendedScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final host = gatewayHostLabel(ref.watch(configProvider).httpBaseUrl);
+    final host = islandHostLabel(ref.watch(configProvider).httpBaseUrl);
     final theme = Theme.of(context);
 
     return Scaffold(

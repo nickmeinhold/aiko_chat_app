@@ -1,8 +1,8 @@
 /// The "islands I've met" seed store (#36) — the DHT-style growing half of
 /// resilient discovery.
 ///
-/// Discovery bootstraps from the bundled [kGatewayPresets], but every island the
-/// app successfully learns about (from any gateway's `/v1/gateways`) is UNIONED
+/// Discovery bootstraps from the bundled [kIslandPresets], but every island the
+/// app successfully learns about (from any island's `/v1/islands`) is UNIONED
 /// into a locally-persisted set. On the next cold start that set seeds the picker
 /// alongside the presets — so an island seen once becomes a future bootstrap
 /// contact, and the reachable set is `presets ∪ ever-seen`, not a single
@@ -10,8 +10,8 @@
 ///
 /// SECURITY: a persisted base URL is attacker-influenceable — it originated in a
 /// directory response, and a picker tile bypasses the custom-URL validation on
-/// its way to `switchGateway`. So [load] re-hydrates every stored entry through
-/// [ServerEntry.tryFromJson], the SAME validating parser a freshly-fetched entry
+/// its way to `switchIsland`. So [load] re-hydrates every stored entry through
+/// [IslandEntry.tryFromJson], the SAME validating parser a freshly-fetched entry
 /// clears (absolute http(s) + host). A tampered prefs blob (a `file://`, a
 /// missing host, garbage) is dropped on read, never surfaced as a tappable tile.
 library;
@@ -20,24 +20,32 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../domain/server_entry.dart';
+import '../../../core/prefs/pref_key_migration.dart';
+
+import '../domain/island_entry.dart';
 
 /// SharedPreferences key holding the JSON array of ever-seen islands. Distinct
-/// from `gatewayBaseUrlPrefKey` (the single SELECTED gateway).
-const kKnownGatewaysPrefKey = 'aiko_known_gateways';
+/// from `islandBaseUrlPrefKey` (the single SELECTED island).
+const kKnownIslandsPrefKey = 'aiko_known_islands';
 
-class GatewaySeedStore {
+class IslandSeedStore {
   // Private-named initializing formals: callers pass `prefs:` / `normalize:`.
-  GatewaySeedStore({required this._prefs, required this._normalize});
+  IslandSeedStore({required this._prefs, required this._normalize});
 
   final SharedPreferences _prefs;
   final String Function(String) _normalize;
 
   /// The ever-seen islands, re-validated. Returns `[]` on a missing, malformed,
   /// or fully-invalid blob — persistence is best-effort chrome, never a crash
-  /// surface. Each surviving entry has cleared [ServerEntry.tryFromJson].
-  List<ServerEntry> load() {
-    final raw = _prefs.getString(kKnownGatewaysPrefKey);
+  /// surface. Each surviving entry has cleared [IslandEntry.tryFromJson].
+  List<IslandEntry> load() {
+    // Legacy-aware read: adopts a pre-vocabulary install's set forward under the
+    // new key the first time it is loaded.
+    final raw = readAndAdopt(
+      _prefs,
+      key: kKnownIslandsPrefKey,
+      legacyKey: kLegacyKnownIslandsPrefKey,
+    );
     if (raw == null || raw.trim().isEmpty) return const [];
     late final dynamic decoded;
     try {
@@ -48,8 +56,8 @@ class GatewaySeedStore {
     if (decoded is! List) return const [];
     return decoded
         .whereType<Map<String, dynamic>>()
-        .map(ServerEntry.tryFromJson) // re-validate: the security invariant
-        .whereType<ServerEntry>()
+        .map(IslandEntry.tryFromJson) // re-validate: the security invariant
+        .whereType<IslandEntry>()
         .toList(growable: false);
   }
 
@@ -58,11 +66,11 @@ class GatewaySeedStore {
   /// so a caller can update in-memory state without a re-read. Existing entries
   /// win on a collision — a re-advertised island keeps its first-seen label
   /// rather than churning. Invalid discovered entries can't enter (they never
-  /// parsed into a [ServerEntry]); the round-trip through JSON on save + [load]
+  /// parsed into a [IslandEntry]); the round-trip through JSON on save + [load]
   /// keeps stored and in-memory shapes identical.
-  Future<List<ServerEntry>> remember(Iterable<ServerEntry> discovered) async {
+  Future<List<IslandEntry>> remember(Iterable<IslandEntry> discovered) async {
     final seen = <String>{};
-    final merged = <ServerEntry>[];
+    final merged = <IslandEntry>[];
     // load() first so already-known islands keep priority over a fresh re-fetch.
     for (final entry in [...load(), ...discovered]) {
       if (seen.add(_normalize(entry.httpBaseUrl))) merged.add(entry);
@@ -74,7 +82,7 @@ class GatewaySeedStore {
     // set is still returned so THIS session grows regardless.
     try {
       await _prefs.setString(
-        kKnownGatewaysPrefKey,
+        kKnownIslandsPrefKey,
         jsonEncode(merged.map((e) => e.toJson()).toList()),
       );
     } catch (_) {

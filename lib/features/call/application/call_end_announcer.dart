@@ -198,8 +198,8 @@ class CallEndAnnouncer {
           final slice = left < _attemptSlice ? left : _attemptSlice;
           final repo = await _repositoryWithin(slice);
           if (repo != null) {
-            final serverId = await repo.serverIdFor(inviteId);
-            if (serverId != null) {
+            final islandId = await repo.serverIdFor(inviteId);
+            if (islandId != null) {
               // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
               // identity check and then awaited twice; a liveness test does not
               // survive an await. Round 3 added exactly this guard and the
@@ -219,7 +219,7 @@ class CallEndAnnouncer {
               final sentId = await repo.sendMessage(
                 channelId,
                 kCallEndBody,
-                replyToId: serverId,
+                replyToId: islandId,
               );
               if (sentId != null) return; // spoken; the claim stands.
               // NAMED COMPROMISE, found by a fix-interaction pass rather than a

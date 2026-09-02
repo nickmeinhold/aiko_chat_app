@@ -1,7 +1,7 @@
 import '../domain/gateway_capabilities.dart';
 
 /// Transitional allowlist of hosts KNOWN to carry the sovereign `origin`
-/// envelope, used ONLY while the island's `GET /capabilities` endpoint is not
+/// envelope, used ONLY while the gateway's `GET /capabilities` endpoint is not
 /// yet deployed (it 404s on prod as of 2026-07-26). It exists so shipping the
 /// capability gate does not regress the live round-trip against the one carriage
 /// island whose `/capabilities` still 404s.

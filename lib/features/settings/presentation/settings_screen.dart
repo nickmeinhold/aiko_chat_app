@@ -1,5 +1,5 @@
 /// Settings — currently the home of account management. Reachable from the chat
-/// AppBar. Built as a simple list so later threads (the in-app gateway picker,
+/// AppBar. Built as a simple list so later threads (the in-app island picker,
 /// #4; a blocked-users list, #7) can slot in as new sections without rework.
 library;
 
@@ -78,10 +78,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/blocked'),
             ),
             // Operator seat (#33/#35): visible ONLY to a moderator. Presentation
-            // gate only — the server ModeratorUser check is the real boundary — so
+            // gate only — the island ModeratorUser check is the real boundary — so
             // a stale-true flag at worst shows a tile whose actions 403 → Forbidden
             // (handled, not a logout). isModeratorProvider is fail-closed (false
-            // when logged out / mid-restore / on an older gateway).
+            // when logged out / mid-restore / on an older island).
             if (ref.watch(isModeratorProvider))
               ListTile(
                 leading: const Icon(Icons.shield_outlined),
@@ -245,7 +245,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  // Neutral 409 copy: the gateway's "already registered" (409) can mean this OR
+  // Neutral 409 copy: the island's "already registered" (409) can mean this OR
   // another account, so it must not assert the credential is on *this* one.
   String _addPasskeyError(Object e) => switch (e) {
     PasskeyAlreadyRegistered() =>
@@ -253,8 +253,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           'signing in with it, or use a different passkey.',
     // Before Unauthorized (its supertype): a ban is not "session expired."
     // Short snackbar deliberately says "this island" rather than naming the
-    // host (as authErrorText does) — Settings already shows the active server
-    // in the Server tile, so the host is on-screen; a terse snackbar reads
+    // host (as authErrorText does) — Settings already shows the active island
+    // in the Island tile, so the host is on-screen; a terse snackbar reads
     // better here (cage-match Tesla P3, copy-drift is intentional).
     AccountSuspended() => 'This account is suspended on this island.',
     Unauthorized() => 'Your session has expired. Please sign in again.',

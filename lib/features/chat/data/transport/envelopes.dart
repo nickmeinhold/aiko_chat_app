@@ -71,13 +71,13 @@ enum TransportErrorCode {
 // Server -> client (inbound). Sealed: exhaustive switch at the call site.
 // ---------------------------------------------------------------------------
 
-sealed class ServerFrame {
-  const ServerFrame();
+sealed class GatewayFrame {
+  const GatewayFrame();
 
   /// Parse a raw inbound text frame. NEVER throws: a malformed or
   /// unrecognised frame becomes [UnknownFrame] (logged + dropped by the
   /// transport) so an additive/garbled server frame can't kill the socket.
-  static ServerFrame parse(String raw) {
+  static GatewayFrame parse(String raw) {
     final Object? decoded;
     try {
       decoded = jsonDecode(raw);
@@ -148,7 +148,7 @@ sealed class ServerFrame {
 
 /// Server confirmed our send: maps our [clientMsgId] to the server [msgId].
 /// This is what reconciles an optimistic row (sets its id + state=sent).
-class AckFrame extends ServerFrame {
+class AckFrame extends GatewayFrame {
   final String clientMsgId;
   final String msgId;
   final String? createdAt;
@@ -163,7 +163,7 @@ class AckFrame extends ServerFrame {
 /// `Message.fromView`). Carries NO client_msg_id — the sender's own echo is
 /// deduped by server id against the ack-reconciled row (ack precedes echo;
 /// see docs/design/01-data-layer.md E2).
-class MessageFrame extends ServerFrame {
+class MessageFrame extends GatewayFrame {
   final Map<String, dynamic> msg;
   const MessageFrame(this.msg);
 
@@ -173,16 +173,16 @@ class MessageFrame extends ServerFrame {
 /// Subscription-ack: the server confirmed a `subscribe` and reports each
 /// channel's live/history *fence* — the newest persisted ULID at
 /// subscription-effective time (`""` for an empty channel). The reconcile
-/// engine partitions on it: `serverUlid <= fence` is fetched from history,
+/// engine partitions on it: `islandUlid <= fence` is fetched from history,
 /// `> fence` arrives live, with no gap (design 04 §Gap 2).
-class SubAckFrame extends ServerFrame {
+class SubAckFrame extends GatewayFrame {
   final Map<String, String> channelFences;
   const SubAckFrame(this.channelFences);
 }
 
 /// Server rejected/failed a frame. [refClientMsgId] ties it back to the
 /// offending `send` when known (null for malformed subscribe/non-dict frames).
-class ErrorFrame extends ServerFrame {
+class ErrorFrame extends GatewayFrame {
   /// The raw wire `code` string, preserved verbatim for logging/telemetry.
   final String code;
 
@@ -203,7 +203,7 @@ class ErrorFrame extends ServerFrame {
 /// taken-down [targetMsgId] with the retraction's own higher [id]; the transport
 /// maps it to a [Retraction] the reconcile engine suppresses. Flat (no nested
 /// `msg`) — the fanout envelope itself carries the `type`.
-class RetractionFrame extends ServerFrame {
+class RetractionFrame extends GatewayFrame {
   final String channelId;
   final String id;
   final String targetMsgId;
@@ -216,7 +216,7 @@ class RetractionFrame extends ServerFrame {
 
 /// A frame we couldn't classify. Held (not thrown) so the transport can log it
 /// and continue; future server frame types land here on an old client.
-class UnknownFrame extends ServerFrame {
+class UnknownFrame extends GatewayFrame {
   final String raw;
   final String reason;
   const UnknownFrame(this.raw, {required this.reason});

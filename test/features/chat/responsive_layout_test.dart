@@ -313,7 +313,7 @@ void main() {
     await pumpApp(tester, container);
     await signIn(tester);
 
-    // Default gateway is Production (kDefaultGatewayBaseUrl) → its preset label
+    // Default gateway is Production (kDefaultIslandBaseUrl) → its preset label
     // shows in the switcher header.
     expect(find.text('Production'), findsOneWidget);
   });
@@ -355,7 +355,7 @@ void main() {
   });
 
   testWidgets(
-    'wide: server switcher confirm → switchGateway (logs out, flips config)',
+    'wide: server switcher confirm → switchIsland (logs out, flips config)',
     (tester) async {
       setWidth(tester, wide);
       final transport = FakeChatTransport();
@@ -391,7 +391,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // switchGateway ran: the live config flipped to Enspyr and the user is logged
+      // switchIsland ran: the live config flipped to Enspyr and the user is logged
       // out (back at the login screen on the new gateway).
       expect(
         container.read(configProvider).httpBaseUrl,

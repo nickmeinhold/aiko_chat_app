@@ -137,9 +137,9 @@ void main() {
     });
   });
 
-  group('ServerFrame.parse (never throws)', () {
+  group('GatewayFrame.parse (never throws)', () {
     test('ack', () {
-      final f = ServerFrame.parse(
+      final f = GatewayFrame.parse(
         '{"type":"ack","client_msg_id":"tmp-1","msg_id":"01J","created_at":"2026-06-21T00:00:00Z"}',
       );
       expect(f, isA<AckFrame>());
@@ -149,7 +149,7 @@ void main() {
     });
 
     test('message', () {
-      final f = ServerFrame.parse(
+      final f = GatewayFrame.parse(
         '{"type":"message","msg":{"msg_id":"01J","channel_id":"c1","sender":{"kind":"human","label":"A"},"body":"hi","created_at":"2026-06-21T00:00:00Z","reply_to":null}}',
       );
       expect(f, isA<MessageFrame>());
@@ -160,7 +160,7 @@ void main() {
     });
 
     test('error', () {
-      final f = ServerFrame.parse(
+      final f = GatewayFrame.parse(
         '{"type":"error","code":"bad","detail":"nope","ref_client_msg_id":"tmp-9"}',
       );
       expect(f, isA<ErrorFrame>());
@@ -170,23 +170,23 @@ void main() {
     });
 
     test('non-JSON -> UnknownFrame', () {
-      expect(ServerFrame.parse('not json {'), isA<UnknownFrame>());
+      expect(GatewayFrame.parse('not json {'), isA<UnknownFrame>());
     });
     test('non-object JSON -> UnknownFrame', () {
-      expect(ServerFrame.parse('[1,2,3]'), isA<UnknownFrame>());
+      expect(GatewayFrame.parse('[1,2,3]'), isA<UnknownFrame>());
     });
     test('unknown type -> UnknownFrame (forward-compat)', () {
-      final f = ServerFrame.parse('{"type":"typing","user":"a"}');
+      final f = GatewayFrame.parse('{"type":"typing","user":"a"}');
       expect(f, isA<UnknownFrame>());
     });
     test('ack missing ids -> UnknownFrame', () {
       expect(
-        ServerFrame.parse('{"type":"ack","client_msg_id":"x"}'),
+        GatewayFrame.parse('{"type":"ack","client_msg_id":"x"}'),
         isA<UnknownFrame>(),
       );
     });
     test('retraction -> RetractionFrame with all three ids (island #104)', () {
-      final f = ServerFrame.parse(
+      final f = GatewayFrame.parse(
         '{"type":"retraction","channel_id":"c1","id":"01Z","target_msg_id":"01A"}',
       );
       expect(f, isA<RetractionFrame>());
@@ -197,7 +197,9 @@ void main() {
     });
     test('retraction missing target_msg_id -> UnknownFrame (never throws)', () {
       expect(
-        ServerFrame.parse('{"type":"retraction","channel_id":"c1","id":"01Z"}'),
+        GatewayFrame.parse(
+          '{"type":"retraction","channel_id":"c1","id":"01Z"}',
+        ),
         isA<UnknownFrame>(),
       );
     });

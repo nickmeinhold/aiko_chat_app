@@ -45,7 +45,7 @@ class CachedUserStore {
   }
 
   /// Returns SharedPreferences' success flag — `false` is a persistence failure
-  /// that does NOT throw (mirrors how [switchGateway] checks `setString`). The
+  /// that does NOT throw (mirrors how [switchIsland] checks `setString`). The
   /// caller ([AuthController._writeCachedUser]) acts on `false` so a silently-
   /// failed write can't leave a stale identity paired with fresh tokens.
   Future<bool> write(AppUser user) =>

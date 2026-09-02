@@ -35,7 +35,7 @@ import '../features/legal/application/eula_controller.dart';
 import '../features/legal/presentation/eula_screen.dart';
 import '../features/moderation/presentation/blocked_users_screen.dart';
 import '../features/moderation/presentation/report_queue_screen.dart';
-import '../features/settings/presentation/gateway_picker_screen.dart';
+import '../features/settings/presentation/island_picker_screen.dart';
 import '../features/settings/presentation/settings_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -109,8 +109,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       // Tesla), so a flag set while authenticated falls through to the logged-in
       // eject below rather than trapping a live user on the ban screen. In the
       // normal ban path tokens are cleared, so loggedIn is already false. The
-      // gateway picker stays reachable so the user can switch islands
-      // (switchGateway clears the flag).
+      // island picker stays reachable so the user can switch islands
+      // (switchIsland clears the flag).
       if (!loggedIn && banned) {
         if (loc == '/settings/island') return null;
         return loc == '/suspended' ? null : '/suspended';
@@ -135,13 +135,13 @@ final routerProvider = Provider<GoRouter>((ref) {
             : null;
       }
 
-      // The gateway picker is a PRE-LOGIN act (#35): choosing a server precedes
-      // having an account on it. A user stranded on a gateway they can't sign
+      // The island picker is a PRE-LOGIN act (#35): choosing a island precedes
+      // having an account on it. A user stranded on a island they can't sign
       // into (down, wrong URL, registration closed) must be able to switch away
       // without reinstalling — so it stays reachable while logged out, ahead of
-      // both the login and claim-handle gates. switchGateway clears the
+      // both the login and claim-handle gates. switchIsland clears the
       // pending-handle + tokens, so a switch from here lands cleanly on the new
-      // gateway's /login (via the loading → /splash → /login redirect).
+      // island's /login (via the loading → /splash → /login redirect).
       if (loc == '/settings/island') return null;
 
       // Logged out: a pending identity must claim a handle first;
@@ -183,7 +183,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/settings/island',
-        builder: (_, _) => const GatewayPickerScreen(),
+        builder: (_, _) => const IslandPickerScreen(),
       ),
       GoRoute(
         path: '/settings/blocked',
@@ -193,7 +193,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // typed path itself is not router-gated — a deep link mounts it for any
       // logged-in user, at which point the screen's own isModeratorProvider gate
       // shows "no longer a moderator" and every action is ModeratorUser-gated
-      // server-side (the real boundary). Router-level gating is deferred polish,
+      // island-side (the real boundary). Router-level gating is deferred polish,
       // not a security gap (cage-match Tesla).
       GoRoute(
         path: '/moderation/reports',
