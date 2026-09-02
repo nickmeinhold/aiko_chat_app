@@ -20,12 +20,24 @@ import 'package:flutter/foundation.dart';
 import '../domain/island_entry.dart';
 
 /// The directory-array envelope keys we accept, in PRIORITY order. `islands` is
-/// the canonical island-vocabulary key (Design 10) and is tried FIRST; `gateways`
-/// is the current wire key, kept for backward-compat; `servers`/`entries`/
-/// `directory` are tolerant fallbacks. ORDER IS SEMANTIC — a guard-contract test
-/// pins that `islands` wins over `gateways` when both are present, so this is not
-/// a set to reorder casually. No island serves `islands` yet, so accepting it is
-/// a pure widening today.
+/// the canonical island-vocabulary key (Design 10) and is tried FIRST;
+/// `gateways` is the legacy key; `servers`/`entries`/`directory` are tolerant
+/// fallbacks. ORDER IS SEMANTIC — a guard-contract test pins that `islands` wins
+/// over `gateways` when both are present, so this is not a set to reorder
+/// casually.
+///
+/// Measured 2026-09-02: both live islands (chat.imagineering.cc,
+/// chat.enspyr.co) serve the `islands` envelope key, and answer `gateways` as a
+/// deprecated alias with no removal date. So accepting `islands` is not a
+/// widening-in-advance — it is the CURRENT key, and the order above is what
+/// carries an island through its own compat window.
+///
+/// The sentence this replaces said "no island serves `islands` yet", which had
+/// been false since island PR#62. It survived because a claim about the live
+/// world cannot be held by any test here, so it could only ever rot — and it
+/// came back when a vocabulary sweep corrupted this paragraph and the restore
+/// was faithful rather than correct. A world-claim in a comment gets a DATE and
+/// a SOURCE, or it does not get written.
 const kDirectoryEnvelopeKeysByPriority = <String>[
   'islands',
   'gateways',
