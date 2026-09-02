@@ -76,7 +76,7 @@ sealed class GatewayFrame {
 
   /// Parse a raw inbound text frame. NEVER throws: a malformed or
   /// unrecognised frame becomes [UnknownFrame] (logged + dropped by the
-  /// transport) so an additive/garbled server frame can't kill the socket.
+  /// transport) so an additive/garbled gateway frame can't kill the socket.
   static GatewayFrame parse(String raw) {
     final Object? decoded;
     try {

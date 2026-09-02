@@ -75,6 +75,22 @@ void main() {
     expect(prefs.getString(_old), isNull);
   });
 
+  test('a switch issued right after adoption WINS — the fire-and-forget write '
+      'cannot land late and clobber it', () async {
+    // The adopt write is unawaited, issued from inside a provider build. If
+    // SharedPreferences reordered it against a later write, a legacy install
+    // whose owner switched island in the same breath would be dragged silently
+    // back to the old value. Reasoning says the in-memory cache updates
+    // synchronously and platform writes queue in call order; this asserts it
+    // instead of trusting the reasoning.
+    final prefs = await prefsWith({_old: 'https://legacy.example.com'});
+    readAndAdopt(prefs, key: _new, legacyKey: _old); // issues the adopt write
+    await prefs.setString(_new, 'https://chosen.example.com'); // the user
+    await Future<void>.delayed(Duration.zero);
+
+    expect(prefs.getString(_new), 'https://chosen.example.com');
+  });
+
   test(
     'an empty legacy value is adopted verbatim, not treated as absent',
     () async {
