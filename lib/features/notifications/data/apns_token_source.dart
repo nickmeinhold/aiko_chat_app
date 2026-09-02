@@ -25,7 +25,8 @@ class ApnsTokenSource implements PushTokenSource {
     MethodChannel? methods,
     EventChannel? refreshes,
     PushTelemetry telemetry = PushTelemetry.noop,
-  }) : _telemetry = telemetry, assert(
+  }) : _telemetry = telemetry,
+       assert(
          const {
            TargetPlatform.iOS,
            TargetPlatform.macOS,
@@ -105,7 +106,5 @@ class ApnsTokenSource implements PushTokenSource {
       // down with it, and the registrar would then be deaf to every later
       // rotation for the life of the session — silently, since nothing surfaces
       // a dead stream. Dropping the bad event keeps the subscription alive.
-      .handleError(
-        (Object e) => _telemetry.rotationStreamError('apns', e),
-      );
+      .handleError((Object e) => _telemetry.rotationStreamError('apns', e));
 }

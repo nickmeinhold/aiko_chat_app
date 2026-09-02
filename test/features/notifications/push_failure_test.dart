@@ -42,59 +42,94 @@ class _Capture extends LogSink {
 void main() {
   group('classification is from CLOSED inputs only', () {
     test('transport failures map to their own transient reasons', () {
-      expect(PushFailure.of(_dio(DioExceptionType.connectionError)),
-          PushFailure.unreachable);
-      expect(PushFailure.of(_dio(DioExceptionType.connectionTimeout)),
-          PushFailure.timedOut);
-      expect(PushFailure.of(_dio(DioExceptionType.sendTimeout)),
-          PushFailure.timedOut);
-      expect(PushFailure.of(_dio(DioExceptionType.receiveTimeout)),
-          PushFailure.timedOut);
-      expect(PushFailure.of(_dio(DioExceptionType.cancel)),
-          PushFailure.cancelled);
-      expect(PushFailure.of(_dio(DioExceptionType.badCertificate)),
-          PushFailure.badCertificate);
+      expect(
+        PushFailure.of(_dio(DioExceptionType.connectionError)),
+        PushFailure.unreachable,
+      );
+      expect(
+        PushFailure.of(_dio(DioExceptionType.connectionTimeout)),
+        PushFailure.timedOut,
+      );
+      expect(
+        PushFailure.of(_dio(DioExceptionType.sendTimeout)),
+        PushFailure.timedOut,
+      );
+      expect(
+        PushFailure.of(_dio(DioExceptionType.receiveTimeout)),
+        PushFailure.timedOut,
+      );
+      expect(
+        PushFailure.of(_dio(DioExceptionType.cancel)),
+        PushFailure.cancelled,
+      );
+      expect(
+        PushFailure.of(_dio(DioExceptionType.badCertificate)),
+        PushFailure.badCertificate,
+      );
     });
 
     test('a dead credential is distinguishable from every other 4xx', () {
       expect(
-          PushFailure.of(_dio(DioExceptionType.badResponse, status: 401)),
-          PushFailure.credentialRejected);
+        PushFailure.of(_dio(DioExceptionType.badResponse, status: 401)),
+        PushFailure.credentialRejected,
+      );
       // 403 is NOT a dead credential — the credential is live and the island
       // refuses the OPERATION, which re-authenticating cannot fix. The previous
       // version of THIS test asserted 403 into credentialRejected, which is how
       // the fold survived two rounds: the jig soldered the part it checked.
-      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 403)),
-          PushFailure.forbidden);
-      expect(PushFailure.forbidden.credentialIsDead, isFalse,
-          reason: 'a live credential refused an operation is not a dead one — '
-              'claude-tasks#3723 branches on this');
+      expect(
+        PushFailure.of(_dio(DioExceptionType.badResponse, status: 403)),
+        PushFailure.forbidden,
+      );
+      expect(
+        PushFailure.forbidden.credentialIsDead,
+        isFalse,
+        reason:
+            'a live credential refused an operation is not a dead one — '
+            'claude-tasks#3723 branches on this',
+      );
       // NOT credentialRejected — a 400 is our bug, not a dead session.
-      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 400)),
-          PushFailure.rejected);
-      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 404)),
-          PushFailure.rejected);
+      expect(
+        PushFailure.of(_dio(DioExceptionType.badResponse, status: 400)),
+        PushFailure.rejected,
+      );
+      expect(
+        PushFailure.of(_dio(DioExceptionType.badResponse, status: 404)),
+        PushFailure.rejected,
+      );
     });
 
     test('the RETRYABLE 4xx are not collapsed into permanent rejection', () {
       // Carnot + Tesla, independently, round 1. Both 408 and 429 mean an
       // identical retry can succeed — the exact fact this enum exists to carry.
-      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 429)),
-          PushFailure.rateLimited);
+      expect(
+        PushFailure.of(_dio(DioExceptionType.badResponse, status: 429)),
+        PushFailure.rateLimited,
+      );
       expect(PushFailure.rateLimited.transient, isTrue);
-      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 408)),
-          PushFailure.timedOut);
+      expect(
+        PushFailure.of(_dio(DioExceptionType.badResponse, status: 408)),
+        PushFailure.timedOut,
+      );
       expect(PushFailure.timedOut.transient, isTrue);
       // ...and they must not have been fixed by making the 4xx arm transient.
-      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 400))
-          .transient, isFalse);
+      expect(
+        PushFailure.of(
+          _dio(DioExceptionType.badResponse, status: 400),
+        ).transient,
+        isFalse,
+      );
     });
 
     test('5xx is the island failing, and is worth retrying', () {
-      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 500)),
-          PushFailure.islandError);
-      expect(PushFailure.of(_dio(DioExceptionType.badResponse, status: 503)),
-          PushFailure.islandError);
+      expect(
+        PushFailure.of(_dio(DioExceptionType.badResponse, status: 500)),
+        PushFailure.islandError,
+      );
+      expect(
+        PushFailure.of(_dio(DioExceptionType.badResponse, status: 503)),
+        PushFailure.islandError,
+      );
       expect(PushFailure.islandError.transient, isTrue);
     });
 
@@ -104,26 +139,36 @@ void main() {
       // Weak-signal capture fails OPEN: an unclassifiable failure must not be
       // reported as permanent, because that would licence giving up on a debt
       // we cannot prove is unpayable.
-      expect(PushFailure.unknown.transient, isTrue,
-          reason: 'unknown must never read as a permanent failure');
+      expect(
+        PushFailure.unknown.transient,
+        isTrue,
+        reason: 'unknown must never read as a permanent failure',
+      );
     });
   });
 
   group('the facts the enum carries', () {
     test('exactly one reason means the credential is dead', () {
-      final lost =
-          PushFailure.values.where((f) => f.credentialIsDead).toList();
-      expect(lost, [PushFailure.credentialRejected],
-          reason: 'credentialIsDead is the flag that answers "can a retry ever '
-              'work?" — if it spreads, it stops meaning anything');
+      final lost = PushFailure.values.where((f) => f.credentialIsDead).toList();
+      expect(
+        lost,
+        [PushFailure.credentialRejected],
+        reason:
+            'credentialIsDead is the flag that answers "can a retry ever '
+            'work?" — if it spreads, it stops meaning anything',
+      );
     });
 
     test('a dead credential is never also transient', () {
       for (final f in PushFailure.values) {
         if (f.credentialIsDead) {
-          expect(f.transient, isFalse,
-              reason: '${f.name} claims both a dead credential and a '
-                  'worthwhile retry, which cannot both be true');
+          expect(
+            f.transient,
+            isFalse,
+            reason:
+                '${f.name} claims both a dead credential and a '
+                'worthwhile retry, which cannot both be true',
+          );
         }
       }
     });
@@ -137,16 +182,22 @@ void main() {
     // the real spark gap; letting a tautology sit beside it inflates the
     // apparent coverage of the boundary this PR convened a cage-match to defend.
 
-    test('POSITIVE CONTROL: the secret really is in the exception we passed',
-        () {
-      // Without this, the assertion above passes just as happily against an
-      // exception that never carried a secret at all — a check that cannot
-      // go red.
-      final e = _dio(DioExceptionType.badResponse, status: 401);
-      expect(e.toString().contains(_secret), isTrue,
-          reason: 'the fixture must actually carry the secret, or the '
-              'no-leak assertions prove nothing');
-    });
+    test(
+      'POSITIVE CONTROL: the secret really is in the exception we passed',
+      () {
+        // Without this, the assertion above passes just as happily against an
+        // exception that never carried a secret at all — a check that cannot
+        // go red.
+        final e = _dio(DioExceptionType.badResponse, status: 401);
+        expect(
+          e.toString().contains(_secret),
+          isTrue,
+          reason:
+              'the fixture must actually carry the secret, or the '
+              'no-leak assertions prove nothing',
+        );
+      },
+    );
 
     // THE GUARD THAT ACTUALLY GUARDS. Captures the record BEFORE the redactor.
     //
@@ -167,22 +218,29 @@ void main() {
       // NO RedactingLogSink. If the reason ever carries the secret, it arrives
       // here intact and this test fails, which is the whole point.
       final log = AikoLogger(subsystem: 'aiko', sink: capture);
-      PushTelemetry(log.child('push')).unregisterDeferred(
-        _dio(DioExceptionType.badResponse, status: 401),
-      );
+      PushTelemetry(
+        log.child('push'),
+      ).unregisterDeferred(_dio(DioExceptionType.badResponse, status: 401));
 
       expect(capture.records, hasLength(1));
       final r = capture.records.single;
       expect(r.event, 'push.unregister.deferred');
       expect(r.fields['reason'], 'credentialRejected');
       expect(r.fields['transient'], isFalse);
-      expect(r.fields['credentialIsDead'], isTrue,
-          reason: 'both facts the type carries must reach the record — a '
-              'consumer must never reverse-map the enum NAME back into a fact');
+      expect(
+        r.fields['credentialIsDead'],
+        isTrue,
+        reason:
+            'both facts the type carries must reach the record — a '
+            'consumer must never reverse-map the enum NAME back into a fact',
+      );
       // Every field value, unredacted, must be free of the payload.
       for (final e in r.fields.entries) {
-        expect(e.value.toString().contains(_secret), isFalse,
-            reason: 'field ${e.key} carried the token into the record');
+        expect(
+          e.value.toString().contains(_secret),
+          isFalse,
+          reason: 'field ${e.key} carried the token into the record',
+        );
       }
     });
 
@@ -192,9 +250,9 @@ void main() {
         subsystem: 'aiko',
         sink: RedactingLogSink(capture),
       );
-      PushTelemetry(log.child('push')).unregisterDeferred(
-        _dio(DioExceptionType.badResponse, status: 401),
-      );
+      PushTelemetry(
+        log.child('push'),
+      ).unregisterDeferred(_dio(DioExceptionType.badResponse, status: 401));
       final line = capture.records.single.format();
       expect(line, contains('push.unregister.deferred'));
       expect(line, contains('reason=credentialRejected'));

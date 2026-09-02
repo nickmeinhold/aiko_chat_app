@@ -62,7 +62,7 @@ class _RecordingTokenStore extends InMemoryTokenStore {
   }
 }
 
-/// A token store whose `clear()` can be made to THROW — which `switchGateway`
+/// A token store whose `clear()` can be made to THROW — which `switchIsland`
 /// documents as an anticipated outcome ("a clear failure propagates to the
 /// picker's error UI"), not a theoretical one.
 class _ThrowingClearTokenStore extends InMemoryTokenStore {
@@ -315,14 +315,14 @@ void main() {
         await pumpEventQueue();
         expect(rest.registeredDevices, isNotEmpty, reason: 'precondition');
 
-        await auth.switchGateway('https://other.example');
+        await auth.switchIsland('https://other.example');
         await pumpEventQueue();
 
         expect(
           log,
           ['clearTokens', 'unregisterDevice(tok-1)'],
           reason:
-              'switchGateway tears down BY HAND rather than through '
+              'switchIsland tears down BY HAND rather than through '
               '_teardownResources, so it needs its own unpair. Without it the '
               'island you just left keeps a live routable token forever',
         );
@@ -332,7 +332,7 @@ void main() {
           reason:
               'any debt recorded here belongs to the island being LEFT. The '
               'unpair must therefore precede the invalidate(configProvider) in '
-              "switchGateway's finally — after it, both the REST client and the "
+              "switchIsland's finally — after it, both the REST client and the "
               'registrar have been rebuilt against the NEW island, so the debt '
               'would be keyed there and its DELETE addressed to the wrong one',
         );
@@ -500,7 +500,7 @@ void main() {
 
     test('a THROWING credential clear still leaves the debt recorded', () async {
       // Cage-match round 3, Maxwell. The unpair used to run AFTER clearTokens,
-      // and switchGateway deliberately does not swallow a clear failure ("a
+      // and switchIsland deliberately does not swallow a clear failure ("a
       // clear failure propagates to the picker's error UI"). So a throwing clear
       // skipped the unpair entirely and the island being left kept a live
       // routable row forever — the exact residual this change exists to close.

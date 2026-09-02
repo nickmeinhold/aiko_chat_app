@@ -1,6 +1,6 @@
 // Acceptance tests for Component 3 — the drift cache.
 // These encode the invariants from docs/design/03-drift-cache.html:
-//   U (non-null serverUlid unique) · A (stream atomicity) · O (outbox-as-query)
+//   U (non-null islandUlid unique) · A (stream atomicity) · O (outbox-as-query)
 //   and the W1-W5 writer contracts. Written test-first against the merged design.
 
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
@@ -112,7 +112,7 @@ void main() {
   });
 
   group('W2 — ack reconcile', () {
-    test('happy path: stamps serverUlid + marks sent, one row', () async {
+    test('happy path: stamps islandUlid + marks sent, one row', () async {
       await cache.insertOptimistic(optimistic('c1', 'chan', 'hi'));
       await cache.reconcileAck(
         'c1',
@@ -195,7 +195,7 @@ void main() {
   group('Invariant A — stream atomicity', () {
     test(
       'collapse commits as exactly ONE emission (no mid-transaction '
-      'delete/update emission) AND never shows a duplicate serverUlid',
+      'delete/update emission) AND never shows a duplicate islandUlid',
       () async {
         await cache.insertOptimistic(optimistic('c1', 'chan', 'mine'));
         await cache.upsertInbound(server('01ULID_A', 'chan', 'server-body'));
@@ -216,7 +216,7 @@ void main() {
         // The collapse's delete + update are ONE transaction, so the watcher
         // fires ONCE post-commit. Without the transaction, delete-then-update
         // would emit the intermediate [R_c(null)] state too (an extra emission).
-        // This is what actually tests Invariant A — the same-serverUlid check
+        // This is what actually tests Invariant A — the same-islandUlid check
         // below is necessary but, with delete-first ordering, not sufficient.
         expect(
           emissions.length - before,
@@ -230,7 +230,7 @@ void main() {
           expect(
             ulids.length,
             ulids.toSet().length,
-            reason: 'no emission may contain two rows for one serverUlid',
+            reason: 'no emission may contain two rows for one islandUlid',
           );
         }
       },
@@ -251,7 +251,7 @@ void main() {
     });
 
     test(
-      'cross-channel serverUlid match is corruption (fails loudly)',
+      'cross-channel islandUlid match is corruption (fails loudly)',
       () async {
         await cache.upsertInbound(server('01ULID_A', 'chanA', 'x'));
         expect(
@@ -286,7 +286,7 @@ void main() {
       expect(
         rows.single.deliveryState,
         DeliveryState.sent,
-        reason: 'guard: only serverUlid IS NULL rows can be failed',
+        reason: 'guard: only islandUlid IS NULL rows can be failed',
       );
     });
 
@@ -314,7 +314,7 @@ void main() {
         );
         expect(affected.map((m) => m.clientTempId), [
           'c1',
-        ], reason: 'the channel filter must AND with serverUlid IS NULL');
+        ], reason: 'the channel filter must AND with islandUlid IS NULL');
       },
     );
   });
@@ -472,13 +472,13 @@ void main() {
         'optimistic row hard-deleted, never resurrected', () async {
       await cache.insertOptimistic(optimistic('tmp', 'chan', 'my message'));
       // The takedown lands while the ack is still in flight. applyRetraction
-      // deletes by serverUlid, but the optimistic row has serverUlid NULL, so it
+      // deletes by islandUlid, but the optimistic row has islandUlid NULL, so it
       // is NOT matched here — it is the second door the dead id must cover.
       await cache.applyRetraction(retract('01A', '01Z'));
       expect(
         await chanRows(),
         hasLength(1),
-        reason: 'optimistic (serverUlid NULL) row untouched by applyRetraction',
+        reason: 'optimistic (islandUlid NULL) row untouched by applyRetraction',
       );
       final outcome = await cache.reconcileAck(
         'tmp',

@@ -96,7 +96,7 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
                   Text(
                     authErrorText(
                       auth.error,
-                      host: gatewayHostLabel(
+                      host: islandHostLabel(
                         ref.watch(configProvider).httpBaseUrl,
                       ),
                       action: AuthAction.claimHandle,

@@ -316,7 +316,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
 
   /// Clear the suspended flag (ban lifted / session ended / gateway switched).
   /// SYNCHRONOUS, matching the sibling `pendingHandleProvider.clear()` it sits
-  /// beside in every caller (_teardownResources / switchGateway / success /
+  /// beside in every caller (_teardownResources / switchIsland / success /
   /// restore-success). Every mutation of the suspended flag is now synchronous,
   /// so ordering is by execution order, not event-loop timing: the cold-start
   /// ban flags as the LAST statement before `_restoreSession` returns (no await
@@ -534,7 +534,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// old comment named as an accepted tradeoff closes on the way past.
   ///
   /// Called from THREE places. `_teardownResources` covers logout, the signal-
-  /// driven teardown and account deletion; [switchGateway] and
+  /// driven teardown and account deletion; [switchIsland] and
   /// [_settleSuspension] each end a session without going through it.
   /// [_restoreSession] also clears tokens and is deliberately NOT a caller —
   /// nothing has registered yet in that process, so there is no debt to record.
@@ -542,7 +542,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// hole and the `try` is what closes the remaining one (cage-match round 3):
   ///
   ///   - clear-then-unpair loses the unpair whenever the clear THROWS, and in
-  ///     [switchGateway] a throwing clear is an anticipated, documented outcome
+  ///     [switchIsland] a throwing clear is an anticipated, documented outcome
   ///     ("a clear failure propagates to the picker's error UI"). The island
   ///     being left would keep a live routable row forever — the exact residual
   ///     this whole change exists to close.
@@ -739,16 +739,16 @@ class AuthController extends AsyncNotifier<AppUser?> {
   ///      is preserved.
   ///   5. `finally` publishes logged-out exactly once, so a teardown error can
   ///      never leave the app bricked on /splash.
-  Future<void> switchGateway(String httpBaseUrl) async {
-    final next = GatewayConfig.normalized(httpBaseUrl).httpBaseUrl;
+  Future<void> switchIsland(String httpBaseUrl) async {
+    final next = IslandConfig.normalized(httpBaseUrl).httpBaseUrl;
     if (next == ref.read(configProvider).httpBaseUrl) return;
 
     final persisted = await ref
         .read(sharedPreferencesProvider)
-        .setString(gatewayBaseUrlPrefKey, next);
+        .setString(islandBaseUrlPrefKey, next);
     if (!persisted) {
       // Session untouched — surfaced to the picker for an inline error.
-      throw const GatewaySwitchFailed('Could not save the island selection.');
+      throw const IslandSwitchFailed('Could not save the island selection.');
     }
 
     state = const AsyncValue.loading(); // block login (router → /splash)
@@ -821,12 +821,12 @@ class AuthController extends AsyncNotifier<AppUser?> {
   }
 }
 
-/// Thrown by [AuthController.switchGateway] when the chosen gateway could not be
+/// Thrown by [AuthController.switchIsland] when the chosen gateway could not be
 /// persisted — raised BEFORE any session teardown, so the current session is
 /// untouched and the picker can surface an inline error and stay put.
-class GatewaySwitchFailed implements Exception {
+class IslandSwitchFailed implements Exception {
   final String message;
-  const GatewaySwitchFailed(this.message);
+  const IslandSwitchFailed(this.message);
   @override
   String toString() => message;
 }

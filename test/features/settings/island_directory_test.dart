@@ -22,23 +22,23 @@ import 'dart:typed_data';
 
 import 'package:aiko_chat_app/app/config.dart';
 import 'package:aiko_chat_app/app/providers.dart';
-import 'package:aiko_chat_app/features/settings/application/gateway_directory_provider.dart';
-import 'package:aiko_chat_app/features/settings/data/gateway_directory_client.dart';
-import 'package:aiko_chat_app/features/settings/data/gateway_seed_store.dart';
-import 'package:aiko_chat_app/features/settings/domain/server_entry.dart';
-import 'package:aiko_chat_app/features/settings/presentation/gateway_picker_screen.dart';
+import 'package:aiko_chat_app/features/settings/application/island_directory_provider.dart';
+import 'package:aiko_chat_app/features/settings/data/island_directory_client.dart';
+import 'package:aiko_chat_app/features/settings/data/island_seed_store.dart';
+import 'package:aiko_chat_app/features/settings/domain/island_entry.dart';
+import 'package:aiko_chat_app/features/settings/presentation/island_picker_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-String _norm(String url) => GatewayConfig.normalized(url).httpBaseUrl;
+String _norm(String url) => IslandConfig.normalized(url).httpBaseUrl;
 
 void main() {
-  group('ServerEntry.tryFromJson (tolerant)', () {
+  group('IslandEntry.tryFromJson (tolerant)', () {
     test('snake_case contract maps to label + url + metadata', () {
-      final e = ServerEntry.tryFromJson({
+      final e = IslandEntry.tryFromJson({
         'id': 'imagineering',
         'display_name': 'Imagineering',
         'base_url': 'https://chat.imagineering.cc',
@@ -53,7 +53,7 @@ void main() {
     });
 
     test('camelCase spellings also resolve', () {
-      final e = ServerEntry.tryFromJson({
+      final e = IslandEntry.tryFromJson({
         'name': 'Enspyr',
         'baseUrl': 'https://enspyr.co',
       })!;
@@ -62,13 +62,13 @@ void main() {
     });
 
     test('a missing name falls back to the host', () {
-      final e = ServerEntry.tryFromJson({'base_url': 'https://enspyr.co'})!;
+      final e = IslandEntry.tryFromJson({'base_url': 'https://enspyr.co'})!;
       expect(e.label, 'enspyr.co');
     });
 
     test('an entry with no usable URL is skipped (null)', () {
-      expect(ServerEntry.tryFromJson({'name': 'no url here'}), isNull);
-      expect(ServerEntry.tryFromJson({'base_url': '   '}), isNull);
+      expect(IslandEntry.tryFromJson({'name': 'no url here'}), isNull);
+      expect(IslandEntry.tryFromJson({'base_url': '   '}), isNull);
     });
 
     test(
@@ -76,21 +76,21 @@ void main() {
       () {
         // The directory is attacker-influenceable; a directory tile bypasses the
         // picker's custom-URL validation, so junk must be rejected at parse time.
-        expect(ServerEntry.tryFromJson({'base_url': 'garbage'}), isNull);
+        expect(IslandEntry.tryFromJson({'base_url': 'garbage'}), isNull);
         expect(
-          ServerEntry.tryFromJson({'base_url': 'ftp://example.com'}),
+          IslandEntry.tryFromJson({'base_url': 'ftp://example.com'}),
           isNull,
         );
-        expect(ServerEntry.tryFromJson({'base_url': 'https://'}), isNull);
+        expect(IslandEntry.tryFromJson({'base_url': 'https://'}), isNull);
         expect(
-          ServerEntry.tryFromJson({'base_url': 'javascript:alert(1)'}),
+          IslandEntry.tryFromJson({'base_url': 'javascript:alert(1)'}),
           isNull,
         );
       },
     );
   });
 
-  group('GatewayDirectoryClient.fetchFrom', () {
+  group('IslandDirectoryClient.fetchFrom', () {
     test('parses a bare JSON array, skipping malformed entries', () async {
       final dio = Dio()
         ..httpClientAdapter = _CannedAdapter(
@@ -103,7 +103,7 @@ void main() {
             {'name': 'Enspyr', 'base_url': 'https://enspyr.co'},
           ]),
         );
-      final client = GatewayDirectoryClient(dio: dio);
+      final client = IslandDirectoryClient(dio: dio);
       final out = await client.fetchFrom('https://dir.example/v1/gateways');
       expect(out.map((e) => e.httpBaseUrl), [
         'https://chat.imagineering.cc',
@@ -120,7 +120,7 @@ void main() {
             ],
           }),
         );
-      final client = GatewayDirectoryClient(dio: dio);
+      final client = IslandDirectoryClient(dio: dio);
       final out = await client.fetchFrom('https://dir.example/v1/gateways');
       expect(out.single.httpBaseUrl, 'https://enspyr.co');
     });
@@ -136,7 +136,7 @@ void main() {
             ],
           }),
         );
-      final client = GatewayDirectoryClient(dio: dio);
+      final client = IslandDirectoryClient(dio: dio);
       final out = await client.fetchFrom('https://dir.example/v1/gateways');
       expect(out.single.httpBaseUrl, 'https://enspyr.co');
     });
@@ -155,7 +155,7 @@ void main() {
             ],
           }),
         );
-      final client = GatewayDirectoryClient(dio: dio);
+      final client = IslandDirectoryClient(dio: dio);
       final out = await client.fetchFrom('https://dir.example/v1/gateways');
       expect(out.single.httpBaseUrl, 'https://new.example');
     });
@@ -173,7 +173,7 @@ void main() {
             ],
           }),
         );
-      final client = GatewayDirectoryClient(dio: dio);
+      final client = IslandDirectoryClient(dio: dio);
       final out = await client.fetchFrom('https://dir.example/v1/gateways');
       expect(out.single.httpBaseUrl, 'https://legacy.example');
     });
@@ -199,7 +199,7 @@ void main() {
               ],
             }),
           );
-        final client = GatewayDirectoryClient(dio: dio);
+        final client = IslandDirectoryClient(dio: dio);
         final out = await client.fetchFrom('https://dir.example/v1/gateways');
         expect(out.single.httpBaseUrl, 'https://legacy.example');
       },
@@ -212,7 +212,7 @@ void main() {
         ..httpClientAdapter = _CannedAdapter(
           jsonEncode({'islands': <dynamic>[], 'gateways': <dynamic>[]}),
         );
-      final client = GatewayDirectoryClient(dio: dio);
+      final client = IslandDirectoryClient(dio: dio);
       expect(
         await client.fetchFrom('https://dir.example/v1/gateways'),
         isEmpty,
@@ -221,7 +221,7 @@ void main() {
 
     test('an unrecognised shape yields [] (not a crash)', () async {
       final dio = Dio()..httpClientAdapter = _CannedAdapter(jsonEncode(42));
-      final client = GatewayDirectoryClient(dio: dio);
+      final client = IslandDirectoryClient(dio: dio);
       expect(
         await client.fetchFrom('https://dir.example/v1/gateways'),
         isEmpty,
@@ -230,7 +230,7 @@ void main() {
 
     test('a network error propagates (caller falls back to seed)', () async {
       final dio = Dio()..httpClientAdapter = _ExplodingAdapter();
-      final client = GatewayDirectoryClient(dio: dio);
+      final client = IslandDirectoryClient(dio: dio);
       expect(
         client.fetchFrom('https://dir.example/v1/gateways'),
         throwsA(isA<DioException>()),
@@ -243,15 +243,15 @@ void main() {
       const directory = [
         // Same gateway as the seed Production, but with a trailing slash —
         // normalization must dedupe it against the preset.
-        ServerEntry(
+        IslandEntry(
           label: 'Imagineering',
           httpBaseUrl: 'https://chat.imagineering.cc/',
         ),
-        ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://enspyr.co'),
+        IslandEntry(label: 'Enspyr', httpBaseUrl: 'https://enspyr.co'),
       ];
       final merged = mergeDirectory(
         directory,
-        kGatewayPresets,
+        kIslandPresets,
         normalize: _norm,
       );
 
@@ -274,19 +274,19 @@ void main() {
 
     test('an empty directory returns the seed unchanged (the fallback)', () {
       expect(
-        mergeDirectory(const [], kGatewayPresets, normalize: _norm),
-        kGatewayPresets,
+        mergeDirectory(const [], kIslandPresets, normalize: _norm),
+        kIslandPresets,
       );
     });
   });
 
-  group('gatewayDirectoryProvider', () {
+  group('islandDirectoryProvider', () {
     Future<ProviderContainer> makeContainer(
       _FakeClient client, {
-      String gatewayBaseUrl = 'https://chat.imagineering.cc',
+      String islandBaseUrl = 'https://chat.imagineering.cc',
     }) async {
       SharedPreferences.setMockInitialValues({
-        gatewayBaseUrlPrefKey: gatewayBaseUrl,
+        islandBaseUrlPrefKey: islandBaseUrl,
       });
       final prefs = await SharedPreferences.getInstance();
       return ProviderContainer(
@@ -302,15 +302,15 @@ void main() {
       'discovers from the CURRENT gateway (composes <base>/v1/gateways)',
       () async {
         final client = _FakeClient(const [
-          ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://enspyr.co'),
+          IslandEntry(label: 'Enspyr', httpBaseUrl: 'https://enspyr.co'),
         ]);
         final container = await makeContainer(
           client,
-          gatewayBaseUrl: 'https://chat.enspyr.co/',
+          islandBaseUrl: 'https://chat.enspyr.co/',
         );
         addTearDown(container.dispose);
 
-        final out = await container.read(gatewayDirectoryProvider.future);
+        final out = await container.read(islandDirectoryProvider.future);
         expect(out.single.label, 'Enspyr');
         // The SPOF-removal invariant: the URL is derived from the SELECTED gateway
         // (normalized, trailing slash stripped), NOT a fixed origin.
@@ -322,11 +322,11 @@ void main() {
       final client = _FakeClient(const []);
       final container = await makeContainer(
         client,
-        gatewayBaseUrl: 'https://chat.imagineering.cc',
+        islandBaseUrl: 'https://chat.imagineering.cc',
       );
       addTearDown(container.dispose);
 
-      await container.read(gatewayDirectoryProvider.future);
+      await container.read(islandDirectoryProvider.future);
       expect(client.lastUrl, 'https://chat.imagineering.cc/v1/gateways');
     });
 
@@ -334,7 +334,7 @@ void main() {
       final container = await makeContainer(_FakeClient.throwing());
       addTearDown(container.dispose);
       await expectLater(
-        container.read(gatewayDirectoryProvider.future),
+        container.read(islandDirectoryProvider.future),
         throwsException,
       );
     });
@@ -345,8 +345,8 @@ void main() {
       // so discovery never fires. The persisted island must STILL be reachable
       // from disk — otherwise persistence is useless in the exact SPOF case.
       SharedPreferences.setMockInitialValues({
-        gatewayBaseUrlPrefKey: 'https://chat.imagineering.cc',
-        kKnownGatewaysPrefKey: jsonEncode([
+        islandBaseUrlPrefKey: 'https://chat.imagineering.cc',
+        kKnownIslandsPrefKey: jsonEncode([
           {
             'base_url': 'https://chat.seen-before.example',
             'display_name': 'Seen Before',
@@ -359,9 +359,9 @@ void main() {
       );
       addTearDown(container.dispose);
 
-      // Read the known set directly — NO gatewayDirectoryProvider touched.
+      // Read the known set directly — NO islandDirectoryProvider touched.
       expect(
-        container.read(knownGatewaysProvider).map((e) => _norm(e.httpBaseUrl)),
+        container.read(knownIslandsProvider).map((e) => _norm(e.httpBaseUrl)),
         contains(_norm('https://chat.seen-before.example')),
       );
     });
@@ -370,7 +370,7 @@ void main() {
         'persisted (the DHT grow loop)', () async {
       // A brand-new island the app has never seen and that isn't a bundled seed.
       final client = _FakeClient(const [
-        ServerEntry(
+        IslandEntry(
           label: 'New Island',
           httpBaseUrl: 'https://chat.newisland.example',
         ),
@@ -380,16 +380,16 @@ void main() {
       // Materialize the known set BEFORE discovery so the notifier is alive to
       // receive the remember() (a NotifierProvider is lazy).
       expect(
-        container.read(knownGatewaysProvider).map((e) => _norm(e.httpBaseUrl)),
+        container.read(knownIslandsProvider).map((e) => _norm(e.httpBaseUrl)),
         isNot(contains(_norm('https://chat.newisland.example'))),
       );
 
-      await container.read(gatewayDirectoryProvider.future);
+      await container.read(islandDirectoryProvider.future);
       await pumpEventQueue(); // let the fire-and-forget remember() settle
 
       // GROW: the known set (what the picker seeds from) now includes it.
       expect(
-        container.read(knownGatewaysProvider).map((e) => _norm(e.httpBaseUrl)),
+        container.read(knownIslandsProvider).map((e) => _norm(e.httpBaseUrl)),
         contains(_norm('https://chat.newisland.example')),
       );
       // PERSIST: a fresh store over the same prefs sees it → survives a restart.
@@ -403,10 +403,10 @@ void main() {
     });
   });
 
-  group('GatewayPickerScreen directory rendering', () {
+  group('IslandPickerScreen directory rendering', () {
     Future<ProviderContainer> pump(
       WidgetTester tester,
-      Future<List<ServerEntry>> Function() directoryFetch,
+      Future<List<IslandEntry>> Function() directoryFetch,
     ) async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
@@ -415,13 +415,13 @@ void main() {
         retry: (_, _) => null,
         overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
-          gatewayDirectoryProvider.overrideWith((ref) => directoryFetch()),
+          islandDirectoryProvider.overrideWith((ref) => directoryFetch()),
         ],
       );
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(home: GatewayPickerScreen()),
+          child: const MaterialApp(home: IslandPickerScreen()),
         ),
       );
       await tester.pumpAndSettle();
@@ -434,7 +434,7 @@ void main() {
       final container = await pump(
         tester,
         () async => const [
-          ServerEntry(label: 'Enspyr Island', httpBaseUrl: 'https://enspyr.co'),
+          IslandEntry(label: 'Enspyr Island', httpBaseUrl: 'https://enspyr.co'),
         ],
       );
       addTearDown(container.dispose);
@@ -504,15 +504,15 @@ class _ExplodingAdapter implements HttpClientAdapter {
 
 /// A directory client with canned output — for provider-level tests. Records the
 /// URL it was asked to fetch so the URL-composition invariant can be asserted.
-class _FakeClient implements GatewayDirectoryClient {
+class _FakeClient implements IslandDirectoryClient {
   _FakeClient(this._entries) : _throws = false;
   _FakeClient.throwing() : _entries = const [], _throws = true;
-  final List<ServerEntry> _entries;
+  final List<IslandEntry> _entries;
   final bool _throws;
   String? lastUrl;
 
   @override
-  Future<List<ServerEntry>> fetchFrom(String directoryUrl) async {
+  Future<List<IslandEntry>> fetchFrom(String directoryUrl) async {
     lastUrl = directoryUrl;
     if (_throws) throw Exception('directory down');
     return _entries;

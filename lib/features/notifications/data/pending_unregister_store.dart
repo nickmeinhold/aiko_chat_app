@@ -21,7 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// guard because the two operations are no longer racing for the same instant.
 ///
 /// KEYED BY ISLAND, deliberately. A token registered with island X must never be
-/// deleted at island Y — after `switchGateway` the REST client already points at
+/// deleted at island Y — after `switchIsland` the REST client already points at
 /// the new island, and an un-keyed debt would send X's DELETE to Y (a 204 that
 /// deletes nothing while reporting success, leaving X routing forever).
 ///

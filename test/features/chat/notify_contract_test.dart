@@ -7,7 +7,7 @@
 // contract so the footgun fails CI instead of shipping:
 //   1. every public writer that changes a row EMITS on watchChannel;
 //   2. the two no-op-prone writers (markFailed / retry) stay SILENT when their
-//      `serverUlid IS NULL` guard matches zero rows (already-sent) — the "finish
+//      `islandUlid IS NULL` guard matches zero rows (already-sent) — the "finish
 //      the octave" consistency fix that gates their notify on rows-changed.
 //
 // Chosen over a `_mutate()` choke-point wrapper (the other option in #2905): a test
@@ -153,7 +153,7 @@ void main() {
         DateTime.utc(2026, 1, 1, 12),
       ); // sent
       expect(
-        // WHERE serverUlid IS NULL now matches zero rows.
+        // WHERE islandUlid IS NULL now matches zero rows.
         await emissionsFrom(cache, 'c', () => cache.markFailed('t1')),
         0,
       );

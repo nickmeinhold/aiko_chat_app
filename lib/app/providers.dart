@@ -17,6 +17,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/prefs/pref_key_migration.dart';
+
 import '../core/auth/token_provider.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/auth/data/cached_user_store.dart';
@@ -35,8 +37,8 @@ import 'config.dart';
 // --- config ----------------------------------------------------------------
 
 /// The platform key-value store, loaded once in `main()` (it's async to obtain)
-/// and injected here so [GatewayConfigController.build] can read the persisted
-/// gateway synchronously. A throwing default means a `main()` that forgot the
+/// and injected here so [IslandConfigController.build] can read the persisted
+/// island synchronously. A throwing default means a `main()` that forgot the
 /// override fails loudly at first read rather than silently losing persistence.
 /// Tests that build [configProvider] override this with an in-memory instance
 /// (`SharedPreferences.setMockInitialValues({})`).
@@ -47,44 +49,51 @@ final sharedPreferencesProvider = Provider<SharedPreferences>(
   ),
 );
 
-/// The persistence key for the user's chosen gateway base URL. Public so the
-/// switch ceremony ([AuthController.switchGateway]) can write it — but exposing
+/// The persistence key for the user's chosen island base URL. Public so the
+/// switch ceremony ([AuthController.switchIsland]) can write it — but exposing
 /// the *key* is not a mutation door: there is deliberately NO public setter on
-/// [GatewayConfigController], so the gateway can only change via the ceremony
+/// [IslandConfigController], so the island can only change via the ceremony
 /// (which first tears the session down). Closing that bypass at compile time
 /// (Kelvin + Carnot consensus) — documentation doesn't compile, so we removed
 /// the public mutator instead.
-const gatewayBaseUrlPrefKey = 'aiko_gateway_base_url';
+const islandBaseUrlPrefKey = 'aiko_island_base_url';
 
-/// Where the gateway lives — a RUNTIME-mutable, persisted value (the #4 picker).
+/// Where the island lives — a RUNTIME-mutable, persisted value (the #4 picker).
 ///
 /// `ref.watch(configProvider)` stays synchronous (a [Notifier]'s `build` is
 /// sync), so [backendProvider] and [transportProvider] are untouched: changing
-/// the gateway flips this state, and the REST backend + WSS transport rebuild
+/// the island flips this state, and the REST backend + WSS transport rebuild
 /// automatically against the new host (transport's `onDispose` disconnects the
 /// old socket cleanly).
-final configProvider = NotifierProvider<GatewayConfigController, GatewayConfig>(
-  GatewayConfigController.new,
+final configProvider = NotifierProvider<IslandConfigController, IslandConfig>(
+  IslandConfigController.new,
 );
 
-/// Owns the gateway selection: resolves the value from persistence + environment.
+/// Owns the island selection: resolves the value from persistence + environment.
 ///
 /// Resolution order in [build]: a persisted choice wins; otherwise fall back to
-/// [GatewayConfig.fromEnvironment] (`--dart-define` → hardcoded prod). There is
-/// deliberately NO public mutator — the gateway changes ONLY via
-/// [AuthController.switchGateway], which writes [gatewayBaseUrlPrefKey] and then
+/// [IslandConfig.fromEnvironment] (`--dart-define` → hardcoded prod). There is
+/// deliberately NO public mutator — the island changes ONLY via
+/// [AuthController.switchIsland], which writes [islandBaseUrlPrefKey] and then
 /// `ref.invalidate`s this provider to re-derive from the new persisted value.
 /// That makes the session teardown impossible to bypass: you cannot move the
 /// live config without going through the ceremony that first clears the tokens.
-class GatewayConfigController extends Notifier<GatewayConfig> {
+class IslandConfigController extends Notifier<IslandConfig> {
   @override
-  GatewayConfig build() {
+  IslandConfig build() {
     final prefs = ref.watch(sharedPreferencesProvider);
-    final persisted = prefs.getString(gatewayBaseUrlPrefKey);
+    // Legacy-aware: an install that predates the island vocabulary still holds
+    // its choice under the old key, and reading it here is what adopts it
+    // forward. See [readAndAdopt] for why the write matters.
+    final persisted = readAndAdopt(
+      prefs,
+      key: islandBaseUrlPrefKey,
+      legacyKey: kLegacyIslandBaseUrlPrefKey,
+    );
     if (persisted != null && persisted.trim().isNotEmpty) {
-      return GatewayConfig.normalized(persisted);
+      return IslandConfig.normalized(persisted);
     }
-    return GatewayConfig.fromEnvironment();
+    return IslandConfig.fromEnvironment();
   }
 }
 
@@ -123,7 +132,7 @@ final authEventsProvider = Provider<StreamController<void>>((ref) {
   return controller;
 });
 
-/// The gateway backend: a token-less client (login/refresh), a single-flight
+/// The island backend: a token-less client (login/refresh), a single-flight
 /// token provider, and an interceptor-wrapped authed client — wired cycle-free
 /// by [buildGatewayBackend]. The token provider is shared with the transport so
 /// REST and WSS draw from ONE source of tokens.
@@ -169,8 +178,8 @@ final transportProvider = Provider<ChatTransport>((ref) {
   // Capability gate for sovereign `origin` emit (task #1896). Seeded from the
   // transitional carriage allowlist for this host, then re-resolved from the
   // gateway's `GET /capabilities` on every (re)connect. Rebuilt with this
-  // provider when the gateway URL changes (switchGateway), so the host seed
-  // always matches the active gateway.
+  // provider when the island URL changes (switchIsland), so the host seed
+  // always matches the active island.
   final carriage = CarriageCapability(
     host: Uri.parse(config.httpBaseUrl).host,
     fetch: restApi.getCapabilities,

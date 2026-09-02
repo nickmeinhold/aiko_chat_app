@@ -34,16 +34,17 @@ import 'package:flutter_test/flutter_test.dart';
 const _permitted = <String>{
   // Drift/SQL — `server_ulid` is the island-assigned message id column.
   'server_ulid',
-  r'${_M.serverUlid} = ?',
-  r'${_M.serverUlid} IS NULL',
-  r'${_M.clientTempId} = ? AND ${_M.serverUlid} IS NULL',
-  r'COALESCE(${_M.serverUlid}, ${_M.clientTempId})',
-  r'DELETE FROM ${_M.table} WHERE ${_M.serverUlid} = ?',
-  r'SELECT * FROM ${_M.table} WHERE ${_M.serverUlid} IS NULL ',
-  r'serverUlid $u matched a row in channel ${existing.channelId} ',
-  r'!= ${serverMsg.channelId} — corruption, refusing to overwrite',
-  'upsertInbound requires a server ULID (id != null)',
-  // Storage keys — renaming these would orphan every existing install's prefs.
+  r'${_M.islandUlid} = ?',
+  r'${_M.islandUlid} IS NULL',
+  r'${_M.clientTempId} = ? AND ${_M.islandUlid} IS NULL',
+  r'COALESCE(${_M.islandUlid}, ${_M.clientTempId})',
+  r'DELETE FROM ${_M.table} WHERE ${_M.islandUlid} = ?',
+  r'SELECT * FROM ${_M.table} WHERE ${_M.islandUlid} IS NULL ',
+  r'islandUlid $u matched a row in channel ${existing.channelId} ',
+  r'!= ${islandMsg.channelId} — corruption, refusing to overwrite',
+  // LEGACY storage keys, read-only. These are the pre-vocabulary names, kept so
+  // an existing install's island choice can be adopted forward under the new key
+  // (see `pref_key_migration.dart`). They disappear when that fallback does.
   'aiko_gateway_base_url',
   'aiko_known_gateways',
   // Wire: the island's own directory endpoint and its JSON fields.
@@ -51,10 +52,9 @@ const _permitted = <String>{
   'gateways',
   'servers',
   // Telemetry and debug output.
-  r'server=$serverUlid',
-  r'sender=${senderUserId ?? "-"} channel=$channelId ulid=$serverUlid ',
-  r'GatewayConfig($httpBaseUrl)',
-  'GatewayDirectoryClient',
+  r'sender=${senderUserId ?? "-"} channel=$channelId ulid=$islandUlid ',
+  r'IslandConfig($httpBaseUrl)',
+  'IslandDirectoryClient',
   // A developer `assert` about the gateway service's own REST contract (is
   // `after` exclusive?). Aimed at us, and "gateway" is the CORRECT word — the
   // cursor belongs to the bridge service, not to the island.
@@ -65,7 +65,10 @@ const _permitted = <String>{
 final _banned = RegExp(r'\b(server|gateway)s?\b', caseSensitive: false);
 
 /// Dart string literals on one line, single- or double-quoted.
-final _literal = RegExp(r"'([^'\\]*(?:\\.[^'\\]*)*)'" r'|"([^"\\]*(?:\\.[^"\\]*)*)"');
+final _literal = RegExp(
+  r"'([^'\\]*(?:\\.[^'\\]*)*)'"
+  r'|"([^"\\]*(?:\\.[^"\\]*)*)"',
+);
 
 /// An import/export path is machine-facing by construction.
 bool _isPath(String s) =>
@@ -109,16 +112,18 @@ void main() {
     );
   });
 
-  test('the island picker route is /settings/island, not /settings/gateway',
-      () {
-    // The route is semi-visible: it is what a deep link says out loud.
-    final hits = <String>[];
-    for (final entity in Directory('lib').listSync(recursive: true)) {
-      if (entity is! File || !entity.path.endsWith('.dart')) continue;
-      if (entity.readAsStringSync().contains('/settings/gateway')) {
-        hits.add(entity.path);
+  test(
+    'the island picker route is /settings/island, not /settings/gateway',
+    () {
+      // The route is semi-visible: it is what a deep link says out loud.
+      final hits = <String>[];
+      for (final entity in Directory('lib').listSync(recursive: true)) {
+        if (entity is! File || !entity.path.endsWith('.dart')) continue;
+        if (entity.readAsStringSync().contains('/settings/gateway')) {
+          hits.add(entity.path);
+        }
       }
-    }
-    expect(hits, isEmpty);
-  });
+      expect(hits, isEmpty);
+    },
+  );
 }

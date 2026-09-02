@@ -8,7 +8,7 @@ import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// The derived, three-state network status (offline / serverUnreachable /
+/// The derived, three-state network status (offline / islandUnreachable /
 /// online) picks the right reachability source per auth state, and the banner
 /// shows only on trouble.
 void main() {
@@ -71,14 +71,14 @@ void main() {
     expect(await status(c), NetworkStatus.online);
   });
 
-  test('logged in + socket DISCONNECTED → serverUnreachable', () async {
+  test('logged in + socket DISCONNECTED → islandUnreachable', () async {
     final c = container(
       deviceOnline: true,
       loggedInUser: user,
       socket: ConnectionState.disconnected,
     );
     addTearDown(c.dispose);
-    expect(await status(c), NetworkStatus.serverUnreachable);
+    expect(await status(c), NetworkStatus.islandUnreachable);
   });
 
   test(
@@ -120,11 +120,11 @@ void main() {
   });
 
   test(
-    'logged out + gateway unreachable → serverUnreachable (the DNS case)',
+    'logged out + gateway unreachable → islandUnreachable (the DNS case)',
     () async {
       final c = container(deviceOnline: true, gatewayReachable: false);
       addTearDown(c.dispose);
-      expect(await status(c), NetworkStatus.serverUnreachable);
+      expect(await status(c), NetworkStatus.islandUnreachable);
     },
   );
 
@@ -146,8 +146,8 @@ void main() {
       expect(find.text("You're offline"), findsOneWidget);
     });
 
-    testWidgets('serverUnreachable → amber cannot-reach text', (t) async {
-      await pump(t, NetworkStatus.serverUnreachable);
+    testWidgets('islandUnreachable → amber cannot-reach text', (t) async {
+      await pump(t, NetworkStatus.islandUnreachable);
       expect(find.text("Can't reach the island"), findsOneWidget);
     });
   });

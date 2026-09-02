@@ -1,17 +1,17 @@
-/// Provider graph for resilient gateway/island discovery (#36).
+/// Provider graph for resilient island/island discovery (#36).
 ///
 /// Three parts, no single point of failure:
-///  1. BOOTSTRAP from multiple bundled seeds ([kGatewayPresets]) — survives any
+///  1. BOOTSTRAP from multiple bundled seeds ([kIslandPresets]) — survives any
 ///     one being down.
-///  2. DISCOVER from the CURRENTLY-SELECTED gateway's `/v1/gateways`
-///     ([gatewayDirectoryProvider]) — not a fixed origin. Re-fires on a gateway
+///  2. DISCOVER from the CURRENTLY-SELECTED island's `/v1/islands`
+///     ([islandDirectoryProvider]) — not a fixed origin. Re-fires on a island
 ///     switch (it watches [configProvider]).
 ///  3. GROW: every successfully-discovered island is unioned into a persisted
-///     "ever-seen" set ([knownGatewaysProvider] via [GatewaySeedStore]), so it
+///     "ever-seen" set ([knownIslandsProvider] via [IslandSeedStore]), so it
 ///     becomes a future bootstrap contact. Reachable set = presets ∪ ever-seen.
 ///
-/// The picker watches [knownGatewaysProvider] (renders instantly, incl. persisted
-/// islands) and overlays [gatewayDirectoryProvider] once the live fetch lands —
+/// The picker watches [knownIslandsProvider] (renders instantly, incl. persisted
+/// islands) and overlays [islandDirectoryProvider] once the live fetch lands —
 /// a slow/absent/failed directory never blocks the screen.
 library;
 
@@ -22,16 +22,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
-import '../data/gateway_directory_client.dart';
-import '../data/gateway_seed_store.dart';
-import '../domain/server_entry.dart';
+import '../data/island_directory_client.dart';
+import '../data/island_seed_store.dart';
+import '../domain/island_entry.dart';
 
-String _normalizeUrl(String url) => GatewayConfig.normalized(url).httpBaseUrl;
+String _normalizeUrl(String url) => IslandConfig.normalized(url).httpBaseUrl;
 
 /// The directory client — its own [Dio], unauthenticated (the directory is
 /// public). Tests override this with a fake to drive entries/errors without a
 /// network. The Dio is disposed with the provider scope.
-final gatewayDirectoryClientProvider = Provider<GatewayDirectoryClient>((ref) {
+final gatewayDirectoryClientProvider = Provider<IslandDirectoryClient>((ref) {
   final dio = Dio(
     BaseOptions(
       connectTimeout: const Duration(seconds: 8),
@@ -39,12 +39,12 @@ final gatewayDirectoryClientProvider = Provider<GatewayDirectoryClient>((ref) {
     ),
   );
   ref.onDispose(dio.close);
-  return GatewayDirectoryClient(dio: dio);
+  return IslandDirectoryClient(dio: dio);
 });
 
 /// The local "islands I've met" store, backed by SharedPreferences.
-final gatewaySeedStoreProvider = Provider<GatewaySeedStore>((ref) {
-  return GatewaySeedStore(
+final gatewaySeedStoreProvider = Provider<IslandSeedStore>((ref) {
+  return IslandSeedStore(
     prefs: ref.watch(sharedPreferencesProvider),
     normalize: _normalizeUrl,
   );
@@ -56,17 +56,17 @@ final gatewaySeedStoreProvider = Provider<GatewaySeedStore>((ref) {
 /// instantly-available floor the picker renders before (and instead of, on
 /// failure) the live directory. [remember] folds a fresh discovery in and
 /// persists it, growing the set for next launch.
-final knownGatewaysProvider =
-    NotifierProvider<KnownGatewaysNotifier, List<ServerEntry>>(
-      KnownGatewaysNotifier.new,
+final knownIslandsProvider =
+    NotifierProvider<KnownIslandsNotifier, List<IslandEntry>>(
+      KnownIslandsNotifier.new,
     );
 
-class KnownGatewaysNotifier extends Notifier<List<ServerEntry>> {
+class KnownIslandsNotifier extends Notifier<List<IslandEntry>> {
   @override
-  List<ServerEntry> build() =>
+  List<IslandEntry> build() =>
       // Load the persisted ever-seen set on FIRST build — not just after a
       // discovery this session. This is the whole point of persistence: if the
-      // current bootstrap gateway is DOWN (the SPOF case this feature exists to
+      // current bootstrap island is DOWN (the SPOF case this feature exists to
       // solve), discovery throws and remember() never fires, so a previously-seen
       // island must still seed the picker from disk to be reachable at all.
       _merge(ref.watch(gatewaySeedStoreProvider).load());
@@ -75,7 +75,7 @@ class KnownGatewaysNotifier extends Notifier<List<ServerEntry>> {
   /// list. Idempotent: re-remembering already-known islands is a no-op write of
   /// the same set. Skips the state update when nothing changed so a periodic
   /// re-fetch doesn't churn listeners.
-  Future<void> remember(List<ServerEntry> discovered) async {
+  Future<void> remember(List<IslandEntry> discovered) async {
     final store = ref.read(gatewaySeedStoreProvider);
     final persisted = await store.remember(discovered);
     final next = _merge(persisted);
@@ -83,16 +83,16 @@ class KnownGatewaysNotifier extends Notifier<List<ServerEntry>> {
   }
 
   /// presets ∪ [persisted], deduped on normalized URL (presets first / win).
-  List<ServerEntry> _merge(List<ServerEntry> persisted) {
+  List<IslandEntry> _merge(List<IslandEntry> persisted) {
     final seen = <String>{};
-    final merged = <ServerEntry>[];
-    for (final entry in [...kGatewayPresets, ...persisted]) {
+    final merged = <IslandEntry>[];
+    for (final entry in [...kIslandPresets, ...persisted]) {
       if (seen.add(_normalizeUrl(entry.httpBaseUrl))) merged.add(entry);
     }
     return merged;
   }
 
-  static bool _sameUrls(List<ServerEntry> a, List<ServerEntry> b) {
+  static bool _sameUrls(List<IslandEntry> a, List<IslandEntry> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (_normalizeUrl(a[i].httpBaseUrl) != _normalizeUrl(b[i].httpBaseUrl)) {
@@ -103,16 +103,16 @@ class KnownGatewaysNotifier extends Notifier<List<ServerEntry>> {
   }
 }
 
-/// The live directory fetched from the CURRENT gateway. `AsyncError` on a
+/// The live directory fetched from the CURRENT island. `AsyncError` on a
 /// network/HTTP failure (picker then shows the known set); the entries on
-/// success — which are also unioned into [knownGatewaysProvider] so they persist.
-/// Watches [configProvider], so switching gateways re-discovers from the new one.
+/// success — which are also unioned into [knownIslandsProvider] so they persist.
+/// Watches [configProvider], so switching islands re-discovers from the new one.
 /// `ref.invalidate` to retry.
-final gatewayDirectoryProvider = FutureProvider<List<ServerEntry>>((ref) async {
+final islandDirectoryProvider = FutureProvider<List<IslandEntry>>((ref) async {
   final base = _normalizeUrl(ref.watch(configProvider).httpBaseUrl);
   // Optional fixed override (dev/staging); default = discover from the current
-  // gateway, so there is no privileged directory host to fail.
-  final override = kGatewayDirectoryUrl.trim();
+  // island, so there is no privileged directory host to fail.
+  final override = kIslandDirectoryUrl.trim();
   final url = override.isNotEmpty ? override : '$base/v1/gateways';
 
   final entries = await ref
@@ -122,7 +122,7 @@ final gatewayDirectoryProvider = FutureProvider<List<ServerEntry>>((ref) async {
   // Fold the discovery into the persisted set (fire-and-forget: a persistence
   // hiccup must not fail discovery — the live entries still render this session).
   if (entries.isNotEmpty) {
-    unawaited(ref.read(knownGatewaysProvider.notifier).remember(entries));
+    unawaited(ref.read(knownIslandsProvider.notifier).remember(entries));
   }
   return entries;
 });

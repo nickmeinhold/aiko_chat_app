@@ -8,7 +8,7 @@
 /// Sources, by auth state:
 ///  - device offline (no interface)            → [NetworkStatus.offline]
 ///  - logged IN: the live WSS socket is the free reachability probe
-///      (`connectionStateProvider`): connected → online, else serverUnreachable
+///      (`connectionStateProvider`): connected → online, else islandUnreachable
 ///  - logged OUT (login screen — no socket yet): an on-demand HTTP reachability
 ///      probe of the current gateway ([gatewayReachableProvider])
 library;
@@ -26,7 +26,7 @@ enum NetworkStatus {
   online,
 
   /// On a network, but the gateway can't be reached (the DNS/server-down case).
-  serverUnreachable,
+  islandUnreachable,
 
   /// No network interface at all.
   offline,
@@ -145,15 +145,15 @@ final networkStatusProvider = Provider<NetworkStatus>((ref) {
   if (loggedIn) {
     // Only a DEFINITIVE drop is "trouble". `connecting` and the still-loading
     // (null) state are the normal connect/revalidate window — painting them
-    // serverUnreachable would flash a false "can't reach" on every chat open
+    // islandUnreachable would flash a false "can't reach" on every chat open
     // (Tesla, PR #72). `unauthenticated` is an auth signal, not a network one
     // (the controller turns it into a logout), so it shows no banner either.
     final conn = ref.watch(connectionStateProvider).value;
     return conn == ConnectionState.disconnected
-        ? NetworkStatus.serverUnreachable
+        ? NetworkStatus.islandUnreachable
         : NetworkStatus.online;
   }
 
   final reachable = ref.watch(gatewayReachableProvider).value ?? true;
-  return reachable ? NetworkStatus.online : NetworkStatus.serverUnreachable;
+  return reachable ? NetworkStatus.online : NetworkStatus.islandUnreachable;
 });

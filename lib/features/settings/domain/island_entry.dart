@@ -1,4 +1,4 @@
-/// A selectable gateway in the picker (#4).
+/// A selectable island in the picker (#4).
 ///
 /// Deliberately a flat value object (label + base URL) so the source of the list
 /// can swap — from the hardcoded presets to the live discovery directory
@@ -10,17 +10,17 @@ library;
 
 import 'package:flutter/foundation.dart';
 
-class ServerEntry {
+class IslandEntry {
   /// Human label shown in the picker, e.g. "Production".
   final String label;
 
-  /// The gateway HTTP base URL, e.g. `https://chat.imagineering.cc`. Normalized
-  /// at switch time via `GatewayConfig.normalized`.
+  /// The island HTTP base URL, e.g. `https://chat.imagineering.cc`. Normalized
+  /// at switch time via `IslandConfig.normalized`.
   final String httpBaseUrl;
 
   /// Stable directory id/slug, when this entry came from the live directory.
   /// Null for the built-in presets. Not used for matching (we dedupe on the
-  /// normalized URL, the thing that actually identifies a gateway) — carried for
+  /// normalized URL, the thing that actually identifies a island) — carried for
   /// future grouping/telemetry.
   final String? id;
 
@@ -31,7 +31,7 @@ class ServerEntry {
   /// Optional region hint from the directory (e.g. "au"). Null for presets.
   final String? region;
 
-  const ServerEntry({
+  const IslandEntry({
     required this.label,
     required this.httpBaseUrl,
     this.id,
@@ -41,12 +41,12 @@ class ServerEntry {
 
   /// Tolerantly parse one directory entry. The cross-tab contract (#1548) is
   /// `{ id, name/display name, base URL, description?, region? }`, but the wire
-  /// casing isn't pinned yet (the gateway is Python/SQLite → likely snake_case),
+  /// casing isn't pinned yet (the island is Python/SQLite → likely snake_case),
   /// so we accept the common spellings of each field. An entry with no usable
   /// base URL is unparseable — return null so the caller can skip it rather than
   /// surfacing a tile that points nowhere. A missing name falls back to the host,
   /// so a half-populated directory still renders something tappable.
-  static ServerEntry? tryFromJson(Map<String, dynamic> json) {
+  static IslandEntry? tryFromJson(Map<String, dynamic> json) {
     final url = _firstString(json, const [
       'base_url',
       'baseUrl',
@@ -57,7 +57,7 @@ class ServerEntry {
     final trimmed = url.trim();
     // The directory is attacker-influenceable content, and a preset/directory
     // tile bypasses the picker's custom-URL validation (it goes straight to
-    // switchGateway). So hold each entry to the SAME bar as a typed URL: an
+    // switchIsland). So hold each entry to the SAME bar as a typed URL: an
     // absolute http(s) URL with a host. A malformed entry is skipped, not
     // surfaced as a tile that points nowhere.
     final uri = Uri.tryParse(trimmed);
@@ -76,7 +76,7 @@ class ServerEntry {
         ]) ??
         Uri.tryParse(trimmed)?.host ??
         trimmed;
-    return ServerEntry(
+    return IslandEntry(
       label: name,
       httpBaseUrl: trimmed,
       id: _firstString(json, const ['id', 'slug']),
@@ -114,23 +114,23 @@ class ServerEntry {
 /// MULTIPLE real internet islands are bundled (not just one), so bootstrap
 /// discovery survives any single one being down — the irreducible chicken-egg
 /// of a federated network (cf. BitTorrent DHT bootstrap nodes, a Mastodon
-/// server pick). Every island serves the FULL peer directory from `/v1/gateways`,
+/// island pick). Every island serves the FULL peer directory from `/v1/islands`,
 /// so reaching ANY one of these teaches the app about all the others; the
 /// ever-seen set is then persisted and grows (see the seed store), so these are
 /// only the cold-start floor, not the ceiling.
 ///
-/// Production is first so the common case (point at the live server) is one tap.
-/// Local and the Android-emulator loopback cover dev against a gateway on the
+/// Production is first so the common case (point at the live island) is one tap.
+/// Local and the Android-emulator loopback cover dev against a island on the
 /// host machine — DEBUG-ONLY: gated behind [kDebugMode] so they never reach end
 /// users in a release build (a user has nothing on their localhost, and
 /// 10.0.2.2 only resolves inside an Android emulator). A developer on a release
 /// build can still reach them via the Custom URL field. [kDebugMode] is a const
 /// bool, so the list stays `const` and the gating is zero-cost.
-const kGatewayPresets = <ServerEntry>[
-  ServerEntry(label: 'Production', httpBaseUrl: 'https://chat.imagineering.cc'),
-  ServerEntry(label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co'),
+const kIslandPresets = <IslandEntry>[
+  IslandEntry(label: 'Production', httpBaseUrl: 'https://chat.imagineering.cc'),
+  IslandEntry(label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co'),
   if (kDebugMode)
-    ServerEntry(label: 'Local', httpBaseUrl: 'http://localhost:8095'),
+    IslandEntry(label: 'Local', httpBaseUrl: 'http://localhost:8095'),
   if (kDebugMode)
-    ServerEntry(label: 'Android emulator', httpBaseUrl: 'http://10.0.2.2:8095'),
+    IslandEntry(label: 'Android emulator', httpBaseUrl: 'http://10.0.2.2:8095'),
 ];

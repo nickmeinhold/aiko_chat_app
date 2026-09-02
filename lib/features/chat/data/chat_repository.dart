@@ -26,7 +26,7 @@ import 'transport/chat_transport.dart';
 /// swallowed. Default is a no-op; production wires real telemetry.
 abstract class ChatTelemetry {
   const ChatTelemetry();
-  void orphanAck(String clientMsgId, String serverUlid) {}
+  void orphanAck(String clientMsgId, String islandUlid) {}
   void reconnectFailed(Object error, StackTrace stack) {}
   void historyGapBeforeFence(String channelId, String? cursor, String fence) {}
 
@@ -83,13 +83,13 @@ abstract class ChatTelemetry {
   /// a re-delivered invalid origin is not re-counted.
   ///
   /// PII: opaque ids ONLY. [senderUserId] is the account id, never the handle;
-  /// [serverUlid] (stable server message id, for dedup/correlation) and
+  /// [islandUlid] (stable server message id, for dedup/correlation) and
   /// [clientMsgId] (the content-bound signed id) are opaque. NEVER the body,
   /// pubkey, or signature.
   void originVerificationFailed({
     String? senderUserId,
     required String channelId,
-    required String serverUlid,
+    required String islandUlid,
     required String clientMsgId,
   }) {}
 }
@@ -443,7 +443,7 @@ class ChatRepository {
       final createdAt = await _clampToBottom(channelId);
       final optimistic = Message(
         clientTempId: tempId,
-        id: null, // serverUlid NULL → in the outbox
+        id: null, // islandUlid NULL → in the outbox
         channelId: channelId,
         sender: _meSender,
         body: body,
@@ -657,7 +657,7 @@ class ChatRepository {
       _telemetry.originVerificationFailed(
         senderUserId: m.sender.userId,
         channelId: m.channelId,
-        serverUlid:
+        islandUlid:
             m.id!, // non-null for inbound (upsertInbound just asserted it)
         clientMsgId: o.clientMsgId,
       );
@@ -683,7 +683,7 @@ class ChatRepository {
   Future<void> _onError(TransportError e) async {
     if (_disposed) return; // a torn-down repo must not write (rebuild overlap)
     if (e.refClientMsgId != null) {
-      // Per-message: fail that row (cache guards serverUlid IS NULL). UI offers
+      // Per-message: fail that row (cache guards islandUlid IS NULL). UI offers
       // W5 retry; no auto-retry. Guarded: a write landing as the cache closes
       // during teardown is benign (session ending) — own it, don't leak it.
       try {
@@ -942,11 +942,11 @@ class ChatRepository {
     }
   }
 
-  /// Complete any waiter whose row is ALREADY acked (serverUlid != null) in the
+  /// Complete any waiter whose row is ALREADY acked (islandUlid != null) in the
   /// cache — e.g. an ack that landed in the dispatch window — so the drain
   /// doesn't burn the full timeout. A self-echo alone does NOT complete it: the
-  /// echo writes R_u (keyed by serverUlid) while the optimistic row stays
-  /// serverUlid==NULL until the ACK collapse (round-3 distinction).
+  /// echo writes R_u (keyed by islandUlid) while the optimistic row stays
+  /// islandUlid==NULL until the ACK collapse (round-3 distinction).
   Future<void> _resolveAlreadyAcked(Set<String> ids) async {
     if (ids.isEmpty) return;
     final out = (await _cache.outbox()).map((m) => m.clientTempId).toSet();
