@@ -33,6 +33,19 @@ const kLegacyKnownIslandsPrefKey = 'aiko_known_gateways';
 
 /// Read [key]; failing that, adopt whatever [legacyKey] holds.
 ///
+/// PRECONDITION, made explicit because a reviewer was right to ask (Carnot,
+/// cage-match PR #173): this is a check-then-act — read the new key, then write
+/// it — and it is safe here for two reasons that a future change could remove.
+/// First, there is NO `await` between the read and the write, and Dart is
+/// single-threaded, so nothing can interleave within an isolate. Second, this
+/// app has exactly one `SharedPreferences` instance, created once in `main()`
+/// and injected; there are no background isolates and no native writer.
+///
+/// Add a background isolate that touches preferences — a push handler, say — and
+/// the second reason fails, and this becomes a real race in which a person's
+/// chosen island can be overwritten by the legacy value. The finding was
+/// rejected on today's code, not on the shape of the code.
+///
 /// The forward write is fire-and-forget: persistence here is best-effort, and a
 /// failure costs only that the next launch migrates instead. Returns the value
 /// either way, so a write failure never changes what this launch sees.

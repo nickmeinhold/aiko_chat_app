@@ -12,15 +12,24 @@
 // WHY A TEST AND NOT A NOTE. The drift did not arrive in one bad commit — it
 // accumulated one honest string at a time, in seven files, over months, while a
 // numbered ADR sat in `docs/adr/` saying otherwise. A rule that lives only in
-// prose is re-broken by the next person writing a snackbar at speed. This is the
-// enforcement point.
+// prose is re-broken by the next person writing a snackbar at speed.
 //
-// HOW IT WORKS. Every Dart string literal under `lib/` is checked (comment lines
-// are skipped — a comment is not something the app says). Anything containing
-// "server" or "gateway" must appear verbatim in [_permitted] below, which holds
-// only strings the USER NEVER SEES: SQL, storage keys, wire paths, telemetry,
-// and developer assertions. A new one is a decision, so it has to be written
-// down here to pass.
+// HOW IT WORKS. Every Dart string literal under `lib/` is checked — single-line
+// and triple-quoted, with comment lines skipped, because a comment is not
+// something the app says. Anything containing "server" or "gateway" must appear
+// verbatim in [_permitted], which holds only strings the USER NEVER SEES.
+//
+// THE ALLOWLIST IS ITSELF GUARDED, which is the lesson of this file's own
+// cage-match. Two reviewers attacked it independently and both were right: the
+// corpus-wide rename edited the allowlist along with the code, so an entry
+// hollowed out silently (`r'server=$serverUlid'` became `r'server=$islandUlid'`
+// and went on matching, keeping the suite green by tracking the very thing it
+// polices), and thirteen more entries stopped containing a banned word at all.
+// An allowlist is authoritative state that drifts exactly like the code it
+// polices, so it gets the same treatment: the meta-tests below fail on a DEAD
+// entry (no banned word — it can never match, so it is residue wearing policy's
+// clothes) and on an ORPHAN entry (no occurrence in the corpus — the exemption
+// outlived its reason).
 //
 // If this test fails on a string a person reads, the fix is the word, not the
 // allowlist.
@@ -29,32 +38,23 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Literals that legitimately carry "server"/"gateway" because the user never
-/// reads them. Each is machine-facing: a column, a key, a route on the wire, a
-/// log line, or an assertion aimed at us.
+/// reads them.
+///
+/// COVERAGE BOUNDARY, learned from the DEAD meta-test on its first run.
+/// [_banned] is word-boundary anchored, so a SNAKE_CASE token carrying the word
+/// does not match: in `server_ulid` the word is followed by `_`, itself a word
+/// character, so there is no boundary. `server_ulid`, `aiko_gateway_base_url`
+/// and `aiko_known_gateways` sat here exempting a match that could never happen
+/// — and their presence made that silence look deliberate rather than
+/// unexamined. They are gone. The boundary is correct on purpose (this guard
+/// hunts user-facing PROSE, and a snake_case token is never prose), but it is a
+/// boundary, and it is now written down instead of hidden behind exemptions.
 const _permitted = <String>{
-  // Drift/SQL — `server_ulid` is the island-assigned message id column.
-  'server_ulid',
-  r'${_M.islandUlid} = ?',
-  r'${_M.islandUlid} IS NULL',
-  r'${_M.clientTempId} = ? AND ${_M.islandUlid} IS NULL',
-  r'COALESCE(${_M.islandUlid}, ${_M.clientTempId})',
-  r'DELETE FROM ${_M.table} WHERE ${_M.islandUlid} = ?',
-  r'SELECT * FROM ${_M.table} WHERE ${_M.islandUlid} IS NULL ',
-  r'islandUlid $u matched a row in channel ${existing.channelId} ',
-  r'!= ${islandMsg.channelId} — corruption, refusing to overwrite',
-  // LEGACY storage keys, read-only. These are the pre-vocabulary names, kept so
-  // an existing install's island choice can be adopted forward under the new key
-  // (see `pref_key_migration.dart`). They disappear when that fallback does.
-  'aiko_gateway_base_url',
-  'aiko_known_gateways',
-  // Wire: the island's own directory endpoint and its JSON fields.
+  // Wire: the island's own directory endpoint and its JSON field names. The
+  // island repo owns this shape; we do not rename it unilaterally.
   r'$base/v1/gateways',
   'gateways',
   'servers',
-  // Telemetry and debug output.
-  r'sender=${senderUserId ?? "-"} channel=$channelId ulid=$islandUlid ',
-  r'IslandConfig($httpBaseUrl)',
-  'IslandDirectoryClient',
   // A developer `assert` about the gateway service's own REST contract (is
   // `after` exclusive?). Aimed at us, and "gateway" is the CORRECT word — the
   // cursor belongs to the bridge service, not to the island.
@@ -70,6 +70,24 @@ final _literal = RegExp(
   r'|"([^"\\]*(?:\\.[^"\\]*)*)"',
 );
 
+/// Triple-quoted literals, which span lines and are therefore invisible to a
+/// line-oriented scan. Kelvin's catch, and this guard's biggest hole: the
+/// single-line pattern matches the empty string between the first two quotes and
+/// never sees the body, so a multi-line help string — exactly where user-facing
+/// prose lives — passed in silence.
+///
+/// KNOWN BOUND, stated rather than papered over (Carnot): this is a regex, not
+/// the Dart analyzer. Adjacent-fragment concatenation IS covered, because each
+/// fragment sits on its own line and is scanned as its own literal; a banned word
+/// split ACROSS fragments ('ser' 'ver') would pass. Nobody writes that by
+/// accident, and buying it would cost an analyzer dependency in a vocabulary
+/// test. If this ever needs to be airtight rather than high-yield, switch to
+/// `package:analyzer` string-token parsing.
+final _tripleLiteral = RegExp(
+  r"'''([\s\S]*?)'''"
+  r'|"""([\s\S]*?)"""',
+);
+
 /// An import/export path is machine-facing by construction.
 bool _isPath(String s) =>
     s.startsWith('package:') ||
@@ -77,14 +95,31 @@ bool _isPath(String s) =>
     s.startsWith('../') ||
     s.endsWith('.dart');
 
+List<File> _dartFilesUnderLib() => Directory('lib')
+    .listSync(recursive: true)
+    .whereType<File>()
+    .where((f) => f.path.endsWith('.dart'))
+    .toList(growable: false);
+
 void main() {
   test('no user-facing string says "server" or "gateway" — the app says '
       '"island" (ADR-0001)', () {
     final offenders = <String>[];
 
-    for (final entity in Directory('lib').listSync(recursive: true)) {
-      if (entity is! File || !entity.path.endsWith('.dart')) continue;
-      final lines = entity.readAsLinesSync();
+    for (final entity in _dartFilesUnderLib()) {
+      final source = entity.readAsStringSync();
+
+      // Triple-quoted literals first, over the WHOLE file — a line-oriented
+      // pass structurally cannot see them.
+      for (final m in _tripleLiteral.allMatches(source)) {
+        final value = m.group(1) ?? m.group(2) ?? '';
+        if (!_banned.hasMatch(value)) continue;
+        if (_permitted.contains(value)) continue;
+        final line = '\n'.allMatches(source.substring(0, m.start)).length + 1;
+        offenders.add('${entity.path}:$line  (triple-quoted) "$value"');
+      }
+
+      final lines = source.split('\n');
       for (var i = 0; i < lines.length; i++) {
         final line = lines[i];
         final trimmed = line.trimLeft();
@@ -116,14 +151,42 @@ void main() {
     'the island picker route is /settings/island, not /settings/gateway',
     () {
       // The route is semi-visible: it is what a deep link says out loud.
-      final hits = <String>[];
-      for (final entity in Directory('lib').listSync(recursive: true)) {
-        if (entity is! File || !entity.path.endsWith('.dart')) continue;
-        if (entity.readAsStringSync().contains('/settings/gateway')) {
-          hits.add(entity.path);
-        }
-      }
+      final hits = _dartFilesUnderLib()
+          .where((f) => f.readAsStringSync().contains('/settings/gateway'))
+          .map((f) => f.path)
+          .toList();
       expect(hits, isEmpty);
     },
   );
+
+  test('no allowlist entry is DEAD — every one must contain a banned word', () {
+    // A corpus-wide rename edits this file too. An entry whose banned word was
+    // renamed away can never match again: not policy, residue that LOOKS like
+    // policy, and it will quietly permit any future string equal to it.
+    final dead = _permitted.where((e) => !_banned.hasMatch(e)).toList();
+    expect(
+      dead,
+      isEmpty,
+      reason:
+          'These allowlist entries contain no "server"/"gateway", so they '
+          'exempt nothing and are almost certainly rename residue. Delete '
+          'them:\n${dead.join('\n')}',
+    );
+  });
+
+  test('no allowlist entry is an ORPHAN — every one must occur in lib/', () {
+    // Kelvin's catch. An exemption whose justification has left the codebase is
+    // an open door: valid forever, reread by nobody. Requiring a live occurrence
+    // means an exemption dies with the code that earned it.
+    final corpus = _dartFilesUnderLib().map((f) => f.readAsStringSync()).join();
+    final orphans = _permitted.where((e) => !corpus.contains(e)).toList();
+    expect(
+      orphans,
+      isEmpty,
+      reason:
+          'These allowlist entries no longer appear anywhere under lib/, so '
+          'the exemption has outlived its reason. Delete them:\n'
+          '${orphans.join('\n')}',
+    );
+  });
 }
