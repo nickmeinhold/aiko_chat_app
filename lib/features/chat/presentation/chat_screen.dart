@@ -300,8 +300,9 @@ class _ConversationTitle extends ConsumerWidget {
     if (a == null) return const Text('Chat');
     // By SOURCE, through the one door (#136) — a DM whose `kind` says otherwise
     // would otherwise render `a.name`, which for a DM is the empty string.
-    if (!ref.watch(dmConversationIdsProvider).contains(a.id))
+    if (!ref.watch(dmConversationIdsProvider).contains(a.id)) {
       return Text(a.name);
+    }
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(a.id)).value;
     return Text(dmPeerTitle(roster, myId));
@@ -321,6 +322,18 @@ class _ConversationTitle extends ConsumerWidget {
 ///
 /// [rooms] and [dms] MUST partition [navigableChannelsProvider]: a correctness
 /// requirement, not a convention (see [ChatScreen.build]).
+/// One row of the conversation menu: the id it selects (null for a section
+/// header, which is a label rather than a destination) and how to draw it.
+///
+/// It exists so `items` and `selectedItemBuilder` cannot disagree about how many
+/// rows there are — DropdownButton asserts if they do.
+class _SwitcherRow {
+  const _SwitcherRow(this.id, this.build);
+
+  final String? id;
+  final Widget Function(BuildContext) build;
+}
+
 class _ConversationSwitcher extends ConsumerWidget {
   const _ConversationSwitcher({
     required this.rooms,
@@ -351,118 +364,153 @@ class _ConversationSwitcher extends ConsumerWidget {
           (sum, c) => sum + ref.watch(channelUnreadCountProvider(c.id)),
         );
 
-    return Row(
+    // Resolve every DM's roster while the menu is SHUT, so a DM row is
+    // peer-titled on the frame it appears instead of relabelling from
+    // `dmPeerTitle`'s placeholder a round-trip later.
+    //
+    // This used to happen by accident: `DropdownButton` stacks its items in an
+    // [IndexedStack], which BUILDS every child and paints one, so each
+    // `_DmMenuItem` resolved its own roster while invisible. Drawing the
+    // collapsed face from [selectedItemBuilder] stops building the rows you
+    // cannot see — the point of doing it — and took the warm with it. Stated
+    // here it is a property this widget holds on purpose rather than one the
+    // framework was providing where nobody had written it down.
+    for (final d in dms) {
+      ref.watch(channelRosterProvider(d.id));
+    }
+
+    // The collapsed face of the switcher: caret, then the aggregate unread, then
+    // the conversation name. All three are built INSIDE the DropdownButton via
+    // [selectedItemBuilder] rather than beside it in a Row, because a widget
+    // drawn next to the button is decoration with no hit area — the caret looked
+    // like the thing you press to open the menu and was the one part of the
+    // control that could not (found on a phone, not by any test here).
+    //
+    // The aggregate count travels WITH the caret rather than trailing the name:
+    // it means attention wanted in OTHER conversations, while the bell that
+    // [ConversationTitleMuteGesture] appends right after the title means
+    // attention suppressed in THIS one. Six pixels apart they read as one
+    // compound signal ("3 muted notifications"), which is wrong in a way that is
+    // worse than either being unclear alone.
+    Widget collapsedFace(Widget label) => Row(
       children: [
-        // The caret sits to the LEFT of the name, outside the DropdownButton.
-        // Drawing it here rather than as the button's own `icon` is what makes
-        // "on the left" a one-line change instead of a rebuild of how the
-        // collapsed state is composed.
         const Icon(Icons.arrow_drop_down),
-        // The aggregate unread count travels WITH the caret, not at the far end
-        // of the title.
-        //
-        // It used to sit last in this Row — which put it flush against the mute
-        // bell that `ConversationTitleMuteGesture` appends immediately after,
-        // six pixels away. The two mean opposite things: this number is
-        // attention wanted in OTHER conversations, the bell is attention
-        // suppressed in THIS one. Adjacent, they read as one compound signal
-        // ("3 muted notifications"), which is wrong in a way that is worse than
-        // either being unclear alone. Nobody wrote that adjacency: it emerged
-        // from `title:` composing a switcher that ended in a badge with a
-        // wrapper that appends a bell, so no single diff ever showed it and it
-        // survived review and 1185 tests until a human looked at a phone.
-        //
-        // Beside the caret it belongs to the thing it is ABOUT — the switcher,
-        // "other conversations you could go to" — and the two opposite meanings
-        // are separated by the width of the title.
         if (otherUnread > 0) ...[
           const SizedBox(width: 3),
           UnreadBadge(key: const Key('unread-aggregate'), count: otherUnread),
         ],
         const SizedBox(width: 2),
-        Expanded(
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: activeId,
-              isDense: true,
-              // isExpanded so the button is bounded by the AppBar title width and
-              // a long channel name ellipsizes instead of overflowing the bar (a
-              // channel named like a legal entity would otherwise clip —
-              // cage-match #106, Tesla).
-              isExpanded: true,
-              borderRadius: BorderRadius.circular(8),
-              // NO trailing caret — the arrow is drawn to the LEFT of this
-              // button by the Row below.
-              //
-              // The first attempt moved it with `selectedItemBuilder`, which
-              // works but changes how the collapsed state is BUILT: it hands
-              // DropdownButton a parallel list of widgets for every item. A
-              // committed probe in narrow_dm_navigation_test proves only the
-              // ACTIVE row is built when collapsed — a property a phone's data
-              // budget depends on — and routing through selectedItemBuilder put
-              // that at risk to move a caret 40 pixels. Not a trade worth making.
-              icon: const SizedBox.shrink(),
-              // M3 AppBar foreground is onSurface, and the menu opens on a
-              // surface background — so the inherited onSurface text reads
-              // correctly in both the collapsed bar and the open menu.
-              items: [
-                for (final c in rooms)
-                  DropdownMenuItem<String>(
-                    value: c.id,
-                    child: _ChannelMenuItem(
-                      channelId: c.id,
-                      name: c.name,
-                      isActive: c.id == activeId,
-                    ),
-                  ),
-                // Section header, not a destination: `enabled: false` keeps it out
-                // of the selectable set and a null value keeps it out of the
-                // one-item-matches-`value` assertion. `Semantics(header: true)`
-                // because a disabled menu item still ANNOUNCES as an item, which
-                // would offer a screen reader a dead destination in the only
-                // navigation control a phone has (cage-match #136, Tesla).
-                // Drawn only when there is a boundary to mark.
-                if (dms.isNotEmpty && rooms.isNotEmpty)
-                  DropdownMenuItem<String>(
-                    enabled: false,
-                    child: Semantics(
-                      header: true,
-                      child: Text(
-                        'Direct messages',
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ),
-                for (final d in dms)
-                  DropdownMenuItem<String>(
-                    value: d.id,
-                    child: _DmMenuItem(dm: d, isActive: d.id == activeId),
-                  ),
-              ],
-              onChanged: (id) {
-                if (id == null) return;
-                // FAIL CLOSED on an id the list no longer holds. The overlay
-                // route snapshots its items when the menu OPENS and keeps
-                // offering them; if a conversation retires while the menu is up,
-                // tapping its leftover row would write a dead id into the
-                // selection. Display would look fine — `resolveActive` falls back
-                // — but the Notifier stays poisoned, and `ref.listen`'s self-heal
-                // never fires because the list did not change again. When that id
-                // came back the user would be yanked into a conversation they
-                // never re-picked: the exact #106 snap-back this file already
-                // guards, re-entered through the overlay (cage-match #136, Tesla).
-                if (!rooms.any((c) => c.id == id) &&
-                    !dms.any((c) => c.id == id)) {
-                  return;
-                }
-                ref.read(selectedChannelIdProvider.notifier).select(id);
-              },
+        Expanded(child: label),
+      ],
+    );
+
+    // Every row of the menu, in order: the id it selects (null for the section
+    // header, which is not a destination) and how to draw it.
+    final rows = <_SwitcherRow>[
+      for (final c in rooms)
+        _SwitcherRow(
+          c.id,
+          (_) => _ChannelMenuItem(
+            channelId: c.id,
+            name: c.name,
+            isActive: c.id == activeId,
+          ),
+        ),
+      // A boundary is only worth marking when there is one on both sides. The
+      // null id makes this `enabled: false`, which keeps it out of the
+      // selectable set and out of the one-item-matches-`value` assertion.
+      // `Semantics(header: true)` because a disabled menu item still ANNOUNCES
+      // as an item, which would offer a screen reader a dead destination in the
+      // only navigation control a phone has (cage-match #136, Tesla).
+      if (dms.isNotEmpty && rooms.isNotEmpty)
+        _SwitcherRow(
+          null,
+          (context) => Semantics(
+            header: true,
+            child: Text(
+              'Direct messages',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ),
-      ],
+      for (final d in dms)
+        _SwitcherRow(
+          d.id,
+          (_) => _DmMenuItem(dm: d, isActive: d.id == activeId),
+        ),
+    ];
+
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        value: activeId,
+
+        // isExpanded so the button is bounded by the AppBar title width and
+        // a long channel name ellipsizes instead of overflowing the bar (a
+        // channel named like a legal entity would otherwise clip —
+        // cage-match #106, Tesla).
+        isExpanded: true,
+        borderRadius: BorderRadius.circular(8),
+        // NO trailing caret — [selectedItemBuilder] draws it at the head
+        // of the collapsed face instead, inside this button's hit area.
+        icon: const SizedBox.shrink(),
+        // A tap target the size of the control it looks like. `isDense`
+        // used to shrink this below Material's 48px minimum, so even the
+        // half that WAS tappable took an accurate press.
+        itemHeight: kMinInteractiveDimension,
+        // M3 AppBar foreground is onSurface, and the menu opens on a
+        // surface background — so the inherited onSurface text reads
+        // correctly in both the collapsed bar and the open menu.
+        // ONE list, read twice. `items` and `selectedItemBuilder` must be the
+        // same LENGTH — DropdownButton asserts outright if they are not — and
+        // they were built by two separate comprehensions that each decided
+        // independently whether the "Direct messages" header was present. Two
+        // readers of one fact, six lines apart, with a crash as the failure
+        // mode: the exact shape cage-match #136 found in this widget's
+        // providers, and the reason that one was restructured rather than
+        // guarded. Mapping one row list twice makes a length mismatch
+        // unrepresentable rather than merely tested for.
+        items: [
+          for (final row in rows)
+            DropdownMenuItem<String>(
+              value: row.id,
+              enabled: row.id != null,
+              child: row.build(context),
+            ),
+        ],
+        // The collapsed face. Every non-active row is an empty box on purpose:
+        // that is what keeps the committed probe in narrow_dm_navigation_test
+        // true — only the ACTIVE row is built while the menu is shut, so a
+        // phone still pays no per-DM roster fetch until it opens. The active
+        // entry rebuilds the very same item widget, so its name, mute
+        // resolution and DM peer lookup stay in one place rather than becoming
+        // a second derivation that can drift.
+        selectedItemBuilder: (context) => [
+          for (final row in rows)
+            if (row.id != null && row.id == activeId)
+              collapsedFace(row.build(context))
+            else
+              const SizedBox.shrink(),
+        ],
+        onChanged: (id) {
+          if (id == null) return;
+          // FAIL CLOSED on an id the list no longer holds. The overlay
+          // route snapshots its items when the menu OPENS and keeps
+          // offering them; if a conversation retires while the menu is up,
+          // tapping its leftover row would write a dead id into the
+          // selection. Display would look fine — `resolveActive` falls back
+          // — but the Notifier stays poisoned, and `ref.listen`'s self-heal
+          // never fires because the list did not change again. When that id
+          // came back the user would be yanked into a conversation they
+          // never re-picked: the exact #106 snap-back this file already
+          // guards, re-entered through the overlay (cage-match #136, Tesla).
+          if (!rooms.any((c) => c.id == id) && !dms.any((c) => c.id == id)) {
+            return;
+          }
+          ref.read(selectedChannelIdProvider.notifier).select(id);
+        },
+      ),
     );
   }
 }
