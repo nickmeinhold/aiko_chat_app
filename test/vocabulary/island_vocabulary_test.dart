@@ -67,6 +67,10 @@ const _permittedInFile = <String, Set<String>>{};
 /// the client speaks to — ADR-0001's Gateway, not its Island — plus the legacy
 /// storage-key constants, which are strings-as-names and cannot move.
 const _permittedIdentifiers = <String>{
+  // The RENAMED-AWAY dart-define, read only so a stale build flag becomes a
+  // loud error instead of a silent fall-back to production. Retires with the
+  // tripwire in IslandConfig.fromEnvironment.
+  'GATEWAY_BASE_URL',
   // The bridge service and everything that talks to it.
   'GatewayRestApi', 'buildGatewayBackend', 'gateway_rest_api',
   'GatewayTransport', 'gateway_transport',
