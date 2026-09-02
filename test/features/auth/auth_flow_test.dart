@@ -79,7 +79,7 @@ void main() {
 
   // --- #35: the gateway picker is a PRE-LOGIN act -------------------------
 
-  testWidgets('login screen surfaces the active server + a Change affordance', (
+  testWidgets('login screen surfaces the active island + a Change affordance', (
     tester,
   ) async {
     final container = makeContainer(
@@ -92,12 +92,12 @@ void main() {
 
     // The footer names the host (not the full URL) of the active gateway.
     final host = Uri.parse(container.read(configProvider).httpBaseUrl).host;
-    expect(find.text('Server: $host'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Change server'), findsOneWidget);
+    expect(find.text('Island: $host'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Change island'), findsOneWidget);
   });
 
   testWidgets(
-    'a LOGGED-OUT user can reach the gateway picker (no /login bounce)',
+    'a LOGGED-OUT user can reach the island picker (no /login bounce)',
     (tester) async {
       final container = makeContainer(
         rest: FakeRestApi(),
@@ -111,11 +111,11 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(find.widgetWithText(TextButton, 'Change server'));
+      await tester.tap(find.widgetWithText(TextButton, 'Change island'));
       await tester.pumpAndSettle();
 
-      // Reached the picker (its AppBar title is "Server"), not bounced to login.
-      expect(find.widgetWithText(AppBar, 'Server'), findsOneWidget);
+      // Reached the picker (its AppBar title is "Island"), not bounced to login.
+      expect(find.widgetWithText(AppBar, 'Island'), findsOneWidget);
       expect(
         find.widgetWithText(FilledButton, 'Create a passkey'),
         findsNothing,
@@ -126,7 +126,7 @@ void main() {
   );
 
   testWidgets('a LOGGED-OUT switch re-points config and lands on the new '
-      "gateway's login (cage-match #53 consensus: switch-from-logged-out)", (
+      "island's login (cage-match #53 consensus: switch-from-logged-out)", (
     tester,
   ) async {
     final container = makeContainer(
@@ -136,13 +136,13 @@ void main() {
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await tester.tap(find.widgetWithText(TextButton, 'Change server'));
+    await tester.tap(find.widgetWithText(TextButton, 'Change island'));
     await tester.pumpAndSettle();
 
     // Pick a different preset and confirm the switch.
     await tester.tap(find.text('Local'));
     await tester.pumpAndSettle();
-    expect(find.text('Switch server?'), findsOneWidget);
+    expect(find.text('Switch island?'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, 'Switch'));
     await tester.pumpAndSettle();
     await tester.runAsync(
@@ -150,7 +150,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Config re-pointed; still logged out; landed on the NEW gateway's login
+    // Config re-pointed; still logged out; landed on the NEW island's login
     expect(container.read(configProvider).httpBaseUrl, 'http://localhost:8095');
     expect(container.read(authControllerProvider).value, isNull);
     expect(
@@ -158,10 +158,10 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.widgetWithText(AppBar, 'Server'),
+      find.widgetWithText(AppBar, 'Island'),
       findsNothing,
     ); // left the picker
-    expect(find.text('Server: localhost:8095'), findsOneWidget);
+    expect(find.text('Island: localhost:8095'), findsOneWidget);
   });
 
   // --- passkey sign-in (first-passkey-creates-account) ---------------------

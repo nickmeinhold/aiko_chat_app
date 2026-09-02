@@ -144,7 +144,7 @@ class IslandMark extends StatelessWidget {
   /// "where am I", so the obvious next question is "can I go somewhere else".
   ///
   /// Passed IN rather than routed from here: this widget lives in `core/` and
-  /// knowing about `/settings/gateway` would tie a drawing to the router.
+  /// knowing about `/settings/island` would tie a drawing to the router.
   final VoidCallback? onTap;
 
   /// Padding that is INSIDE the tap target — pressable space around the mark.

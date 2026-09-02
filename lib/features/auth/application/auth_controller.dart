@@ -748,7 +748,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
         .setString(gatewayBaseUrlPrefKey, next);
     if (!persisted) {
       // Session untouched — surfaced to the picker for an inline error.
-      throw const GatewaySwitchFailed('Could not save the server selection.');
+      throw const GatewaySwitchFailed('Could not save the island selection.');
     }
 
     state = const AsyncValue.loading(); // block login (router → /splash)

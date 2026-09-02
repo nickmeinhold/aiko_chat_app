@@ -63,7 +63,7 @@ class SuspendedScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton(
-                    onPressed: () => context.go('/settings/gateway'),
+                    onPressed: () => context.go('/settings/island'),
                     child: const Text('Use a different island'),
                   ),
                 ],

@@ -24,7 +24,7 @@ class NetworkStatusBanner extends ConsumerWidget {
       NetworkStatus.online => null, // healthy → no chrome
       NetworkStatus.offline => ("You're offline", errorColor),
       NetworkStatus.serverUnreachable => (
-        "Can't reach the server",
+        "Can't reach the island",
         kMaritimeBeaconAmber,
       ),
     };

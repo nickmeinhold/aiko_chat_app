@@ -100,7 +100,7 @@ String authErrorText(
   }
   if (ceremonyMsg.contains('domain-not-associated')) {
     return "Passkeys aren't linked to $host yet, so sign-in can't complete. "
-        "(The server's domain association is still pending.)";
+        "(The island's domain association is still pending.)";
   }
   if (ceremonyMsg.contains('deviceNotSupported') ||
       lower.contains('not supported')) {

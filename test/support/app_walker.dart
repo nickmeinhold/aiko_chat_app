@@ -92,7 +92,7 @@ class WalkTrail {
   final int seed;
   final List<String> steps = [];
 
-  /// Route PATTERNS visited (`/settings/gateway`, `/call/:channelId`), not
+  /// Route PATTERNS visited (`/settings/island`, `/call/:channelId`), not
   /// concrete locations — so they can be compared against the router's own
   /// table without re-deriving which segments were parameters.
   final Set<String> routes = {};

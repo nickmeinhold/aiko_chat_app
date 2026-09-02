@@ -58,7 +58,7 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
         );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Server')),
+      appBar: AppBar(title: const Text('Island')),
       body: ReadingColumn(
         child: AbsorbPointer(
           absorbing: _switching,
@@ -67,15 +67,15 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: Text(
-                  'Choose which server Aiko Chat connects to. Switching signs you '
-                  'out, because your sign-in only works on the server that issued '
+                  'Choose which island Aiko Chat connects to. Switching signs you '
+                  'out, because your sign-in only works on the island that issued '
                   'it.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               ),
-              const _SectionHeader('Servers'),
+              const _SectionHeader('Islands'),
               for (final entry in servers)
                 _ServerTile(
                   label: entry.label,
@@ -92,7 +92,7 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
                   autocorrect: false,
                   enableSuggestions: false,
                   decoration: const InputDecoration(
-                    labelText: 'Server URL',
+                    labelText: 'Island URL',
                     hintText: 'https://chat.example.com',
                     border: OutlineInputBorder(),
                   ),
@@ -141,7 +141,7 @@ class _GatewayPickerScreenState extends ConsumerState<GatewayPickerScreen> {
   /// Validate a custom URL: must parse to an absolute http(s) URL with a host.
   /// Returns an error message, or null if valid.
   String? _validate(String raw) {
-    if (raw.isEmpty) return 'Enter a server URL.';
+    if (raw.isEmpty) return 'Enter an island URL.';
     final uri = Uri.tryParse(raw);
     if (uri == null || !uri.isAbsolute) return 'Not a valid URL.';
     if (uri.scheme != 'http' && uri.scheme != 'https') {

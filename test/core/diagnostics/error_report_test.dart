@@ -62,7 +62,7 @@ void main() {
 
   group('formatErrorReport', () {
     test(
-      'includes time, server, network, every device fact, and the error',
+      'includes time, island, network, every device fact, and the error',
       () {
         final text = formatErrorReport(
           error: const NetworkUnavailable('dns'),
@@ -72,7 +72,7 @@ void main() {
           nowUtc: DateTime.utc(2026, 7, 11, 9, 51),
         );
         expect(text, contains('2026-07-11T09:51:00.000Z'));
-        expect(text, contains('Server: https://chat.example.com'));
+        expect(text, contains('Island: https://chat.example.com'));
         expect(text, contains('Network (at report time): offline'));
         expect(text, contains('App: Aiko Chat 0.0.1+6'));
         expect(text, contains('Device: Google Pixel 7'));

@@ -504,7 +504,7 @@ class _SidebarDmTile extends ConsumerWidget {
 
 /// The top-of-rail server switcher. Shows the current gateway; opens a menu of
 /// `knownGatewaysProvider` ∪ `gatewayDirectoryProvider` (same source as the
-/// picker), plus a "Custom / other servers…" escape to the full picker. A
+/// picker), plus a "Custom / other islands…" escape to the full picker. A
 /// different selection routes through the shared [confirmAndSwitchGateway] so the
 /// confirm dialog can't drift from the picker's.
 class _ServerSwitcher extends ConsumerWidget {
@@ -537,11 +537,11 @@ class _ServerSwitcher extends ConsumerWidget {
     final currentLabel = currentEntry?.label ?? _hostOf(current);
 
     return PopupMenuButton<String>(
-      tooltip: 'Switch server',
+      tooltip: 'Switch island',
       position: PopupMenuPosition.under,
       onSelected: (value) {
         if (value == _customValue) {
-          context.push('/settings/gateway');
+          context.push('/settings/island');
           return;
         }
         final entry = servers.where((e) => e.httpBaseUrl == value).firstOrNull;
@@ -564,7 +564,7 @@ class _ServerSwitcher extends ConsumerWidget {
         const PopupMenuDivider(),
         const PopupMenuItem<String>(
           value: _customValue,
-          child: Text('Custom / other servers…'),
+          child: Text('Custom / other islands…'),
         ),
       ],
       child: Padding(
@@ -582,7 +582,7 @@ class _ServerSwitcher extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Server',
+                    'Island',
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),

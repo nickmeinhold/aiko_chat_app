@@ -1374,7 +1374,7 @@ class _ComposerState extends ConsumerState<Composer> {
                     // Where am I → can I go elsewhere. The picker owns the
                     // session-teardown ceremony a gateway switch requires, so
                     // this only has to open it.
-                    onTap: () => context.push('/settings/gateway'),
+                    onTap: () => context.push('/settings/island'),
                     // THE MARK'S SURROUNDING SPACE IS THE TAP TARGET.
                     //
                     // These are not new pixels: the Row used to draw a 12px left

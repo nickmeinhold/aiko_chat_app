@@ -116,7 +116,7 @@ String formatErrorReport({
   final b = StringBuffer()
     ..writeln('Aiko Chat — problem report')
     ..writeln('Time: ${nowUtc.toIso8601String()}')
-    ..writeln('Server: $host')
+    ..writeln('Island: $host')
     // "at report time", not at-failure: the tap can be minutes after the error
     // (offline → reconnect → report), so labelling it as current avoids a false
     // "online next to NetworkUnavailable" chord (cage-match #74, Tesla).
