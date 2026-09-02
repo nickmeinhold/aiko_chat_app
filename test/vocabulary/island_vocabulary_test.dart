@@ -50,7 +50,6 @@ import 'package:flutter_test/flutter_test.dart';
 /// hunts user-facing PROSE, and a snake_case token is never prose), but it is a
 /// boundary, and it is now written down instead of hidden behind exemptions.
 const _permitted = <String>{
-  r'$base/v1/gateways',
   // A developer `assert` about the gateway service's own REST contract (is
   // `after` exclusive?). Aimed at us, and "gateway" is the CORRECT word — the
   // cursor belongs to the bridge service, not to the island.
@@ -62,12 +61,7 @@ const _permitted = <String>{
 /// would sail through the very policy that exists to stop it. These are the
 /// island directory's own wire field names, and they are legitimate in exactly
 /// one file.
-const _permittedInFile = <String, Set<String>>{
-  'lib/features/settings/data/island_directory_client.dart': {
-    'gateways',
-    'servers',
-  },
-};
+const _permittedInFile = <String, Set<String>>{};
 
 /// Identifiers that may carry "gateway" because they NAME THE BRIDGE SERVICE
 /// the client speaks to — ADR-0001's Gateway, not its Island — plus the legacy
@@ -81,8 +75,6 @@ const _permittedIdentifiers = <String>{
   // Legacy pref keys, read-only until task #25 retires them.
   'kLegacyIslandBaseUrlPrefKey', 'kLegacyKnownIslandsPrefKey',
   'aiko_gateway_base_url', 'aiko_known_gateways',
-  // The island directory's own wire path and field names.
-  'v1', 'gateways', 'servers',
   // The Drift column on disk; the Dart constant is `islandUlid`.
   'server_ulid',
 };

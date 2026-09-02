@@ -3,7 +3,7 @@
 /// Three parts, no single point of failure:
 ///  1. BOOTSTRAP from multiple bundled seeds ([kIslandPresets]) — survives any
 ///     one being down.
-///  2. DISCOVER from the CURRENTLY-SELECTED island's `/v1/gateways`
+///  2. DISCOVER from the CURRENTLY-SELECTED island's `/v1/islands`
 ///     ([islandDirectoryProvider]) — not a fixed origin. Re-fires on a island
 ///     switch (it watches [configProvider]).
 ///  3. GROW: every successfully-discovered island is unioned into a persisted
@@ -113,7 +113,7 @@ final islandDirectoryProvider = FutureProvider<List<IslandEntry>>((ref) async {
   // Optional fixed override (dev/staging); default = discover from the current
   // island, so there is no privileged directory host to fail.
   final override = kIslandDirectoryUrl.trim();
-  final url = override.isNotEmpty ? override : '$base/v1/gateways';
+  final url = override.isNotEmpty ? override : '$base/v1/islands';
 
   final entries = await ref.watch(islandDirectoryClientProvider).fetchFrom(url);
 

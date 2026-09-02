@@ -1,0 +1,14 @@
+{
+    "islands": [
+        {
+            "id": "enspyr",
+            "display_name": "Enspyr",
+            "base_url": "https://chat.enspyr.co"
+        },
+        {
+            "id": "imagineering",
+            "display_name": "Imagineering",
+            "base_url": "https://chat.imagineering.cc"
+        }
+    ]
+}

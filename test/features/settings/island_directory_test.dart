@@ -6,7 +6,7 @@
 //    snake_case AND camelCase resolve; a urlless/junk entry is skipped, not
 //    crashed (the directory is attacker-influenceable);
 //  - NO discovery SPOF — the provider discovers from the CURRENTLY-SELECTED
-//    gateway (`<base>/v1/gateways`), not a fixed origin, and re-composes that URL
+//    island (`<base>/v1/islands`), not a fixed origin, and re-composes that URL
 //    from whatever gateway is active;
 //  - merge/dedup — directory wins over the known seed set on the same normalized
 //    URL and comes first; seed-only entries (Local/emulator) survive;
@@ -104,7 +104,7 @@ void main() {
           ]),
         );
       final client = IslandDirectoryClient(dio: dio);
-      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      final out = await client.fetchFrom('https://dir.example/v1/islands');
       expect(out.map((e) => e.httpBaseUrl), [
         'https://chat.imagineering.cc',
         'https://enspyr.co',
@@ -115,18 +115,17 @@ void main() {
       final dio = Dio()
         ..httpClientAdapter = _CannedAdapter(
           jsonEncode({
-            'gateways': [
+            'entries': [
               {'name': 'Enspyr', 'base_url': 'https://enspyr.co'},
             ],
           }),
         );
       final client = IslandDirectoryClient(dio: dio);
-      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      final out = await client.fetchFrom('https://dir.example/v1/islands');
       expect(out.single.httpBaseUrl, 'https://enspyr.co');
     });
 
-    // Forward-compat (Design 10): when an island renames `/v1/gateways`'s payload
-    // to the canonical `islands` key, the app already reads it — a pure widening.
+    // The canonical key, which is what both live islands serve.
     test('parses an envelope under the canonical `islands` key', () async {
       final dio = Dio()
         ..httpClientAdapter = _CannedAdapter(
@@ -137,52 +136,55 @@ void main() {
           }),
         );
       final client = IslandDirectoryClient(dio: dio);
-      final out = await client.fetchFrom('https://dir.example/v1/gateways');
+      final out = await client.fetchFrom('https://dir.example/v1/islands');
       expect(out.single.httpBaseUrl, 'https://enspyr.co');
     });
 
-    // Guard-contract, not just outcome: `islands` is tried BEFORE `gateways`, so
-    // during a compat window that double-serves both, the canonical key wins.
-    test('`islands` wins over `gateways` when both keys are present', () async {
-      final dio = Dio()
-        ..httpClientAdapter = _CannedAdapter(
-          jsonEncode({
-            'islands': [
-              {'name': 'New', 'base_url': 'https://new.example'},
-            ],
-            'gateways': [
-              {'name': 'Legacy', 'base_url': 'https://legacy.example'},
-            ],
-          }),
-        );
-      final client = IslandDirectoryClient(dio: dio);
-      final out = await client.fetchFrom('https://dir.example/v1/gateways');
-      expect(out.single.httpBaseUrl, 'https://new.example');
-    });
+    // Guard-contract, not just outcome: `islands` is tried BEFORE the tolerant
+    // fallbacks, so a directory serving both is read canonically.
+    test(
+      '`islands` wins over a tolerant fallback when both are present',
+      () async {
+        final dio = Dio()
+          ..httpClientAdapter = _CannedAdapter(
+            jsonEncode({
+              'islands': [
+                {'name': 'New', 'base_url': 'https://new.example'},
+              ],
+              'entries': [
+                {'name': 'Other', 'base_url': 'https://other.example'},
+              ],
+            }),
+          );
+        final client = IslandDirectoryClient(dio: dio);
+        final out = await client.fetchFrom('https://dir.example/v1/islands');
+        expect(out.single.httpBaseUrl, 'https://new.example');
+      },
+    );
 
-    // Empty-shadow guard (Tesla): an empty `islands` must NOT blank the directory
-    // when a populated `gateways` is present — priority yields to usability, so we
-    // fall through to the legacy rail rather than silently show zero islands.
-    test('an empty `islands` does not shadow a populated `gateways`', () async {
+    // Empty-shadow guard (Tesla). The legacy `gateways` key this originally used
+    // is gone, but the PROPERTY it pinned is not: priority yields to usability,
+    // so an empty first key falls through rather than blanking the directory.
+    test('an empty `islands` does not shadow a populated fallback', () async {
       final dio = Dio()
         ..httpClientAdapter = _CannedAdapter(
           jsonEncode({
             'islands': <dynamic>[],
-            'gateways': [
-              {'name': 'Legacy', 'base_url': 'https://legacy.example'},
+            'entries': [
+              {'name': 'Other', 'base_url': 'https://other.example'},
             ],
           }),
         );
       final client = IslandDirectoryClient(dio: dio);
-      final out = await client.fetchFrom('https://dir.example/v1/gateways');
-      expect(out.single.httpBaseUrl, 'https://legacy.example');
+      final out = await client.fetchFrom('https://dir.example/v1/islands');
+      expect(out.single.httpBaseUrl, 'https://other.example');
     });
 
     // Invalid-shadow guard (Tesla, second harmonic): a non-empty `islands` whose
     // every entry is malformed is ALSO unusable — it must not shadow a valid
-    // `gateways` either. Dissolves the whole shadow class, not just the empty case.
+    // fallback either. Dissolves the whole shadow class, not just the empty case.
     test(
-      'an all-malformed `islands` does not shadow a valid `gateways`',
+      'an all-malformed `islands` does not shadow a valid fallback',
       () async {
         final dio = Dio()
           ..httpClientAdapter = _CannedAdapter(
@@ -194,14 +196,14 @@ void main() {
                 }, // fails validator
                 {'name': 'AlsoBad'}, // no url at all
               ],
-              'gateways': [
-                {'name': 'Legacy', 'base_url': 'https://legacy.example'},
+              'entries': [
+                {'name': 'Other', 'base_url': 'https://other.example'},
               ],
             }),
           );
         final client = IslandDirectoryClient(dio: dio);
-        final out = await client.fetchFrom('https://dir.example/v1/gateways');
-        expect(out.single.httpBaseUrl, 'https://legacy.example');
+        final out = await client.fetchFrom('https://dir.example/v1/islands');
+        expect(out.single.httpBaseUrl, 'https://other.example');
       },
     );
 
@@ -210,29 +212,23 @@ void main() {
     test('both keys empty yields [] (genuinely empty directory)', () async {
       final dio = Dio()
         ..httpClientAdapter = _CannedAdapter(
-          jsonEncode({'islands': <dynamic>[], 'gateways': <dynamic>[]}),
+          jsonEncode({'islands': <dynamic>[], 'entries': <dynamic>[]}),
         );
       final client = IslandDirectoryClient(dio: dio);
-      expect(
-        await client.fetchFrom('https://dir.example/v1/gateways'),
-        isEmpty,
-      );
+      expect(await client.fetchFrom('https://dir.example/v1/islands'), isEmpty);
     });
 
     test('an unrecognised shape yields [] (not a crash)', () async {
       final dio = Dio()..httpClientAdapter = _CannedAdapter(jsonEncode(42));
       final client = IslandDirectoryClient(dio: dio);
-      expect(
-        await client.fetchFrom('https://dir.example/v1/gateways'),
-        isEmpty,
-      );
+      expect(await client.fetchFrom('https://dir.example/v1/islands'), isEmpty);
     });
 
     test('a network error propagates (caller falls back to seed)', () async {
       final dio = Dio()..httpClientAdapter = _ExplodingAdapter();
       final client = IslandDirectoryClient(dio: dio);
       expect(
-        client.fetchFrom('https://dir.example/v1/gateways'),
+        client.fetchFrom('https://dir.example/v1/islands'),
         throwsA(isA<DioException>()),
       );
     });
@@ -299,7 +295,7 @@ void main() {
     }
 
     test(
-      'discovers from the CURRENT gateway (composes <base>/v1/gateways)',
+      'discovers from the CURRENT island (composes <base>/v1/islands)',
       () async {
         final client = _FakeClient(const [
           IslandEntry(label: 'Enspyr', httpBaseUrl: 'https://enspyr.co'),
@@ -314,7 +310,7 @@ void main() {
         expect(out.single.label, 'Enspyr');
         // The SPOF-removal invariant: the URL is derived from the SELECTED gateway
         // (normalized, trailing slash stripped), NOT a fixed origin.
-        expect(client.lastUrl, 'https://chat.enspyr.co/v1/gateways');
+        expect(client.lastUrl, 'https://chat.enspyr.co/v1/islands');
       },
     );
 
@@ -327,7 +323,7 @@ void main() {
       addTearDown(container.dispose);
 
       await container.read(islandDirectoryProvider.future);
-      expect(client.lastUrl, 'https://chat.imagineering.cc/v1/gateways');
+      expect(client.lastUrl, 'https://chat.imagineering.cc/v1/islands');
     });
 
     test('surfaces an AsyncError on a client failure', () async {

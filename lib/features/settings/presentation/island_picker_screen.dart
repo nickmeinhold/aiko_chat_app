@@ -45,7 +45,7 @@ class _IslandPickerScreenState extends ConsumerState<IslandPickerScreen> {
     // to the merged live directory once it loads. Loading/error all fall back to
     // the known set — a slow or absent directory never blocks the screen.
     final known = ref.watch(knownIslandsProvider);
-    final servers = ref
+    final islands = ref
         .watch(islandDirectoryProvider)
         .maybeWhen(
           data: (directory) => mergeDirectory(
@@ -75,7 +75,7 @@ class _IslandPickerScreenState extends ConsumerState<IslandPickerScreen> {
                 ),
               ),
               const _SectionHeader('Islands'),
-              for (final entry in servers)
+              for (final entry in islands)
                 _IslandTile(
                   label: entry.label,
                   url: entry.httpBaseUrl,

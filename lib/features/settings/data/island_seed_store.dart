@@ -2,7 +2,7 @@
 /// resilient discovery.
 ///
 /// Discovery bootstraps from the bundled [kIslandPresets], but every island the
-/// app successfully learns about (from any island's `/v1/gateways`) is UNIONED
+/// app successfully learns about (from any island's `/v1/islands`) is UNIONED
 /// into a locally-persisted set. On the next cold start that set seeds the picker
 /// alongside the presets — so an island seen once becomes a future bootstrap
 /// contact, and the reachable set is `presets ∪ ever-seen`, not a single

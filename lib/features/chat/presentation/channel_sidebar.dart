@@ -519,7 +519,7 @@ class _IslandSwitcher extends ConsumerWidget {
     // Seed-first: render the known set immediately, overlay the live directory
     // once it lands — identical to the picker so the two lists agree.
     final known = ref.watch(knownIslandsProvider);
-    final servers = ref
+    final islands = ref
         .watch(islandDirectoryProvider)
         .maybeWhen(
           data: (directory) => mergeDirectory(
@@ -529,7 +529,7 @@ class _IslandSwitcher extends ConsumerWidget {
           ),
           orElse: () => known,
         );
-    final currentEntry = servers
+    final currentEntry = islands
         .where(
           (e) => IslandConfig.normalized(e.httpBaseUrl).httpBaseUrl == current,
         )
@@ -544,7 +544,7 @@ class _IslandSwitcher extends ConsumerWidget {
           context.push('/settings/island');
           return;
         }
-        final entry = servers.where((e) => e.httpBaseUrl == value).firstOrNull;
+        final entry = islands.where((e) => e.httpBaseUrl == value).firstOrNull;
         if (entry == null) return;
         confirmAndSwitchIsland(
           context,
@@ -554,7 +554,7 @@ class _IslandSwitcher extends ConsumerWidget {
         );
       },
       itemBuilder: (context) => [
-        for (final e in servers)
+        for (final e in islands)
           CheckedPopupMenuItem<String>(
             value: e.httpBaseUrl,
             checked:
