@@ -28,6 +28,18 @@ import '../domain/island_entry.dart';
 /// from `islandBaseUrlPrefKey` (the single SELECTED island).
 const kKnownIslandsPrefKey = 'aiko_known_islands';
 
+/// Whether [raw] is a JSON array — the shape [IslandSeedStore.load] can use.
+/// Passed to `readAndAdopt` so an unusable new value cannot hide a usable legacy
+/// one; the decode is cheap and happens once per load.
+bool _decodesToList(String raw) {
+  if (raw.trim().isEmpty) return false;
+  try {
+    return jsonDecode(raw) is List;
+  } on FormatException {
+    return false;
+  }
+}
+
 class IslandSeedStore {
   // Private-named initializing formals: callers pass `prefs:` / `normalize:`.
   IslandSeedStore({required this._prefs, required this._normalize});
@@ -45,6 +57,9 @@ class IslandSeedStore {
       _prefs,
       key: kKnownIslandsPrefKey,
       legacyKey: kLegacyKnownIslandsPrefKey,
+      // A blob that will not decode into a list is not a remembered set, so it
+      // must not shadow a legacy one that would.
+      isUsable: _decodesToList,
     );
     if (raw == null || raw.trim().isEmpty) return const [];
     late final dynamic decoded;

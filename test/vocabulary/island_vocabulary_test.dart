@@ -122,11 +122,22 @@ void main() {
       final lines = source.split('\n');
       for (var i = 0; i < lines.length; i++) {
         final line = lines[i];
+        var scannable = line;
         final trimmed = line.trimLeft();
         // A comment is not something the app SAYS. Doc comments legitimately
         // discuss the gateway service by its correct internal name.
-        if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
-        for (final m in _literal.allMatches(line)) {
+        if (trimmed.startsWith('//')) continue;
+        if (trimmed.startsWith('*')) {
+          // A block-comment line — but the CLOSE of a block comment can carry
+          // real code after it (`*/ final s = 'server';`), and skipping the
+          // whole line would blind the guard to that literal (Carnot's catch).
+          // Scan only what follows the terminator; skip the line when there is
+          // none, because then it is comment all the way to the newline.
+          final close = line.indexOf('*/');
+          if (close < 0) continue;
+          scannable = line.substring(close + 2);
+        }
+        for (final m in _literal.allMatches(scannable)) {
           final value = m.group(1) ?? m.group(2) ?? '';
           if (!_banned.hasMatch(value)) continue;
           if (_isPath(value) || _permitted.contains(value)) continue;

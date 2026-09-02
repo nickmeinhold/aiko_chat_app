@@ -49,16 +49,29 @@ const kLegacyKnownIslandsPrefKey = 'aiko_known_gateways';
 /// The forward write is fire-and-forget: persistence here is best-effort, and a
 /// failure costs only that the next launch migrates instead. Returns the value
 /// either way, so a write failure never changes what this launch sees.
+/// [isUsable] decides what counts as a real value, and it exists because a
+/// reviewer pointed out that this helper was answering a WEAKER question than
+/// its callers ask (Carnot, cage-match PR #173). Presence is not usability: the
+/// island config rejects a blank string, and the seed store rejects a blob that
+/// will not parse, so "the new key exists" and "the new value is usable" are two
+/// different predicates — and migration policy was being decided with the wrong
+/// one. No path in today's code reaches the gap, because the only things ever
+/// written to the new key are a legacy value or a real island URL. The gap was
+/// in the design regardless, and the fix is to let the caller state the rule
+/// rather than to guard the case.
 String? readAndAdopt(
   SharedPreferences prefs, {
   required String key,
   required String legacyKey,
+  bool Function(String)? isUsable,
 }) {
+  final usable = isUsable ?? (v) => true;
+
   final current = prefs.getString(key);
-  if (current != null) return current;
+  if (current != null && usable(current)) return current;
 
   final legacy = prefs.getString(legacyKey);
-  if (legacy == null) return null;
+  if (legacy == null || !usable(legacy)) return current;
 
   unawaited(prefs.setString(key, legacy).catchError((_) => false));
   return legacy;

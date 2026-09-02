@@ -89,6 +89,9 @@ class IslandConfigController extends Notifier<IslandConfig> {
       prefs,
       key: islandBaseUrlPrefKey,
       legacyKey: kLegacyIslandBaseUrlPrefKey,
+      // The SAME rule the resolution below applies. Stated once, here, so the
+      // migration cannot adopt-or-keep a value this controller would reject.
+      isUsable: (v) => v.trim().isNotEmpty,
     );
     if (persisted != null && persisted.trim().isNotEmpty) {
       return IslandConfig.normalized(persisted);
