@@ -117,7 +117,7 @@ class LoginScreen extends ConsumerWidget {
                         ],
                         const SizedBox(height: 28),
                         Text(
-                          'Server: $gatewayHost',
+                          'Island: $gatewayHost',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(
@@ -129,8 +129,8 @@ class LoginScreen extends ConsumerWidget {
                         TextButton(
                           onPressed: busy
                               ? null
-                              : () => context.push('/settings/gateway'),
-                          child: const Text('Change server'),
+                              : () => context.push('/settings/island'),
+                          child: const Text('Change island'),
                         ),
                       ],
                     ),

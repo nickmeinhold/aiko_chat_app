@@ -148,7 +148,7 @@ void main() {
 
     testWidgets('serverUnreachable → amber cannot-reach text', (t) async {
       await pump(t, NetworkStatus.serverUnreachable);
-      expect(find.text("Can't reach the server"), findsOneWidget);
+      expect(find.text("Can't reach the island"), findsOneWidget);
     });
   });
 }

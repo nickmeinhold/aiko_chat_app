@@ -345,8 +345,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // No confirm dialog — the no-op guard fired with a snackbar instead.
-    expect(find.text('Switch server?'), findsNothing);
-    expect(find.text('Already connected to this server.'), findsOneWidget);
+    expect(find.text('Switch island?'), findsNothing);
+    expect(find.text('Already connected to this island.'), findsOneWidget);
     // Still logged in on the same gateway.
     expect(
       container.read(configProvider).httpBaseUrl,
@@ -384,7 +384,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // The shared confirm dialog appears — confirm the switch.
-      expect(find.text('Switch server?'), findsOneWidget);
+      expect(find.text('Switch island?'), findsOneWidget);
       await tester.tap(find.widgetWithText(FilledButton, 'Switch'));
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)),

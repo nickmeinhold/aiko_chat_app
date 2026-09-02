@@ -375,7 +375,7 @@ void main() {
       await tester.tap(find.text('Local'));
       await tester.pumpAndSettle();
       // The confirm dialog warns about sign-out before committing.
-      expect(find.text('Switch server?'), findsOneWidget);
+      expect(find.text('Switch island?'), findsOneWidget);
 
       await tester.tap(find.text('Switch'));
       await tester.pumpAndSettle();
@@ -397,7 +397,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // No confirm dialog, gateway unchanged.
-      expect(find.text('Switch server?'), findsNothing);
+      expect(find.text('Switch island?'), findsNothing);
       expect(
         container.read(configProvider).httpBaseUrl,
         kDefaultGatewayBaseUrl,

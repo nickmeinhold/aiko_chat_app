@@ -9,7 +9,7 @@
 ///     never flash the login screen before the restore resolves (but `/login`,
 ///     `/claim-handle`, and `/suspended` hold through loading);
 ///   - this island suspended (banned) this account → `/suspended`, ahead of the
-///     logged-out routing so a ban never loops on `/login`; `/settings/gateway`
+///     logged-out routing so a ban never loops on `/login`; `/settings/island`
 ///     stays reachable so the user can switch islands;
 ///   - logged out → `/login`;
 ///   - logged in → `/` (chat) — ejecting off any auth/gate/suspended screen.
@@ -112,7 +112,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // gateway picker stays reachable so the user can switch islands
       // (switchGateway clears the flag).
       if (!loggedIn && banned) {
-        if (loc == '/settings/gateway') return null;
+        if (loc == '/settings/island') return null;
         return loc == '/suspended' ? null : '/suspended';
       }
 
@@ -142,7 +142,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // both the login and claim-handle gates. switchGateway clears the
       // pending-handle + tokens, so a switch from here lands cleanly on the new
       // gateway's /login (via the loading → /splash → /login redirect).
-      if (loc == '/settings/gateway') return null;
+      if (loc == '/settings/island') return null;
 
       // Logged out: a pending identity must claim a handle first;
       // otherwise the login screen.
@@ -182,7 +182,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, _) => const CarriedRecordScreen(),
       ),
       GoRoute(
-        path: '/settings/gateway',
+        path: '/settings/island',
         builder: (_, _) => const GatewayPickerScreen(),
       ),
       GoRoute(

@@ -144,7 +144,7 @@ class _Header extends StatelessWidget {
             'Messages attributed to you in this device’s cache. Only rows '
             'marked Verified are cryptographically bound to this device’s '
             'key — each of those signatures is re-checked here on your device, '
-            'from the message itself, with nothing on a server trusted to '
+            'from the message itself, with nothing on an island trusted to '
             're-vouch it.',
             style: theme.textTheme.bodyMedium,
           ),

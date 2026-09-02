@@ -1,4 +1,4 @@
-/// The shared "switch server (and re-login)" flow.
+/// The shared "switch island (and re-login)" flow.
 ///
 /// Switching gateway is a hard logout by design: [AuthController.switchGateway]
 /// clears tokens + cached user, disconnects, and bounces to the new gateway's
@@ -43,7 +43,7 @@ Future<void> confirmAndSwitchGateway(
   final current = ref.read(configProvider).httpBaseUrl;
   if (GatewayConfig.normalized(url).httpBaseUrl == current) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Already connected to this server.')),
+      const SnackBar(content: Text('Already connected to this island.')),
     );
     return;
   }
@@ -51,10 +51,10 @@ Future<void> confirmAndSwitchGateway(
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Switch server?'),
+      title: const Text('Switch island?'),
       content: Text(
         'You\'ll be signed out and need to sign in again on $label. '
-        'Your account on the current server is not affected.',
+        'Your account on the current island is not affected.',
       ),
       actions: [
         TextButton(
@@ -85,7 +85,7 @@ Future<void> confirmAndSwitchGateway(
     return;
   }
   // Land deterministically on the new gateway's /login. Since #35 made
-  // /settings/gateway reachable while logged out, the redirect treats it as a
+  // /settings/island reachable while logged out, the redirect treats it as a
   // valid logged-out resting state — so without an explicit nav the picker stays
   // on screen after the switch. maybeOf keeps a bare-widget unit test (no
   // GoRouter ancestor) a safe no-op.
@@ -95,5 +95,5 @@ Future<void> confirmAndSwitchGateway(
 
 String _switchError(Object e) {
   if (e is GatewaySwitchFailed) return e.message;
-  return 'Could not switch servers. Please try again.';
+  return 'Could not switch islands. Please try again.';
 }

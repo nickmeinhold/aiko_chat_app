@@ -192,7 +192,7 @@ class CallSession {
     ConnectionResult.tokenAuthError => 'Session expired — please sign in again',
     ConnectionResult.accountSuspended => 'This account is suspended',
     ConnectionResult.tokenNetworkError =>
-      'Could not reach the server — check your connection',
+      'Could not reach the island — check your connection',
     ConnectionResult.videoUnavailable =>
       "Video calling isn't available here yet",
     ConnectionResult.channelUnavailable => 'This call is unavailable',

@@ -85,7 +85,7 @@ void main() {
     var registered = <String>{};
 
     // BOTH layouts, because reachability is layout-dependent and that is worth
-    // asserting. `/settings/gateway` is reached through the WIDE sidebar's
+    // asserting. `/settings/island` is reached through the WIDE sidebar's
     // server switcher (channel_sidebar.dart); walking only the phone viewport
     // reported it unreachable, which would have pushed a perfectly reachable
     // screen into the exemption list and taught the next reader it was a known
