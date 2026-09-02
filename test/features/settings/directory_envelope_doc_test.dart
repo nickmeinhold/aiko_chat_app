@@ -14,6 +14,14 @@
 // are a wire contract with other operators, and the order decides which envelope
 // wins when an island serves two. Prose that states a fact should be checked
 // like a fact.
+//
+// STATED BOUND, because this guard's first version already let one through. It
+// pins that the doc NAMES every key in list order. It cannot judge the TRUTH of
+// the sentences around that list — the restored paragraph went on to claim "no
+// island serves `islands` yet", which had been false for months, and this test
+// stayed green because the naming was still correct. A claim about the live
+// world is unfalsifiable from a unit test by construction; the discipline is to
+// date and source such claims in the comment, not to try to assert them here.
 import 'package:aiko_chat_app/features/settings/data/island_directory_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'dart:io';
