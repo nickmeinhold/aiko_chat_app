@@ -322,6 +322,18 @@ class _ConversationTitle extends ConsumerWidget {
 ///
 /// [rooms] and [dms] MUST partition [navigableChannelsProvider]: a correctness
 /// requirement, not a convention (see [ChatScreen.build]).
+/// One row of the conversation menu: the id it selects (null for a section
+/// header, which is a label rather than a destination) and how to draw it.
+///
+/// It exists so `items` and `selectedItemBuilder` cannot disagree about how many
+/// rows there are — DropdownButton asserts if they do.
+class _SwitcherRow {
+  const _SwitcherRow(this.id, this.build);
+
+  final String? id;
+  final Widget Function(BuildContext) build;
+}
+
 class _ConversationSwitcher extends ConsumerWidget {
   const _ConversationSwitcher({
     required this.rooms,
@@ -392,6 +404,44 @@ class _ConversationSwitcher extends ConsumerWidget {
       ],
     );
 
+    // Every row of the menu, in order: the id it selects (null for the section
+    // header, which is not a destination) and how to draw it.
+    final rows = <_SwitcherRow>[
+      for (final c in rooms)
+        _SwitcherRow(
+          c.id,
+          (_) => _ChannelMenuItem(
+            channelId: c.id,
+            name: c.name,
+            isActive: c.id == activeId,
+          ),
+        ),
+      // A boundary is only worth marking when there is one on both sides. The
+      // null id makes this `enabled: false`, which keeps it out of the
+      // selectable set and out of the one-item-matches-`value` assertion.
+      // `Semantics(header: true)` because a disabled menu item still ANNOUNCES
+      // as an item, which would offer a screen reader a dead destination in the
+      // only navigation control a phone has (cage-match #136, Tesla).
+      if (dms.isNotEmpty && rooms.isNotEmpty)
+        _SwitcherRow(
+          null,
+          (context) => Semantics(
+            header: true,
+            child: Text(
+              'Direct messages',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      for (final d in dms)
+        _SwitcherRow(
+          d.id,
+          (_) => _DmMenuItem(dm: d, isActive: d.id == activeId),
+        ),
+    ];
+
     return DropdownButtonHideUnderline(
       child: DropdownButton<String>(
         value: activeId,
@@ -412,62 +462,34 @@ class _ConversationSwitcher extends ConsumerWidget {
         // M3 AppBar foreground is onSurface, and the menu opens on a
         // surface background — so the inherited onSurface text reads
         // correctly in both the collapsed bar and the open menu.
+        // ONE list, read twice. `items` and `selectedItemBuilder` must be the
+        // same LENGTH — DropdownButton asserts outright if they are not — and
+        // they were built by two separate comprehensions that each decided
+        // independently whether the "Direct messages" header was present. Two
+        // readers of one fact, six lines apart, with a crash as the failure
+        // mode: the exact shape cage-match #136 found in this widget's
+        // providers, and the reason that one was restructured rather than
+        // guarded. Mapping one row list twice makes a length mismatch
+        // unrepresentable rather than merely tested for.
         items: [
-          for (final c in rooms)
+          for (final row in rows)
             DropdownMenuItem<String>(
-              value: c.id,
-              child: _ChannelMenuItem(
-                channelId: c.id,
-                name: c.name,
-                isActive: c.id == activeId,
-              ),
-            ),
-          // Section header, not a destination: `enabled: false` keeps it out
-          // of the selectable set and a null value keeps it out of the
-          // one-item-matches-`value` assertion. `Semantics(header: true)`
-          // because a disabled menu item still ANNOUNCES as an item, which
-          // would offer a screen reader a dead destination in the only
-          // navigation control a phone has (cage-match #136, Tesla).
-          // Drawn only when there is a boundary to mark.
-          if (dms.isNotEmpty && rooms.isNotEmpty)
-            DropdownMenuItem<String>(
-              enabled: false,
-              child: Semantics(
-                header: true,
-                child: Text(
-                  'Direct messages',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ),
-          for (final d in dms)
-            DropdownMenuItem<String>(
-              value: d.id,
-              child: _DmMenuItem(dm: d, isActive: d.id == activeId),
+              value: row.id,
+              enabled: row.id != null,
+              child: row.build(context),
             ),
         ],
-        // The collapsed face, one entry per item in the SAME order.
-        // Every non-active index is an empty box on purpose: this is what
-        // keeps the committed probe in narrow_dm_navigation_test true —
-        // only the ACTIVE row is built when the menu is shut, so a phone
-        // still pays no per-DM roster fetch until it opens. The active
+        // The collapsed face. Every non-active row is an empty box on purpose:
+        // that is what keeps the committed probe in narrow_dm_navigation_test
+        // true — only the ACTIVE row is built while the menu is shut, so a
+        // phone still pays no per-DM roster fetch until it opens. The active
         // entry rebuilds the very same item widget, so its name, mute
-        // resolution and DM peer lookup stay in one place rather than
-        // becoming a second derivation that can drift.
+        // resolution and DM peer lookup stay in one place rather than becoming
+        // a second derivation that can drift.
         selectedItemBuilder: (context) => [
-          for (final c in rooms)
-            if (c.id == activeId)
-              collapsedFace(
-                _ChannelMenuItem(channelId: c.id, name: c.name, isActive: true),
-              )
-            else
-              const SizedBox.shrink(),
-          if (dms.isNotEmpty && rooms.isNotEmpty) const SizedBox.shrink(),
-          for (final d in dms)
-            if (d.id == activeId)
-              collapsedFace(_DmMenuItem(dm: d, isActive: true))
+          for (final row in rows)
+            if (row.id != null && row.id == activeId)
+              collapsedFace(row.build(context))
             else
               const SizedBox.shrink(),
         ],
