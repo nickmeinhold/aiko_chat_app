@@ -44,7 +44,7 @@ void main() {
     'M2': '01M0GS7FDWBVQ31950B1PTV2D1',
     'M9': '01M0GS7FDWBVQ31950B1PTV2D2',
   };
-  String serverIdFor(String clientMsgId) {
+  String islandIdFor(String clientMsgId) {
     final id = serverIds[clientMsgId];
     if (id == null) {
       throw ArgumentError(
@@ -88,7 +88,7 @@ void main() {
     String? replyTo,
     // The SERVER ulid, variable INDEPENDENTLY of the client id.
     //
-    // It defaulted to `serverIdFor(clientMsgId)` and nothing else — a pure
+    // It defaulted to `islandIdFor(clientMsgId)` and nothing else — a pure
     // function of the client id, so the two could not be varied apart and the
     // one shape that can defeat `_settled` (one signed invitation, two server
     // ULIDs) was inexpressible. That is why deleting the replay guard left every
@@ -117,7 +117,7 @@ void main() {
       replyTo: replyTo,
     );
     final sig = await sign(key, payload);
-    final ulid = islandId ?? serverIdFor(clientMsgId);
+    final ulid = islandId ?? islandIdFor(clientMsgId);
     return Message(
       // clientTempId IS THE SERVER ULID for an inbound message, exactly as
       // `Message.fromView` builds one: `final msgId = v['msg_id'] as String;
@@ -415,7 +415,7 @@ void main() {
         await inbound(
           body: kCallEndBody,
           clientMsgId: 'M2',
-          replyTo: serverIdFor('M1'),
+          replyTo: islandIdFor('M1'),
         ),
       );
       await pump();
@@ -462,7 +462,7 @@ void main() {
       await inbound(
         body: kCallEndBody,
         clientMsgId: 'M2',
-        replyTo: serverIdFor('M1'),
+        replyTo: islandIdFor('M1'),
       ),
     );
     await pump();
@@ -472,7 +472,7 @@ void main() {
         from: 'mallory-key',
         body: kCallEndBody,
         clientMsgId: 'M9',
-        replyTo: serverIdFor('M1'),
+        replyTo: islandIdFor('M1'),
       ),
     );
     await pump();
@@ -509,7 +509,7 @@ void main() {
       await inbound(
         body: kCallEndBody,
         clientMsgId: 'M2',
-        replyTo: serverIdFor('M1'),
+        replyTo: islandIdFor('M1'),
       ),
     );
     await pump();
@@ -550,7 +550,7 @@ void main() {
         from: 'mallory-key',
         body: kCallEndBody,
         clientMsgId: 'M9',
-        replyTo: serverIdFor('M1'),
+        replyTo: islandIdFor('M1'),
       ),
     );
     await pump();
@@ -703,8 +703,8 @@ void main() {
       );
       transport.emitMessage(
         Message(
-          clientTempId: serverIdFor('M1'),
-          id: serverIdFor('M1'),
+          clientTempId: islandIdFor('M1'),
+          id: islandIdFor('M1'),
           channelId: dmId,
           sender: const MessageSender(
             userId: robinId,

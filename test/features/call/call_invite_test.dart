@@ -323,7 +323,7 @@ void main() {
       producedByStart.add(refusal(invite(age: const Duration(seconds: -5)))!);
       // A signed, permitted invite carrying NO SERVER ID. Built by hand because
       // the `invite` fixture always mints one — which is precisely why the first
-      // roster version could file `noServerId` as "deliberately unreachable" and
+      // roster version could file `noIslandId` as "deliberately unreachable" and
       // never be contradicted. Driving the gate forces the question.
       producedByStart.add(switch (admitRing(
         Message(

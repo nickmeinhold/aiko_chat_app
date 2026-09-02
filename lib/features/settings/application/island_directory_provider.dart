@@ -31,7 +31,7 @@ String _normalizeUrl(String url) => IslandConfig.normalized(url).httpBaseUrl;
 /// The directory client — its own [Dio], unauthenticated (the directory is
 /// public). Tests override this with a fake to drive entries/errors without a
 /// network. The Dio is disposed with the provider scope.
-final gatewayDirectoryClientProvider = Provider<IslandDirectoryClient>((ref) {
+final islandDirectoryClientProvider = Provider<IslandDirectoryClient>((ref) {
   final dio = Dio(
     BaseOptions(
       connectTimeout: const Duration(seconds: 8),
@@ -43,7 +43,7 @@ final gatewayDirectoryClientProvider = Provider<IslandDirectoryClient>((ref) {
 });
 
 /// The local "islands I've met" store, backed by SharedPreferences.
-final gatewaySeedStoreProvider = Provider<IslandSeedStore>((ref) {
+final islandSeedStoreProvider = Provider<IslandSeedStore>((ref) {
   return IslandSeedStore(
     prefs: ref.watch(sharedPreferencesProvider),
     normalize: _normalizeUrl,
@@ -69,14 +69,14 @@ class KnownIslandsNotifier extends Notifier<List<IslandEntry>> {
       // current bootstrap island is DOWN (the SPOF case this feature exists to
       // solve), discovery throws and remember() never fires, so a previously-seen
       // island must still seed the picker from disk to be reachable at all.
-      _merge(ref.watch(gatewaySeedStoreProvider).load());
+      _merge(ref.watch(islandSeedStoreProvider).load());
 
   /// Union [discovered] into the known set + persist, then publish the merged
   /// list. Idempotent: re-remembering already-known islands is a no-op write of
   /// the same set. Skips the state update when nothing changed so a periodic
   /// re-fetch doesn't churn listeners.
   Future<void> remember(List<IslandEntry> discovered) async {
-    final store = ref.read(gatewaySeedStoreProvider);
+    final store = ref.read(islandSeedStoreProvider);
     final persisted = await store.remember(discovered);
     final next = _merge(persisted);
     if (!_sameUrls(next, state)) state = next;
@@ -115,9 +115,7 @@ final islandDirectoryProvider = FutureProvider<List<IslandEntry>>((ref) async {
   final override = kIslandDirectoryUrl.trim();
   final url = override.isNotEmpty ? override : '$base/v1/gateways';
 
-  final entries = await ref
-      .watch(gatewayDirectoryClientProvider)
-      .fetchFrom(url);
+  final entries = await ref.watch(islandDirectoryClientProvider).fetchFrom(url);
 
   // Fold the discovery into the persisted set (fire-and-forget: a persistence
   // hiccup must not fail discovery — the live entries still render this session).

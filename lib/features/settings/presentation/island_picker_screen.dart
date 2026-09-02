@@ -24,11 +24,10 @@ class IslandPickerScreen extends ConsumerStatefulWidget {
   const IslandPickerScreen({super.key});
 
   @override
-  ConsumerState<IslandPickerScreen> createState() =>
-      _GatewayPickerScreenState();
+  ConsumerState<IslandPickerScreen> createState() => _IslandPickerScreenState();
 }
 
-class _GatewayPickerScreenState extends ConsumerState<IslandPickerScreen> {
+class _IslandPickerScreenState extends ConsumerState<IslandPickerScreen> {
   final _customController = TextEditingController();
   bool _switching = false;
 

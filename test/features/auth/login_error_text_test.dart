@@ -66,7 +66,7 @@ void main() {
         reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
         // Stub the 5s-Timer reachability loop so the pumped login screen doesn't
         // leave a pending timer at test teardown.
-        gatewayReachableProvider.overrideWith((ref) => Stream.value(true)),
+        islandReachableProvider.overrideWith((ref) => Stream.value(true)),
       ],
     );
     addTearDown(container.dispose);
