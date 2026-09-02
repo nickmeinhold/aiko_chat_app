@@ -568,7 +568,7 @@ class ChatRepository {
       outcome = await _cache.reconcileAck(
         a.clientMsgId,
         a.msgId,
-        _parseIslandTime(a.createdAt),
+        _parseGatewayTime(a.createdAt),
       );
     } catch (e, st) {
       // A write already past the guard can land as the cache closes during
@@ -988,7 +988,17 @@ class ChatRepository {
 
   // --- helpers ---------------------------------------------------------------
 
-  DateTime _parseIslandTime(String? iso) =>
+  /// The timestamp on a frame off the gateway socket.
+  ///
+  /// Named for the GATEWAY, not the island, and the reason is the type: `a` is an
+  /// [AckFrame], which extends [GatewayFrame] — this parses a field of a frame
+  /// the bridge service sent. Its sibling in the same sweep, `closeFromServer`,
+  /// became `closeFromGateway` for exactly that reason; this one became
+  /// `_parseIslandTime` instead. Two identifiers, one category, opposite bins,
+  /// which is the signature of a MISSING RULE rather than a missed instance —
+  /// see [_permittedIdentifiers] in the vocabulary test for the third meaning
+  /// that had never been written down.
+  DateTime _parseGatewayTime(String? iso) =>
       (iso != null ? DateTime.tryParse(iso)?.toUtc() : null) ??
       DateTime.now().toUtc();
 
