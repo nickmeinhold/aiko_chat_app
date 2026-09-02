@@ -1,9 +1,9 @@
-/// Provider graph for resilient island/island discovery (#36).
+/// Provider graph for resilient island discovery (#36).
 ///
 /// Three parts, no single point of failure:
 ///  1. BOOTSTRAP from multiple bundled seeds ([kIslandPresets]) — survives any
 ///     one being down.
-///  2. DISCOVER from the CURRENTLY-SELECTED island's `/v1/islands`
+///  2. DISCOVER from the CURRENTLY-SELECTED island's `/v1/gateways`
 ///     ([islandDirectoryProvider]) — not a fixed origin. Re-fires on a island
 ///     switch (it watches [configProvider]).
 ///  3. GROW: every successfully-discovered island is unioned into a persisted
