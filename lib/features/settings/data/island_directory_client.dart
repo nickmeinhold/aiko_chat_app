@@ -1,17 +1,10 @@
-/// Fetches the live island directory (#36) — the layer ABOVE per-island
-/// community discovery: "which independent operators exist to connect to?".
+/// Fetches the live island directory (#36) — the layer ABOVE per-island community
+/// discovery: "which independent operators exist to connect to?".
 ///
-/// Every island serves the FULL known-peer set from `/v1/islands`, so there is
-/// NO privileged "directory host": the app discovers from whichever island it is
-/// currently pointed at (see [islandDirectoryProvider]), and reaching any one
-/// island teaches it about all the others. Removing the old single fixed origin
-/// is the point — a hardcoded directory URL re-introduced a discovery SPOF even
-/// though the island side had none. Still deliberately CROSS-GATEWAY-shaped: its
-/// own bare [Dio] (no auth interceptor / bearer), never `restApiProvider`.
-///
-/// [kIslandDirectoryUrl] remains as an OPTIONAL build-time override (dev/staging
-/// can pin a fixed directory); when empty (the shipped default) the provider
-/// composes `<current island>/v1/islands`.
+/// Every island serves the FULL known-peer set from `/v1/islands`, so there is NO
+/// privileged "directory host": the app discovers from whichever island it is
+/// currently on, and composes `<current island>/v1/islands`.
+
 library;
 
 import 'package:dio/dio.dart';
@@ -19,22 +12,14 @@ import 'package:flutter/foundation.dart';
 
 import '../domain/island_entry.dart';
 
-/// The directory-array envelope keys we accept, in PRIORITY order. `islands` is
-/// the canonical key and is tried FIRST; `entries`/`directory` are tolerant
-/// fallbacks for a differently-shaped directory. ORDER IS SEMANTIC — a
-/// guard-contract test pins it, so this is not a set to reorder casually.
+/// The directory-array envelope keys we accept, in PRIORITY order: `islands`
+/// first, then `entries`/`directory` as tolerant fallbacks for a
+/// differently-SHAPED directory. Order is semantic and a guard-contract test pins
+/// it, so this is not a set to reorder casually.
 ///
-/// THE LEGACY KEYS ARE GONE, deliberately (Nick, 2026-09-02): `gateways` and
-/// `servers` were compat for a rename the island completed in its PR#62, and we
-/// operate both islands in existence, so there is nothing left to be compatible
-/// WITH. Measured 2026-09-02: chat.imagineering.cc and chat.enspyr.co both serve
-/// `/v1/islands` returning an `islands` envelope.
-///
-/// The cost of dropping them, stated so it is a choice and not a surprise: an
-/// island that served only a `gateways` envelope would now parse to an EMPTY
-/// directory rather than an error — silent degradation to the seed list, not a
-/// crash. Acceptable while we run every island; revisit if a third-party
-/// operator ever appears (the AGPL licence exists for exactly that future).
+/// Dropping a key means an island serving only that key parses to an EMPTY
+/// directory rather than an error — silent degradation to the seed list. That is
+/// acceptable only while we operate every island.
 const kDirectoryEnvelopeKeysByPriority = <String>[
   'islands',
   'entries',
@@ -69,11 +54,9 @@ class IslandDirectoryClient {
   }
 
   /// Accept either a bare JSON array of entries, or an envelope object holding
-  /// the array under a conventional key (see [kDirectoryEnvelopeKeysByPriority]:
-  /// `islands` first, then `entries`/`directory` as tolerant fallbacks). That
-  /// reads a directory whose SHAPE differs from ours without needing to know its
-  /// name for the array. Anything else yields an empty list rather than throwing
-  /// — a shape we don't recognise is "no directory", not a crash.
+  /// the array under one of [kDirectoryEnvelopeKeysByPriority]. An unrecognised
+  /// shape yields an empty list rather than throwing — "no directory", not a
+  /// crash.
   static List<IslandEntry> _parse(dynamic data) => switch (data) {
     List<dynamic> l => _entries(l),
     Map<String, dynamic> m => _firstUsableEnvelope(m),

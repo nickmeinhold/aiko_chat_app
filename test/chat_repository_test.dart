@@ -855,8 +855,8 @@ void main() {
       await repo.sendMessage(_chan, 'hi');
       final optimisticAt = (await rows()).single.createdAt;
       // Server time deliberately far in the PAST relative to any real `now`.
-      const serverIso = '2020-01-01T00:00:00Z';
-      transport.emitAck('tmp0', '01U', createdAt: serverIso);
+      const islandIso = '2020-01-01T00:00:00Z';
+      transport.emitAck('tmp0', '01U', createdAt: islandIso);
       await pump();
 
       final r = (await rows()).single;
@@ -864,7 +864,7 @@ void main() {
       expect(r.deliveryState, DeliveryState.sent);
       expect(
         r.createdAt,
-        DateTime.parse(serverIso).toUtc(),
+        DateTime.parse(islandIso).toUtc(),
         reason: 'server time wins — even though it moves the row upward',
       );
       expect(

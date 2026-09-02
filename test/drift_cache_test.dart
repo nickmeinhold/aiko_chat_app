@@ -33,8 +33,8 @@ Message optimistic(
   deliveryState: DeliveryState.sending,
 );
 
-/// A server-authoritative message (inbound fanout / history).
-Message server(
+/// A fromIsland-authoritative message (inbound fanout / history).
+Message fromIsland(
   String ulid,
   String channel,
   String body, {
@@ -127,48 +127,41 @@ void main() {
       expect(rows.single.deliveryState, DeliveryState.sent);
     });
 
-    test(
-      'collapse: history wins first, ack merges server truth INTO optimistic '
-      'row, keeps clientTempId, deletes R_u (THE CRUX)',
-      () async {
-        // Optimistic row we sent.
-        await cache.insertOptimistic(optimistic('c1', 'chan', 'mine'));
-        // History fetched the server copy first (different body/sender to prove
-        // the merge DIRECTION, not just the count). Distinct history time to
-        // prove the collapse stamps the ACK time, not R_u's, consistently with
-        // the happy path (Carnot finding).
-        await cache.upsertInbound(
-          server(
-            '01ULID_A',
-            'chan',
-            'server-body',
-            sender: _alice,
-            at: DateTime.utc(2026, 1, 1, 12, 0),
-          ),
-        );
-        // Now our ack lands, mapping c1 -> 01ULID_A, with its own server time.
-        final ackTime = DateTime.utc(2026, 1, 1, 12, 9);
-        await cache.reconcileAck('c1', '01ULID_A', ackTime);
+    test('collapse: history wins first, ack merges fromIsland truth INTO optimistic '
+        'row, keeps clientTempId, deletes R_u (THE CRUX)', () async {
+      // Optimistic row we sent.
+      await cache.insertOptimistic(optimistic('c1', 'chan', 'mine'));
+      // History fetched the fromIsland copy first (different body/sender to prove
+      // the merge DIRECTION, not just the count). Distinct history time to
+      // prove the collapse stamps the ACK time, not R_u's, consistently with
+      // the happy path (Carnot finding).
+      await cache.upsertInbound(
+        fromIsland(
+          '01ULID_A',
+          'chan',
+          'fromIsland-body',
+          sender: _alice,
+          at: DateTime.utc(2026, 1, 1, 12, 0),
+        ),
+      );
+      // Now our ack lands, mapping c1 -> 01ULID_A, with its own fromIsland time.
+      final ackTime = DateTime.utc(2026, 1, 1, 12, 9);
+      await cache.reconcileAck('c1', '01ULID_A', ackTime);
 
-        final rows = await cache.watchChannel('chan').first;
-        expect(
-          rows,
-          hasLength(1),
-          reason: 'collapse must leave exactly one row',
-        );
-        final m = rows.single;
-        expect(m.clientTempId, 'c1', reason: 'optimistic-wins-on-PK (UI key)');
-        expect(m.id, '01ULID_A');
-        expect(m.body, 'server-body', reason: 'server-wins-on-fields');
-        expect(m.sender.label, 'Alice', reason: 'server-wins-on-fields');
-        expect(
-          m.createdAt,
-          ackTime,
-          reason: 'collapse stamps the ACK time, same as the happy path',
-        );
-        expect(m.deliveryState, DeliveryState.sent);
-      },
-    );
+      final rows = await cache.watchChannel('chan').first;
+      expect(rows, hasLength(1), reason: 'collapse must leave exactly one row');
+      final m = rows.single;
+      expect(m.clientTempId, 'c1', reason: 'optimistic-wins-on-PK (UI key)');
+      expect(m.id, '01ULID_A');
+      expect(m.body, 'fromIsland-body', reason: 'fromIsland-wins-on-fields');
+      expect(m.sender.label, 'Alice', reason: 'fromIsland-wins-on-fields');
+      expect(
+        m.createdAt,
+        ackTime,
+        reason: 'collapse stamps the ACK time, same as the happy path',
+      );
+      expect(m.deliveryState, DeliveryState.sent);
+    });
 
     test(
       'guard: a late ack does not regress an already-reconciled row',
@@ -198,7 +191,9 @@ void main() {
       'delete/update emission) AND never shows a duplicate islandUlid',
       () async {
         await cache.insertOptimistic(optimistic('c1', 'chan', 'mine'));
-        await cache.upsertInbound(server('01ULID_A', 'chan', 'server-body'));
+        await cache.upsertInbound(
+          fromIsland('01ULID_A', 'chan', 'fromIsland-body'),
+        );
 
         final emissions = <List<Message>>[];
         final sub = cache.watchChannel('chan').listen(emissions.add);
@@ -239,8 +234,8 @@ void main() {
 
   group('W3 — inbound dedup-upsert', () {
     test('delivering the same ULID twice keeps one row', () async {
-      await cache.upsertInbound(server('01ULID_A', 'chan', 'v1'));
-      await cache.upsertInbound(server('01ULID_A', 'chan', 'v2'));
+      await cache.upsertInbound(fromIsland('01ULID_A', 'chan', 'v1'));
+      await cache.upsertInbound(fromIsland('01ULID_A', 'chan', 'v2'));
       final rows = await cache.watchChannel('chan').first;
       expect(rows, hasLength(1));
       expect(
@@ -253,9 +248,9 @@ void main() {
     test(
       'cross-channel islandUlid match is corruption (fails loudly)',
       () async {
-        await cache.upsertInbound(server('01ULID_A', 'chanA', 'x'));
+        await cache.upsertInbound(fromIsland('01ULID_A', 'chanA', 'x'));
         expect(
-          () => cache.upsertInbound(server('01ULID_A', 'chanB', 'x')),
+          () => cache.upsertInbound(fromIsland('01ULID_A', 'chanB', 'x')),
           throwsA(isA<StateError>()),
         );
       },
@@ -390,20 +385,20 @@ void main() {
 
   group('W6 — applyRetraction (hard-delete + dead id)', () {
     test('hard-deletes a present target row and records the dead id', () async {
-      await cache.upsertInbound(server('01A', 'chan', 'objectionable'));
+      await cache.upsertInbound(fromIsland('01A', 'chan', 'objectionable'));
       expect(await chanRows(), hasLength(1));
       await cache.applyRetraction(retract('01A', '01Z'));
       expect(await chanRows(), isEmpty, reason: 'target hard-deleted');
     });
 
     test('is idempotent — applying twice is a no-op (PK dead id)', () async {
-      await cache.upsertInbound(server('01A', 'chan', 'x'));
+      await cache.upsertInbound(fromIsland('01A', 'chan', 'x'));
       await cache.applyRetraction(retract('01A', '01Z'));
       await cache.applyRetraction(retract('01A', '01Z')); // again
       expect(await chanRows(), isEmpty);
       // And a later re-upsert is still suppressed (dead id persisted once).
       expect(
-        (await cache.upsertInbound(server('01A', 'chan', 'x'))).inserted,
+        (await cache.upsertInbound(fromIsland('01A', 'chan', 'x'))).inserted,
         isFalse,
         reason: 'dead id persisted once — still suppressed, nothing written',
       );
@@ -432,7 +427,7 @@ void main() {
       // a reconnect where the retraction is seen first). Recording the dead id
       // must not require the row to exist.
       await cache.applyRetraction(retract('01A', '01Z'));
-      final r = await cache.upsertInbound(server('01A', 'chan', 'late'));
+      final r = await cache.upsertInbound(fromIsland('01A', 'chan', 'late'));
       // `inserted` is the field that actually means "nothing written" — the old
       // bool was `newlyInvalid` and only coincidentally false here, so this
       // assertion now tests the reason it always claimed to (cage-match #139 R5).
@@ -447,10 +442,10 @@ void main() {
     test(
       'message AFTER a delete (buffered frame / reconnect re-walk) stays gone',
       () async {
-        await cache.upsertInbound(server('01A', 'chan', 'x'));
+        await cache.upsertInbound(fromIsland('01A', 'chan', 'x'));
         await cache.applyRetraction(retract('01A', '01Z')); // deletes it
         // A buffered fanout frame or a history re-walk re-delivers 01A.
-        final r = await cache.upsertInbound(server('01A', 'chan', 'x'));
+        final r = await cache.upsertInbound(fromIsland('01A', 'chan', 'x'));
         expect(r.inserted, isFalse, reason: 'no resurrection, nothing written');
         expect(await chanRows(), isEmpty, reason: 'no resurrection');
       },
@@ -461,7 +456,7 @@ void main() {
       // (upsertInbound's bool is the #1896 invalid-origin probe, not an
       // insert flag — for a plain message it is false either way; the row's
       // PRESENCE is the real proof the dead id didn't suppress it.)
-      await cache.upsertInbound(server('01B', 'chan', 'fine'));
+      await cache.upsertInbound(fromIsland('01B', 'chan', 'fine'));
       expect(await chanRows(), hasLength(1));
       expect((await chanRows()).single.id, '01B');
     });
@@ -537,7 +532,7 @@ void main() {
       'case-insensitive substring match across channels, newest first',
       () async {
         await cache.upsertInbound(
-          server(
+          fromIsland(
             '01A',
             'chanA',
             'The quick brown fox',
@@ -545,7 +540,7 @@ void main() {
           ),
         );
         await cache.upsertInbound(
-          server(
+          fromIsland(
             '01B',
             'chanB',
             'lazy FOX sleeping',
@@ -553,7 +548,7 @@ void main() {
           ),
         );
         await cache.upsertInbound(
-          server(
+          fromIsland(
             '01C',
             'chanA',
             'no match here',
@@ -572,7 +567,7 @@ void main() {
     test(
       'a retracted message never appears in results (hard-deleted)',
       () async {
-        await cache.upsertInbound(server('01A', 'chan', 'secret plans'));
+        await cache.upsertInbound(fromIsland('01A', 'chan', 'secret plans'));
         expect(await cache.searchMessages('secret'), hasLength(1));
         await cache.applyRetraction(
           Retraction(channelId: 'chan', id: '01Z', targetMsgId: '01A'),
@@ -590,9 +585,9 @@ void main() {
       'LIKE wildcards in the query are literal (escaped), not patterns',
       () async {
         await cache.upsertInbound(
-          server('01A', 'chan', 'discount is 50% today'),
+          fromIsland('01A', 'chan', 'discount is 50% today'),
         );
-        await cache.upsertInbound(server('01B', 'chan', 'plain text'));
+        await cache.upsertInbound(fromIsland('01B', 'chan', 'plain text'));
         // '%' must match the literal percent, NOT act as a match-anything wildcard.
         final pct = await cache.searchMessages('50%');
         expect(pct.map((m) => m.id), ['01A']);
@@ -605,7 +600,7 @@ void main() {
     );
 
     test('empty / whitespace query returns nothing without scanning', () async {
-      await cache.upsertInbound(server('01A', 'chan', 'anything'));
+      await cache.upsertInbound(fromIsland('01A', 'chan', 'anything'));
       expect(await cache.searchMessages(''), isEmpty);
       expect(await cache.searchMessages('   '), isEmpty);
     });

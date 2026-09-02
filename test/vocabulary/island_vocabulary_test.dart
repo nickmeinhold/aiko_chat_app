@@ -1,54 +1,22 @@
-// The app never says "server" or "gateway" to a person. It says "island".
+// The app says "island". ADR-0001: ISLAND is the user-facing federation word,
+// GATEWAY is the bridge service INSIDE an island, and SERVER is the host it runs
+// on. Only the first two may appear in shipped text; the third is sayable as a
+// NAME with a reason (see [_permittedIdentifiers]).
 //
-// Nick's ruling, 2026-09-02: "I don't want the app to ever say 'server' or
-// 'gateway'... it should say 'island'." That is ADR-0001 restated at the UI:
-// ISLAND is "the user-facing federation word", while GATEWAY names "a thin
-// internal bridge service INSIDE an Island" — so `/settings/gateway` was not a
-// loose synonym, it named a different thing, one scope level down. And "server"
-// is the exact word ADR-0001's own motivation was written to kill: "Vocabulary
-// drift is design drift. 'Server', 'user', and 'identity' each meant three
-// different things."
+// Scans every string literal and every identifier under lib/ and test/. Comment
+// lines are excluded — a comment is not something the app says.
 //
-// WHY A TEST AND NOT A NOTE. The drift did not arrive in one bad commit — it
-// accumulated one honest string at a time, in seven files, over months, while a
-// numbered ADR sat in `docs/adr/` saying otherwise. A rule that lives only in
-// prose is re-broken by the next person writing a snackbar at speed.
-//
-// HOW IT WORKS. Every Dart string literal under `lib/` is checked — single-line
-// and triple-quoted, with comment lines skipped, because a comment is not
-// something the app says. Anything containing "server" or "gateway" must appear
-// verbatim in [_permitted], which holds only strings the USER NEVER SEES.
-//
-// THE ALLOWLIST IS ITSELF GUARDED, which is the lesson of this file's own
-// cage-match. Two reviewers attacked it independently and both were right: the
-// corpus-wide rename edited the allowlist along with the code, so an entry
-// hollowed out silently (`r'server=$serverUlid'` became `r'server=$islandUlid'`
-// and went on matching, keeping the suite green by tracking the very thing it
-// polices), and thirteen more entries stopped containing a banned word at all.
-// An allowlist is authoritative state that drifts exactly like the code it
-// polices, so it gets the same treatment: the meta-tests below fail on a DEAD
-// entry (no banned word — it can never match, so it is residue wearing policy's
-// clothes) and on an ORPHAN entry (no occurrence in the corpus — the exemption
-// outlived its reason).
-//
-// If this test fails on a string a person reads, the fix is the word, not the
-// allowlist.
+// The allowlists are themselves guarded: an entry must contain a banned word (or
+// it exempts nothing) and must occur as a live literal (or its reason has gone).
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-/// Literals that legitimately carry "server"/"gateway" because the user never
-/// reads them.
+/// Literals that carry a banned word because the user never reads them.
 ///
-/// COVERAGE BOUNDARY, learned from the DEAD meta-test on its first run.
-/// [_banned] is word-boundary anchored, so a SNAKE_CASE token carrying the word
-/// does not match: in `server_ulid` the word is followed by `_`, itself a word
-/// character, so there is no boundary. `server_ulid`, `aiko_gateway_base_url`
-/// and `aiko_known_gateways` sat here exempting a match that could never happen
-/// — and their presence made that silence look deliberate rather than
-/// unexamined. They are gone. The boundary is correct on purpose (this guard
-/// hunts user-facing PROSE, and a snake_case token is never prose), but it is a
-/// boundary, and it is now written down instead of hidden behind exemptions.
+/// COVERAGE BOUNDARY: [_banned] is word-boundary anchored, so a snake_case
+/// token (`server_ulid`) never matches. Deliberate — this hunts prose.
 const _permitted = <String>{
   // A developer `assert` about the gateway service's own REST contract (is
   // `after` exclusive?). Aimed at us, and "gateway" is the CORRECT word — the
@@ -56,43 +24,18 @@ const _permitted = <String>{
   '— is the gateway `after` cursor exclusive?',
 };
 
-/// Exemptions SCOPED TO A FILE. Carnot's catch: a bare `'servers'` on the global
-/// allowlist exempts that word ANYWHERE, so a future user-facing `Text('servers')`
-/// would sail through the very policy that exists to stop it. These are the
-/// island directory's own wire field names, and they are legitimate in exactly
-/// one file.
+/// Exemptions scoped to one file, so a wire-field name cannot be exempted
+/// everywhere.
 const _permittedInFile = <String, Set<String>>{};
 
 /// Identifiers that may carry "gateway" because they NAME THE BRIDGE SERVICE
 /// the client speaks to — ADR-0001's Gateway, not its Island — plus the legacy
 /// storage-key constants, which are strings-as-names and cannot move.
-/// Identifiers exempt from the vocabulary rule, EACH WITH ITS REASON.
+/// Identifiers exempt from the rule, each with its reason. A map, not a set:
+/// an exemption without a stated reason is how a wrong one survives.
 ///
-/// THERE ARE THREE MEANINGS, and until 2026-09-02 only two had a rule:
-///
-///   1. ISLAND  — the sovereign deployment. The user-facing word (ADR-0001).
-///   2. GATEWAY — the bridge service INSIDE an island. Kept deliberately: an
-///      island HAS a gateway, and the client dials it.
-///   3. SERVER  — the physical or virtual HOST the thing runs on. NO RULE WAS
-///      EVER WRITTEN for this one, and its absence caused a real defect.
-///
-/// The proof that the gap was structural rather than careless: one sweep made
-/// the same call twice and split. `closeFromServer` became `closeFromGateway`
-/// (correct — a close frame comes from the bridge service) while
-/// `_parseServerTime` became `_parseIslandTime` (wrong — it parses a field of an
-/// AckFrame, which IS a GatewayFrame). Same category, opposite bins. Neither the
-/// guard nor a four-family cage-match could have caught it, because both were
-/// handed the two-bin taxonomy as a premise.
-///
-/// The asymmetry that produced it: STRINGS could always exempt `server` with a
-/// reason, but IDENTIFIERS banned it outright with no escape — so anyone needing
-/// meaning 3 (`serverClockSkew`, `serverDiskFull`) had to pick island or gateway
-/// by feel, and the coin lands wrong about half the time. Nick's call,
-/// 2026-09-02: give identifiers the same reason-carrying escape. A name meaning
-/// THE HOST is legitimate; it just has to say so here.
-///
-/// A bare allowlist is what let two local variables named `servers` sail through
-/// for a week, so this is a map: no entry without a reason.
+/// Meaning 3 (the HOST) belongs here too, with a reason naming the host —
+/// not bent into island or gateway to get past this.
 const _permittedIdentifiers = <String, String>{
   // Meaning 2 — the bridge service and everything that speaks to it.
   'GatewayRestApi': 'the REST client for the bridge service',
@@ -104,6 +47,7 @@ const _permittedIdentifiers = <String, String>{
   'gateway_capabilities': 'file for the above',
   'gatewayCapabilities': 'field holding the above',
   'GatewayFrame': 'a frame arriving on the gateway socket',
+  'closeFromGateway': 'test fake: a WS close from the bridge service',
   '_parseGatewayTime':
       'parses a timestamp field of an AckFrame, which IS a GatewayFrame — the '
       'bin its sibling closeFromGateway landed in',
@@ -158,10 +102,22 @@ bool _isPath(String s) =>
     s.startsWith('../') ||
     s.endsWith('.dart');
 
-List<File> _dartFilesUnderLib() => Directory('lib')
-    .listSync(recursive: true)
+/// SCOPE DIFFERS BY RULE, on purpose.
+///
+/// The STRING rule is about what the APP SAYS to a person, so it scans lib/ only —
+/// a test description is not something the app says, and it legitimately discusses
+/// the gateway service and island-assigned timestamps.
+///
+/// The IDENTIFIER rule is about code following the vocabulary, so it scans lib/ AND
+/// test/. test/ sat outside every instrument's coverage until 2026-09-03, and seven
+/// declarations named for the banned word had survived there.
+List<File> _dartFiles(List<String> roots) => roots
+    .map(Directory.new)
+    .expand((d) => d.listSync(recursive: true))
     .whereType<File>()
     .where((f) => f.path.endsWith('.dart'))
+    // This file names the banned words in order to police them.
+    .where((f) => !f.path.endsWith('island_vocabulary_test.dart'))
     .toList(growable: false);
 
 void main() {
@@ -169,7 +125,7 @@ void main() {
       '"island" (ADR-0001)', () {
     final offenders = <String>[];
 
-    for (final entity in _dartFilesUnderLib()) {
+    for (final entity in _dartFiles(['lib'])) {
       final source = entity.readAsStringSync();
 
       // Triple-quoted literals first, over the WHOLE file — a line-oriented
@@ -225,7 +181,7 @@ void main() {
     'the island picker route is /settings/island, not /settings/gateway',
     () {
       // The route is semi-visible: it is what a deep link says out loud.
-      final hits = _dartFilesUnderLib()
+      final hits = _dartFiles(['lib'])
           .where((f) => f.readAsStringSync().contains('/settings/gateway'))
           .map((f) => f.path)
           .toList();
@@ -234,9 +190,7 @@ void main() {
   );
 
   test('no allowlist entry is DEAD — every one must contain a banned word', () {
-    // A corpus-wide rename edits this file too. An entry whose banned word was
-    // renamed away can never match again: not policy, residue that LOOKS like
-    // policy, and it will quietly permit any future string equal to it.
+    // An entry with no banned word can never match: residue, not policy.
     final all = {..._permitted, ..._permittedInFile.values.expand((e) => e)};
     final dead = all.where((e) => !_banned.hasMatch(e)).toList();
     expect(
@@ -250,10 +204,9 @@ void main() {
   });
 
   test('no allowlist entry is an ORPHAN — every one must occur in lib/', () {
-    // Kelvin's catch. An exemption whose justification has left the codebase is
-    // an open door: valid forever, reread by nobody. Requiring a live occurrence
-    // means an exemption dies with the code that earned it.
-    final corpus = _dartFilesUnderLib().map((f) => f.readAsStringSync()).join();
+    // An exemption whose justification has left the codebase stays valid
+    // forever and is reread by nobody.
+    final corpus = _dartFiles(['lib']).map((f) => f.readAsStringSync()).join();
     final all = {..._permitted, ..._permittedInFile.values.expand((e) => e)};
     final orphans = all.where((e) => !corpus.contains(e)).toList();
     expect(
@@ -268,21 +221,12 @@ void main() {
 
   test('no IDENTIFIER under lib/ says "server", and "gateway" only names the '
       'bridge service', () {
-    // THE FINDING THIS TEST EXISTS FOR. The 470-site rename that introduced this
-    // vocabulary used a word-boundary pattern, so any identifier where the token
-    // sat INSIDE a longer name was silently skipped: `serverUlidFor`,
-    // `serverIdFor`, `noServerId`, `_parseServerTime`, `_GatewayPickerScreenState`,
-    // `gatewaySeedStoreProvider` and five more survived, and `flutter analyze`
-    // stayed green the whole time because they are internally consistent. A
-    // reviewer found ONE of them by reading; this finds all of them, and stops
-    // the next sweep from having the same blind spot.
-    //
-    // Strings are guarded above; this is the same policy one layer down, where a
-    // rename actually goes wrong.
+    // Identifier-level twin of the string rule above — where a rename actually
+    // goes wrong.
     final ident = RegExp(r'[A-Za-z_][A-Za-z0-9_]*');
     final offenders = <String>[];
 
-    for (final file in _dartFilesUnderLib()) {
+    for (final file in _dartFiles(['lib', 'test'])) {
       final lines = file.readAsStringSync().split('\n');
       for (var i = 0; i < lines.length; i++) {
         final line = lines[i];
@@ -298,18 +242,8 @@ void main() {
         for (final m in ident.allMatches(code)) {
           final name = m.group(0)!;
           if (_permittedIdentifiers.containsKey(name)) continue;
-          // MATCH ON THE IDENTIFIER'S OWN WORDS, not a substring and not a
-          // regex word boundary — both are wrong here, in opposite directions.
-          // A substring flags `observer` (ob|server) as saying "server"; a `\b`
-          // boundary MISSES `serverUlidFor`, which is the exact miss round 3
-          // existed to catch. The unit the question is really about is the
-          // camelCase/snake_case COMPONENT: `serverUlidFor` -> [server, ulid,
-          // for] flags, `observer` -> [observer] does not.
-          //
-          // Today `observer` appears once in lib/ and only inside a comment, so
-          // the substring version passed by luck of placement. The first person
-          // to name a variable `observer` in real code would have hit a false
-          // positive on a guard that is supposed to be trustworthy.
+          // Match the identifier's own camelCase/snake components: a substring
+          // flags `observer`, a word boundary misses a token inside a name.
           final words = name
               .split('_')
               .expand((part) => part.split(RegExp(r'(?=[A-Z])')))
