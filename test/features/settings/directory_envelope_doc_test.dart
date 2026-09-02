@@ -30,6 +30,69 @@ import 'dart:io';
 import 'package:aiko_chat_app/features/settings/domain/island_entry.dart';
 
 void main() {
+  test('NO doc comment in this file names a key absent from the list', () {
+    // The window was the blind spot. The paragraph-anchored test below scans one
+    // comment; the `_parse` docstring a few lines further down went on
+    // advertising `gateways` after 1748d19 deleted it, and stayed green because
+    // it sits outside that window — while a test two functions away asserted the
+    // key was gone. The suite held both facts and never let them meet.
+    //
+    // This one needs no window: any backticked key named in ANY comment in the
+    // file must still be in the list. It generalises where an anchor cannot.
+    final source = File(
+      'lib/features/settings/data/island_directory_client.dart',
+    ).readAsStringSync();
+    final known = {...kDirectoryEnvelopeKeysByPriority, 'entries', 'directory'};
+    // The vocabulary we care about: a key that WAS in the list and was removed.
+    const retired = {'gateways', 'servers'};
+
+    // Judged per comment BLOCK, not per line, and the rule is not "never mention
+    // a retired key" — that would forbid explaining the removal, which is the
+    // most useful thing a comment can say about one. The rule is: if a block
+    // names a retired key it must ALSO say, in that same block, that it is gone.
+    // A mention without that word is the failure mode — prose advertising a key
+    // the list does not contain.
+    final retirementWords = RegExp(
+      r'\b(gone|removed|retired|dropped|deleted|no longer|legacy)\b',
+      caseSensitive: false,
+    );
+
+    final offenders = <String>[];
+    final lines = source.split('\n');
+    var i = 0;
+    while (i < lines.length) {
+      if (!lines[i].trimLeft().startsWith('//')) {
+        i++;
+        continue;
+      }
+      final start = i;
+      final block = StringBuffer();
+      while (i < lines.length && lines[i].trimLeft().startsWith('//')) {
+        block.writeln(lines[i]);
+        i++;
+      }
+      final text = block.toString();
+      final saysRetired = retirementWords.hasMatch(text);
+      for (final key in retired) {
+        if (known.contains(key)) continue;
+        if (text.contains('`$key`') && !saysRetired) {
+          offenders.add(
+            'comment block at line ${start + 1} names `$key`, which is not in '
+            'kDirectoryEnvelopeKeysByPriority, without saying it is gone',
+          );
+        }
+      }
+    }
+    expect(
+      offenders,
+      isEmpty,
+      reason:
+          'A comment in island_directory_client.dart advertises an envelope key '
+          'that kDirectoryEnvelopeKeysByPriority no longer contains:\n'
+          '${offenders.join('\n')}',
+    );
+  });
+
   test('the envelope-priority doc names every key, in the list order', () {
     final source = File(
       'lib/features/settings/data/island_directory_client.dart',

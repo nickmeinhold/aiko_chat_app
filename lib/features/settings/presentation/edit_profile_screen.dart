@@ -53,7 +53,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       });
       return;
     }
-    // Send only what changed — a same-value handle is a island-side no-op, but
+    // Send only what changed — a same-value handle is an island-side no-op, but
     // not sending it keeps the request (and the cooldown) about real intent.
     final handleChanged = newHandle != user.username;
     final nameChanged = newName != user.displayName;

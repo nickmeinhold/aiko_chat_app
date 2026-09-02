@@ -135,8 +135,8 @@ final routerProvider = Provider<GoRouter>((ref) {
             : null;
       }
 
-      // The island picker is a PRE-LOGIN act (#35): choosing a island precedes
-      // having an account on it. A user stranded on a island they can't sign
+      // The island picker is a PRE-LOGIN act (#35): choosing an island precedes
+      // having an account on it. A user stranded on an island they can't sign
       // into (down, wrong URL, registration closed) must be able to switch away
       // without reinstalling — so it stays reachable while logged out, ahead of
       // both the login and claim-handle gates. switchIsland clears the

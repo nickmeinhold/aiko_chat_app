@@ -20,7 +20,7 @@ class IslandEntry {
 
   /// Stable directory id/slug, when this entry came from the live directory.
   /// Null for the built-in presets. Not used for matching (we dedupe on the
-  /// normalized URL, the thing that actually identifies a island) — carried for
+  /// normalized URL, the thing that actually identifies an island) — carried for
   /// future grouping/telemetry.
   final String? id;
 
@@ -120,7 +120,7 @@ class IslandEntry {
 /// only the cold-start floor, not the ceiling.
 ///
 /// Production is first so the common case (point at the live island) is one tap.
-/// Local and the Android-emulator loopback cover dev against a island on the
+/// Local and the Android-emulator loopback cover dev against an island on the
 /// host machine — DEBUG-ONLY: gated behind [kDebugMode] so they never reach end
 /// users in a release build (a user has nothing on their localhost, and
 /// 10.0.2.2 only resolves inside an Android emulator). A developer on a release
