@@ -114,7 +114,7 @@ class IslandEntry {
 /// MULTIPLE real internet islands are bundled (not just one), so bootstrap
 /// discovery survives any single one being down — the irreducible chicken-egg
 /// of a federated network (cf. BitTorrent DHT bootstrap nodes, a Mastodon
-/// island pick). Every island serves the FULL peer directory from `/v1/islands`,
+/// island pick). Every island serves the FULL peer directory from `/v1/gateways`,
 /// so reaching ANY one of these teaches the app about all the others; the
 /// ever-seen set is then persisted and grows (see the seed store), so these are
 /// only the cold-start floor, not the ceiling.

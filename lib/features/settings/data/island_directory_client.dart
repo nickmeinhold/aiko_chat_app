@@ -1,7 +1,7 @@
-/// Fetches the live island/island directory (#36) — the layer ABOVE per-island
+/// Fetches the live island directory (#36) — the layer ABOVE per-island
 /// community discovery: "which independent operators exist to connect to?".
 ///
-/// Every island serves the FULL known-peer set from `/v1/islands`, so there is
+/// Every island serves the FULL known-peer set from `/v1/gateways`, so there is
 /// NO privileged "directory host": the app discovers from whichever island it is
 /// currently pointed at (see [islandDirectoryProvider]), and reaching any one
 /// island teaches it about all the others. Removing the old single fixed origin
@@ -11,7 +11,7 @@
 ///
 /// [kIslandDirectoryUrl] remains as an OPTIONAL build-time override (dev/staging
 /// can pin a fixed directory); when empty (the shipped default) the provider
-/// composes `<current island>/v1/islands`.
+/// composes `<current island>/v1/gateways`.
 library;
 
 import 'package:dio/dio.dart';
@@ -20,10 +20,10 @@ import 'package:flutter/foundation.dart';
 import '../domain/island_entry.dart';
 
 /// The directory-array envelope keys we accept, in PRIORITY order. `islands` is
-/// the canonical island-vocabulary key (Design 10) and is tried FIRST; `islands`
-/// is the current wire key, kept for backward-compat; `islands`/`entries`/
+/// the canonical island-vocabulary key (Design 10) and is tried FIRST; `gateways`
+/// is the current wire key, kept for backward-compat; `servers`/`entries`/
 /// `directory` are tolerant fallbacks. ORDER IS SEMANTIC — a guard-contract test
-/// pins that `islands` wins over `islands` when both are present, so this is not
+/// pins that `islands` wins over `gateways` when both are present, so this is not
 /// a set to reorder casually. No island serves `islands` yet, so accepting it is
 /// a pure widening today.
 const kDirectoryEnvelopeKeysByPriority = <String>[
@@ -63,8 +63,8 @@ class IslandDirectoryClient {
 
   /// Accept either a bare JSON array of entries, or an envelope object holding the
   /// array under a conventional key (see [kDirectoryEnvelopeKeysByPriority]:
-  /// `islands` first, then legacy `islands`, then tolerant fallbacks). This reads
-  /// both a legacy directory and a future island that renames `/v1/islands`'s
+  /// `islands` first, then legacy `gateways`, then tolerant fallbacks). This reads
+  /// both a legacy directory and a future island that renames `/v1/gateways`'s
   /// payload during its compat window. Anything else yields an empty list rather
   /// than throwing — a shape we don't recognise is "no directory", not a crash.
   static List<IslandEntry> _parse(dynamic data) => switch (data) {
