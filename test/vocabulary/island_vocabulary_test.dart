@@ -262,10 +262,26 @@ void main() {
         for (final m in ident.allMatches(code)) {
           final name = m.group(0)!;
           if (_permittedIdentifiers.contains(name)) continue;
-          final lower = name.toLowerCase();
-          if (lower.contains('server')) {
+          // MATCH ON THE IDENTIFIER'S OWN WORDS, not a substring and not a
+          // regex word boundary — both are wrong here, in opposite directions.
+          // A substring flags `observer` (ob|server) as saying "server"; a `\b`
+          // boundary MISSES `serverUlidFor`, which is the exact miss round 3
+          // existed to catch. The unit the question is really about is the
+          // camelCase/snake_case COMPONENT: `serverUlidFor` -> [server, ulid,
+          // for] flags, `observer` -> [observer] does not.
+          //
+          // Today `observer` appears once in lib/ and only inside a comment, so
+          // the substring version passed by luck of placement. The first person
+          // to name a variable `observer` in real code would have hit a false
+          // positive on a guard that is supposed to be trustworthy.
+          final words = name
+              .split('_')
+              .expand((part) => part.split(RegExp(r'(?=[A-Z])')))
+              .map((w) => w.toLowerCase())
+              .where((w) => w.isNotEmpty);
+          if (words.any((w) => w == 'server' || w == 'servers')) {
             offenders.add('${file.path}:${i + 1}  $name  (says "server")');
-          } else if (lower.contains('gateway')) {
+          } else if (words.any((w) => w == 'gateway' || w == 'gateways')) {
             offenders.add('${file.path}:${i + 1}  $name  (says "gateway")');
           }
         }

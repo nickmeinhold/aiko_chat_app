@@ -68,12 +68,12 @@ class IslandDirectoryClient {
     return _parse(res.data);
   }
 
-  /// Accept either a bare JSON array of entries, or an envelope object holding the
-  /// array under a conventional key (see [kDirectoryEnvelopeKeysByPriority]:
-  /// `islands` first, then legacy `gateways`, then tolerant fallbacks). This reads
-  /// a future island that renames `/v1/islands`'s
-  /// payload during its compat window. Anything else yields an empty list rather
-  /// than throwing — a shape we don't recognise is "no directory", not a crash.
+  /// Accept either a bare JSON array of entries, or an envelope object holding
+  /// the array under a conventional key (see [kDirectoryEnvelopeKeysByPriority]:
+  /// `islands` first, then `entries`/`directory` as tolerant fallbacks). That
+  /// reads a directory whose SHAPE differs from ours without needing to know its
+  /// name for the array. Anything else yields an empty list rather than throwing
+  /// — a shape we don't recognise is "no directory", not a crash.
   static List<IslandEntry> _parse(dynamic data) => switch (data) {
     List<dynamic> l => _entries(l),
     Map<String, dynamic> m => _firstUsableEnvelope(m),
@@ -130,7 +130,7 @@ class IslandDirectoryClient {
 }
 
 /// Merge the live [directory] over the bundled [seed], deduped on the normalized
-/// base URL (the thing that actually identifies a island). Directory entries win
+/// base URL (the thing that actually identifies an island). Directory entries win
 /// and come first (the real federation list); seed entries the directory doesn't
 /// mention follow (so dev-only Local/emulator stay reachable). With an empty
 /// directory this returns the seed unchanged — the seed-first fallback.
