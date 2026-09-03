@@ -27,6 +27,8 @@ import 'dart:io';
 
 import 'package:analyzer/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
 
 /// ADR-0001: island = the deployment, gateway = the bridge service INSIDE one,
@@ -63,10 +65,14 @@ void _check(String kind, String? name, String where) {
   if (_permitted.contains(name)) return;
   final words = _words(name).toSet();
   if (words.intersection(_banned).isNotEmpty) {
-    _findings.add('$where  [$kind] $name  (declares "server" — banned outright)');
+    _findings.add(
+      '$where  [$kind] $name  (declares "server" — banned outright)',
+    );
   } else if (words.intersection(_needsReason).isNotEmpty) {
-    _findings.add('$where  [$kind] $name  (declares "gateway" — not a permitted '
-        'bridge-service name)');
+    _findings.add(
+      '$where  [$kind] $name  (declares "gateway" — not a permitted '
+      'bridge-service name)',
+    );
   }
 }
 
@@ -98,6 +104,30 @@ void _checkInterface(String kind, InterfaceElement c, String where) {
   }
 }
 
+/// The locals, parameters and loop variables the element model cannot reach.
+class _BodyVisitor extends RecursiveAstVisitor<void> {
+  _BodyVisitor(this.where);
+  final String where;
+
+  @override
+  void visitVariableDeclaration(VariableDeclaration n) {
+    _check('local', n.name.lexeme, where);
+    super.visitVariableDeclaration(n);
+  }
+
+  @override
+  void visitSimpleFormalParameter(SimpleFormalParameter n) {
+    _check('parameter', n.name?.lexeme, where);
+    super.visitSimpleFormalParameter(n);
+  }
+
+  @override
+  void visitDeclaredIdentifier(DeclaredIdentifier n) {
+    _check('loop-variable', n.name.lexeme, where);
+    super.visitDeclaredIdentifier(n);
+  }
+}
+
 Future<void> main(List<String> args) async {
   final roots = (args.isEmpty ? ['lib'] : args)
       .map((d) => Directory(d).absolute.path)
@@ -112,52 +142,58 @@ Future<void> main(List<String> args) async {
       final result = await context.currentSession.getResolvedUnit(path);
       if (result is! ResolvedUnitResult) continue;
       final lib = result.libraryElement;
-      if (!seen.add(lib.identifier)) continue;
-      libraries++;
+      final firstTimeLibrary = seen.add(lib.identifier);
+      if (firstTimeLibrary) libraries++;
       final where = path.replaceFirst('${Directory.current.path}/', '');
 
-      for (final c in lib.classes) {
-        _checkInterface('class', c, where);
-      }
-      for (final m in lib.mixins) {
-        _checkInterface('mixin', m, where);
-      }
-      for (final e in lib.enums) {
-        _checkInterface('enum', e, where);
-      }
-      for (final x in lib.extensionTypes) {
-        _checkInterface('extension-type', x, where);
-      }
-      for (final x in lib.extensions) {
-        _check('extension', x.name, where);
-        for (final m in x.methods) {
-          _checkExecutable('extension-method', m, where);
+      if (firstTimeLibrary) {
+        for (final c in lib.classes) {
+          _checkInterface('class', c, where);
+        }
+        for (final m in lib.mixins) {
+          _checkInterface('mixin', m, where);
+        }
+        for (final e in lib.enums) {
+          _checkInterface('enum', e, where);
+        }
+        for (final x in lib.extensionTypes) {
+          _checkInterface('extension-type', x, where);
+        }
+        for (final x in lib.extensions) {
+          _check('extension', x.name, where);
+          for (final m in x.methods) {
+            _checkExecutable('extension-method', m, where);
+          }
+        }
+        for (final t in lib.typeAliases) {
+          _check('typedef', t.name, where);
+        }
+        for (final f in lib.topLevelFunctions) {
+          _checkExecutable('function', f, where);
+        }
+        for (final v in lib.topLevelVariables) {
+          _check('top-level-variable', v.name, where);
+        }
+        for (final g in lib.getters) {
+          _check('top-level-getter', g.name, where);
+        }
+        for (final s in lib.setters) {
+          _check('top-level-setter', s.name, where);
         }
       }
-      for (final t in lib.typeAliases) {
-        _check('typedef', t.name, where);
-      }
-      for (final f in lib.topLevelFunctions) {
-        _checkExecutable('function', f, where);
-      }
-      for (final v in lib.topLevelVariables) {
-        _check('top-level-variable', v.name, where);
-      }
-      for (final g in lib.getters) {
-        _check('top-level-getter', g.name, where);
-      }
-      for (final s in lib.setters) {
-        _check('top-level-setter', s.name, where);
-      }
+      // Locals/params/loop vars — same resolved unit, different traversal.
+      result.unit.accept(_BodyVisitor(where));
     }
   }
 
   stdout.writeln('resolved $libraries librar(ies) under ${roots.join(", ")}');
   final unique = _findings.toSet().toList()..sort();
   if (unique.isEmpty) {
-    stdout.writeln('SEMANTIC AUDIT CLEAN — no declaration in the element model says '
-        '"server", and every "gateway" declaration is a permitted bridge-service '
-        'name. (Locals are out of scope here — see the boundary note at the top.)');
+    stdout.writeln(
+      'SEMANTIC AUDIT CLEAN — no declaration says "server", and every '
+      '"gateway" declaration is a permitted bridge-service name. Types, members, '
+      'top-level declarations, locals, parameters and loop variables all checked.',
+    );
     return;
   }
   stdout.writeln('SEMANTIC AUDIT FOUND ${unique.length} declaration(s):');
