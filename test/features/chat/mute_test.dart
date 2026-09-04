@@ -314,6 +314,102 @@ void main() {
     },
   );
 
+  // REPRODUCTION ATTEMPT — Nick, on an iPhone in landscape, 2026-09-04:
+  // long-pressed a sidebar channel and "nothing happened", including after
+  // lifting his finger. Every existing long-press test is green, so the harness
+  // and the device disagree and the harness is the thing that must be wrong.
+  //
+  // The one difference between `tester.longPress` and a thumb is MOVEMENT.
+  // LongPressGestureRecognizer carries `preAcceptSlopTolerance` (kTouchSlop,
+  // 18 logical px): drift further than that BEFORE the 500ms deadline and the
+  // long press is rejected outright, handing the arena to the scrollable's drag.
+  // `tester.longPress` moves exactly zero pixels, so it can never see this.
+  //
+  // If this test goes RED, that is the mechanism and the fix is a slop
+  // tolerance, not a haptic. If it goes GREEN, drift is NOT the cause and this
+  // stays as a guard while the hunt continues elsewhere.
+  testWidgets('a long press that DRIFTS like a real thumb still opens the mute '
+      'menu', (tester) async {
+    final transport = FakeChatTransport();
+    final container = makeContainer(
+      rest: FakeRestApi(channels: twoChannels),
+      transport: transport,
+    );
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    transport.emitConn(ConnectionState.connected);
+    await settle(tester);
+
+    final row = find.byKey(const Key('sidebar-channel-c2'));
+    expect(row, findsOneWidget);
+
+    // POSITIVE CONTROL first: the still-finger press must work here, or a red
+    // below would be about this harness rather than about drift.
+    await tester.longPress(row);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Mute'),
+      findsOneWidget,
+      reason: 'control arm: a motionless long press must open the menu',
+    );
+    await tester.tapAt(const Offset(700, 20)); // dismiss
+    await tester.pumpAndSettle();
+
+    // A REAL THUMB: press, drift ~20px over the hold, then lift. This is Nick's
+    // actual gesture, in landscape, and it was RED before _HoldRecognizer.
+    //
+    // (The diagnosis ran this drift HORIZONTALLY first, deliberately: the list
+    // scrolls vertically, so its drag recognizer cannot claim sideways movement.
+    // The horizontal arm failed too, which ruled out the usual suspect — the
+    // scrollable stealing the arena — and pinned it on the long press rejecting
+    // itself on radial slop.)
+    final gesture = await tester.startGesture(tester.getCenter(row));
+    await tester.pump(const Duration(milliseconds: 80));
+    for (var i = 0; i < 10; i++) {
+      await gesture.moveBy(const Offset(0, 2));
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+    await tester.pump(const Duration(milliseconds: 400));
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Mute'),
+      findsOneWidget,
+      reason:
+          'A thumb drifts. If this fails, the long press is being rejected on '
+          'slop and handed to the scrollable, which is exactly what "nothing '
+          'happened" looks like from the outside.',
+    );
+
+    await tester.tapAt(const Offset(700, 20)); // dismiss
+    await tester.pumpAndSettle();
+
+    // THE ARM THAT MUST STILL FAIL. Widening the tolerance buys a dead control
+    // back; it must not buy it at the cost of scrolling. A deliberate drag —
+    // well past _thumbSlop — has to stay a drag, or the fix has simply moved the
+    // bug to the other end of the gesture and nothing here would notice.
+    final drag = await tester.startGesture(tester.getCenter(row));
+    await tester.pump(const Duration(milliseconds: 80));
+    for (var i = 0; i < 10; i++) {
+      await drag.moveBy(const Offset(0, 8)); // 80px total
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+    await tester.pump(const Duration(milliseconds: 400));
+    await drag.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Mute'),
+      findsNothing,
+      reason:
+          'An 80px travel is a scroll, not a hold. If the menu opens here the '
+          'tolerance is swallowing real drags.',
+    );
+  });
+
   testWidgets('NARROW: the app bar can mute the conversation being read', (
     tester,
   ) async {

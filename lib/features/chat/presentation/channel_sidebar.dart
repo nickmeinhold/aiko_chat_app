@@ -15,6 +15,7 @@
 library;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -110,26 +111,119 @@ class MuteGesture extends ConsumerWidget {
     // logout/user-switch is dropped rather than written into another account
     // (cage-match #135 round 3, Tesla).
     final expectUserId = ref.watch(currentUserProvider)?.userId;
-    return GestureDetector(
+    void open(Offset at) =>
+        _show(context, container, expectUserId: expectUserId, at: at);
+
+    // RawGestureDetector, for one reason: the slop tolerance (see
+    // [_HoldRecognizer]). `GestureDetector` builds a LongPressGestureRecognizer
+    // whose pre-accept slop is fixed at kTouchSlop and offers no way to widen it.
+    return RawGestureDetector(
       behavior: HitTestBehavior.opaque,
-      onLongPressEnd: (d) => _show(
-        context,
-        container,
-        expectUserId: expectUserId,
-        at: d.globalPosition,
-      ),
-      onSecondaryTapUp: kIsWeb
-          ? null
-          : (d) => _show(
-              context,
-              container,
-              expectUserId: expectUserId,
-              at: d.globalPosition,
-            ),
+      gestures: <Type, GestureRecognizerFactory>{
+        _HoldRecognizer: GestureRecognizerFactoryWithHandlers<_HoldRecognizer>(
+          () => _HoldRecognizer(debugOwner: this),
+          (_HoldRecognizer instance) =>
+              instance.onLongPressEnd = (d) => open(d.globalPosition),
+        ),
+        if (!kIsWeb)
+          TapGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                () => TapGestureRecognizer(debugOwner: this),
+                (TapGestureRecognizer instance) =>
+                    instance.onSecondaryTapUp = (d) => open(d.globalPosition),
+              ),
+      },
       child: child,
     );
   }
 }
+
+/// A long press that tolerates a real hand.
+///
+/// [LongPressGestureRecognizer] inherits `preAcceptSlopTolerance` = `kTouchSlop`
+/// (18 logical px) and does NOT forward that parameter through its constructor,
+/// so it cannot be widened. Drift more than 18px in ANY direction before the
+/// deadline and [PrimaryPointerGestureRecognizer.handleEvent] resolves the
+/// gesture REJECTED and stops tracking: no long press ever happens, so nothing
+/// fires on pointer-up either and the control is simply dead.
+///
+/// Nick found this holding an iPhone in LANDSCAPE — the worst case, arm out and
+/// thumb reaching across. He long-pressed a channel and nothing happened at all,
+/// including after lifting.
+///
+/// Every long-press test in this repo was green throughout, because
+/// `WidgetTester.longPress` moves exactly zero pixels: it performs a gesture no
+/// human hand can. The tests were not weak, they were measuring a different act
+/// than the user's. `mute_test` now drives a DRIFTING hold beside the still one,
+/// and the drifting arm was RED before this class existed.
+///
+/// Rather than reimplement a recognizer whose deadline, arena and pointer-up
+/// semantics are load-bearing here (the menu opens on LIFT — cage-match #135,
+/// Tesla HIGH — because one opened under a finger still down selects itself),
+/// this subclass only FILTERS what the base sees: a move within [_thumbSlop] is
+/// swallowed, so the base never gets an event it would call a slop violation.
+/// Everything past that threshold is forwarded untouched and still rejects
+/// normally, which is what keeps a real drag a drag.
+///
+/// Diagnosis note, because it rules out the usual suspect: the sidebar scrolls
+/// VERTICALLY, and a purely HORIZONTAL drift killed the press too. So this was
+/// never the scrollable's drag winning the arena — it was the long press
+/// rejecting itself on its own radial slop.
+class _HoldRecognizer extends LongPressGestureRecognizer {
+  _HoldRecognizer({super.debugOwner}) : super(duration: _holdDeadline);
+
+  Offset? _origin;
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    // The base keeps its origin private, so keep our own to measure against.
+    _origin = event.position;
+    super.addAllowedPointer(event);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    final origin = _origin;
+    if (origin != null &&
+        event is PointerMoveEvent &&
+        (event.position - origin).distance <= _thumbSlop) {
+      return;
+    }
+    super.handleEvent(event);
+  }
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {
+    _origin = null;
+    super.didStopTrackingLastPointer(pointer);
+  }
+
+  @override
+  String get debugDescription => 'hold (thumb-tolerant long press)';
+}
+
+/// How far a finger may wander and still count as holding still.
+///
+/// `kTouchSlop` (18) is Flutter's threshold for "is this a scroll" — a question
+/// about INTENT TO MOVE. "Is this hand holding still" is a different question
+/// and deserves a different number. 48 fits a real thumb and is still far short
+/// of a deliberate drag.
+const double _thumbSlop = 48.0;
+
+/// How long the finger must rest before the hold claims the gesture.
+///
+/// The slop widening alone was not enough, and the reason is the ARENA rather
+/// than this recognizer. A scrollable's vertical drag accepts the instant travel
+/// passes `kTouchSlop`; our hold only accepts at its deadline. A drifting thumb
+/// crosses 18px well inside 500ms, so the drag wins first — and because the
+/// sidebar list does not overflow, it wins and then has nothing to scroll. The
+/// gesture is eaten by a scroll that cannot happen, which is exactly what a dead
+/// control feels like.
+///
+/// So the lever is WHEN we accept, not how much drift we forgive. 250ms is long
+/// enough that a tap (well under 200ms) is never mistaken for a hold, and early
+/// enough to claim the arena before a normal thumb has drifted past slop.
+const Duration _holdDeadline = Duration(milliseconds: 250);
 
 /// Open the conversation mute menu at global position [at].
 ///
