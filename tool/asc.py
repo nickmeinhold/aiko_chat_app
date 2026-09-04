@@ -76,6 +76,23 @@ def get(path: str, token: str) -> dict:
         sys.exit(f"HTTP {exc.code} on {url}\n{exc.read().decode()}")
 
 
+def patch(path: str, token: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        f"{API}{path}",
+        data=json.dumps(payload).encode(),
+        method="PATCH",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as exc:
+        sys.exit(f"HTTP {exc.code} on PATCH {path}\n{exc.read().decode()}")
+
+
 def find_app(token: str) -> dict:
     data = get(f"/apps?filter[bundleId]={BUNDLE_ID}", token)
     if not data["data"]:
@@ -183,6 +200,86 @@ def cmd_status(token: str, args) -> None:
     sys.exit(0 if all_installable else 1)
 
 
+def cmd_expire(token: str, args) -> None:
+    """Retire builds so they stop appearing in TestFlight.
+
+    TestFlight orders by SHORT VERSION STRING, not upload date, so a stale build
+    with a higher version string sits above every newer one and reads as current.
+    That is what expiry is for here: the build is not broken, it is misleading.
+
+    Expiry cannot be undone, so this DRY-RUNS unless --yes is passed, and the
+    plan it prints is built from what the server returned rather than from the
+    numbers on the command line.
+    """
+    app = find_app(token)
+    data = get(
+        f"/builds?filter[app]={app['id']}&limit=50&sort=-version"
+        "&include=preReleaseVersion",
+        token,
+    )
+    versions = {
+        item["id"]: item["attributes"]["version"]
+        for item in data.get("included", [])
+        if item["type"] == "preReleaseVersions"
+    }
+
+    wanted = set(args.build)
+    plan = []
+    for build in data["data"]:
+        rel = build["relationships"].get("preReleaseVersion", {}).get("data") or {}
+        short = versions.get(rel.get("id"), "?")
+        if build["attributes"]["version"] in wanted:
+            plan.append((build, short))
+
+    missing = wanted - {b["attributes"]["version"] for b, _ in plan}
+    if missing:
+        sys.exit(f"no such build(s): {', '.join(sorted(missing))} — nothing expired")
+
+    for build, short in plan:
+        state = "already expired" if build["attributes"].get("expired") else "will expire"
+        print(f"  {short} ({build['attributes']['version']})  {state}  id={build['id']}")
+
+    todo = [(b, s) for b, s in plan if not b["attributes"].get("expired")]
+    if not todo:
+        print("\nnothing to do — every named build is already expired")
+        return
+    if not args.yes:
+        print(f"\nDRY RUN — {len(todo)} build(s) would be expired. Re-run with --yes.")
+        return
+
+    for build, short in todo:
+        patch(
+            f"/builds/{build['id']}",
+            token,
+            {
+                "data": {
+                    "type": "builds",
+                    "id": build["id"],
+                    "attributes": {"expired": True},
+                }
+            },
+        )
+        print(f"expired {short} ({build['attributes']['version']})")
+
+    # Read the state back from the server rather than trusting the 200s: the
+    # point of the command is what TestFlight shows, not what the PATCH returned.
+    print("\nreadback:")
+    after = get(
+        f"/builds?filter[app]={app['id']}&limit=50&sort=-version", token
+    )
+    stuck = [
+        b["attributes"]["version"]
+        for b in after["data"]
+        if b["attributes"]["version"] in wanted and not b["attributes"].get("expired")
+    ]
+    for build in after["data"]:
+        if build["attributes"]["version"] in wanted:
+            print(f"  build {build['attributes']['version']}: expired={build['attributes']['expired']}")
+    if stuck:
+        sys.exit(f"\nFAILED — still not expired: {', '.join(stuck)}")
+    print("\nall named builds are expired")
+
+
 def cmd_upload(token: str, args) -> None:
     """Binary upload goes through altool, which reads the .p8 from its own key dir."""
     key_id, issuer_id, key_path = load_creds()
@@ -218,6 +315,9 @@ def main() -> None:
     sub.add_parser("testers", help="list TestFlight groups and their testers")
     status = sub.add_parser("status", help="can a tester install this build yet?")
     status.add_argument("--build", required=True, help="build number, e.g. 12")
+    expire = sub.add_parser("expire", help="retire builds so TestFlight stops showing them")
+    expire.add_argument("--build", required=True, nargs="+", help="build number(s), e.g. 1 2 3")
+    expire.add_argument("--yes", action="store_true", help="actually expire (default: dry run)")
     upload = sub.add_parser("upload", help="upload an IPA via altool")
     upload.add_argument("--ipa", required=True)
     args = parser.parse_args()
@@ -229,6 +329,7 @@ def main() -> None:
         "builds": cmd_builds,
         "testers": cmd_testers,
         "status": cmd_status,
+        "expire": cmd_expire,
         "upload": cmd_upload,
     }[
         args.cmd
