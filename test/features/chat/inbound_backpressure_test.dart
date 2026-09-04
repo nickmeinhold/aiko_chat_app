@@ -37,7 +37,7 @@ const _me = AppUser(
 );
 const _chan = 'chan';
 
-Message _server(String ulid) => Message(
+Message _fromIsland(String ulid) => Message(
   clientTempId: ulid,
   id: ulid,
   channelId: _chan,
@@ -114,7 +114,7 @@ void main() {
     // Emit 4 messages (> high-water 3). Delivery climbs depth to 3, where the
     // valve pauses the subs; the 4th is held (buffered), not dropped.
     for (var i = 0; i < 4; i++) {
-      transport.emitMessage(_server('m$i'));
+      transport.emitMessage(_fromIsland('m$i'));
     }
     await pump();
 
@@ -131,7 +131,7 @@ void main() {
     // Emit 3 MORE while paused. They buffer on the paused subs (no delivery, no
     // loss) — depth must NOT climb past the high-water mark.
     for (var i = 4; i < 7; i++) {
-      transport.emitMessage(_server('m$i'));
+      transport.emitMessage(_fromIsland('m$i'));
     }
     await pump();
     expect(spy.backpressure.where((t) => t.$1).toList(), [
@@ -161,8 +161,8 @@ void main() {
 
   test('sub-threshold load never engages the valve', () async {
     // 2 messages, below the high-water of 3, no gate — handlers complete freely.
-    transport.emitMessage(_server('a'));
-    transport.emitMessage(_server('b'));
+    transport.emitMessage(_fromIsland('a'));
+    transport.emitMessage(_fromIsland('b'));
     await pump();
 
     expect(

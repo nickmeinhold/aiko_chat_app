@@ -39,16 +39,16 @@ void main() {
   /// so an SDK bump could mint that collision silently.
   ///
   /// A map, so an unknown id FAILS rather than quietly hashing into a neighbour.
-  const serverIds = {
+  const islandIds = {
     'M1': '01M0GS7FDWBVQ31950B1PTV2D0',
     'M2': '01M0GS7FDWBVQ31950B1PTV2D1',
     'M9': '01M0GS7FDWBVQ31950B1PTV2D2',
   };
   String islandIdFor(String clientMsgId) {
-    final id = serverIds[clientMsgId];
+    final id = islandIds[clientMsgId];
     if (id == null) {
       throw ArgumentError(
-        'no server ULID pinned for "$clientMsgId" — add one to serverIds '
+        'no server ULID pinned for "$clientMsgId" — add one to islandIds '
         'rather than deriving it, so two fixtures can never share a row',
       );
     }

@@ -22,7 +22,7 @@ const _alice = MessageSender(
   label: 'Alice',
 );
 
-Message server(
+Message fromIsland(
   String ulid,
   String channel,
   String body, {
@@ -51,11 +51,11 @@ void main() {
     () async {
       final file = dbFile('alice');
 
-      // First "launch": write a server message and advance the contiguous-history
+      // First "launch": write a fromIsland message and advance the contiguous-history
       // watermark, then close (drops the in-memory connection, flushes the file).
       final first = DriftCache(NativeDatabase(file));
       await first.upsertInbound(
-        server('01ULID_A', 'general', 'persisted hello'),
+        fromIsland('01ULID_A', 'general', 'persisted hello'),
       );
       await first.advanceHistoryContiguous('general', '01ULID_A');
       await first.close();
@@ -89,7 +89,7 @@ void main() {
       final bCache = DriftCache(NativeDatabase(dbFile('userB')));
       addTearDown(bCache.close);
 
-      await aCache.upsertInbound(server('01ULID_A', 'general', 'A secret'));
+      await aCache.upsertInbound(fromIsland('01ULID_A', 'general', 'A secret'));
 
       // User B's separate file must not see user A's message (Carnot C3).
       final bMsgs = await bCache.watchChannel('general').first;

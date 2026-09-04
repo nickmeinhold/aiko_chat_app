@@ -37,7 +37,7 @@ Message optimistic(String tempId, String channel, String body) => Message(
   deliveryState: DeliveryState.sending,
 );
 
-Message server(String ulid, String channel, String body) => Message(
+Message fromIsland(String ulid, String channel, String body) => Message(
   clientTempId: ulid,
   id: ulid,
   channelId: channel,
@@ -98,7 +98,7 @@ void main() {
         await emissionsFrom(
           cache,
           'c',
-          () => cache.upsertInbound(server('ULID2', 'c', 'yo')),
+          () => cache.upsertInbound(fromIsland('ULID2', 'c', 'yo')),
         ),
         greaterThan(0),
       );
@@ -125,7 +125,7 @@ void main() {
 
     test('W6 applyRetraction on a present row', () async {
       final cache = makeCache();
-      await cache.upsertInbound(server('ULID3', 'c', 'gone soon'));
+      await cache.upsertInbound(fromIsland('ULID3', 'c', 'gone soon'));
       expect(
         await emissionsFrom(
           cache,
