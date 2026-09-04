@@ -50,13 +50,22 @@ void main() {
     return Theme.of(tester.element(find.byType(TextField).first)).colorScheme;
   }
 
+  /// The COMPOSER's island mark specifically. Since the wide rail gained an
+  /// island mark of its own as its crown, a bare `find.byType(IslandMark)`
+  /// matches two widgets and every geometry read off it is ambiguous. These
+  /// tests are about the composer's mark, so they say so.
+  Finder composerMark() => find.descendant(
+    of: find.byType(Composer),
+    matching: find.byType(IslandMark),
+  );
+
   /// The island mark's painter. Comparing painters across a rebuild is how we
   /// prove the mark did NOT change: `shouldRepaint` is the widget's own answer
   /// to "is this different from what was there before".
   CustomPainter islandPainter(WidgetTester tester) => tester
       .widget<CustomPaint>(
         find.descendant(
-          of: find.byType(IslandMark),
+          of: composerMark(),
           matching: find.byType(CustomPaint),
         ),
       )
@@ -306,10 +315,10 @@ void main() {
     // the thing that changed.
     await pumpComposer(tester);
 
-    final target = tester.getRect(find.byType(IslandMark));
+    final target = tester.getRect(composerMark());
     final glyph = tester.getRect(
       find.descendant(
-        of: find.byType(IslandMark),
+        of: composerMark(),
         matching: find.byType(CustomPaint),
       ),
     );

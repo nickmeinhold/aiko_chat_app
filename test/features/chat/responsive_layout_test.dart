@@ -1,10 +1,11 @@
-import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart'
     show ConnectionState;
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/presentation/channel_sidebar.dart';
+import 'package:aiko_chat_app/core/widgets/island_mark.dart';
+import 'package:aiko_chat_app/features/settings/presentation/island_picker_screen.dart';
 import 'package:aiko_chat_app/features/chat/presentation/chat_message_pane.dart';
 import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
@@ -302,7 +303,22 @@ void main() {
     },
   );
 
-  testWidgets('wide: server switcher shows the current server', (tester) async {
+  // The wide rail's island SWITCHER is gone: its row drew a generic
+  // `dns_outlined` glyph, the word "Island" and the island's name, and Nick,
+  // seeing it in landscape, wanted the whole bar gone. What sits there now is
+  // the island MARK, which carries the identity in a picture derived from the
+  // island's key rather than in words beside a glyph that was the same
+  // everywhere.
+  //
+  // Three tests died with that widget. Deleting them outright would have
+  // retired a CAPABILITY by deleting a WIDGET: you must still be able to reach
+  // another island from the wide layout. Two of the three (confirm -> switch,
+  // and the guard against re-picking your current island) now live in
+  // island_picker_test, which is where that behaviour actually happens. This
+  // one pins the part that is genuinely this layout's job: the rail still
+  // OFFERS the journey.
+  testWidgets('wide: the rail crown is the island mark, and it still reaches '
+      'the picker', (tester) async {
     setWidth(tester, wide);
     final container = makeContainer(
       rest: FakeRestApi(channels: twoChannels),
@@ -313,94 +329,24 @@ void main() {
     await pumpApp(tester, container);
     await signIn(tester);
 
-    // Default gateway is Production (kDefaultIslandBaseUrl) → its preset label
-    // shows in the switcher header.
-    expect(find.text('Production'), findsOneWidget);
-  });
+    // The words are gone: no static label, and no bare host/preset name where
+    // the switcher header used to print one.
+    expect(find.text('Island'), findsNothing);
+    expect(find.text('Production'), findsNothing);
 
-  testWidgets('wide: server switcher no-op guard on the current server', (
-    tester,
-  ) async {
-    setWidth(tester, wide);
-    final container = makeContainer(
-      rest: FakeRestApi(channels: twoChannels),
-      transport: FakeChatTransport(),
+    // The mark is there. Scoped to the sidebar, because the composer draws one
+    // too and an unscoped byType would match either.
+    final crown = find.descendant(
+      of: find.byType(ChatSidebar),
+      matching: find.byType(IslandMark),
     );
-    addTearDown(container.dispose);
+    expect(crown, findsOneWidget);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-
-    // Open the switcher menu and pick the ALREADY-current server.
-    await tester.tap(find.byType(PopupMenuButton<String>));
+    // And it goes somewhere. "Where am I" -> "can I go elsewhere" is the whole
+    // reason the mark is tappable; without this the rail would state the island
+    // and offer no way off it.
+    await tester.tap(crown);
     await tester.pumpAndSettle();
-    // 'Production' now appears in both the header and the menu item; tap the
-    // menu entry itself (its checkmark padding offsets the label from center).
-    await tester.tap(
-      find.ancestor(
-        of: find.text('Production'),
-        matching: find.byType(CheckedPopupMenuItem<String>),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    // No confirm dialog — the no-op guard fired with a snackbar instead.
-    expect(find.text('Switch island?'), findsNothing);
-    expect(find.text('Already connected to this island.'), findsOneWidget);
-    // Still logged in on the same gateway.
-    expect(
-      container.read(configProvider).httpBaseUrl,
-      'https://chat.imagineering.cc',
-    );
+    expect(find.byType(IslandPickerScreen), findsOneWidget);
   });
-
-  testWidgets(
-    'wide: server switcher confirm → switchIsland (logs out, flips config)',
-    (tester) async {
-      setWidth(tester, wide);
-      final transport = FakeChatTransport();
-      final container = makeContainer(
-        rest: FakeRestApi(channels: twoChannels),
-        transport: transport,
-      );
-      addTearDown(container.dispose);
-
-      await pumpApp(tester, container);
-      await signIn(tester);
-      expect(
-        container.read(configProvider).httpBaseUrl,
-        'https://chat.imagineering.cc',
-      );
-
-      // Open the switcher and pick a DIFFERENT preset (Enspyr).
-      await tester.tap(find.byType(PopupMenuButton<String>));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.ancestor(
-          of: find.text('Enspyr'),
-          matching: find.byType(CheckedPopupMenuItem<String>),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      // The shared confirm dialog appears — confirm the switch.
-      expect(find.text('Switch island?'), findsOneWidget);
-      await tester.tap(find.widgetWithText(FilledButton, 'Switch'));
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)),
-      );
-      await tester.pumpAndSettle();
-
-      // switchIsland ran: the live config flipped to Enspyr and the user is logged
-      // out (back at the login screen on the new gateway).
-      expect(
-        container.read(configProvider).httpBaseUrl,
-        'https://chat.enspyr.co',
-      );
-      expect(
-        find.widgetWithText(FilledButton, 'Create a passkey'),
-        findsOneWidget,
-      );
-    },
-  );
 }

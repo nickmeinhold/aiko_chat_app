@@ -386,6 +386,54 @@ void main() {
       );
     });
 
+    // The wide sidebar's island switcher was deleted (its row became the island
+    // MARK), and the only assertion that picking your CURRENT island cannot
+    // cost you your session lived in its test. The behaviour has to keep a home.
+    //
+    // It is not the same mechanism, and the difference is the point. The menu
+    // let you SELECT the island you were already on and then caught it with a
+    // snackbar — a window that has to stay guarded forever. The picker gives the
+    // connected tile no `onTap` at all, so the state is never entered. Pinning
+    // the guard here would have pinned the weaker of the two.
+    testWidgets('the island you are ON is not selectable — the no-op cannot be '
+        'entered, rather than being caught after the fact', (tester) async {
+      final container = await pumpPicker(tester);
+      addTearDown(container.dispose);
+
+      final before = container.read(configProvider).httpBaseUrl;
+      final tile = tester.widget<ListTile>(
+        find.ancestor(
+          of: find.text('Production'),
+          matching: find.byType(ListTile),
+        ),
+      );
+      expect(
+        tile.onTap,
+        isNull,
+        reason:
+            'The connected island must not be tappable. A tappable one relies '
+            'on a downstream guard to stop a pointless re-login; an untappable '
+            'one cannot start it.',
+      );
+      // NOT `tile.selected` — `_IslandTile` never forwards that flag to the
+      // ListTile, it only uses it to pick the icon, the trailing label and
+      // whether onTap is null. Assert the marker a person actually sees.
+      expect(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('Production'),
+            matching: find.byType(ListTile),
+          ),
+          matching: find.text('Connected'),
+        ),
+        findsOneWidget,
+      );
+
+      // And nothing moved: the assertion above is about the affordance, this
+      // one is about the state it protects.
+      expect(container.read(configProvider).httpBaseUrl, before);
+    });
+
     testWidgets('an invalid custom URL is rejected (no switch)', (
       tester,
     ) async {
