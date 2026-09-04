@@ -200,6 +200,136 @@ def cmd_status(token: str, args) -> None:
     sys.exit(0 if all_installable else 1)
 
 
+def post(path: str, token: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        f"{API}{path}",
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as exc:
+        sys.exit(f"HTTP {exc.code} on POST {path}\n{exc.read().decode()}")
+
+
+def cmd_release(token: str, args) -> None:
+    """Stage an App Store version: create it, attach the build, set the listing.
+
+    Deliberately stops BEFORE submitting for review. Everything here is
+    reversible — a staged version can be edited or deleted — whereas submission
+    hands the build to Apple. `submit` is the separate, irreversible step.
+    """
+    app = find_app(token)
+    existing = get(f"/apps/{app['id']}/appStoreVersions?limit=20", token)["data"]
+    version = next(
+        (
+            v
+            for v in existing
+            if v["attributes"]["versionString"] == args.version
+            and v["attributes"]["platform"] == args.platform
+        ),
+        None,
+    )
+    if version is None:
+        version = post(
+            "/appStoreVersions",
+            token,
+            {
+                "data": {
+                    "type": "appStoreVersions",
+                    "attributes": {
+                        "platform": args.platform,
+                        "versionString": args.version,
+                    },
+                    "relationships": {
+                        "app": {"data": {"type": "apps", "id": app["id"]}}
+                    },
+                }
+            },
+        )["data"]
+        print(f"created {args.platform} version {args.version}  id={version['id']}")
+    else:
+        state = version["attributes"].get("appStoreState")
+        if state in ("READY_FOR_SALE", "IN_REVIEW", "PENDING_DEVELOPER_RELEASE"):
+            sys.exit(
+                f"{args.platform} {args.version} is already {state} — refusing to edit it"
+            )
+        print(f"reusing {args.platform} version {args.version} ({state})  id={version['id']}")
+
+    # The build must be attached to the SAME platform's version. A build number
+    # is not unique across platforms, so match on the platform's own build list.
+    builds = get(
+        f"/builds?filter[app]={app['id']}&limit=40&sort=-version", token
+    )["data"]
+    candidates = [b for b in builds if b["attributes"]["version"] == args.build]
+    if not candidates:
+        sys.exit(f"build {args.build} not found")
+    chosen = None
+    for build in candidates:
+        detail = get(f"/builds/{build['id']}", token)["data"]
+        if detail["attributes"]["processingState"] != "VALID":
+            continue
+        chosen = build
+        break
+    if chosen is None:
+        sys.exit(f"build {args.build} is not VALID yet — cannot attach it")
+
+    patch(
+        f"/appStoreVersions/{version['id']}/relationships/build",
+        token,
+        {"data": {"type": "builds", "id": chosen["id"]}},
+    )
+    print(f"attached build {args.build} ({chosen['id']})")
+
+    locales = get(
+        f"/appStoreVersions/{version['id']}/appStoreVersionLocalizations?limit=10",
+        token,
+    )["data"]
+    if not locales:
+        sys.exit("no localizations on this version — create one in App Store Connect first")
+
+    attrs = {}
+    if args.whats_new:
+        attrs["whatsNew"] = Path(args.whats_new).read_text().strip()
+    if args.support_url:
+        attrs["supportUrl"] = args.support_url
+    if args.marketing_url:
+        attrs["marketingUrl"] = args.marketing_url
+    if attrs:
+        for loc in locales:
+            patch(
+                f"/appStoreVersionLocalizations/{loc['id']}",
+                token,
+                {
+                    "data": {
+                        "type": "appStoreVersionLocalizations",
+                        "id": loc["id"],
+                        "attributes": attrs,
+                    }
+                },
+            )
+            print(f"updated listing [{loc['attributes']['locale']}]: {', '.join(attrs)}")
+
+    # Readback, because the point is what the listing SAYS, not what the PATCH returned.
+    print("\nreadback:")
+    fresh = get(f"/appStoreVersions/{version['id']}?include=build", token)
+    battrs = (fresh.get("included") or [{}])[0].get("attributes", {})
+    print(f"  version   = {fresh['data']['attributes']['versionString']} ({fresh['data']['attributes']['platform']})")
+    print(f"  state     = {fresh['data']['attributes']['appStoreState']}")
+    print(f"  build     = {battrs.get('version', 'NONE ATTACHED')}")
+    for loc in get(
+        f"/appStoreVersions/{version['id']}/appStoreVersionLocalizations?limit=10", token
+    )["data"]:
+        la = loc["attributes"]
+        print(f"  [{la['locale']}] support={la.get('supportUrl')} marketing={la.get('marketingUrl')}")
+    print(f"\nSTAGED — not submitted. Review it, then: asc.py submit --version {args.version} --platform {args.platform} --yes")
+
+
 def cmd_expire(token: str, args) -> None:
     """Retire builds so they stop appearing in TestFlight.
 
@@ -280,6 +410,92 @@ def cmd_expire(token: str, args) -> None:
     print("\nall named builds are expired")
 
 
+def cmd_submit(token: str, args) -> None:
+    """Hand a staged version to Apple for review. The irreversible step.
+
+    Success is read back from reviewSubmission.state, NOT appStoreVersion.state:
+    the version is a field this side moves, while the submission is the object
+    the counterparty advances. A version flipping to WAITING_FOR_REVIEW without
+    a submission behind it is our own write reflected back at us.
+    """
+    app = find_app(token)
+    version = next(
+        (
+            v
+            for v in get(f"/apps/{app['id']}/appStoreVersions?limit=20", token)["data"]
+            if v["attributes"]["versionString"] == args.version
+            and v["attributes"]["platform"] == args.platform
+        ),
+        None,
+    )
+    if version is None:
+        sys.exit(f"no {args.platform} version {args.version} — run `release` first")
+
+    detail = get(f"/appStoreVersions/{version['id']}?include=build", token)
+    build = (detail.get("included") or [{}])[0].get("attributes", {}).get("version")
+    if not build:
+        sys.exit("no build attached to that version — refusing to submit")
+
+    print(f"{args.platform} {args.version}  build {build}  state={detail['data']['attributes']['appStoreState']}")
+    if not args.yes:
+        print("\nDRY RUN — this would submit to Apple for review. Re-run with --yes.")
+        return
+
+    submission = post(
+        "/reviewSubmissions",
+        token,
+        {
+            "data": {
+                "type": "reviewSubmissions",
+                "attributes": {"platform": args.platform},
+                "relationships": {"app": {"data": {"type": "apps", "id": app["id"]}}},
+            }
+        },
+    )["data"]
+    print(f"opened review submission {submission['id']}")
+
+    post(
+        "/reviewSubmissionItems",
+        token,
+        {
+            "data": {
+                "type": "reviewSubmissionItems",
+                "relationships": {
+                    "reviewSubmission": {
+                        "data": {"type": "reviewSubmissions", "id": submission["id"]}
+                    },
+                    "appStoreVersion": {
+                        "data": {"type": "appStoreVersions", "id": version["id"]}
+                    },
+                },
+            }
+        },
+    )
+    print("added the version to the submission")
+
+    patch(
+        f"/reviewSubmissions/{submission['id']}",
+        token,
+        {
+            "data": {
+                "type": "reviewSubmissions",
+                "id": submission["id"],
+                "attributes": {"submitted": True},
+            }
+        },
+    )
+
+    state = get(f"/reviewSubmissions/{submission['id']}", token)["data"]["attributes"]
+    print(f"\nreadback: reviewSubmission.state = {state.get('state')}")
+    print(f"          submitted = {state.get('submittedDate')}")
+    if state.get("state") in (None, "READY_FOR_REVIEW"):
+        sys.exit(
+            f"NOT submitted — state is {state.get('state')}; the submission was "
+            "created but Apple has not accepted it"
+        )
+    print("\nSUBMITTED — Apple has the build.")
+
+
 def cmd_upload(token: str, args) -> None:
     """Binary upload goes through altool, which reads the .p8 from its own key dir."""
     key_id, issuer_id, key_path = load_creds()
@@ -315,6 +531,17 @@ def main() -> None:
     sub.add_parser("testers", help="list TestFlight groups and their testers")
     status = sub.add_parser("status", help="can a tester install this build yet?")
     status.add_argument("--build", required=True, help="build number, e.g. 12")
+    rel = sub.add_parser("release", help="stage an App Store version (reversible)")
+    rel.add_argument("--version", required=True)
+    rel.add_argument("--build", required=True)
+    rel.add_argument("--platform", default="IOS", choices=["IOS", "MAC_OS"])
+    rel.add_argument("--whats-new", help="path to a file holding the release notes")
+    rel.add_argument("--support-url")
+    rel.add_argument("--marketing-url")
+    sb = sub.add_parser("submit", help="hand a staged version to Apple (IRREVERSIBLE)")
+    sb.add_argument("--version", required=True)
+    sb.add_argument("--platform", default="IOS", choices=["IOS", "MAC_OS"])
+    sb.add_argument("--yes", action="store_true", help="actually submit (default: dry run)")
     expire = sub.add_parser("expire", help="retire builds so TestFlight stops showing them")
     expire.add_argument("--build", required=True, nargs="+", help="build number(s), e.g. 1 2 3")
     expire.add_argument("--yes", action="store_true", help="actually expire (default: dry run)")
@@ -330,6 +557,8 @@ def main() -> None:
         "testers": cmd_testers,
         "status": cmd_status,
         "expire": cmd_expire,
+        "release": cmd_release,
+        "submit": cmd_submit,
         "upload": cmd_upload,
     }[
         args.cmd

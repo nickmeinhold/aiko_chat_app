@@ -1,0 +1,7 @@
+What's new in 0.0.4
+
+- Direct messages on your phone: open, read and leave a DM straight from the conversation switcher
+- Mute a conversation or a person, without leaving either
+- Make it yours: pick a colour palette, edit your own, and choose a typeface
+- Notifications: your device can be reached now even when the app is closed
+- Know which island you are on at a glance
