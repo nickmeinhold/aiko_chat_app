@@ -88,7 +88,10 @@ def patch(path: str, token: str, payload: dict) -> dict:
     )
     try:
         with urllib.request.urlopen(req) as resp:
-            return json.load(resp)
+            # Relationship writes answer 204 with no body. An empty response is
+            # a successful write here, not a parse failure.
+            body = resp.read()
+            return json.loads(body) if body.strip() else {}
     except urllib.error.HTTPError as exc:
         sys.exit(f"HTTP {exc.code} on PATCH {path}\n{exc.read().decode()}")
 
@@ -212,7 +215,8 @@ def post(path: str, token: str, payload: dict) -> dict:
     )
     try:
         with urllib.request.urlopen(req) as resp:
-            return json.load(resp)
+            body = resp.read()
+            return json.loads(body) if body.strip() else {}
     except urllib.error.HTTPError as exc:
         sys.exit(f"HTTP {exc.code} on POST {path}\n{exc.read().decode()}")
 
