@@ -392,14 +392,20 @@ class _ConversationSwitcher extends ConsumerWidget {
     // attention suppressed in THIS one. Six pixels apart they read as one
     // compound signal ("3 muted notifications"), which is wrong in a way that is
     // worse than either being unclear alone.
+    // The gaps are not decoration. A filled pill two logical pixels from a
+    // glyph reads as touching it, so the count and the first letter of the name
+    // ran together into one token — found on a phone, where the badge is doing
+    // its actual job. The badge needs more air after it than before it: the
+    // caret is the same control and belongs close, the name is a different
+    // thing and must not fuse with the number.
     Widget collapsedFace(Widget label) => Row(
       children: [
         const Icon(Icons.arrow_drop_down),
         if (otherUnread > 0) ...[
-          const SizedBox(width: 3),
+          const SizedBox(width: 4),
           UnreadBadge(key: const Key('unread-aggregate'), count: otherUnread),
         ],
-        const SizedBox(width: 2),
+        const SizedBox(width: 8),
         Expanded(child: label),
       ],
     );

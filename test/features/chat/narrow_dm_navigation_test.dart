@@ -831,6 +831,90 @@ void main() {
           'beside the caret it belongs to — not at the far right of the title '
           'where it collides with the mute bell.',
     );
+
+    // ...and far enough left to be a separate token. Position alone was pinned
+    // and the arrangement still read wrong on a phone: the pill sat 2 logical
+    // pixels from the name, so the count and the first letter fused. A filled
+    // shape against a glyph needs real air, and "LEFT of" is satisfied by zero
+    // gap — which is how a green test coexisted with the defect.
+    final badgeRight = tester.getRect(
+      find.byKey(const Key('unread-aggregate')),
+    ).right;
+    final nameLeft = tester.getRect(find.text('general').first).left;
+    expect(
+      nameLeft - badgeRight,
+      greaterThanOrEqualTo(6.0),
+      reason:
+          'The aggregate badge must not crowd the conversation name — a filled '
+          'pill flush against text reads as one token, not a count beside a '
+          'name.',
+    );
+  });
+
+  // Is the aggregate badge a CONTROL or a decoration? Task #22 recorded it as
+  // "genuinely inert" and ruled `selectedItemBuilder` out as the fix. The widget
+  // has since moved INTO `selectedItemBuilder`, which draws it inside the
+  // DropdownButton's own hit area — so the note is stale and the badge should
+  // open the menu. Stale-or-true is not a thing to reason about: a decoration
+  // that looks like a control is the defect, and only a tap can tell them apart.
+  testWidgets('tapping the aggregate badge OPENS the switcher — it is inside the '
+      'button hit area, not a decoration beside it', (tester) async {
+    setNarrow(tester);
+    final transport = FakeChatTransport();
+    final container = makeContainer(rest: restWithDm(), transport: transport);
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    transport.emitConn(ConnectionState.connected);
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+
+    container.read(selectedChannelIdProvider.notifier).select('c1');
+    await tester.pumpAndSettle();
+
+    transport.emitMessage(
+      Message(
+        clientTempId: 'm1',
+        id: '01J${'0' * 21}1',
+        channelId: 'dm1',
+        sender: const MessageSender(
+          userId: 'u2',
+          kind: SenderKind.human,
+          label: 'alice',
+        ),
+        body: 'hey',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
+        deliveryState: DeliveryState.sent,
+      ),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+
+    final badge = find.byKey(const Key('unread-aggregate'));
+    expect(badge, findsOneWidget);
+
+    // NEGATIVE CONTROL: while the menu is shut, every non-active row is a
+    // SizedBox.shrink, so the OTHER channel's name is nowhere on screen. Without
+    // this the positive below would pass against a name that was always drawn.
+    expect(find.text('random'), findsNothing);
+
+    await tester.tap(badge);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('random'),
+      findsWidgets,
+      reason:
+          'Tapping the aggregate badge must open the conversation switcher. It '
+          'is drawn inside DropdownButton via selectedItemBuilder, so it shares '
+          'the button hit area — if this fails the badge has become decoration '
+          'again and reads as a broken control.',
+    );
   });
 
   testWidgets('a PEER-muted DM renders muted in the menu (peer-aware, like the '
