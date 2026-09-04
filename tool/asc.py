@@ -128,6 +128,61 @@ def cmd_testers(token: str, _args) -> None:
             print(f"    {t.get('email')}  {name}  state={t.get('state')}")
 
 
+def cmd_status(token: str, args) -> None:
+    """Answer the only question a release actually asks: can a tester install it yet?
+
+    `processingState=VALID` does NOT mean installable — it means Apple finished
+    processing. The terminal observable is the build appearing in a beta group
+    with internalBuildState=IN_BETA_TESTING.
+    """
+    app = find_app(token)
+    builds = get(f"/builds?filter[app]={app['id']}&limit=20&sort=-version", token)
+    # A build NUMBER is not a unique key: iOS and macOS upload under the same
+    # version string, so a lookup that takes the first match can report on the
+    # wrong platform's binary. Every match is reported and all must be installable.
+    matches = [b for b in builds["data"] if b["attributes"]["version"] == args.build]
+    if not matches:
+        sys.exit(f"build {args.build} not found (may not have registered yet)")
+
+    groups = get(f"/apps/{app['id']}/betaGroups?limit=50", token)["data"]
+    # betaGroups is not GET-able from the build side (CREATE/DELETE only), so
+    # membership has to be asked from the group side. That endpoint in turn
+    # rejects `sort`, hence the wide limit and a local scan.
+    membership = {
+        group["id"]: {b["id"] for b in get(f"/betaGroups/{group['id']}/builds?limit=200", token)["data"]}
+        for group in groups
+    }
+
+    all_installable = True
+    for match in matches:
+        detail = get(f"/builds/{match['id']}/buildBetaDetail", token)["data"]["attributes"]
+        print(f"build {args.build}  id={match['id']}")
+        print(f"  processingState    = {match['attributes']['processingState']}")
+        print(f"  internalBuildState = {detail.get('internalBuildState')}")
+        print(f"  externalBuildState = {detail.get('externalBuildState')}")
+        print(f"  autoNotifyEnabled  = {detail.get('autoNotifyEnabled')}")
+
+        installable = False
+        for group in groups:
+            attrs = group["attributes"]
+            kind = "internal" if attrs.get("isInternalGroup") else "external"
+            present = match["id"] in membership[group["id"]]
+            print(f"  [{kind}] {attrs['name']}: {'YES' if present else 'no'}")
+            if present and kind == "internal":
+                installable = True
+        all_installable &= installable
+
+    n = len(matches)
+    plural = f"all {n} binaries" if n > 1 else "binary"
+    verdict = (
+        f"INSTALLABLE by internal testers ({plural})"
+        if all_installable
+        else "NOT yet installable"
+    )
+    print(f"\n=> {verdict}")
+    sys.exit(0 if all_installable else 1)
+
+
 def cmd_upload(token: str, args) -> None:
     """Binary upload goes through altool, which reads the .p8 from its own key dir."""
     key_id, issuer_id, key_path = load_creds()
@@ -161,13 +216,21 @@ def main() -> None:
     builds = sub.add_parser("builds", help="list builds and their processing state")
     builds.add_argument("--limit", type=int, default=10)
     sub.add_parser("testers", help="list TestFlight groups and their testers")
+    status = sub.add_parser("status", help="can a tester install this build yet?")
+    status.add_argument("--build", required=True, help="build number, e.g. 12")
     upload = sub.add_parser("upload", help="upload an IPA via altool")
     upload.add_argument("--ipa", required=True)
     args = parser.parse_args()
 
     key_id, issuer_id, key_path = load_creds()
     token = make_token(key_id, issuer_id, key_path)
-    {"app": cmd_app, "builds": cmd_builds, "testers": cmd_testers, "upload": cmd_upload}[
+    {
+        "app": cmd_app,
+        "builds": cmd_builds,
+        "testers": cmd_testers,
+        "status": cmd_status,
+        "upload": cmd_upload,
+    }[
         args.cmd
     ](token, args)
 
