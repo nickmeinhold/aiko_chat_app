@@ -15,16 +15,15 @@
 library;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/config.dart';
+import '../../../core/widgets/island_mark.dart';
+import '../../settings/application/island_manifest_provider.dart';
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
-import '../../settings/application/island_directory_provider.dart';
-import '../../settings/data/island_directory_client.dart';
-import '../../settings/presentation/island_switch_action.dart';
 import '../application/chat_providers.dart';
 import '../application/mute_controller.dart';
 import '../domain/channel.dart';
@@ -112,26 +111,131 @@ class MuteGesture extends ConsumerWidget {
     // logout/user-switch is dropped rather than written into another account
     // (cage-match #135 round 3, Tesla).
     final expectUserId = ref.watch(currentUserProvider)?.userId;
-    return GestureDetector(
+    void open(Offset at) =>
+        _show(context, container, expectUserId: expectUserId, at: at);
+
+    // RawGestureDetector, for one reason: the slop tolerance (see
+    // [_HoldRecognizer]). `GestureDetector` builds a LongPressGestureRecognizer
+    // whose pre-accept slop is fixed at kTouchSlop and offers no way to widen it.
+    return RawGestureDetector(
       behavior: HitTestBehavior.opaque,
-      onLongPressEnd: (d) => _show(
-        context,
-        container,
-        expectUserId: expectUserId,
-        at: d.globalPosition,
-      ),
-      onSecondaryTapUp: kIsWeb
-          ? null
-          : (d) => _show(
-              context,
-              container,
-              expectUserId: expectUserId,
-              at: d.globalPosition,
-            ),
+      gestures: <Type, GestureRecognizerFactory>{
+        _HoldRecognizer: GestureRecognizerFactoryWithHandlers<_HoldRecognizer>(
+          () => _HoldRecognizer(debugOwner: this),
+          (_HoldRecognizer instance) =>
+              instance.onLongPressEnd = (d) => open(d.globalPosition),
+        ),
+        if (!kIsWeb)
+          TapGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                () => TapGestureRecognizer(debugOwner: this),
+                (TapGestureRecognizer instance) =>
+                    instance.onSecondaryTapUp = (d) => open(d.globalPosition),
+              ),
+      },
       child: child,
     );
   }
 }
+
+/// A long press that tolerates a real hand.
+///
+/// [LongPressGestureRecognizer] inherits `preAcceptSlopTolerance` = `kTouchSlop`
+/// (18 logical px) and does NOT forward that parameter through its constructor,
+/// so it cannot be widened. Drift more than 18px in ANY direction before the
+/// deadline and [PrimaryPointerGestureRecognizer.handleEvent] resolves the
+/// gesture REJECTED and stops tracking: no long press ever happens, so nothing
+/// fires on pointer-up either and the control is simply dead.
+///
+/// Nick found this holding an iPhone in LANDSCAPE — the worst case, arm out and
+/// thumb reaching across. He long-pressed a channel and nothing happened at all,
+/// including after lifting.
+///
+/// Every long-press test in this repo was green throughout, because
+/// `WidgetTester.longPress` moves exactly zero pixels: it performs a gesture no
+/// human hand can. The tests were not weak, they were measuring a different act
+/// than the user's. `mute_test` now drives a DRIFTING hold beside the still one,
+/// and the drifting arm was RED before this class existed.
+///
+/// Rather than reimplement a recognizer whose deadline, arena and pointer-up
+/// semantics are load-bearing here (the menu opens on LIFT — cage-match #135,
+/// Tesla HIGH — because one opened under a finger still down selects itself),
+/// this subclass only FILTERS what the base sees: a move within [_thumbSlop] is
+/// swallowed, so the base never gets an event it would call a slop violation.
+/// Everything past that threshold is forwarded untouched and still rejects
+/// normally, which is what keeps a real drag a drag.
+///
+/// Diagnosis note, because it rules out the usual suspect: the sidebar scrolls
+/// VERTICALLY, and a purely HORIZONTAL drift killed the press too. So this was
+/// never the scrollable's drag winning the arena — it was the long press
+/// rejecting itself on its own radial slop.
+class _HoldRecognizer extends LongPressGestureRecognizer {
+  _HoldRecognizer({super.debugOwner}) : super(duration: _holdDeadline);
+
+  Offset? _origin;
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    // The base keeps its origin private, so keep our own to measure against.
+    _origin = event.position;
+    super.addAllowedPointer(event);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    final origin = _origin;
+    if (origin != null &&
+        event is PointerMoveEvent &&
+        (event.position - origin).distance <= _thumbSlop) {
+      return;
+    }
+    super.handleEvent(event);
+  }
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {
+    _origin = null;
+    super.didStopTrackingLastPointer(pointer);
+  }
+
+  @override
+  String get debugDescription => 'hold (thumb-tolerant long press)';
+}
+
+/// How far a finger may wander and still count as holding still.
+///
+/// `kTouchSlop` (18) is Flutter's threshold for "is this a scroll" — a question
+/// about INTENT TO MOVE. "Is this hand holding still" is a different question
+/// and deserves a different number. 48 fits a real thumb and is still far short
+/// of a deliberate drag.
+const double _thumbSlop = 48.0;
+
+/// How long the finger must rest before the hold claims the gesture.
+///
+/// The slop widening alone was not enough, and the reason is the ARENA rather
+/// than this recognizer. A scrollable's vertical drag accepts the instant travel
+/// passes `kTouchSlop`; our hold only accepts at its deadline. A drifting thumb
+/// crosses 18px well inside 500ms, so the drag wins first — and because the
+/// sidebar list does not overflow, it wins and then has nothing to scroll. The
+/// gesture is eaten by a scroll that cannot happen, which is exactly what a dead
+/// control feels like.
+///
+/// So the lever is WHEN we accept, not how much drift we forgive.
+///
+/// 400ms, and the number is MEASURED rather than reasoned — the first attempt at
+/// this said 250ms and that was a regression. At 250ms a deliberate 300ms press
+/// opened the mute menu and left `selectedChannelId` NULL, taking the row's
+/// PRIMARY action away from anyone who taps slowly; a 50 px/s scroll begun on a
+/// row also stopped scrolling entirely. Both restored at 400ms with the drift
+/// arm still green, which is the frontier: 300/350/400 all pass the drift arm,
+/// and 400 is the largest, so it concedes the least. It is also Android's own
+/// long-press timeout.
+///
+/// STATED LIMIT: the drift arm's synthetic thumb travels 50 px/s and crosses
+/// kTouchSlop at ~440ms, so the suite cannot distinguish 400 from anything up to
+/// that. If a real thumb drifts FASTER than ~45 px/s this will be green here and
+/// still dead on the handset. Only the phone settles it.
+const Duration _holdDeadline = Duration(milliseconds: 400);
 
 /// Open the conversation mute menu at global position [at].
 ///
@@ -309,8 +413,7 @@ class ChatSidebar extends ConsumerWidget {
           right: false,
           child: Column(
             children: [
-              const _IslandSwitcher(),
-              const Divider(height: 1),
+              const _IslandCrown(),
               Expanded(
                 // The SAME readiness predicate as the app bar and the pane: the
                 // repository has a value. Two earlier cuts of this gate were each
@@ -502,116 +605,48 @@ class _SidebarDmTile extends ConsumerWidget {
   }
 }
 
-/// The top-of-rail server switcher. Shows the current gateway; opens a menu of
-/// `knownIslandsProvider` ∪ `islandDirectoryProvider` (same source as the
-/// picker), plus a "Custom / other islands…" escape to the full picker. A
-/// different selection routes through the shared [confirmAndSwitchIsland] so the
-/// confirm dialog can't drift from the picker's.
-class _IslandSwitcher extends ConsumerWidget {
-  const _IslandSwitcher();
-
-  static const _customValue = '__custom__';
+/// The head of the rail: the island you are on, as its own mark and nothing else.
+///
+/// This replaced a row that drew a GENERIC `dns_outlined` glyph, the word
+/// "Island", and the island's name — three elements where the name carried all
+/// of the identity and the icon carried none of it. Nick, seeing it in
+/// landscape: "we don't need the island name in the side bar, we have the icon."
+/// The icon he meant is this one, which was living at 18px beside the composer.
+///
+/// It can carry the identity because it is DERIVED from it: hue and silhouette
+/// grow out of the island's pubkey (or its URL until the manifest lands), so the
+/// mark cannot disagree with the island it names the way a hand-set logo could.
+///
+/// Sized for a rail rather than a text run. The tap goes where the composer's
+/// mark goes — where am I, so, can I go elsewhere.
+///
+/// Presence belongs here too, beneath the mark: who is aboard this island right
+/// now (Nick picked it in the same breath). It is not built because the island
+/// has none to give — 57 paths on the live schema, no presence among them, only
+/// a note in `realtime/envelopes.py` that typing/presence "extend it later".
+/// Tracked as claude-tasks#3885; this column is where those marks land.
+class _IslandCrown extends ConsumerWidget {
+  const _IslandCrown();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final current = ref.watch(configProvider).httpBaseUrl;
-    // Seed-first: render the known set immediately, overlay the live directory
-    // once it lands — identical to the picker so the two lists agree.
-    final known = ref.watch(knownIslandsProvider);
-    final islands = ref
-        .watch(islandDirectoryProvider)
-        .maybeWhen(
-          data: (directory) => mergeDirectory(
-            directory,
-            known,
-            normalize: (url) => IslandConfig.normalized(url).httpBaseUrl,
-          ),
-          orElse: () => known,
-        );
-    final currentEntry = islands
-        .where(
-          (e) => IslandConfig.normalized(e.httpBaseUrl).httpBaseUrl == current,
-        )
-        .firstOrNull;
-    final currentLabel = currentEntry?.label ?? _hostOf(current);
-
-    return PopupMenuButton<String>(
-      tooltip: 'Switch island',
-      position: PopupMenuPosition.under,
-      onSelected: (value) {
-        if (value == _customValue) {
-          context.push('/settings/island');
-          return;
-        }
-        final entry = islands.where((e) => e.httpBaseUrl == value).firstOrNull;
-        if (entry == null) return;
-        confirmAndSwitchIsland(
-          context,
-          ref,
-          url: entry.httpBaseUrl,
-          label: entry.label,
-        );
-      },
-      itemBuilder: (context) => [
-        for (final e in islands)
-          CheckedPopupMenuItem<String>(
-            value: e.httpBaseUrl,
-            checked:
-                IslandConfig.normalized(e.httpBaseUrl).httpBaseUrl == current,
-            child: Text(e.label, overflow: TextOverflow.ellipsis),
-          ),
-        const PopupMenuDivider(),
-        const PopupMenuItem<String>(
-          value: _customValue,
-          child: Text('Custom / other islands…'),
-        ),
-      ],
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-        child: Row(
-          children: [
-            Icon(
-              Icons.dns_outlined,
-              size: 20,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Island',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  Text(
-                    currentLabel,
-                    style: theme.textTheme.titleSmall,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Icons.arrow_drop_down),
-          ],
+    final baseUrl = ref.watch(configProvider).httpBaseUrl;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: IslandMark(
+          baseUrl: baseUrl,
+          islandPubkey: ref.watch(islandPubkeyProvider(baseUrl)),
+          size: 44,
+          onTap: () => context.push('/settings/island'),
+          hitPadding: const EdgeInsets.all(6),
         ),
       ),
     );
   }
-
-  /// The host for the fallback label when the current gateway isn't a named
-  /// entry — parsed defensively, falling back to the raw value.
-  static String _hostOf(String httpBaseUrl) {
-    final host = Uri.tryParse(httpBaseUrl)?.host;
-    return (host == null || host.isEmpty) ? httpBaseUrl : host;
-  }
 }
 
-/// The rail footer: Settings + Sign out — the actions that live in the app bar
-/// on narrow, moved here off the wide app bar.
 class _SidebarFooter extends ConsumerWidget {
   const _SidebarFooter();
 

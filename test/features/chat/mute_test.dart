@@ -314,6 +314,185 @@ void main() {
     },
   );
 
+  // REPRODUCTION ATTEMPT — Nick, on an iPhone in landscape, 2026-09-04:
+  // long-pressed a sidebar channel and "nothing happened", including after
+  // lifting his finger. Every existing long-press test is green, so the harness
+  // and the device disagree and the harness is the thing that must be wrong.
+  //
+  // The one difference between `tester.longPress` and a thumb is MOVEMENT.
+  // LongPressGestureRecognizer carries `preAcceptSlopTolerance` (kTouchSlop,
+  // 18 logical px): drift further than that BEFORE the 500ms deadline and the
+  // long press is rejected outright, handing the arena to the scrollable's drag.
+  // `tester.longPress` moves exactly zero pixels, so it can never see this.
+  //
+  // If this test goes RED, that is the mechanism and the fix is a slop
+  // tolerance, not a haptic. If it goes GREEN, drift is NOT the cause and this
+  // stays as a guard while the hunt continues elsewhere.
+  // THE REGRESSION GUARD. Nothing in this suite noticed when the hold deadline
+  // was first set to 250ms, and at 250ms a deliberate 300ms press opened the
+  // mute menu and left the conversation UNSELECTED — the row's primary action,
+  // taken away from anyone who taps slowly. Measured by the PR #184 reviewer,
+  // not by this file, which is the gap this test closes.
+  //
+  // Tap and hold are read off ONE number, so any future change to _holdDeadline
+  // trades directly against this. 300ms is a slow-but-ordinary tap; both
+  // platform conventions sit at or above 400 (Android 400, iOS/Material 500).
+  testWidgets('a slow, deliberate tap SELECTS the conversation — it is not a '
+      'hold', (tester) async {
+    final transport = FakeChatTransport();
+    final container = makeContainer(
+      rest: FakeRestApi(channels: twoChannels),
+      transport: transport,
+    );
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    transport.emitConn(ConnectionState.connected);
+    await settle(tester);
+
+    final row = find.byKey(const Key('sidebar-channel-c2'));
+    final press = await tester.startGesture(tester.getCenter(row));
+    await tester.pump(const Duration(milliseconds: 300));
+    await press.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Mute'),
+      findsNothing,
+      reason: 'a 300ms press is a tap; it must not summon the mute menu',
+    );
+    expect(
+      container.read(selectedChannelIdProvider),
+      'c2',
+      reason:
+          'and the tap must still do its job. A menu opening here does not just '
+          'add a wrong thing, it REMOVES the row primary action.',
+    );
+  });
+
+  testWidgets('a long press that DRIFTS like a real thumb still opens the mute '
+      'menu', (tester) async {
+    final transport = FakeChatTransport();
+    final container = makeContainer(
+      rest: FakeRestApi(channels: twoChannels),
+      transport: transport,
+    );
+    addTearDown(container.dispose);
+
+    await pumpApp(tester, container);
+    await signIn(tester);
+    transport.emitConn(ConnectionState.connected);
+    await settle(tester);
+
+    final row = find.byKey(const Key('sidebar-channel-c2'));
+    expect(row, findsOneWidget);
+
+    // POSITIVE CONTROL first: the still-finger press must work here, or a red
+    // below would be about this harness rather than about drift.
+    await tester.longPress(row);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Mute'),
+      findsOneWidget,
+      reason: 'control arm: a motionless long press must open the menu',
+    );
+    await tester.tapAt(const Offset(700, 20)); // dismiss
+    await tester.pumpAndSettle();
+
+    // A REAL THUMB: press, drift ~20px over the hold, then lift. This is Nick's
+    // actual gesture, in landscape, and it was RED before _HoldRecognizer.
+    //
+    // (The diagnosis ran this drift HORIZONTALLY first, deliberately: the list
+    // scrolls vertically, so its drag recognizer cannot claim sideways movement.
+    // The horizontal arm failed too, which ruled out the usual suspect — the
+    // scrollable stealing the arena — and pinned it on the long press rejecting
+    // itself on radial slop.)
+    final gesture = await tester.startGesture(tester.getCenter(row));
+    await tester.pump(const Duration(milliseconds: 80));
+    for (var i = 0; i < 10; i++) {
+      await gesture.moveBy(const Offset(0, 2));
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+    await tester.pump(const Duration(milliseconds: 400));
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Mute'),
+      findsOneWidget,
+      reason:
+          'A thumb drifts. If this fails, the long press is being rejected on '
+          'slop and handed to the scrollable, which is exactly what "nothing '
+          'happened" looks like from the outside.',
+    );
+
+    await tester.tapAt(const Offset(700, 20)); // dismiss
+    await tester.pumpAndSettle();
+
+    // THE ARM THAT MUST STILL FAIL. Widening the tolerance buys a dead control
+    // back; it must not buy it at the cost of scrolling. A deliberate drag —
+    // well past _thumbSlop — has to stay a drag, or the fix has simply moved the
+    // bug to the other end of the gesture and nothing here would notice.
+    final drag = await tester.startGesture(tester.getCenter(row));
+    await tester.pump(const Duration(milliseconds: 80));
+    for (var i = 0; i < 10; i++) {
+      await drag.moveBy(const Offset(0, 8)); // 80px total
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+    await tester.pump(const Duration(milliseconds: 400));
+    await drag.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Mute'),
+      findsNothing,
+      reason:
+          'An 80px travel is a scroll, not a hold. NOTE what this actually '
+          'guards: the DEADLINE, not the tolerance. Falsified both ways by the '
+          'PR #184 review — it stays green with _thumbSlop at 400 and goes red '
+          'at a 100ms deadline, because the ListView drag claims the arena at '
+          '18px (~200ms) before our hold accepts, whatever the slop is. The '
+          'tolerance is pinned by the horizontal arm below instead.',
+    );
+
+    await tester.tapAt(const Offset(700, 20)); // dismiss anything stray
+    await tester.pumpAndSettle();
+
+    // THE ARM THAT PINS _thumbSlop — and it took two tries to make it real.
+    //
+    // Two properties it needs, and the first version had neither by accident:
+    //  * SIDEWAYS, because the list scrolls vertically and its drag cannot claim
+    //    horizontal travel. That isolates this from the arena and leaves our own
+    //    radial slop as the only thing able to reject the press.
+    //  * FAST ENOUGH TO CROSS kTouchSlop BEFORE THE DEADLINE. The first attempt
+    //    drifted 50 px/s and only reached 16px by 400ms — under kTouchSlop, so
+    //    it stayed green with _thumbSlop narrowed all the way back to 18 and
+    //    tested nothing. A guard that cannot go red is not a guard.
+    //
+    // 100 px/s crosses 18px at ~180ms, comfortably inside the 400ms deadline,
+    // and totals 32px — past kTouchSlop, inside _thumbSlop. Verified in both
+    // directions: RED at _thumbSlop 18, GREEN at 48.
+    final sideways = await tester.startGesture(tester.getCenter(row));
+    await tester.pump(const Duration(milliseconds: 80));
+    for (var i = 0; i < 8; i++) {
+      await sideways.moveBy(const Offset(4, 0)); // 32px total, ~100 px/s
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+    await tester.pump(const Duration(milliseconds: 300));
+    await sideways.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Mute'),
+      findsOneWidget,
+      reason:
+          'A 32px sideways drift is past kTouchSlop and inside _thumbSlop, and a '
+          'vertical scrollable cannot claim it. If this fails, the hold is '
+          'rejecting itself on radial slop again.',
+    );
+  });
+
   testWidgets('NARROW: the app bar can mute the conversation being read', (
     tester,
   ) async {
