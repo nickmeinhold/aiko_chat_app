@@ -4,6 +4,7 @@ import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart'
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/chat/presentation/channel_sidebar.dart';
+import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/widgets/island_mark.dart';
 import 'package:aiko_chat_app/features/settings/presentation/island_picker_screen.dart';
 import 'package:aiko_chat_app/features/chat/presentation/chat_message_pane.dart';
@@ -345,6 +346,18 @@ void main() {
     // And it goes somewhere. "Where am I" -> "can I go elsewhere" is the whole
     // reason the mark is tappable; without this the rail would state the island
     // and offer no way off it.
+    // ...and it is a mark of the island we are ACTUALLY on. The deleted
+    // switcher pinned this by printing "Production" on screen; asserting only
+    // that the words are gone would leave a wrong baseUrl in _IslandCrown
+    // completely green, which is worse than the row it replaced (PR #184
+    // review, finding 4). The mark's whole claim is that it is DERIVED from
+    // the island, so derive-from-WHICH is the thing worth pinning.
+    expect(
+      tester.widget<IslandMark>(crown).baseUrl,
+      container.read(configProvider).httpBaseUrl,
+      reason: 'the crown must mark the island this session is connected to',
+    );
+
     await tester.tap(crown);
     await tester.pumpAndSettle();
     expect(find.byType(IslandPickerScreen), findsOneWidget);

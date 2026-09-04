@@ -220,10 +220,22 @@ const double _thumbSlop = 48.0;
 /// gesture is eaten by a scroll that cannot happen, which is exactly what a dead
 /// control feels like.
 ///
-/// So the lever is WHEN we accept, not how much drift we forgive. 250ms is long
-/// enough that a tap (well under 200ms) is never mistaken for a hold, and early
-/// enough to claim the arena before a normal thumb has drifted past slop.
-const Duration _holdDeadline = Duration(milliseconds: 250);
+/// So the lever is WHEN we accept, not how much drift we forgive.
+///
+/// 400ms, and the number is MEASURED rather than reasoned — the first attempt at
+/// this said 250ms and that was a regression. At 250ms a deliberate 300ms press
+/// opened the mute menu and left `selectedChannelId` NULL, taking the row's
+/// PRIMARY action away from anyone who taps slowly; a 50 px/s scroll begun on a
+/// row also stopped scrolling entirely. Both restored at 400ms with the drift
+/// arm still green, which is the frontier: 300/350/400 all pass the drift arm,
+/// and 400 is the largest, so it concedes the least. It is also Android's own
+/// long-press timeout.
+///
+/// STATED LIMIT: the drift arm's synthetic thumb travels 50 px/s and crosses
+/// kTouchSlop at ~440ms, so the suite cannot distinguish 400 from anything up to
+/// that. If a real thumb drifts FASTER than ~45 px/s this will be green here and
+/// still dead on the handset. Only the phone settles it.
+const Duration _holdDeadline = Duration(milliseconds: 400);
 
 /// Open the conversation mute menu at global position [at].
 ///
