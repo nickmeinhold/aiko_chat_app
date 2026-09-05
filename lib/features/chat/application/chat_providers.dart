@@ -415,13 +415,11 @@ final visibleDmsProvider = Provider.autoDispose<List<Channel>>((ref) {
 /// "Direct messages" header above it (cage-match #136, Tesla).
 ///
 /// Deduping here rather than in each consumer matters because every consumer
-/// needs the same answer and one of them turns a repeat into a crash: the narrow
-/// app-bar switcher feeds these ids to `DropdownButton`, which asserts that
-/// exactly one item matches its `value`. Deduping in that one widget left
-/// `resolveActive`, the sidebar and the switcher each deciding for themselves
-/// what "the conversation list" is — the two-readers-one-fact drift
-/// [visibleDmsProvider] exists to prevent, one layer up (cage-match #136,
-/// Kelvin). A repeat is a contract violation rather than an expected state; when
+/// needs the same answer. Deduping in one widget left `resolveActive`, the
+/// sidebar/drawer and details each deciding for themselves what "the
+/// conversation list" is — the two-readers-one-fact drift [visibleDmsProvider]
+/// exists to prevent, one layer up (cage-match #136, Kelvin). A repeat is a
+/// contract violation rather than an expected state; when
 /// it happens the DM entry wins, for the same reason the split is by source.
 typedef ConversationSections = ({List<Channel> rooms, List<Channel> dms});
 
@@ -458,7 +456,7 @@ final navigableChannelsProvider = Provider.autoDispose<List<Channel>>((ref) {
 /// Those all used to ask `channel.kind == ChannelKind.dm` individually, which is
 /// the same re-derivation [conversationSectionsProvider] removed from the row
 /// lists, still live on three other call sites: a row from `GET /v1/dm` carrying
-/// an unexpected kind sat in the DM section and was peer-titled in the dropdown,
+/// an unexpected kind sat in the DM section and was peer-titled in the drawer,
 /// then lost its title and its peer-aware mute the moment it became active
 /// (cage-match #136, Tesla + Carnot, converging independently).
 ///

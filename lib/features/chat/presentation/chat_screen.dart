@@ -19,17 +19,16 @@ import 'chat_message_pane.dart';
 import 'emoji_shortcodes.dart';
 
 /// At or above this logical width the chat surface shows the Slack/Element-style
-/// left rail ([ChatSidebar]); below it collapses to the phone app-bar dropdown.
+/// left rail ([ChatSidebar]); below it collapses into the app drawer.
 const double kWideLayoutBreakpoint = 720;
 
 /// The fixed width of the wide-layout channel rail.
 const double kSidebarWidth = 268;
 
-/// The chat surface: a conversation switcher + logout in the app bar, a thin
+/// The chat surface: a conversation drawer/title in the app bar, a thin
 /// connection banner, the message list, and the composer. The default is the
-/// first conversation the gateway returns; when more than one NAVIGABLE
-/// CONVERSATION exists — channels ∪ DMs, [navigableChannelsProvider] — the title
-/// becomes a dropdown to switch among them.
+/// first conversation the gateway returns; switching happens through the shared
+/// [ChatSidebar], inline on wide screens and in the drawer on phones.
 ///
 /// "Navigable conversation", never "channel": the island excludes DMs from
 /// `GET /v1/channels`, so anything scoped to [channelsProvider] here silently
@@ -64,14 +63,9 @@ class ChatScreen extends ConsumerWidget {
     final navigable = ref.watch(navigableChannelsProvider);
     final active = resolveActive(navigable, selectedId);
 
-    // The switcher's sections come from the SAME provider that composes
-    // `navigable`, already partitioned — so every id that can be active has
-    // exactly one item, which is what `DropdownButton`'s value contract requires.
-    // Re-deriving the split here (from `kind`, or from another provider) is what
-    // breaks that contract in one direction or the other (cage-match #136).
-    final sections = ref.watch(conversationSectionsProvider);
-    final rooms = sections.rooms;
-    final dms = sections.dms;
+    // The rooms/DMs partition moved out with the switcher — the drawer's
+    // `ChatSidebar` reads `conversationSectionsProvider` itself, from the same
+    // provider that composes `navigable`. One list, one reader.
     // "Both lists have settled" — the ONE readiness predicate for every surface
     // that names a conversation. [chatRepositoryProvider] awaits both, so its
     // having a value is exactly that condition, and the pane gates on the same
@@ -116,26 +110,18 @@ class ChatScreen extends ConsumerWidget {
     final isWide = MediaQuery.sizeOf(context).width >= kWideLayoutBreakpoint;
 
     return Scaffold(
-      // Wide: NO app bar — the sidebar owns the chrome (server switcher, channels,
-      // settings/logout) and the message pane carries its own slim channel header
-      // (the redundant full-width bar sat below the native macOS title bar). Narrow:
-      // the app bar — the dropdown switcher when there is more than one NAVIGABLE
-      // CONVERSATION (channels ∪ DMs, never channels alone), plus the mute,
-      // search, settings and sign-out actions.
+      // Narrow reaches the conversation list through a drawer, the way every
+      // comparable app does — which is what frees the title to mean "this
+      // conversation". Wide keeps the sidebar inline and has no drawer.
+      drawer: isWide ? null : const Drawer(child: ChatSidebar()),
+      // Wide: NO app bar — the sidebar owns the chrome (server switcher,
+      // conversations, settings/logout) and the message pane carries its own
+      // slim channel header (the redundant full-width bar sat below the native
+      // macOS title bar). Narrow: the app bar owns the drawer button, the current
+      // conversation title/details affordance, search and settings.
       appBar: isWide
           ? null
           : AppBar(
-              // Listing channels ∪ DMs is what makes a DM REACHABLE on a phone at
-              // all: the narrow layout has no sidebar, so this dropdown is the
-              // whole navigation surface, and a channels-only item list left
-              // `openDm` able to strand you in a conversation you could neither
-              // return to nor leave (#2798, task #12).
-              //
-              // It also retires the DM gate that used to hide this switcher: that
-              // gate existed because a DM id in `DropdownButton.value` with no
-              // matching item asserts (cage-match #106). The item list now covers
-              // every id that can be active, so the crash is unreachable rather
-              // than dodged — and the gate WAS the trap.
               // The bar rides the SAME settled predicate as the pane. Gating only
               // the pane closed the floor and left the doorbell wired to the wrong
               // house: with one DM in and the channel list still in flight,
@@ -146,29 +132,27 @@ class ChatScreen extends ConsumerWidget {
               // behind on a conversation they never picked (cage-match #136,
               // Tesla). A conversation control must not exist before the
               // conversation it names is settled.
+              // The title means THIS CONVERSATION and opens its details, where
+              // mute lives. It used to be the conversation SWITCHER, which is
+              // what left mute with nowhere to go on a phone: the one control an
+              // app bar has room for was spent on navigation, so muting ended up
+              // behind an unannounced long-press that a blind playtester could
+              // not find in five presses. Switching moved to the drawer.
               title: !ready
                   ? const Text('Chat')
                   : active == null
                   ? _ConversationTitle(active: active)
-                  // Long-press the title for the mute menu — the phone's
-                  // replacement for the sidebar row gesture it has no sidebar
-                  // to host.
-                  : ConversationTitleMuteGesture(
-                      conversation: active,
-                      child: navigable.length > 1
-                          ? _ConversationSwitcher(
-                              rooms: rooms,
-                              dms: dms,
-                              activeId: active.id,
-                            )
-                          : _ConversationTitle(active: active),
+                  : InkWell(
+                      onTap: () => context.push('/conversation'),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(child: _ConversationTitle(active: active)),
+                          const Icon(Icons.chevron_right, size: 20),
+                        ],
+                      ),
                     ),
               actions: [
-                // Narrow has no sidebar, so the row long-press that mutes a
-                // conversation on wide does not exist here. Without this the
-                // capability would be wide-only — mutable on the desktop, invisible
-                // on the phone, which is where a noisy channel is actually felt.
-                // Mute moved OFF the strip: long-press the conversation title.
                 IconButton(
                   tooltip: 'Search',
                   icon: const Icon(Icons.search),
@@ -203,92 +187,6 @@ class ChatScreen extends ConsumerWidget {
   }
 }
 
-/// Mute/unmute the conversation you are currently reading — the narrow-layout
-/// twin of the sidebar row's long-press menu. One toggle rather than a menu: the
-/// action is instant, reversible, and entirely private, so a confirmation step
-/// would cost more than the mistake it prevents. The icon carries the state, so
-/// a muted conversation announces itself from the bar you are already looking at.
-// A long-press gesture on the dropdown ROWS lived here briefly. Removed at
-// Nick's call: pressing a row in an already-open menu to get a SECOND menu is a
-// menu inside a menu, and the interaction it replaced (long-press the title) is
-// both simpler and already working. The rows are for picking a conversation;
-// that is all they do.
-
-/// Long-press the conversation title to reach the same mute menu the sidebar
-/// rows offer.
-///
-/// This is what let mute leave the app-bar action strip. The gesture already
-/// existed for sidebar rows, but the phone has no sidebar — so the capability
-/// was wide-only and a button was added to compensate. Putting the gesture on
-/// the title makes "long-press a conversation" true on BOTH layouts and gives
-/// the crowded action strip a seat back.
-///
-/// The mute state is derived by the same peer-aware path the button used, so
-/// the two surfaces cannot disagree about the same conversation.
-class ConversationTitleMuteGesture extends ConsumerWidget {
-  const ConversationTitleMuteGesture({
-    super.key,
-    required this.conversation,
-    required this.child,
-  });
-
-  final Channel conversation;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final isDm = ref.watch(dmConversationIdsProvider).contains(conversation.id);
-    final mute = watchConversationMute(
-      ref,
-      conversation.id,
-      peerId: isDm
-          ? dmPeerId(
-              ref.watch(channelRosterProvider(conversation.id)).value,
-              ref.watch(currentUserProvider)?.userId,
-            )
-          : null,
-      hasPeer: isDm,
-    );
-    return MuteGesture(
-      // A CONSTANT key, deliberately NOT keyed by conversation — the opposite of
-      // the sidebar rows, and for the opposite reason. Rows key by id because
-      // they have siblings that reorder, so slot-matching could hand a
-      // recognizer the wrong conversation. A title has exactly one slot and no
-      // siblings; keying it by id instead makes the key CHANGE whenever you
-      // switch conversation, remounting this subtree — including an open
-      // DropdownButton, whose overlay is holding the snapshot the user is
-      // currently choosing from. Same pattern, different structure, opposite
-      // correct answer.
-      key: const Key('mute-gesture-title'),
-      mute: mute,
-      // A muted conversation must still ANNOUNCE itself. The retired app-bar
-      // bell carried that state permanently; a long-press menu only says it once
-      // you have already opened the menu, so removing the button would have left
-      // a silent conversation on a phone looking exactly like a quiet one — the
-      // precise confusion the sidebar's own mute glyph exists to prevent.
-      child: mute.isMuted
-          ? Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(child: child),
-                const SizedBox(width: 6),
-                Icon(
-                  Icons.notifications_off,
-                  size: 16,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ],
-            )
-          : child,
-    );
-  }
-}
-
-// The app-bar mute BUTTON lived here. It existed only because the long-press
-// menu had nowhere to live on a phone — no sidebar, no row to press. The title
-// carries that gesture now (see ConversationTitleMuteGesture), so the button is
-// gone and the action strip is one icon lighter.
-
 class _ConversationTitle extends ConsumerWidget {
   const _ConversationTitle({required this.active});
 
@@ -300,357 +198,34 @@ class _ConversationTitle extends ConsumerWidget {
     if (a == null) return const Text('Chat');
     // By SOURCE, through the one door (#136) — a DM whose `kind` says otherwise
     // would otherwise render `a.name`, which for a DM is the empty string.
-    if (!ref.watch(dmConversationIdsProvider).contains(a.id)) {
-      return Text(a.name);
-    }
+    final isDm = ref.watch(dmConversationIdsProvider).contains(a.id);
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(a.id)).value;
-    return Text(dmPeerTitle(roster, myId));
-  }
-}
+    final title = isDm ? dmPeerTitle(roster, myId) : a.name;
 
-/// The app-bar conversation picker — the narrow layout's ENTIRE navigation
-/// surface, and therefore the phone's equivalent of [ChatSidebar]. Shown when more
-/// than one conversation exists. Renders the active one with a dropdown of the
-/// rest; picking one writes [selectedChannelIdProvider], which re-points the
-/// message surface.
-///
-/// Lists rooms AND DMs, in that order, under a section header — the same two
-/// sections the wide sidebar draws, collapsed into one menu because a phone app
-/// bar has room for exactly one control. Both are already in the repo's
-/// subscription set, so switching stays a pure display change with no fetch.
-///
-/// [rooms] and [dms] MUST partition [navigableChannelsProvider]: a correctness
-/// requirement, not a convention (see [ChatScreen.build]).
-/// One row of the conversation menu: the id it selects (null for a section
-/// header, which is a label rather than a destination) and how to draw it.
-///
-/// It exists so `items` and `selectedItemBuilder` cannot disagree about how many
-/// rows there are — DropdownButton asserts if they do.
-class _SwitcherRow {
-  const _SwitcherRow(this.id, this.build);
-
-  final String? id;
-  final Widget Function(BuildContext) build;
-}
-
-class _ConversationSwitcher extends ConsumerWidget {
-  const _ConversationSwitcher({
-    required this.rooms,
-    required this.dms,
-    required this.activeId,
-  });
-
-  final List<Channel> rooms;
-  final List<Channel> dms;
-  final String activeId;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // Aggregate unread across every NON-active conversation, so the collapsed
-    // app-bar switcher carries an at-a-glance "there's unread elsewhere" dot even
-    // before the user opens the menu (the closed DropdownButton only shows the
-    // active conversation's own item, which is always badge-free). Opening the
-    // menu then reveals which one and how many via the per-item counts below.
-    //
-    // DMs are counted here too. They have to be: on narrow this dot is the ONLY
-    // signal that a DM is waiting, since there is no sidebar row to badge — an
-    // aggregate that quietly excluded them would make a message from a person
-    // less visible than one from a room.
-    final otherUnread = [...rooms, ...dms]
-        .where((c) => c.id != activeId)
-        .fold<int>(
-          0,
-          (sum, c) => sum + ref.watch(channelUnreadCountProvider(c.id)),
-        );
-
-    // Resolve every DM's roster while the menu is SHUT, so a DM row is
-    // peer-titled on the frame it appears instead of relabelling from
-    // `dmPeerTitle`'s placeholder a round-trip later.
-    //
-    // This used to happen by accident: `DropdownButton` stacks its items in an
-    // [IndexedStack], which BUILDS every child and paints one, so each
-    // `_DmMenuItem` resolved its own roster while invisible. Drawing the
-    // collapsed face from [selectedItemBuilder] stops building the rows you
-    // cannot see — the point of doing it — and took the warm with it. Stated
-    // here it is a property this widget holds on purpose rather than one the
-    // framework was providing where nobody had written it down.
-    for (final d in dms) {
-      ref.watch(channelRosterProvider(d.id));
-    }
-
-    // The collapsed face of the switcher: caret, then the aggregate unread, then
-    // the conversation name. All three are built INSIDE the DropdownButton via
-    // [selectedItemBuilder] rather than beside it in a Row, because a widget
-    // drawn next to the button is decoration with no hit area — the caret looked
-    // like the thing you press to open the menu and was the one part of the
-    // control that could not (found on a phone, not by any test here).
-    //
-    // The aggregate count travels WITH the caret rather than trailing the name:
-    // it means attention wanted in OTHER conversations, while the bell that
-    // [ConversationTitleMuteGesture] appends right after the title means
-    // attention suppressed in THIS one. Six pixels apart they read as one
-    // compound signal ("3 muted notifications"), which is wrong in a way that is
-    // worse than either being unclear alone.
-    // The gaps are not decoration. A filled pill two logical pixels from a
-    // glyph reads as touching it, so the count and the first letter of the name
-    // ran together into one token — found on a phone, where the badge is doing
-    // its actual job. The badge needs more air after it than before it: the
-    // caret is the same control and belongs close, the name is a different
-    // thing and must not fuse with the number.
-    Widget collapsedFace(Widget label) => Row(
-      children: [
-        const Icon(Icons.arrow_drop_down),
-        if (otherUnread > 0) ...[
-          const SizedBox(width: 4),
-          UnreadBadge(key: const Key('unread-aggregate'), count: otherUnread),
-        ],
-        const SizedBox(width: 8),
-        Expanded(child: label),
-      ],
-    );
-
-    // Every row of the menu, in order: the id it selects (null for the section
-    // header, which is not a destination) and how to draw it.
-    final rows = <_SwitcherRow>[
-      for (final c in rooms)
-        _SwitcherRow(
-          c.id,
-          (_) => _ChannelMenuItem(
-            channelId: c.id,
-            name: c.name,
-            isActive: c.id == activeId,
-          ),
-        ),
-      // A boundary is only worth marking when there is one on both sides. The
-      // null id makes this `enabled: false`, which keeps it out of the
-      // selectable set and out of the one-item-matches-`value` assertion.
-      // `Semantics(header: true)` because a disabled menu item still ANNOUNCES
-      // as an item, which would offer a screen reader a dead destination in the
-      // only navigation control a phone has (cage-match #136, Tesla).
-      if (dms.isNotEmpty && rooms.isNotEmpty)
-        _SwitcherRow(
-          null,
-          (context) => Semantics(
-            header: true,
-            child: Text(
-              'Direct messages',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ),
-      for (final d in dms)
-        _SwitcherRow(
-          d.id,
-          (_) => _DmMenuItem(dm: d, isActive: d.id == activeId),
-        ),
-    ];
-
-    return DropdownButtonHideUnderline(
-      child: DropdownButton<String>(
-        value: activeId,
-
-        // isExpanded so the button is bounded by the AppBar title width and
-        // a long channel name ellipsizes instead of overflowing the bar (a
-        // channel named like a legal entity would otherwise clip —
-        // cage-match #106, Tesla).
-        isExpanded: true,
-        borderRadius: BorderRadius.circular(8),
-        // NO trailing caret — [selectedItemBuilder] draws it at the head
-        // of the collapsed face instead, inside this button's hit area.
-        icon: const SizedBox.shrink(),
-        // A tap target the size of the control it looks like. `isDense`
-        // used to shrink this below Material's 48px minimum, so even the
-        // half that WAS tappable took an accurate press.
-        itemHeight: kMinInteractiveDimension,
-        // M3 AppBar foreground is onSurface, and the menu opens on a
-        // surface background — so the inherited onSurface text reads
-        // correctly in both the collapsed bar and the open menu.
-        // ONE list, read twice. `items` and `selectedItemBuilder` must be the
-        // same LENGTH — DropdownButton asserts outright if they are not — and
-        // they were built by two separate comprehensions that each decided
-        // independently whether the "Direct messages" header was present. Two
-        // readers of one fact, six lines apart, with a crash as the failure
-        // mode: the exact shape cage-match #136 found in this widget's
-        // providers, and the reason that one was restructured rather than
-        // guarded. Mapping one row list twice makes a length mismatch
-        // unrepresentable rather than merely tested for.
-        items: [
-          for (final row in rows)
-            DropdownMenuItem<String>(
-              value: row.id,
-              enabled: row.id != null,
-              child: row.build(context),
-            ),
-        ],
-        // The collapsed face. Every non-active row is an empty box on purpose:
-        // that is what keeps the committed probe in narrow_dm_navigation_test
-        // true — only the ACTIVE row is built while the menu is shut, so a
-        // phone still pays no per-DM roster fetch until it opens. The active
-        // entry rebuilds the very same item widget, so its name, mute
-        // resolution and DM peer lookup stay in one place rather than becoming
-        // a second derivation that can drift.
-        selectedItemBuilder: (context) => [
-          for (final row in rows)
-            if (row.id != null && row.id == activeId)
-              collapsedFace(row.build(context))
-            else
-              const SizedBox.shrink(),
-        ],
-        onChanged: (id) {
-          if (id == null) return;
-          // FAIL CLOSED on an id the list no longer holds. The overlay
-          // route snapshots its items when the menu OPENS and keeps
-          // offering them; if a conversation retires while the menu is up,
-          // tapping its leftover row would write a dead id into the
-          // selection. Display would look fine — `resolveActive` falls back
-          // — but the Notifier stays poisoned, and `ref.listen`'s self-heal
-          // never fires because the list did not change again. When that id
-          // came back the user would be yanked into a conversation they
-          // never re-picked: the exact #106 snap-back this file already
-          // guards, re-entered through the overlay (cage-match #136, Tesla).
-          if (!rooms.any((c) => c.id == id) && !dms.any((c) => c.id == id)) {
-            return;
-          }
-          ref.read(selectedChannelIdProvider.notifier).select(id);
-        },
-      ),
-    );
-  }
-}
-
-/// One row of the channel dropdown: the channel name plus, for a NON-active
-/// channel with unread messages, a trailing count badge. The active channel is
-/// never badged — it is the one you are reading, so it has no unread — which also
-/// keeps the collapsed DropdownButton (which renders the active item) badge-free.
-class _ChannelMenuItem extends ConsumerWidget {
-  const _ChannelMenuItem({
-    required this.channelId,
-    required this.name,
-    required this.isActive,
-  });
-
-  final String channelId;
-  final String name;
-  final bool isActive;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final unread = isActive
-        ? 0
-        : ref.watch(channelUnreadCountProvider(channelId));
-    // A muted row must say WHY it is quiet here too. `channelUnreadCountProvider`
-    // reports 0 for a muted channel, so without this the dropdown renders muted
-    // and idle identically — two unread surfaces drawing different conclusions
-    // from the same mute state, which is exactly the drift the sidebar glyph was
-    // added to prevent (cage-match #135, Carnot HIGH + Tesla).
-    //
-    // Through the SAME door as every other surface, not a second derivation of
-    // its own — no peer here because a CHANNEL has none; the DM half of this menu
-    // passes one (see [_DmMenuItem]). That day has now arrived: this comment used
-    // to say `mutedChannelIdsProvider` would answer identically "by accident of
-    // topology, not by law", and the law is what held once DMs joined the list.
-    final muted = watchConversationMute(ref, channelId).isMuted;
-    return _MenuItemRow(
-      conversationId: channelId,
-      name: name,
-      unread: unread,
-      muted: muted,
-      isActive: isActive,
-    );
-  }
-}
-
-/// One DM row of the conversation dropdown. Same row shape as a channel's, but
-/// both of its facts are resolved differently, which is why it is a separate
-/// widget rather than a flag on [_ChannelMenuItem]:
-///
-///  * the LABEL is the peer, not a server `name` — a DM has none (identity=key,
-///    ADR-0004: a DM's title IS the other person), so it comes from the roster
-///    via [dmPeerTitle], exactly as [ChatSidebar]'s DM tile resolves it;
-///  * the MUTE is peer-aware — a 1:1 DM is silenced by two independent causes,
-///    this conversation being muted or its PERSON being muted account-wide, and
-///    only the peer-aware call sees the second. Passing `hasPeer: true` is what
-///    the [_ChannelMenuItem] comment was holding this seat open for: without it
-///    a peer-muted DM would render idle in the one menu that never learned about
-///    peers (cage-match #135 round 7, Tesla).
-class _DmMenuItem extends ConsumerWidget {
-  const _DmMenuItem({required this.dm, required this.isActive});
-
-  final Channel dm;
-  final bool isActive;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final myId = ref.watch(currentUserProvider)?.userId;
-    final roster = ref.watch(channelRosterProvider(dm.id)).value;
-    final unread = isActive ? 0 : ref.watch(channelUnreadCountProvider(dm.id));
-    final muted = watchConversationMute(
+    // A muted conversation must ANNOUNCE itself from the bar you are already
+    // looking at. Mute now lives one tap away in the details, which means the
+    // state is only READABLE there — and a silenced conversation that looks
+    // exactly like a quiet one is the failure the sidebar's own mute glyph
+    // exists to prevent, on the layout that has no sidebar. The glyph is the
+    // announcement; the tap is the control.
+    final mute = watchConversationMute(
       ref,
-      dm.id,
-      peerId: dmPeerId(roster, myId),
-      hasPeer: true,
-    ).isMuted;
-    return _MenuItemRow(
-      conversationId: dm.id,
-      name: dmPeerTitle(roster, myId),
-      unread: unread,
-      muted: muted,
-      isActive: isActive,
+      a.id,
+      peerId: isDm ? dmPeerId(roster, myId) : null,
+      hasPeer: isDm,
     );
-  }
-}
-
-/// The shared row body for both kinds of dropdown item: label, then ONE trailing
-/// marker. Shared on purpose — the unread-vs-muted fork below is a decision the
-/// mute cage-match landed twice already, and a channel row and a DM row drawing
-/// it from two copies is precisely the two-readers-one-fact drift this file's
-/// providers were restructured to remove.
-class _MenuItemRow extends StatelessWidget {
-  const _MenuItemRow({
-    required this.conversationId,
-    required this.name,
-    required this.unread,
-    required this.muted,
-    required this.isActive,
-  });
-
-  final String conversationId;
-  final String name;
-  final int unread;
-  final bool muted;
-  final bool isActive;
-
-  @override
-  Widget build(BuildContext context) {
-    // The ACTIVE row carries no marker. The collapsed DropdownButton renders it
-    // inside the app bar, inches from _MuteConversationAction — which states the
-    // same mute AND is the control that changes it, so a glyph here is a second
-    // bell that only opens a menu (cage-match #136).
-    if (isActive) {
-      return Text(name, overflow: TextOverflow.ellipsis);
-    }
+    if (!mute.isMuted) return Text(title);
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
-        // Attention first, same polarity as the sidebar row: a peer mute filters
-        // per MESSAGE, so a muted-looking row can still have a real count from
-        // someone else, and the glyph must never swallow it (cage-match #135
-        // round 12, Tesla).
-        if (unread > 0) ...[
-          const SizedBox(width: 8),
-          UnreadBadge(key: Key('unread-item-$conversationId'), count: unread),
-        ] else if (muted) ...[
-          const SizedBox(width: 8),
-          Icon(
-            Icons.notifications_off_outlined,
-            key: Key('muted-item-$conversationId'),
-            size: 16,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-        ],
+        Flexible(child: Text(title)),
+        const SizedBox(width: 6),
+        Icon(
+          Icons.notifications_off,
+          size: 16,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       ],
     );
   }

@@ -268,23 +268,23 @@ footer em{font-style:italic}
 <details class="pilot">
   <summary>The pilot's book <span>Do not open until the survey is done</span></summary>
   <div class="pilot-body">
-    <p>What the survey should have found, as of 0.0.4 on 1 September 2026.</p>
+    <p>What the survey should have found, as of 0.0.4 on 1 September 2026 — with rows 20, 33 and 34 revised on 5 September when task #26 landed.</p>
     <p><strong>Deliberately absent.</strong> Calling is gated off entirely — three doors shut (the long-press sheet, the ring banner, and the <code>/call/:channelId</code> route, which was never registered). Media crosses the island SFU in the clear with nothing disclosing it, and CallKit is designed-not-built, so an invite to a backgrounded app is silence. Taking back a sent message is also absent: retractions are consumed from the wire, but nothing app-side originates one.</p>
     <div class="tablewrap">
     <table>
       <tr><th>Landing</th><th>How it is actually done</th></tr>
-      <tr><td>33 · silence this conversation</td><td>Long-press the app-bar title</td></tr>
-      <tr><td>34 · silence another one</td><td><strong>No path on a phone.</strong> Switch to it first, then 33. Long-press on a dropdown row is dead</td></tr>
+      <tr><td>33 · silence this conversation</td><td>Tap the app-bar title, then the mute switch on the conversation details</td></tr>
+      <tr><td>34 · silence another one</td><td>Open the drawer and long-press its row — or switch to it, then 33</td></tr>
       <tr><td>35 · silence a person</td><td>Long-press one of their messages</td></tr>
       <tr><td>38, 39 · block, report</td><td>Long-press one of their messages</td></tr>
-      <tr><td>20 · move between conversations</td><td>The app-bar dropdown; the sidebar on a wide screen</td></tr>
+      <tr><td>20 · move between conversations</td><td>The drawer, from the app-bar button; the sidebar on a wide screen</td></tr>
       <tr><td>40, 41 · blocked list</td><td>Settings → Blocked users</td></tr>
       <tr><td>45 · what is recorded about me</td><td>Settings → Carried Record</td></tr>
       <tr><td>46 · search</td><td>The magnifier in the app bar</td></tr>
       <tr><td>47 · change island</td><td>The server switcher — <strong>wide layout only</strong>, no phone path</td></tr>
     </table>
     </div>
-    <p>Every one of those but the last two is a long-press. The whole moderation and attention surface hides behind an invisible gesture, on the platform where there is no right-click to fall back on. That pattern is the finding, not any single row of it.</p>
+    <p>When this book was first written, every one of those but the last two was a long-press: the whole moderation and attention surface hid behind an invisible gesture, on the platform where there is no right-click to fall back on. That pattern was the finding, not any single row of it. Rows 20, 33 and 34 have since been rebuilt — the title means <em>this conversation</em> and opens details where mute lives, and the conversation list moved to a drawer (task #26). The rest still hide.</p>
   </div>
 </details>
 
