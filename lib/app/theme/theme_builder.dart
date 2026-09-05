@@ -133,8 +133,9 @@ ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
     splashFactory: InkSparkle.splashFactory,
   );
 
+  final text = _text(base.textTheme, p, font);
   return base.copyWith(
-    textTheme: _text(base.textTheme, p, font),
+    textTheme: text,
     // Flat chrome — separation by hairline, never elevation.
     appBarTheme: AppBarTheme(
       backgroundColor: p.ground,
@@ -143,7 +144,12 @@ ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
-      titleTextStyle: TextStyle(
+      // DERIVED from the text theme, not a bare `TextStyle`. A bare style here
+      // does not merge with anything — `AppBar` installs `titleTextStyle` AS
+      // the DefaultTextStyle — so it silently dropped the reader's chosen face,
+      // and every app-bar title kept the platform default while the rest of the
+      // app changed typeface around it.
+      titleTextStyle: text.titleLarge?.copyWith(
         color: p.ink,
         fontSize: 20,
         fontWeight: FontWeight.w600,

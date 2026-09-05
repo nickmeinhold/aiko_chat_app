@@ -16,6 +16,8 @@
 @Tags(['playtest'])
 library;
 
+import 'dart:io';
+
 import 'package:aiko_chat_app/app/router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -90,6 +92,7 @@ void main() {
       // ignore: avoid_print
       print(
         'TITLE[$label] text="$text" '
+        'at=(${rect.left.toStringAsFixed(1)},${rect.top.toStringAsFixed(1)}) '
         'rect=${rect.width.toStringAsFixed(1)}x${rect.height.toStringAsFixed(1)} '
         'perChar=${(rect.width / text.length).toStringAsFixed(1)} '
         'ink=${ink.toStringAsFixed(3)} '
@@ -114,7 +117,61 @@ void main() {
     world.container.read(routerProvider).go('/settings/island');
     await tester.pumpAndSettle();
 
+    // HOW MANY "Island" texts are even on this screen, and where? Every number
+    // reported so far assumed `.first` is the app-bar title. That was never
+    // checked, and a measurement bound to the wrong object is not a weak
+    // measurement, it is a measurement of something else.
+    final islands = find.text('Island').evaluate().toList();
+    // ignore: avoid_print
+    print('MATCHES for text "Island": ${islands.length}');
+    for (var i = 0; i < islands.length; i++) {
+      final r = tester.getRect(find.byWidget(islands[i].widget));
+      // ignore: avoid_print
+      print('  [$i] at=(${r.left.toStringAsFixed(1)},${r.top.toStringAsFixed(1)}) '
+          'size=${r.width.toStringAsFixed(1)}x${r.height.toStringAsFixed(1)}');
+    }
+
     await report('island', find.text('Island').first);
+
+    // Stop estimating positions off a scaled screenshot. Write the frame.
+    // `capturePng` wraps its own `runAsync`; nesting a second one is a
+    // reentrancy error, not a slow test.
+    File('/tmp/aiko-playtest/island-probe.png')
+        .writeAsBytesSync(await capturePng(tester));
+
+    // Ask the render tree what font it actually resolved, instead of guessing
+    // a fourth time. Three hypotheses have died here; this reads the answer.
+    for (final rt in find
+        .descendant(of: find.byType(AppBar), matching: find.byType(RichText))
+        .evaluate()) {
+      final style = ((rt.widget as RichText).text as TextSpan).style;
+      // ignore: avoid_print
+      print('APPBAR RichText: family=${style?.fontFamily} '
+          'fallback=${style?.fontFamilyFallback} size=${style?.fontSize} '
+          'weight=${style?.fontWeight} color=${style?.color}');
+    }
+    for (final rt in find.byType(RichText).evaluate().take(12)) {
+      final span = (rt.widget as RichText).text;
+      if (span is TextSpan && (span.text ?? '').isNotEmpty) {
+        // ignore: avoid_print
+        print('  RichText "${span.text}" family=${span.style?.fontFamily} '
+            'size=${span.style?.fontSize}');
+      }
+    }
+
+    // What else paints over that rect? Anything opaque covering the title is
+    // the thing to name.
+    final titleRect = tester.getRect(find.text('Island').first);
+    for (final el in find.byType(DecoratedBox).evaluate()) {
+      final r = tester.getRect(find.byWidget(el.widget));
+      if (r.overlaps(titleRect)) {
+        // ignore: avoid_print
+        print('OVERLAPPING DecoratedBox at=(${r.left.toStringAsFixed(1)},'
+            '${r.top.toStringAsFixed(1)}) size=${r.width.toStringAsFixed(1)}x'
+            '${r.height.toStringAsFixed(1)} '
+            'deco=${(el.widget as DecoratedBox).decoration}');
+      }
+    }
     // Read the verdict off distinctColours, not off ink: one colour is a slab,
     // many is type. Stated here rather than asserted, because this file is a
     // probe and the conclusion belongs in the issue.
