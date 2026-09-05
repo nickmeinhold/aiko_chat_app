@@ -21,11 +21,13 @@ const _grammar = '''
 Reply with EXACTLY ONE line, nothing else, in one of these three forms:
 
   TAP <x> <y> | <a few words on why that spot>
+  HOLD <x> <y> | <a few words on why that spot>
   STUCK | <what you looked for and could not find>
   SEE | <what this screen says to you, in one sentence>
 
-Use TAP to press something. Use STUCK when nothing on the screen looks like it
-would get you closer to the goal — that is a useful answer, not a failure, so
+Use TAP to press something. Use HOLD to press and hold it, the way you would on
+a phone to reveal more options. Use STUCK when nothing on the screen looks like
+it would get you closer to the goal — that is a useful answer, not a failure, so
 prefer it over pressing something at random. Use SEE only when you were asked to
 describe rather than to act.
 ''';
@@ -117,15 +119,20 @@ Move parseMove(List<String> lines) {
     final line = raw.trim();
     if (line.isEmpty) continue;
 
-    final tap = RegExp(
-      r'^TAP\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*(?:\|\s*(.*))?$',
+    final press = RegExp(
+      r'^(TAP|HOLD)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*'
+      r'(?:\|\s*(.*))?$',
       caseSensitive: false,
     ).firstMatch(line);
-    if (tap != null) {
-      return Tap(
-        Offset(double.parse(tap.group(1)!), double.parse(tap.group(2)!)),
-        because: tap.group(3)?.trim() ?? '',
+    if (press != null) {
+      final at = Offset(
+        double.parse(press.group(2)!),
+        double.parse(press.group(3)!),
       );
+      final why = press.group(4)?.trim() ?? '';
+      return press.group(1)!.toUpperCase() == 'HOLD'
+          ? Hold(at, because: why)
+          : Tap(at, because: why);
     }
 
     final stuck = RegExp(

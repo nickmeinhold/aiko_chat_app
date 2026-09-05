@@ -42,6 +42,7 @@ void main() {
   testWidgets(
     'a newcomer can find how to silence a channel',
     (tester) async {
+      hideDebugChrome();
       final container = await pumpWalkableApp(tester, walkPhone);
 
       final run = await playtest(
@@ -59,7 +60,7 @@ void main() {
         reached: () async => container
             .read(mutesProvider.notifier)
             .isMuted(MuteTarget.channel, 'c1'),
-        maxTaps: 6,
+        maxPresses: 6,
       );
 
       run.writeFrames('$_trails/silence-general/frames');
@@ -75,12 +76,12 @@ void main() {
             'from the pixels, or it can only be reached by someone who already '
             'knows where it is. Look at the trail.',
       );
-      // Discoverability as a number. Two taps is the designed path (open the
-      // conversation menu, press mute); more than that is measured hunting.
+      // Discoverability as a number. The designed path is two presses — hold
+      // the app-bar title, press mute — so more than three is measured hunting.
       expect(
-        run.taps,
+        run.presses,
         lessThanOrEqualTo(3),
-        reason: 'reached, but took ${run.taps} taps — that is a hunt',
+        reason: 'reached, but took ${run.presses} presses — that is a hunt',
       );
     },
   );
@@ -93,6 +94,7 @@ void main() {
       // finding is the gap between this sentence and what the bar is supposed
       // to mean, and judging that gap is a human's job. So this test asserts
       // only that the instrument produced a reading, and PRINTS the reading.
+      hideDebugChrome();
       await pumpWalkableApp(tester, walkPhone);
 
       final run = await playtest(
@@ -102,7 +104,7 @@ void main() {
             'screen is telling you about this conversation',
         agent: claudeEyes(tester: tester, scratchDir: '$_trails/read-the-bar'),
         reached: () async => false,
-        maxTaps: 1,
+        maxPresses: 1,
       );
 
       run.writeFrames('$_trails/read-the-bar/frames');
