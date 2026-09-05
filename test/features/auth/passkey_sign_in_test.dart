@@ -26,6 +26,13 @@ void main() {
   }) {
     final tokenStore = store ?? InMemoryTokenStore();
     late final ProviderContainer container;
+    // NOTE: this container deliberately does NOT override
+    // sharedPreferencesProvider, and that omission is now load-bearing COVERAGE
+    // rather than an oversight. The passkey-hint write added on the sign-in path
+    // makes `passkeyHintStoreProvider` throw here — and in its first cut that
+    // exception propagated out of `signInWithPasskey`, turning a SUCCESSFUL
+    // sign-in into a failure. A cosmetic button-emphasis hint could break
+    // authentication. These tests are what caught it; keep the omission.
     container = ProviderContainer(
       overrides: [
         restApiProvider.overrideWithValue(rest),

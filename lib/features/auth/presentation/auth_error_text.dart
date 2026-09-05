@@ -98,9 +98,35 @@ String authErrorText(
     return 'No passkey found on this device. '
         'Tap "Create a passkey" above to make one.';
   }
+  // NEVER blame the island for this one. The old text said "the island's domain
+  // association is still pending", and on 2026-09-05 an Apple reviewer saw exactly
+  // that sentence — while `chat.imagineering.cc` was serving a correct AASA AND
+  // Apple's own CDN was caching it, and the shipped binary carried the right
+  // `associated-domains` entitlement. Every server-side fact was fine; the message
+  // asserted a fault that did not exist, and the app store submission was REJECTED.
+  //
+  // The cause is device-side: `swcd` has not yet fetched (or has negatively cached)
+  // the association — which on a FRESH INSTALL is a few-second window, exactly when
+  // a first-time user is most likely to tap something. We cannot distinguish that
+  // from "this device has no passkey for $host" at this layer, and it does not
+  // matter, because BOTH resolve to the same two actions: make one, or wait a beat.
+  // So lead with what to DO and name both possibilities honestly.
+  //
+  // This is the same shape Google Play review hit with `no-credential` above — a
+  // reviewer tapping "Sign in" on a device that has never had a passkey. That branch
+  // was given a recovery action; this one was left a dead end. Recoverable state
+  // rendered as terminal, one tap from the fix.
   if (ceremonyMsg.contains('domain-not-associated')) {
-    return "Passkeys aren't linked to $host yet, so sign-in can't complete. "
-        "(The island's domain association is still pending.)";
+    switch (action) {
+      case AuthAction.signIn:
+        return "This device doesn't have a passkey for $host yet. Tap "
+            '"Create a passkey" above to make one — or if you just installed '
+            'Aiko, wait a few seconds and try again.';
+      case AuthAction.createAccount:
+      case AuthAction.claimHandle:
+        return "Couldn't link this device to $host just now. Wait a moment and "
+            'try again — this can take a few seconds right after installing.';
+    }
   }
   if (ceremonyMsg.contains('deviceNotSupported') ||
       lower.contains('not supported')) {

@@ -123,7 +123,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.widgetWithText(FilledButton, 'Create a passkey'),
+      find.byKey(const Key('login-screen')),
       findsOneWidget,
     ); // back at login
   });
@@ -163,7 +163,7 @@ void main() {
 
     expect(transport.disconnectCalls, greaterThanOrEqualTo(1));
     expect(
-      find.widgetWithText(FilledButton, 'Create a passkey'),
+      find.byKey(const Key('login-screen')),
       findsOneWidget,
     );
   });
@@ -216,7 +216,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(
-      find.widgetWithText(FilledButton, 'Create a passkey'),
+      find.byKey(const Key('login-screen')),
       findsOneWidget,
     );
 

@@ -381,7 +381,11 @@ void main() {
     // NOT pumpAndSettle here: the pane is showing a CircularProgressIndicator,
     // whose animation never settles — which is itself the assertion. Drive fixed
     // frames instead.
-    await tester.tap(find.text('Already have a passkey? Sign in'));
+    // tapSignIn, NOT signIn: the label is looked up either way (the login screen
+    // swaps which ingress is primary once a ceremony has succeeded on this device
+    // and testPrefs carries that across tests), but signIn() settles — and the
+    // whole point here is the UNSETTLED frame above.
+    await tapSignIn(tester);
     for (var i = 0; i < 6; i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
@@ -442,7 +446,11 @@ void main() {
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await tester.tap(find.text('Already have a passkey? Sign in'));
+    // tapSignIn, NOT signIn: the label is looked up either way (the login screen
+    // swaps which ingress is primary once a ceremony has succeeded on this device
+    // and testPrefs carries that across tests), but signIn() settles — and the
+    // whole point here is the UNSETTLED frame above.
+    await tapSignIn(tester);
     for (var i = 0; i < 6; i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),

@@ -22,6 +22,7 @@ import '../core/prefs/pref_key_migration.dart';
 import '../core/auth/token_provider.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/auth/data/cached_user_store.dart';
+import '../features/auth/data/passkey_hint_store.dart';
 import '../features/auth/data/passkey_auth_client.dart';
 import '../features/chat/data/cache/cache_database.dart';
 import '../features/chat/data/carriage_capability.dart';
@@ -119,6 +120,13 @@ final sovereignKeyStoreProvider = Provider<SovereignKeyStore>(
 /// fields). Tests override this with an `InMemoryCachedUserStore`.
 final cachedUserStoreProvider = Provider<CachedUserStore>(
   (ref) => CachedUserStore(ref.watch(sharedPreferencesProvider)),
+);
+
+/// Sticky "a passkey for this island lives on this device" hint — drives which
+/// ingress the login screen emphasises. See [PasskeyHintStore] for why this is a
+/// hint and not a gate.
+final passkeyHintStoreProvider = Provider<PasskeyHintStore>(
+  (ref) => PasskeyHintStore(ref.watch(sharedPreferencesProvider)),
 );
 
 /// A broadcast sink for "the session is now *terminally* unauthenticated"
