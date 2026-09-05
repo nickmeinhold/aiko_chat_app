@@ -3,6 +3,32 @@
 // Invoked through headless Claude Code (`claude -p`), which is a zero-cost path
 // on the Max plan. Never the metered API.
 //
+// WHERE THE BLINDNESS IS ACTUALLY ENFORCED, and it is not all in the types.
+// `BlindView` closes the DART boundary: there is no path from it to the element
+// tree. The live agent is a separate PROCESS, and that boundary is a different
+// question with a different answer. Measured, not assumed:
+//
+//   cwd = the repo root  ->  asked what project it was in, WITHOUT using a tool,
+//                            it answered "aiko_chat_app - the Flutter/Dart
+//                            client for the aiko chat network ... islands ...
+//                            signed-at-birth". That is this repo's CLAUDE.md,
+//                            auto-loaded because the test process runs here.
+//   cwd = an empty dir   ->  "NONE".
+//
+// A model briefed on the product is not the naive reader this instrument claims
+// to simulate, and the contamination is WORST exactly where the finding is worth
+// most: a real newcomer meeting the word "island" does not know what it means,
+// and one handed this repo's CLAUDE.md does. So the agent runs from the frame
+// directory, not the repo, and with Read as its only tool.
+//
+// RESIDUAL, stated rather than papered over: `Read` is NOT jailed to the working
+// directory - given an absolute path it will read anything this user can read,
+// which was also measured. What the isolated cwd removes is the POINTER, not the
+// capability: no project instructions, and no Grep or Glob to go looking. The
+// honest claim is "not briefed and not browsing", never "cannot reach". Closing
+// it properly means auditing the run's tool-use transcript, which is a follow-up
+// and not a thing this comment should pretend is done.
+//
 // The prompt is deliberately thin. Everything that makes this instrument worth
 // having comes from what it is NOT told: no widget names, no label list, no
 // route table, no hint about which control is the right one. It is told the
@@ -90,12 +116,22 @@ $_grammar''';
     // the fake-async scheduler it would wait forever on a future the test clock
     // never advances to.
     final result = await tester.runAsync(
-      () => Process.run(claudeBin, [
-        '-p',
-        prompt,
-        '--output-format',
-        'text',
-      ]).timeout(timeout),
+      () => Process.run(
+        claudeBin,
+        [
+          '-p',
+          prompt,
+          // Read only: no Grep or Glob, so the widget names are not one command
+          // away from a model that is supposed to be guessing like a person.
+          '--allowedTools',
+          'Read',
+          '--output-format',
+          'text',
+        ],
+        // NOT the repo. Running here is what keeps this repo's CLAUDE.md out of
+        // the agent's context - see the header for the measurement.
+        workingDirectory: dir.path,
+      ).timeout(timeout),
     );
 
     if (result == null || result.exitCode != 0) {
