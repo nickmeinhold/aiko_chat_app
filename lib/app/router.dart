@@ -21,6 +21,7 @@ import 'package:go_router/go_router.dart';
 
 import 'feature_flags.dart' show callingEnabledProvider;
 
+import '../features/chat/presentation/conversation_details_screen.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/chat/data/chat_rest_api.dart' show AccountSuspended;
 import '../features/auth/presentation/claim_handle_screen.dart';
@@ -160,6 +161,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
       GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
+      // Details about the ACTIVE conversation — a real route, so route coverage
+      // admits it to its denominator rather than treating mute as unreachable.
+      GoRoute(
+        path: '/conversation',
+        builder: (_, _) => const ConversationDetailsScreen(),
+      ),
       // Gated with the two visible doors (Call in the long-press sheet, the ring
       // banner): a registered route is reachable by deep link even when nothing
       // in the UI points at it, so leaving it mounted would leave calling one

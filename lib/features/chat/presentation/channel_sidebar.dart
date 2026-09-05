@@ -287,33 +287,10 @@ Future<void> showConversationMuteMenu(
                   ? Icons.notifications_none
                   : Icons.notifications_off_outlined,
             ),
-            title: Text(muted ? 'Unmute' : 'Mute'),
-            // Say WHICH silence this undoes whenever a PERSON is one of the
-            // causes — not only when they are the sole cause. Gating on
-            // "peer and not conversation" left the both-muted case promising
-            // "show unread again" while restoring that account in every room
-            // (cage-match #135 round 5, Tesla).
-            // Three states, because the honest sentence differs in each: we can
-            // see a person is the cause; we know the conversation alone is; or we
-            // cannot speak for the peer at all and must not promise the row goes
-            // audible (cage-match #135 rounds 5-9).
-            // Both verbs scope themselves. Round 9 taught the MUTE side about
-            // `indeterminate` and left the UNMUTE side promising "show unread
-            // again" — which clears only the conversation, so an unnameable peer
-            // mute keeps the row at zero while the glyph disappears with
-            // `byConversation`, closing the undo door on a row that is still
-            // quiet (cage-match #135 round 11, Tesla).
-            subtitle: Text(
-              muted
-                  ? (mute.byPeer
-                        ? 'This person is muted everywhere — unmute them'
-                        : mute.indeterminate
-                        ? 'Unmute this conversation'
-                        : 'Show unread again')
-                  : mute.indeterminate
-                  ? 'No unread badge from this conversation'
-                  : 'No unread badge',
-            ),
+            title: Text(mute.actionLabel),
+            // The sentence is a pure getter on ConversationMute, shared with
+            // every other surface that offers this control.
+            subtitle: Text(mute.actionDetail),
           ),
         ),
       ],
