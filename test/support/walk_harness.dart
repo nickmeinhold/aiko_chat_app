@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'test_helpers.dart';
+import 'ui_fakes.dart';
 
 /// A phone-width viewport: the narrow information architecture (app-bar
 /// dropdown switcher), which is what nearly every user has.
@@ -56,15 +57,17 @@ List<Message> _seedMessages() => [
     ),
 ];
 
-/// Mount the real app, signed in, with a populated world, at [size].
+/// The mounted world, for callers that need to read ground truth out of it.
 ///
-/// Returns the container so a caller can read the live `routerProvider` — the
-/// route-coverage test needs the app's OWN route table as its denominator, not
-/// a list someone maintained by hand beside it.
-Future<ProviderContainer> pumpWalkableApp(
-  WidgetTester tester,
-  Size size,
-) async {
+/// The container gives the live `routerProvider` — route coverage needs the
+/// app's OWN route table as its denominator, not a hand-maintained list beside
+/// it. The rest fake gives the moderation record: whether a block or a report
+/// actually LANDED, which is a different question from whether a screen
+/// advanced, and the only one worth scoring.
+typedef WalkWorld = ({ProviderContainer container, FakeRestApi rest});
+
+/// Mount the real app, signed in, with a populated world, at [size].
+Future<WalkWorld> pumpWalkableApp(WidgetTester tester, Size size) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.resetPhysicalSize);
@@ -86,5 +89,5 @@ Future<ProviderContainer> pumpWalkableApp(
     transport.emitMessage(m);
   }
   await tester.pumpAndSettle();
-  return container;
+  return (container: container, rest: rest);
 }

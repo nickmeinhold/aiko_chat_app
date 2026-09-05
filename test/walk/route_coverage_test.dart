@@ -91,7 +91,7 @@ void main() {
     // screen into the exemption list and taught the next reader it was a known
     // gap. A screen you can only reach on one form factor is a finding.
     for (final size in [walkPhone, walkDesktop]) {
-      final container = await pumpWalkableApp(tester, size);
+      final container = (await pumpWalkableApp(tester, size)).container;
       final router = container.read(routerProvider);
 
       // The denominator, straight from the app. The route TABLE does not vary

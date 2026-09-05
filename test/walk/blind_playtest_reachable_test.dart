@@ -33,7 +33,7 @@ void main() {
     tester,
   ) async {
     hideDebugChrome();
-    final container = await pumpWalkableApp(tester, walkPhone);
+    final container = (await pumpWalkableApp(tester, walkPhone)).container;
 
     // The one place a finder is allowed: establishing WHERE the documented
     // affordance is, so the press itself can be positional and go through the

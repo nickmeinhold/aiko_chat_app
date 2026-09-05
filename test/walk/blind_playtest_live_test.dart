@@ -43,7 +43,7 @@ void main() {
     'a newcomer can find how to silence a channel',
     (tester) async {
       hideDebugChrome();
-      final container = await pumpWalkableApp(tester, walkPhone);
+      final container = (await pumpWalkableApp(tester, walkPhone)).container;
 
       final run = await playtest(
         tester,
