@@ -1,17 +1,13 @@
-/// The wide-layout left rail (Slack/Element style): a server switcher at the
-/// top, the channel list in the middle, and a settings/sign-out footer at the
-/// bottom. Shown ONLY on wide screens ([ChatScreen] forks on width); narrow gets
-/// the app-bar dropdown, which lists the SAME two sections this rail draws — it
-/// is a phone's entire navigation surface, not a channels-only fallback (#2798
-/// task #12; the sentence that used to sit here said "unchanged", and treating
-/// that as law is how a DM ended up with no row and no leave-path on a phone).
+/// The conversation rail (Slack/Element style): a server switcher at the top,
+/// the channel list in the middle, and a settings/sign-out footer at the bottom.
+/// Wide screens show it inline; narrow screens mount the same rail in the app
+/// drawer, so both layouts pick from the same two sections.
 ///
 /// A custom widget (NOT `NavigationRail`) because channels are text names +
-/// unread badges, not icons. Channel selection routes through the EXACT same
-/// mutator the dropdown uses (`selectedChannelIdProvider.notifier.select`), and
-/// per-channel unread reads `channelUnreadCountProvider` (the distinct unread
-/// stream), so both invariants that shipped through cage-matches #106/#109 hold
-/// verbatim.
+/// unread badges, not icons. Channel selection routes through
+/// `selectedChannelIdProvider.notifier.select`, and per-channel unread reads
+/// `channelUnreadCountProvider` (the distinct unread stream), so both invariants
+/// that shipped through cage-matches #106/#109 hold verbatim.
 library;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -46,6 +42,12 @@ Color _selectedTileColor(ColorScheme scheme) => scheme.surfaceContainerHigh;
 const _tileShape = RoundedRectangleBorder(
   borderRadius: BorderRadius.all(Radius.circular(8)),
 );
+
+void _selectConversation(BuildContext context, WidgetRef ref, String id) {
+  ref.read(selectedChannelIdProvider.notifier).select(id);
+  final navigator = Navigator.of(context);
+  if (navigator.canPop()) navigator.pop();
+}
 
 /// Wraps a sidebar row with the mute affordance: long-press on touch,
 /// right-click on desktop — the two gestures that mean "more options" on the
@@ -239,15 +241,10 @@ const Duration _holdDeadline = Duration(milliseconds: 400);
 
 /// Open the conversation mute menu at global position [at].
 ///
-/// PUBLIC because two very different surfaces need the same menu. The sidebar
-/// rows reach it through [MuteGesture]; the rows inside the phone's app-bar
-/// conversation dropdown CANNOT, because they live in the dropdown's own
-/// overlay route where no ancestor of ours is in the tree. They call this
-/// directly instead.
-///
-/// That distinction is the whole reason long-press appeared broken on a phone:
-/// the gesture was wrapped around the app bar's TITLE, which is not the thing
-/// anyone presses — you open the list first, and then press a row in it.
+/// PUBLIC because row-level mute is shared UI, and callers should not rederive
+/// the menu wording or lifetime rules when another row-like surface appears.
+/// The phone's primary mute path is the conversation details switch; this menu
+/// remains the row accelerator.
 ///
 /// [container] is captured by the CALLER before the menu is awaited, and the
 /// notifier re-read from it AFTER — never held across the gap. See [MuteGesture]
@@ -397,7 +394,7 @@ class ChatSidebar extends ConsumerWidget {
                 // wrong in one direction (cage-match #136, Tesla ×3):
                 //  * `channelsAsync.when` blanked the DM rows behind "Could not
                 //    load channels" even though `dmsProvider` fails soft and had
-                //    them — while the phone switcher listed those same DMs;
+                //    them — while the phone drawer listed those same DMs;
                 //  * content-first-on-any-section then painted a row SELECTED
                 //    during the window where DMs have arrived and channels have
                 //    not, so the highlight jumped to the first room when they
@@ -453,15 +450,16 @@ class ChatSidebar extends ConsumerWidget {
         for (final c in channels)
           _SidebarChannelTile(channel: c, selected: c.id == active?.id),
         if (dms.isNotEmpty) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
-            child: Text(
-              'Direct messages',
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+          if (channels.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
+              child: Text(
+                'Direct messages',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
             ),
-          ),
           for (final d in dms)
             _SidebarDmTile(dm: d, selected: d.id == active?.id),
         ],
@@ -470,10 +468,9 @@ class ChatSidebar extends ConsumerWidget {
   }
 }
 
-/// One channel row. Selection calls the SAME mutator as the app-bar dropdown
-/// (`selectedChannelIdProvider.notifier.select`), and unread reads
-/// `channelUnreadCountProvider` (never `messagesProvider`) — the active channel
-/// is never badged, mirroring `_ChannelMenuItem`.
+/// One channel row. Selection calls the shared conversation mutator, and unread
+/// reads `channelUnreadCountProvider` (never `messagesProvider`) — the active
+/// channel is never badged.
 class _SidebarChannelTile extends ConsumerWidget {
   const _SidebarChannelTile({required this.channel, required this.selected});
 
@@ -512,9 +509,7 @@ class _SidebarChannelTile extends ConsumerWidget {
         ),
         onTap: selected
             ? null
-            : () => ref
-                  .read(selectedChannelIdProvider.notifier)
-                  .select(channel.id),
+            : () => _selectConversation(context, ref, channel.id),
       ),
     );
   }
@@ -524,7 +519,7 @@ class _SidebarChannelTile extends ConsumerWidget {
 /// (identity=key, ADR-0004: a DM's title IS the peer), so the label is the peer's
 /// CURRENT handle, resolved from the channel roster the SAME way message sender
 /// names resolve ([channelRosterProvider], PR #127) — a rename retitles the row.
-/// Selection routes through the SAME mutator as channels and the dropdown. A
+/// Selection routes through the SAME mutator as channels. A
 /// self-DM (notes-to-self) shows "Notes to self"; an unresolved roster falls back
 /// to a neutral label rather than leaking the opaque key. Unread reads the SAME
 /// [channelUnreadCountProvider] a channel row does — a DM sits in the repo's
@@ -576,7 +571,7 @@ class _SidebarDmTile extends ConsumerWidget {
         ),
         onTap: selected
             ? null
-            : () => ref.read(selectedChannelIdProvider.notifier).select(dm.id),
+            : () => _selectConversation(context, ref, dm.id),
       ),
     );
   }

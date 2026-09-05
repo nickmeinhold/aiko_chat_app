@@ -71,11 +71,10 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  // These widget tests assert the app-bar aggregate badge — a NARROW (phone)
-  // layout feature. The flutter_test default viewport (800x600) is ABOVE the
-  // responsive breakpoint (720) and renders the wide sidebar instead, so pin a
-  // phone-width viewport. (The sidebar's own unread badge is covered in
-  // responsive_layout_test.dart.)
+  // These widget tests assert the drawer row badges in the NARROW (phone)
+  // layout. The flutter_test default viewport (800x600) is ABOVE the responsive
+  // breakpoint (720) and renders the wide sidebar instead, so pin a phone-width
+  // viewport.
   Future<void> pumpNarrow(
     WidgetTester tester,
     ProviderContainer container,
@@ -100,7 +99,26 @@ void main() {
     await settle(tester);
   }
 
-  Finder aggregate() => find.byKey(const Key('unread-aggregate'));
+  Finder unreadBadge(String channelId) =>
+      find.byKey(Key('sidebar-unread-$channelId'));
+
+  Future<void> expectDrawerUnread(
+    WidgetTester tester,
+    String channelId,
+    Matcher matcher, {
+    String? count,
+  }) async {
+    await openChatDrawer(tester);
+    final badge = unreadBadge(channelId);
+    expect(badge, matcher);
+    if (count != null) {
+      expect(
+        find.descendant(of: badge, matching: find.text(count)),
+        findsOneWidget,
+      );
+    }
+    await closeChatDrawer(tester);
+  }
 
   // ── Store: injective keyspace + durable monotonicity + isolation ────────────
 
@@ -235,18 +253,14 @@ void main() {
     await signInConnected(tester, transport); // active channel = c1
 
     // No unread yet.
-    expect(aggregate(), findsNothing);
+    await expectDrawerUnread(tester, 'c2', findsNothing);
 
     // Another user posts into the NON-active channel c2.
     transport.emitMessage(inbound('c2', ulid('0A'), 'u2', 'hey there'));
     await settle(tester);
 
-    // The collapsed switcher now carries the aggregate unread badge, count 1.
-    expect(aggregate(), findsOneWidget);
-    expect(
-      find.descendant(of: aggregate(), matching: find.text('1')),
-      findsOneWidget,
-    );
+    // The drawer row now carries the unread badge, count 1.
+    await expectDrawerUnread(tester, 'c2', findsOneWidget, count: '1');
   });
 
   testWidgets(
@@ -264,16 +278,14 @@ void main() {
 
       transport.emitMessage(inbound('c2', ulid('0A'), 'u2', 'unread msg'));
       await settle(tester);
-      expect(aggregate(), findsOneWidget);
+      await expectDrawerUnread(tester, 'c2', findsOneWidget, count: '1');
 
       // Switch to c2 (view it) — viewing marks it read.
-      await tester.tap(find.byType(DropdownButton<String>));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('random').last);
+      await selectChannelFromDrawer(tester, 'c2');
       await settle(tester);
 
       // Badge cleared: no aggregate (c1 has none, c2 now read).
-      expect(aggregate(), findsNothing);
+      await expectDrawerUnread(tester, 'c2', findsNothing);
       // And the watermark was durably persisted for this user/channel (per-user
       // JSON map under a single key).
       final raw = testPrefs.getString('aiko_channel_lastread_u1');
@@ -299,7 +311,7 @@ void main() {
 
     // The message renders, but the active channel is never badged.
     expect(find.text('in active chan'), findsOneWidget);
-    expect(aggregate(), findsNothing);
+    await expectDrawerUnread(tester, 'c1', findsNothing);
   });
 
   testWidgets('my own messages do not count as unread', (tester) async {
@@ -318,7 +330,7 @@ void main() {
     await settle(tester);
 
     // No unread — a message from myself is never unread.
-    expect(aggregate(), findsNothing);
+    await expectDrawerUnread(tester, 'c2', findsNothing);
   });
 
   testWidgets('a persisted watermark is honored on load (durability)', (
@@ -346,16 +358,12 @@ void main() {
     // A message BELOW the persisted watermark is already-read → no badge.
     transport.emitMessage(inbound('c2', ulid('03'), 'u2', 'old already-read'));
     await settle(tester);
-    expect(aggregate(), findsNothing);
+    await expectDrawerUnread(tester, 'c2', findsNothing);
 
     // A message ABOVE the watermark is genuinely unread → badge appears.
     transport.emitMessage(inbound('c2', ulid('09'), 'u2', 'new unread'));
     await settle(tester);
-    expect(aggregate(), findsOneWidget);
-    expect(
-      find.descendant(of: aggregate(), matching: find.text('1')),
-      findsOneWidget,
-    );
+    await expectDrawerUnread(tester, 'c2', findsOneWidget, count: '1');
   });
 
   testWidgets(
@@ -379,13 +387,14 @@ void main() {
       await pumpNarrow(tester, container);
       await signIn(tester); // NOT connected: fence not settled yet
       await settle(tester);
-      expect(aggregate(), findsNothing); // fence null → 0
+      await expectDrawerUnread(tester, 'c2', findsNothing); // fence null → 0
 
       // A LIVE message lands in c2 BEFORE history settles (fence still null).
       await cache.upsertInbound(inbound('c2', ulid('09'), 'u2', 'live-early'));
       await settle(tester);
-      expect(
-        aggregate(),
+      await expectDrawerUnread(
+        tester,
+        'c2',
         findsNothing,
       ); // still 0 — baseline withheld until settle
 
@@ -396,11 +405,7 @@ void main() {
 
       // Baseline = fence '05' → the live '09' > '05' is NOT swallowed (count 1).
       // (baseline=newest-cached would baseline to '09' → 0 → RED here.)
-      expect(aggregate(), findsOneWidget);
-      expect(
-        find.descendant(of: aggregate(), matching: find.text('1')),
-        findsOneWidget,
-      );
+      await expectDrawerUnread(tester, 'c2', findsOneWidget, count: '1');
     },
   );
 
@@ -438,11 +443,7 @@ void main() {
       // NO flood: only '09' > baseline '05'. History 01..05 ≤ baseline is read.
       // (baseline=newest-cached-or-'' would baseline '' on the empty first sight →
       // all four count → RED here.)
-      expect(aggregate(), findsOneWidget);
-      expect(
-        find.descendant(of: aggregate(), matching: find.text('1')),
-        findsOneWidget,
-      );
+      await expectDrawerUnread(tester, 'c2', findsOneWidget, count: '1');
     },
   );
 
@@ -485,16 +486,10 @@ void main() {
 
     // Switch to c2 → c1 is now non-active. The unseen tail message MUST show as
     // unread: the watermark did not jump past a message the reader never saw.
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('random').last);
+    await selectChannelFromDrawer(tester, 'c2');
     await settle(tester);
 
-    expect(aggregate(), findsOneWidget);
-    expect(
-      find.descendant(of: aggregate(), matching: find.text('1')),
-      findsOneWidget,
-    );
+    await expectDrawerUnread(tester, 'c1', findsOneWidget, count: '1');
   });
 
   testWidgets('unread count reflects multiple messages and the badge caps', (
@@ -515,12 +510,15 @@ void main() {
     transport.emitMessage(inbound('c2', ulid('0C'), 'u3', 'three'));
     await settle(tester);
 
-    expect(aggregate(), findsOneWidget);
+    await openChatDrawer(tester);
+    final badge = unreadBadge('c2');
+    expect(badge, findsOneWidget);
     expect(
-      find.descendant(of: aggregate(), matching: find.text('3')),
+      find.descendant(of: badge, matching: find.text('3')),
       findsOneWidget,
     );
     // The badge widget is the shared UnreadBadge type.
     expect(find.byType(UnreadBadge), findsWidgets);
+    await closeChatDrawer(tester);
   });
 }

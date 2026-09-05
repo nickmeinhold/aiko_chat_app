@@ -1,17 +1,11 @@
-// Mute on a PHONE.
+// Mute on a phone.
 //
-// The long-press menu has existed since #135 — on sidebar rows, which the narrow
-// layout does not have. So the capability was wide-only, and the phone got a
-// dedicated app-bar button to compensate: a control existing because a gesture
-// had nowhere to live.
-//
-// Now the app bar's conversation title carries the same gesture, and the button
-// is gone. The thing worth testing is not that the wrapper is present — it is
-// that the gesture SURVIVES THE DROPDOWN. With more than one conversation the
-// title IS a DropdownButton, which runs its own gesture recognizers; a
-// long-press that lost the arena to it would leave a phone with no way to mute
-// at all, and nothing else in the suite would notice.
+// The retired app-bar dropdown forced conversation mute behind an unannounced
+// title long-press. The title now means "this conversation" and opens the
+// details screen, where the same mute state is visible and tap-reachable. The
+// drawer owns conversation switching.
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
+import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,7 +32,12 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
   }
 
-  testWidgets('the mute BUTTON is gone from the narrow app bar', (
+  Future<void> openDetails(WidgetTester tester) async {
+    await tester.tap(find.text('general').first);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('the mute button is gone from the narrow app bar', (
     tester,
   ) async {
     narrow(tester);
@@ -53,14 +52,12 @@ void main() {
     expect(
       find.byKey(const Key('appbar-mute-conversation')),
       findsNothing,
-      reason: 'mute is a long-press now; the strip got its seat back',
+      reason: 'mute is in conversation details now; the strip got its seat back',
     );
+    expect(find.byType(DropdownButton<String>), findsNothing);
   });
 
-  testWidgets('long-pressing the title opens the mute menu — WITH a dropdown, '
-      'which is the case that could have lost the gesture arena', (
-    tester,
-  ) async {
+  testWidgets('tapping the title opens conversation details', (tester) async {
     narrow(tester);
     final container = makeContainer(
       rest: FakeRestApi(channels: twoChannels),
@@ -71,26 +68,13 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    // Sanity: this really is the dropdown case, or the test proves nothing.
-    expect(find.byType(DropdownButton<String>), findsOneWidget);
-    expect(
-      find.byKey(const Key('mute-gesture-title')),
-      findsOneWidget,
-      reason: 'the gesture wrapper is not even in the tree',
-    );
+    await openDetails(tester);
 
-    await tester.longPress(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text('Mute'),
-      findsOneWidget,
-      reason: 'the long-press did not reach the mute menu',
-    );
+    expect(find.text('Mute this conversation'), findsOneWidget);
+    expect(find.text('Channel'), findsOneWidget);
   });
 
-  testWidgets('TAPPING the dropdown still opens it — the mute wrapper must not '
-      'swallow the gesture that switches conversations', (tester) async {
+  testWidgets('details mute toggles the active conversation', (tester) async {
     narrow(tester);
     final container = makeContainer(
       rest: FakeRestApi(channels: twoChannels),
@@ -101,20 +85,75 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byType(DropdownButton<String>));
+    expect(container.read(mutedChannelIdsProvider), isEmpty);
+
+    await openDetails(tester);
+    await tester.tap(find.text('Mute this conversation'));
     await tester.pumpAndSettle();
 
-    // The overlay lists every conversation; 'random' only exists there.
+    expect(container.read(mutedChannelIdsProvider), contains('c1'));
+
+    await tester.tap(find.text('Mute this conversation'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(mutedChannelIdsProvider), isEmpty);
+  });
+
+  // The state, not just the control. Mute moved one tap away into the details,
+  // so the app bar is the only place a phone reader can LEARN a conversation is
+  // silenced without going looking. Both arms are here on purpose: an indicator
+  // that is always drawn would pass a present-when-muted check and say nothing.
+  testWidgets('the title announces mute, and only when muted', (tester) async {
+    narrow(tester);
+    final container = makeContainer(
+      rest: FakeRestApi(channels: twoChannels),
+      transport: FakeChatTransport(),
+    );
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    final glyph = find.descendant(
+      of: find.byType(AppBar),
+      matching: find.byIcon(Icons.notifications_off),
+    );
+    expect(glyph, findsNothing, reason: 'an unmuted conversation says nothing');
+
+    await openDetails(tester);
+    await tester.tap(find.text('Mute this conversation'));
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
     expect(
-      find.text('random'),
-      findsWidgets,
+      glyph,
+      findsOneWidget,
       reason:
-          'the dropdown did not open — wrapping the title for long-press '
-          'must not cost the tap that switches conversation',
+          'a silenced conversation that looks exactly like a quiet one is the '
+          'confusion the sidebar mute glyph exists to prevent — and narrow has '
+          'no sidebar',
     );
   });
 
-  testWidgets('and with a single conversation, where the title is plain text', (
+  testWidgets('the drawer still switches conversations', (tester) async {
+    narrow(tester);
+    final container = makeContainer(
+      rest: FakeRestApi(channels: twoChannels),
+      transport: FakeChatTransport(),
+    );
+    addTearDown(container.dispose);
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
+
+    await selectChannelFromDrawer(tester, 'c2');
+
+    expect(container.read(selectedChannelIdProvider), 'c2');
+    expect(find.widgetWithText(AppBar, 'random'), findsOneWidget);
+  });
+
+  testWidgets('details opens with a single plain-title conversation', (
     tester,
   ) async {
     narrow(tester);
@@ -127,34 +166,10 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('general').first);
-    await tester.pumpAndSettle();
+    expect(find.byType(DropdownButton<String>), findsNothing);
 
-    expect(find.text('Mute'), findsOneWidget);
-  });
+    await openDetails(tester);
 
-  // Long-press on the dropdown ROWS was built and then removed at Nick's call:
-  // pressing a row in an already-open menu to summon a second menu is a menu
-  // inside a menu. Muting is the TITLE long-press, above. What remains here is
-  // the guard that the rows still do their one job.
-
-  testWidgets('tapping a row still SELECTS it — the long-press must not have '
-      'cost the ordinary tap', (tester) async {
-    narrow(tester);
-    final container = makeContainer(
-      rest: FakeRestApi(channels: twoChannels),
-      transport: FakeChatTransport(),
-    );
-    addTearDown(container.dispose);
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('random').last);
-    await tester.pumpAndSettle();
-
-    expect(container.read(selectedChannelIdProvider), 'c2');
+    expect(find.text('Mute this conversation'), findsOneWidget);
   });
 }

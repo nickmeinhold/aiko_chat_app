@@ -16,8 +16,8 @@ void main() {
     await initializeTestEnvironment();
   });
 
-  // These tests exercise the NARROW (phone) layout — the app-bar dropdown
-  // switcher and app-bar settings/logout actions. The flutter_test default
+  // These tests exercise the NARROW (phone) layout — the app-bar title, drawer
+  // switcher, and app-bar settings/search actions. The flutter_test default
   // viewport is 800x600, which is ABOVE kWideLayoutBreakpoint (720) and would
   // render the wide sidebar instead; pin a phone-width viewport so the mobile UX
   // under test is what's rendered. The wide layout has its own suite
@@ -252,7 +252,7 @@ void main() {
       await pumpNarrow(tester, container);
       await signIn(tester);
 
-      // The switcher opens on the default (first) channel.
+      // The title starts on the default (first) channel.
       expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
 
       // A send lands in 'general'.
@@ -264,11 +264,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('in-general'), findsOneWidget);
 
-      // Switch to 'random' via the dropdown.
-      await tester.tap(find.byType(DropdownButton<String>));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('random').last);
-      await tester.pumpAndSettle();
+      // Switch to 'random' through the drawer.
+      await selectChannelFromDrawer(tester, 'c2');
 
       // Now on 'random': general's message is off-screen, empty-state shows. No
       // re-subscribe was needed — the repo already subscribed to both channels.
@@ -297,10 +294,7 @@ void main() {
       );
 
       // Switch back to 'general': its message is still cached (round-trip).
-      await tester.tap(find.byType(DropdownButton<String>));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('general').last);
-      await tester.pumpAndSettle();
+      await selectChannelFromDrawer(tester, 'c1');
       expect(find.text('in-general'), findsOneWidget);
       expect(find.text('in-random'), findsNothing);
     },
@@ -325,10 +319,7 @@ void main() {
       await signIn(tester);
 
       // Pick 'random'.
-      await tester.tap(find.byType(DropdownButton<String>));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('random').last);
-      await tester.pumpAndSettle();
+      await selectChannelFromDrawer(tester, 'c2');
       expect(container.read(selectedChannelIdProvider), 'c2');
 
       // 'random' leaves the roster; the channel list refetches.
@@ -375,10 +366,7 @@ void main() {
     await tester.pump();
 
     // Switch to 'random'.
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('random').last);
-    await tester.pumpAndSettle();
+    await selectChannelFromDrawer(tester, 'c2');
 
     // The composer is fresh — the general draft did not ride into 'random'
     // (Composer is keyed by channel id). Fails if the draft carries over.
@@ -401,10 +389,7 @@ void main() {
     await signIn(tester);
 
     // Pick 'random'.
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('random').last);
-    await tester.pumpAndSettle();
+    await selectChannelFromDrawer(tester, 'c2');
     expect(find.widgetWithText(AppBar, 'random'), findsOneWidget);
 
     // Log out (chat surface unmounts → selectedChannelIdProvider auto-disposes).

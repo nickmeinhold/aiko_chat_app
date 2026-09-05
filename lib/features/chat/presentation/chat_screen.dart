@@ -19,17 +19,16 @@ import 'chat_message_pane.dart';
 import 'emoji_shortcodes.dart';
 
 /// At or above this logical width the chat surface shows the Slack/Element-style
-/// left rail ([ChatSidebar]); below it collapses to the phone app-bar dropdown.
+/// left rail ([ChatSidebar]); below it collapses into the app drawer.
 const double kWideLayoutBreakpoint = 720;
 
 /// The fixed width of the wide-layout channel rail.
 const double kSidebarWidth = 268;
 
-/// The chat surface: a conversation switcher + logout in the app bar, a thin
+/// The chat surface: a conversation drawer/title in the app bar, a thin
 /// connection banner, the message list, and the composer. The default is the
-/// first conversation the gateway returns; when more than one NAVIGABLE
-/// CONVERSATION exists — channels ∪ DMs, [navigableChannelsProvider] — the title
-/// becomes a dropdown to switch among them.
+/// first conversation the gateway returns; switching happens through the shared
+/// [ChatSidebar], inline on wide screens and in the drawer on phones.
 ///
 /// "Navigable conversation", never "channel": the island excludes DMs from
 /// `GET /v1/channels`, so anything scoped to [channelsProvider] here silently
@@ -115,26 +114,14 @@ class ChatScreen extends ConsumerWidget {
       // comparable app does — which is what frees the title to mean "this
       // conversation". Wide keeps the sidebar inline and has no drawer.
       drawer: isWide ? null : const Drawer(child: ChatSidebar()),
-      // Wide: NO app bar — the sidebar owns the chrome (server switcher, channels,
-      // settings/logout) and the message pane carries its own slim channel header
-      // (the redundant full-width bar sat below the native macOS title bar). Narrow:
-      // the app bar — the dropdown switcher when there is more than one NAVIGABLE
-      // CONVERSATION (channels ∪ DMs, never channels alone), plus the mute,
-      // search, settings and sign-out actions.
+      // Wide: NO app bar — the sidebar owns the chrome (server switcher,
+      // conversations, settings/logout) and the message pane carries its own
+      // slim channel header (the redundant full-width bar sat below the native
+      // macOS title bar). Narrow: the app bar owns the drawer button, the current
+      // conversation title/details affordance, search and settings.
       appBar: isWide
           ? null
           : AppBar(
-              // Listing channels ∪ DMs is what makes a DM REACHABLE on a phone at
-              // all: the narrow layout has no sidebar, so this dropdown is the
-              // whole navigation surface, and a channels-only item list left
-              // `openDm` able to strand you in a conversation you could neither
-              // return to nor leave (#2798, task #12).
-              //
-              // It also retires the DM gate that used to hide this switcher: that
-              // gate existed because a DM id in `DropdownButton.value` with no
-              // matching item asserts (cage-match #106). The item list now covers
-              // every id that can be active, so the crash is unreachable rather
-              // than dodged — and the gate WAS the trap.
               // The bar rides the SAME settled predicate as the pane. Gating only
               // the pane closed the floor and left the doorbell wired to the wrong
               // house: with one DM in and the channel list still in flight,
@@ -166,11 +153,6 @@ class ChatScreen extends ConsumerWidget {
                       ),
                     ),
               actions: [
-                // Narrow has no sidebar, so the row long-press that mutes a
-                // conversation on wide does not exist here. Without this the
-                // capability would be wide-only — mutable on the desktop, invisible
-                // on the phone, which is where a noisy channel is actually felt.
-                // Mute moved OFF the strip: long-press the conversation title.
                 IconButton(
                   tooltip: 'Search',
                   icon: const Icon(Icons.search),
@@ -205,92 +187,6 @@ class ChatScreen extends ConsumerWidget {
   }
 }
 
-/// Mute/unmute the conversation you are currently reading — the narrow-layout
-/// twin of the sidebar row's long-press menu. One toggle rather than a menu: the
-/// action is instant, reversible, and entirely private, so a confirmation step
-/// would cost more than the mistake it prevents. The icon carries the state, so
-/// a muted conversation announces itself from the bar you are already looking at.
-// A long-press gesture on the dropdown ROWS lived here briefly. Removed at
-// Nick's call: pressing a row in an already-open menu to get a SECOND menu is a
-// menu inside a menu, and the interaction it replaced (long-press the title) is
-// both simpler and already working. The rows are for picking a conversation;
-// that is all they do.
-
-/// Long-press the conversation title to reach the same mute menu the sidebar
-/// rows offer.
-///
-/// This is what let mute leave the app-bar action strip. The gesture already
-/// existed for sidebar rows, but the phone has no sidebar — so the capability
-/// was wide-only and a button was added to compensate. Putting the gesture on
-/// the title makes "long-press a conversation" true on BOTH layouts and gives
-/// the crowded action strip a seat back.
-///
-/// The mute state is derived by the same peer-aware path the button used, so
-/// the two surfaces cannot disagree about the same conversation.
-class ConversationTitleMuteGesture extends ConsumerWidget {
-  const ConversationTitleMuteGesture({
-    super.key,
-    required this.conversation,
-    required this.child,
-  });
-
-  final Channel conversation;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final isDm = ref.watch(dmConversationIdsProvider).contains(conversation.id);
-    final mute = watchConversationMute(
-      ref,
-      conversation.id,
-      peerId: isDm
-          ? dmPeerId(
-              ref.watch(channelRosterProvider(conversation.id)).value,
-              ref.watch(currentUserProvider)?.userId,
-            )
-          : null,
-      hasPeer: isDm,
-    );
-    return MuteGesture(
-      // A CONSTANT key, deliberately NOT keyed by conversation — the opposite of
-      // the sidebar rows, and for the opposite reason. Rows key by id because
-      // they have siblings that reorder, so slot-matching could hand a
-      // recognizer the wrong conversation. A title has exactly one slot and no
-      // siblings; keying it by id instead makes the key CHANGE whenever you
-      // switch conversation, remounting this subtree — including an open
-      // DropdownButton, whose overlay is holding the snapshot the user is
-      // currently choosing from. Same pattern, different structure, opposite
-      // correct answer.
-      key: const Key('mute-gesture-title'),
-      mute: mute,
-      // A muted conversation must still ANNOUNCE itself. The retired app-bar
-      // bell carried that state permanently; a long-press menu only says it once
-      // you have already opened the menu, so removing the button would have left
-      // a silent conversation on a phone looking exactly like a quiet one — the
-      // precise confusion the sidebar's own mute glyph exists to prevent.
-      child: mute.isMuted
-          ? Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(child: child),
-                const SizedBox(width: 6),
-                Icon(
-                  Icons.notifications_off,
-                  size: 16,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ],
-            )
-          : child,
-    );
-  }
-}
-
-// The app-bar mute BUTTON lived here. It existed only because the long-press
-// menu had nowhere to live on a phone — no sidebar, no row to press. The title
-// carries that gesture now (see ConversationTitleMuteGesture), so the button is
-// gone and the action strip is one icon lighter.
-
 class _ConversationTitle extends ConsumerWidget {
   const _ConversationTitle({required this.active});
 
@@ -302,12 +198,36 @@ class _ConversationTitle extends ConsumerWidget {
     if (a == null) return const Text('Chat');
     // By SOURCE, through the one door (#136) — a DM whose `kind` says otherwise
     // would otherwise render `a.name`, which for a DM is the empty string.
-    if (!ref.watch(dmConversationIdsProvider).contains(a.id)) {
-      return Text(a.name);
-    }
+    final isDm = ref.watch(dmConversationIdsProvider).contains(a.id);
     final myId = ref.watch(currentUserProvider)?.userId;
     final roster = ref.watch(channelRosterProvider(a.id)).value;
-    return Text(dmPeerTitle(roster, myId));
+    final title = isDm ? dmPeerTitle(roster, myId) : a.name;
+
+    // A muted conversation must ANNOUNCE itself from the bar you are already
+    // looking at. Mute now lives one tap away in the details, which means the
+    // state is only READABLE there — and a silenced conversation that looks
+    // exactly like a quiet one is the failure the sidebar's own mute glyph
+    // exists to prevent, on the layout that has no sidebar. The glyph is the
+    // announcement; the tap is the control.
+    final mute = watchConversationMute(
+      ref,
+      a.id,
+      peerId: isDm ? dmPeerId(roster, myId) : null,
+      hasPeer: isDm,
+    );
+    if (!mute.isMuted) return Text(title);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(child: Text(title)),
+        const SizedBox(width: 6),
+        Icon(
+          Icons.notifications_off,
+          size: 16,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ],
+    );
   }
 }
 
