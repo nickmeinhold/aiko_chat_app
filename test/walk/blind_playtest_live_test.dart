@@ -13,10 +13,35 @@
 // `blind_playtest_self_test.dart`, including its must-fail arms. This file is
 // about what the app looks like to someone who has never seen it.
 //
-// Read the failures here as reports about DISCOVERABILITY, not as a red suite.
-// A goal the agent cannot reach is a goal a person may not reach either — that
-// is the finding, and the trail of PNGs under /tmp/aiko-playtest is how you
-// check whether you agree with it.
+// WHAT THIS FILE CAN AND CANNOT GUARANTEE, because it used to confuse the two.
+//
+// Three claims live in this directory wearing the same clothes, and only two of
+// them are guarantees:
+//
+//   A PATH EXISTS, and costs N presses to someone who knows where it is.
+//   Deterministic, no model. That is `blind_playtest_reachable_test`, and it is
+//   the strongest thing here — a real gate on the app that goes red if the path
+//   breaks.
+//
+//   THE INSTRUMENT IS NOT BROKEN. Deterministic, proved for free with its own
+//   must-fail arms in `blind_playtest_self_test`.
+//
+//   A NAIVE READER WILL FIND IT. This file. NOT guaranteeable — not with a
+//   better threshold, not with a cleverer assertion. It is one sample from a
+//   distribution, and one sample has no error bars. The sweep scored
+//   `mute-conversation` NOT REACHED in 6; a later run reached it in 6. Those two
+//   numbers do not disagree with each other, because there is not yet anything
+//   there to disagree about.
+//
+// So this file ASSERTS ONLY THAT THE INSTRUMENT RAN, and PRINTS the number. A
+// measurement whose value is longitudinal — is this getting easier or harder
+// across builds — has no business being pass/fail on a single run. Its home is a
+// record you keep, not a gate you trip. The previous version asserted
+// `presses <= 3`, a threshold frozen before any baseline existed, which is the
+// thing the sweep's own header refuses to do one file over.
+//
+// The trail of PNGs under /tmp/aiko-playtest is how you check whether you agree
+// with what it found.
 @Tags(['playtest'])
 library;
 
@@ -68,20 +93,17 @@ void main() {
       print('\n$run\n${run.moves.map((m) => '  $m').join('\n')}\n'
           'trail: $_trails/silence-general\n');
 
+      // The only assertion: the instrument ran. Reachability and press count are
+      // MEASUREMENTS printed above, not gates — see the header. A model that
+      // hunts for six presses is telling us something about the app; a suite
+      // that goes red for it is telling us nothing, and trains us to stop
+      // reading it.
       expect(
-        run.reached,
-        isTrue,
+        run.moves,
+        isNotEmpty,
         reason:
-            'the mute never landed in the store — either it cannot be reached '
-            'from the pixels, or it can only be reached by someone who already '
-            'knows where it is. Look at the trail.',
-      );
-      // Discoverability as a number. The designed path is two presses — hold
-      // the app-bar title, press mute — so more than three is measured hunting.
-      expect(
-        run.presses,
-        lessThanOrEqualTo(3),
-        reason: 'reached, but took ${run.presses} presses — that is a hunt',
+            'the agent produced no moves at all — that is the instrument '
+            'failing, which is the one thing this file does gate on',
       );
     },
   );
