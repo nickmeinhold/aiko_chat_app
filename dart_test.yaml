@@ -19,7 +19,16 @@
 # dropped. Run it deliberately:
 #
 #   flutter test --run-skipped --tags deep
+# `playtest` marks the blind playtester runs — a model looking at screenshots of
+# the app and guessing where to press. No island and no credentials, but it
+# shells out to `claude` and takes wall-clock per move, so it is deliberate
+# rather than automatic. Its failures are DISCOVERABILITY reports, not a red
+# suite: read the PNG trail under /tmp/aiko-playtest before believing one.
+#
+#   flutter test --run-skipped --tags playtest
 tags:
+  playtest:
+    skip: "blind playtester — flutter test --run-skipped --tags playtest"
   deep:
     skip: "pre-submission sweep — flutter test --run-skipped --tags deep"
   live:
