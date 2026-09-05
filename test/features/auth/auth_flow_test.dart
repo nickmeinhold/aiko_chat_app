@@ -17,6 +17,23 @@ void main() {
     await initializeTestEnvironment();
   });
 
+  // `testPrefs` is SUITE-WIDE, so the passkey hint written by any test that
+  // completes a ceremony leaks into every test after it — and the hint flips which
+  // ingress the login screen emphasises, so the leak shows up as "FilledButton not
+  // found" in a test that never touched auth. Clear it per-test, same pattern (and
+  // same reason) as mute_test clearing its mute / read-mark keys.
+  //
+  // The persistence itself is CORRECT — surviving a restart is the feature. This is
+  // the harness paying for state that production wants.
+  setUp(() async {
+    for (final k in testPrefs
+        .getKeys()
+        .where((k) => k.startsWith('aiko_passkey_seen_'))
+        .toList()) {
+      await testPrefs.remove(k);
+    }
+  });
+
   test(
     'the bundled EULA asset carries the Apple 1.2 zero-tolerance clause',
     () async {

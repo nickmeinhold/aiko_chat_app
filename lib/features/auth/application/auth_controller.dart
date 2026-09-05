@@ -96,6 +96,31 @@ class AuthController extends AsyncNotifier<AppUser?> {
   PasskeyAuthClient get _passkey => ref.read(passkeyAuthClientProvider);
   CachedUserStore get _cachedUser => ref.read(cachedUserStoreProvider);
 
+  /// Remember that a passkey ceremony succeeded for the ACTIVE island, so the
+  /// login screen can lead with sign-in next time.
+  ///
+  /// CANNOT FAIL THE CEREMONY, and the catch is the whole point rather than
+  /// laziness. This sits on the critical auth path purely to record which BUTTON
+  /// to emphasise next launch — a cosmetic hint. The first cut of it had no
+  /// guard, and a container without a SharedPreferences override made
+  /// `passkeyHintStoreProvider` throw, which propagated out of
+  /// `signInWithPasskey` and turned a SUCCESSFUL sign-in into a failed one. A
+  /// decoration was able to break authentication.
+  ///
+  /// So it fails OPEN, which is the correct direction for weak-signal capture
+  /// (an irreversible mutation would fail closed; this is the opposite kind of
+  /// write). The cost of a lost hint is a de-emphasised — never absent — sign-in
+  /// affordance, which is the same safe state a fresh install is already in.
+  Future<void> _markPasskeySeen() async {
+    try {
+      await ref
+          .read(passkeyHintStoreProvider)
+          .markSeen(ref.read(configProvider).httpBaseUrl);
+    } catch (_) {
+      // Deliberately swallowed — see above. Never let this reach the ceremony.
+    }
+  }
+
   @override
   Future<AppUser?> build() async {
     // Reconcile signal (1): the WSS terminal-auth state. Only `unauthenticated`
@@ -341,6 +366,10 @@ class AuthController extends AsyncNotifier<AppUser?> {
     } on AuthCeremonyCancelled {
       return prior; // user dismissed the sheet — no-op, restore prior state
     }
+    // A completed ceremony PROVES a usable passkey is on this device, so record
+    // it BEFORE the server round-trip: if the gateway call then fails, the
+    // credential still exists and the login screen should still lead with sign-in.
+    await _markPasskeySeen();
     final outcome = await _rest.finishPasskeyAuthentication(
       challenge.state,
       assertion,
@@ -362,6 +391,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
     } on AuthCeremonyCancelled {
       return prior; // user dismissed the sheet — no-op, restore prior state
     }
+    await _markPasskeySeen();
     final outcome = await _rest.finishPasskeyRegistration(
       challenge.state,
       attestation,

@@ -83,7 +83,7 @@ void main() {
       expect(find.widgetWithText(AppBar, 'general'), findsNothing);
       expect(find.widgetWithText(AppBar, 'Settings'), findsNothing);
       expect(
-        find.widgetWithText(FilledButton, 'Create a passkey'),
+        find.byKey(const Key('login-screen')),
         findsOneWidget,
       ); // login screen is back
     },

@@ -178,6 +178,30 @@ Future<void> pumpApp(WidgetTester tester, ProviderContainer container) async {
 /// immediately navigates to chat (the register button would instead land on the
 /// claim-handle screen — first-passkey-creates-account).
 Future<void> signIn(WidgetTester tester) async {
-  await tester.tap(find.text('Already have a passkey? Sign in'));
+  // Tap the sign-in ingress WHATEVER IT IS CALLED. The login screen now swaps
+  // which action is primary based on whether a passkey ceremony has already
+  // succeeded on this device, so its label is 'Already have a passkey? Sign in'
+  // on a fresh one and 'Sign in with your passkey' on a returning one.
+  //
+  // This helper used to tap the first string literally, which coupled every
+  // caller to a label rather than to an INTENT: the moment a test signed in
+  // once, `testPrefs` carried the hint forward and every later signIn() in that
+  // file tapped a widget that no longer existed. One string, 15 files.
+  await tapSignIn(tester);
   await tester.pumpAndSettle();
+}
+
+/// Tap the sign-in ingress WITHOUT settling.
+///
+/// Split out because some tests assert on the UNSETTLED window — a pane showing a
+/// CircularProgressIndicator never settles, and that is the assertion. Those sites
+/// drive fixed frames themselves, so a helper that calls `pumpAndSettle` hangs
+/// them. Same label-agnostic lookup as [signIn].
+Future<void> tapSignIn(WidgetTester tester) async {
+  final returning = find.text('Sign in with your passkey');
+  await tester.tap(
+    returning.evaluate().isNotEmpty
+        ? returning
+        : find.text('Already have a passkey? Sign in'),
+  );
 }

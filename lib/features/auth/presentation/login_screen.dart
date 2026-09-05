@@ -45,6 +45,23 @@ class LoginScreen extends ConsumerWidget {
     // a way to change it, so a user stranded on an unreachable server can switch
     // away without reinstalling. The route is logged-out-reachable (see router).
     final islandHost = islandHostLabel(ref.watch(configProvider).httpBaseUrl);
+    // Synchronous read off already-loaded prefs — an async one would render the
+    // wrong emphasis for a frame and then swap under the user's thumb.
+    // Keyed on the BASE URL, not the display label: the label is for humans and
+    // could collapse two distinct islands onto one string, which would leak one
+    // island's hint onto another.
+    // Same fail-open rule as the write side: a missing prefs binding must never
+    // brick the login WALL — that would make a cosmetic hint able to lock a user
+    // out of the app entirely. No evidence reads as "fresh device", which is the
+    // safe emphasis (Create primary, sign-in still reachable).
+    bool passkeySeenHere;
+    try {
+      passkeySeenHere = ref
+          .watch(passkeyHintStoreProvider)
+          .seenFor(ref.watch(configProvider).httpBaseUrl);
+    } catch (_) {
+      passkeySeenHere = false;
+    }
 
     void passkeySignIn() {
       ref.read(loginActionProvider.notifier).set(AuthAction.signIn);
@@ -60,6 +77,13 @@ class LoginScreen extends ConsumerWidget {
       // No AppBar — a passkey-first ingress doesn't need a Material title bar;
       // the content stands on its own. SafeArea keeps it clear of the status bar
       // now that nothing sits above it.
+      // A STABLE handle for "we are at the login wall", so tests assert the
+      // DESTINATION rather than a button's wording. Several logout / account-
+      // deletion tests asserted `widgetWithText(FilledButton, 'Create a passkey')`
+      // to mean "back at login" — which silently became false when the primary
+      // ingress started swapping with the passkey hint (the hint survives logout
+      // by design, because the passkey does).
+      key: const Key('login-screen'),
       body: SafeArea(
         child: Column(
           children: [
@@ -80,19 +104,50 @@ class LoginScreen extends ConsumerWidget {
                         // Passkeys need a platform authenticator (iOS
                         // Authentication Services / Android Credential Manager) —
                         // no web target ships, so nothing renders on web.
+                        // EMPHASIS FOLLOWS THE DEVICE, and the order is the
+                        // whole point. An Apple reviewer with a fresh install
+                        // tapped "Already have a passkey? Sign in" — which on a
+                        // device with no passkey can only fail — and 0.0.4 was
+                        // REJECTED on what they saw next. Our own review notes
+                        // said to tap Create; the screen gave both options equal
+                        // standing and let them pick the one that cannot work.
+                        //
+                        // So the likely-correct ingress is the FilledButton and
+                        // the other is a TextButton, swapped on the hint.
+                        //
+                        // The sign-in affordance is NEVER removed, only demoted.
+                        // A passkey outlives the app: reinstall, or restore a new
+                        // device from iCloud Keychain / Google Password Manager,
+                        // and a REAL credential exists with no local hint. Hiding
+                        // sign-in there would strand a returning user holding a
+                        // valid passkey — trading this rejection for a worse bug.
+                        // `seen == false` means "no evidence", never "no passkey".
                         if (!kIsWeb) ...[
-                          FilledButton.icon(
-                            onPressed: busy ? null : passkeyRegister,
-                            icon: const Icon(Icons.fingerprint),
-                            label: const Text('Create a passkey'),
-                          ),
-                          const SizedBox(height: 8),
-                          TextButton(
-                            onPressed: busy ? null : passkeySignIn,
-                            child: const Text(
-                              'Already have a passkey? Sign in',
+                          if (passkeySeenHere) ...[
+                            FilledButton.icon(
+                              onPressed: busy ? null : passkeySignIn,
+                              icon: const Icon(Icons.fingerprint),
+                              label: const Text('Sign in with your passkey'),
                             ),
-                          ),
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: busy ? null : passkeyRegister,
+                              child: const Text('Create a new passkey'),
+                            ),
+                          ] else ...[
+                            FilledButton.icon(
+                              onPressed: busy ? null : passkeyRegister,
+                              icon: const Icon(Icons.fingerprint),
+                              label: const Text('Create a passkey'),
+                            ),
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: busy ? null : passkeySignIn,
+                              child: const Text(
+                                'Already have a passkey? Sign in',
+                              ),
+                            ),
+                          ],
                         ],
                         if (busy) ...[
                           const SizedBox(height: 16),
