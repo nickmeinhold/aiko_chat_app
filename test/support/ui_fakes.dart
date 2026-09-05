@@ -107,6 +107,9 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<PasskeyChallenge> startPasskeyRegistration() async {
     passkeyRegisterStartCalls++;
+    if (startPasskeyRegistrationThrows != null) {
+      throw startPasskeyRegistrationThrows!;
+    }
     return (state: 'reg-state', optionsJson: '{"challenge":"reg-chal"}');
   }
 
@@ -128,6 +131,9 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<PasskeyChallenge> startPasskeyAuthentication() async {
     passkeyAuthStartCalls++;
+    if (startPasskeyAuthenticationThrows != null) {
+      throw startPasskeyAuthenticationThrows!;
+    }
     return (state: 'auth-state', optionsJson: '{"challenge":"auth-chal"}');
   }
 
@@ -149,6 +155,13 @@ class FakeRestApi implements ChatRestApi {
 
   /// If set, `addPasskey` throws this (e.g. `PasskeyAlreadyRegistered`).
   Object? addPasskeyThrows;
+
+  /// Make the FIRST server call of each ingress fail — the offline case. The
+  /// ceremony hooks on FakePasskeyAuthClient cover authenticator failures; these
+  /// cover "the island was unreachable before we ever got to the authenticator",
+  /// which is what a user with no signal actually hits.
+  Object? startPasskeyRegistrationThrows;
+  Object? startPasskeyAuthenticationThrows;
   int addPasskeyCalls = 0;
   String? lastAddPasskeyState;
   String? lastAddPasskeyCredential;

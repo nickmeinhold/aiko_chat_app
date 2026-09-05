@@ -18,6 +18,8 @@ import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
+import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
+    show NetworkUnavailable;
 import 'package:aiko_chat_app/features/auth/presentation/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -191,6 +193,112 @@ void main() {
             'a passkey is scoped to a relying party; one island must never vouch '
             'for another',
       );
+    });
+  });
+
+  /// Drive an ingress with the ISLAND UNREACHABLE — the offline case — and return
+  /// the container so a test can read the rendered banner.
+  Future<void> pumpOfflineIngress(
+    WidgetTester tester, {
+    required bool signInPath,
+  }) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final rest = FakeRestApi();
+    if (signInPath) {
+      rest.startPasskeyAuthenticationThrows = const NetworkUnavailable();
+    } else {
+      rest.startPasskeyRegistrationThrows = const NetworkUnavailable();
+    }
+    late final ProviderContainer container;
+    container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        restApiProvider.overrideWithValue(rest),
+        transportProvider.overrideWithValue(FakeChatTransport()),
+        passkeyAuthClientProvider.overrideWithValue(FakePasskeyAuthClient()),
+        tokenProviderProvider.overrideWithValue(
+          DefaultTokenProvider(
+            store: InMemoryTokenStore(),
+            remoteRefresh: (_) async => 'access2',
+            onUnauthenticated: () {},
+          ),
+        ),
+        connectivityServiceProvider.overrideWithValue(FakeConnectivityService()),
+        reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
+        islandReachableProvider.overrideWith((ref) => Stream.value(true)),
+      ],
+    );
+    addTearDown(container.dispose);
+    expect(await container.read(authControllerProvider.future), isNull);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: LoginScreen()),
+      ),
+    );
+    // TAP THE REAL BUTTON, do not drive the notifier. `loginActionProvider` is
+    // set inside the button callbacks, and the offline sentence is chosen from
+    // it — so calling the controller directly leaves the action at its default
+    // and silently renders the WRONG ingress's message. Found exactly that way:
+    // the create-path arm read back sign-in's text.
+    await tester.tap(
+      signInPath
+          ? find.text('Already have a passkey? Sign in')
+          : find.text('Create a passkey'),
+    );
+    await tester.pump();
+    await tester.pump();
+  }
+
+  // OFFLINE, ON BOTH INGRESSES. `authErrorText` carries three DIFFERENT offline
+  // sentences (create / sign-in / claim-handle) and, until this group, not one of
+  // them was asserted — only the mapping BENEATH them was
+  // (me_network_mapping_test, passkey_network_mapping_test prove a connection
+  // failure becomes NetworkUnavailable).
+  //
+  // That is precisely the gap that produced the 2026-09-05 App Store rejection:
+  // the plumbing was right and the sentence the user MET was wrong, and nothing
+  // looked at the sentence. Tested correctness beneath an untested surface is how
+  // a false message survives to a reviewer.
+  group('offline on both ingresses', () {
+    testWidgets('SIGN IN with no connection says so, and blames nobody', (
+      tester,
+    ) async {
+      await pumpOfflineIngress(tester, signInPath: true);
+
+      expect(find.textContaining("You're offline"), findsOneWidget);
+      // Must not mis-attribute: an unreachable island is not a broken passkey,
+      // not a missing credential, and not a pending domain association.
+      expect(find.textContaining('domain association'), findsNothing);
+      expect(find.textContaining('No passkey found'), findsNothing);
+    });
+
+    testWidgets('CREATE with no connection explains the one-time need', (
+      tester,
+    ) async {
+      await pumpOfflineIngress(tester, signInPath: false);
+
+      // The create-path message is deliberately different from sign-in's: making
+      // an account needs the network ONCE, and saying so is what stops a user
+      // concluding the app is online-only.
+      expect(find.textContaining('needs internet just this once'), findsOneWidget);
+      expect(find.textContaining('domain association'), findsNothing);
+    });
+
+    testWidgets('the two ingresses do NOT share one offline sentence', (
+      tester,
+    ) async {
+      await pumpOfflineIngress(tester, signInPath: true);
+      final signInOffline = tester
+          .widgetList<Text>(find.textContaining('offline'))
+          .map((t) => t.data)
+          .join();
+      expect(signInOffline, isNotEmpty);
+      // Guards the per-action switch in authErrorText: collapsing these to one
+      // string would silently drop the create-path's "just this once" promise,
+      // and no other assertion would notice.
+      expect(signInOffline, isNot(contains('just this once')));
     });
   });
 
