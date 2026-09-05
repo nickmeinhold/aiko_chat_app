@@ -8,6 +8,7 @@ import 'package:aiko_chat_app/features/notifications/domain/push_token_source.da
 import 'package:aiko_chat_app/features/settings/application/island_directory_provider.dart';
 import 'package:aiko_chat_app/main.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle, MethodChannel;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -204,4 +205,39 @@ Future<void> tapSignIn(WidgetTester tester) async {
         ? returning
         : find.text('Already have a passkey? Sign in'),
   );
+}
+
+/// Open the narrow-layout conversation drawer through the app bar's real
+/// navigation affordance.
+Future<void> openChatDrawer(WidgetTester tester) async {
+  final button = find.byType(DrawerButton);
+  expect(
+    button,
+    findsOneWidget,
+    reason: 'narrow chat navigation should live behind the app-bar drawer button',
+  );
+  await tester.tap(button);
+  await tester.pumpAndSettle();
+}
+
+Future<void> closeChatDrawer(WidgetTester tester) async {
+  final drawer = find.byType(Drawer);
+  expect(drawer, findsOneWidget, reason: 'chat drawer should be open');
+  Navigator.of(tester.element(drawer)).pop();
+  await tester.pumpAndSettle();
+}
+
+Future<void> selectChannelFromDrawer(
+  WidgetTester tester,
+  String channelId,
+) async {
+  await openChatDrawer(tester);
+  await tester.tap(find.byKey(Key('sidebar-channel-$channelId')));
+  await tester.pumpAndSettle();
+}
+
+Future<void> selectDmFromDrawer(WidgetTester tester, String dmId) async {
+  await openChatDrawer(tester);
+  await tester.tap(find.byKey(Key('sidebar-dm-$dmId')));
+  await tester.pumpAndSettle();
 }

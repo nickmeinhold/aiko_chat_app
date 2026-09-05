@@ -1,20 +1,17 @@
 // Acceptance tests for #2798 task #12 — narrow-layout DM navigation.
 //
-// The narrow layout has no sidebar, so the app-bar dropdown IS the whole
-// navigation surface. Until this slice it listed `channelsProvider` only — and
-// the island excludes DMs from `GET /v1/channels` by design — so on a phone a DM
-// had no row anywhere: `openDm` could drop you into a conversation you could
-// neither return to nor leave. These lock the two halves of that capability:
+// The narrow layout reaches the shared conversation rail through the app-bar
+// drawer. Before the rail covered phones, `openDm` could drop you into a
+// conversation you could neither return to nor leave. These lock the two halves
+// of that capability:
 //
-//   ENTRY   — a DM is in the dropdown and picking it makes it active;
-//   LEAVE   — with a DM active the switcher is still there, and picking a
-//             channel gets you out (the old code gated the switcher off
-//             entirely whenever a DM was active, which is what made it a trap);
+//   ENTRY   — a DM is in the drawer and picking it makes it active;
+//   LEAVE   — with a DM active the drawer is still reachable, and picking a
+//             channel gets you out;
 //
 // plus the properties that stop the two surfaces drifting: every id that can be
-// ACTIVE has an item (the DropdownButton `value` assertion, which the old gate
-// was papering over), the aggregate unread dot counts DMs, and a peer-muted DM
-// renders muted in this menu too — the menu is the only mute surface on a phone.
+// ACTIVE has a drawer row, unread row badges count DMs, and a peer-muted DM
+// renders muted in the drawer too.
 import 'dart:async';
 
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
@@ -96,14 +93,12 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
   }
 
-  /// Open the app-bar dropdown menu (taps the collapsed button).
-  Future<void> openMenu(WidgetTester tester) async {
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
+  Future<void> openConversationDrawer(WidgetTester tester) async {
+    await openChatDrawer(tester);
   }
 
   testWidgets(
-    'ENTRY: the DM is listed in the narrow dropdown, under a header',
+    'ENTRY: the DM is listed in the narrow drawer, under a header',
     (tester) async {
       setNarrow(tester);
       final container = makeContainer(
@@ -116,7 +111,7 @@ void main() {
       await signIn(tester);
       await tester.pumpAndSettle();
 
-      await openMenu(tester);
+      await openConversationDrawer(tester);
 
       // Both channels, the section boundary, and the DM titled by its peer's
       // CURRENT handle (a DM has no server name — identity=key, ADR-0004).
@@ -141,16 +136,14 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    await openMenu(tester);
-    await tester.tap(find.text('alice'));
-    await tester.pumpAndSettle();
+    await selectDmFromDrawer(tester, 'dm1');
 
     // Through the SAME mutator as a channel, and not cleared by the self-heal.
     expect(container.read(selectedChannelIdProvider), 'dm1');
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('LEAVE: with the DM active the switcher is still shown, and a '
+  testWidgets('LEAVE: with the DM active the drawer is still reachable, and a '
       'channel pick gets you out', (tester) async {
     setNarrow(tester);
     final container = makeContainer(
@@ -166,19 +159,16 @@ void main() {
     container.read(selectedChannelIdProvider.notifier).select('dm1');
     await tester.pumpAndSettle();
 
-    // The trap this slice removes: the switcher used to be gated OFF whenever a
-    // DM was active, leaving a phone user with no control at all.
-    expect(find.byType(DropdownButton<String>), findsOneWidget);
+    // The trap this slice removes: a DM active on a phone must still leave a
+    // visible way back to the conversation list.
+    expect(find.byTooltip('Open navigation menu'), findsOneWidget);
 
-    await openMenu(tester);
-    await tester.tap(find.text('random'));
-    await tester.pumpAndSettle();
+    await selectChannelFromDrawer(tester, 'c2');
 
     expect(container.read(selectedChannelIdProvider), 'c2');
   });
 
-  testWidgets('every id that can be ACTIVE has an item (no DropdownButton '
-      'value assertion for any navigable conversation)', (tester) async {
+  testWidgets('every id that can be ACTIVE has a drawer row', (tester) async {
     setNarrow(tester);
     final container = makeContainer(
       rest: restWithDm(),
@@ -192,26 +182,31 @@ void main() {
 
     // Walk EVERY navigable conversation through the active slot. This is the
     // invariant the removed gate was standing in for, stated directly: the
-    // switcher's item set must cover the resolver's list, or Flutter asserts.
+    // drawer row set must cover the resolver's list.
     for (final c in container.read(navigableChannelsProvider)) {
       container.read(selectedChannelIdProvider.notifier).select(c.id);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: 'active=${c.id}');
+      await openConversationDrawer(tester);
       expect(
-        find.byType(DropdownButton<String>),
+        find.byKey(
+          Key(
+            c.id == 'dm1' ? 'sidebar-dm-${c.id}' : 'sidebar-channel-${c.id}',
+          ),
+        ),
         findsOneWidget,
         reason: 'active=${c.id}',
       );
+      await closeChatDrawer(tester);
     }
   });
 
   // A conversation listed by BOTH island endpoints. The island serves DMs only
   // through GET /v1/dm and excludes them from GET /v1/channels, so this is a
-  // contract violation — but it lands in the app bar that IS a phone's whole
-  // navigation surface, where a repeat is not a cosmetic duplicate row: two items
-  // sharing a `value` trips DropdownButton's exactly-one-match assertion just as
-  // surely as zero items do. Deduped once in navigableChannelsProvider, so every
-  // consumer gets the same answer (cage-match #136, Kelvin).
+  // contract violation — but it lands in the conversation list where a repeat is
+  // not cosmetic: one id would produce two rows with two possible visual states.
+  // Deduped once in navigableChannelsProvider, so every consumer gets the same
+  // answer (cage-match #136, Kelvin).
   FakeRestApi restWithLeak(ChannelKind leakedKind) {
     final rest = FakeRestApi(
       channels: [
@@ -248,11 +243,14 @@ void main() {
         expect(navigable.where((c) => c.id == 'dm1').length, 1);
         expect(navigable.firstWhere((c) => c.id == 'dm1').kind, ChannelKind.dm);
 
-        // No assertion, switcher up, and selecting the doubled id resolves cleanly.
+        // No assertion, one drawer row, and selecting the doubled id resolves
+        // cleanly.
         expect(tester.takeException(), isNull);
-        expect(find.byType(DropdownButton<String>), findsOneWidget);
-        container.read(selectedChannelIdProvider.notifier).select('dm1');
-        await tester.pumpAndSettle();
+        await openConversationDrawer(tester);
+        expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
+        expect(find.byKey(const Key('sidebar-channel-dm1')), findsNothing);
+        await closeChatDrawer(tester);
+        await selectDmFromDrawer(tester, 'dm1');
         expect(tester.takeException(), isNull);
         expect(container.read(selectedChannelIdProvider), 'dm1');
       },
@@ -289,15 +287,15 @@ void main() {
       expect(sections.rooms.map((c) => c.id), ['c1', 'c2']);
 
       // ...and it renders as a DM row: peer-titled, under the header.
-      await openMenu(tester);
+      await openConversationDrawer(tester);
       expect(find.text('Direct messages'), findsOneWidget);
       expect(find.text('alice'), findsWidgets);
-      await tester.tap(find.text('alice'));
-      await tester.pumpAndSettle();
+      await closeChatDrawer(tester);
+      await selectDmFromDrawer(tester, 'dm1');
 
       // Once ACTIVE it must stay a DM on every surface. These three used to ask
       // `channel.kind` individually, so a mis-kinded DM was peer-titled in the
-      // dropdown and then lost both its title and its peer-aware mute the moment
+      // list and then lost both its title and its peer-aware mute the moment
       // you entered it (cage-match #136, Tesla + Carnot).
       expect(find.text('alice'), findsWidgets); // title, not the empty DM name
       container
@@ -305,19 +303,16 @@ void main() {
           .setUserMuted('u2', muted: true, expectUserId: null);
       await tester.pumpAndSettle();
       // Peer-aware: only a peer-aware read sees an ACCOUNT mute on this row.
-      // The control is the long-press menu now rather than an app-bar button,
-      // so the peer-awareness shows up in the menu's own words — which is where
-      // it has to be right, since that sentence is what tells you unmuting here
-      // would make this person audible everywhere.
-      await tester.longPress(find.byKey(const Key('mute-gesture-title')));
+      // The phone control is the details screen now, so the peer-awareness shows
+      // up in that screen's own words — which is where it has to be right, since
+      // that sentence is what tells you unmuting here would make this person
+      // audible everywhere.
+      await tester.tap(find.text('alice').first);
       await tester.pumpAndSettle();
       expect(
         find.textContaining('This person is muted everywhere'),
         findsOneWidget,
       );
-      // Close the menu so it cannot leak into a later expectation.
-      Navigator.of(tester.element(find.text('Unmute').last)).pop();
-      await tester.pumpAndSettle();
     });
   }
 
@@ -411,10 +406,9 @@ void main() {
     // about to leave (cage-match #136, Tesla).
     expect(find.text('alice'), findsNothing);
     // The conversation control must not exist before the conversation it names
-    // is settled. That control is the title's long-press gesture now, so this
-    // asks for ITS absence rather than the retired button's.
-    expect(find.byKey(const Key('appbar-mute-conversation')), findsNothing);
-    expect(find.byKey(const Key('mute-gesture-title')), findsNothing);
+    // is settled. That control lives on the details screen now, and the title is
+    // not tappable until the same readiness gate opens.
+    expect(find.text('Mute this conversation'), findsNothing);
 
     channelGate.complete();
     await tester.runAsync(
@@ -478,23 +472,12 @@ void main() {
     );
   });
 
-  testWidgets('opening the switcher fetches nothing — the DM peer is already '
-      'known', (tester) async {
+  testWidgets('opening the drawer shows the DM peer title', (tester) async {
     setNarrow(tester);
-    // Written while chasing a reported "the drop-down kind of flickers as it
-    // appears", on the theory that the DM row mounts at menu-open, starts its
-    // GET /members then, and shows `dmPeerTitle`'s neutral placeholder until it
-    // lands. THAT THEORY WAS WRONG, and this test is what disproved it: the
-    // roster is already resolved before the menu opens, because the aggregate
-    // unread dot reads `channelUnreadCountProvider` for every non-active
-    // conversation — including DMs — from the collapsed switcher, which warms the
-    // peer-aware mute path and the roster with it. (The real cause was Flutter's
-    // DropdownButton staggering its items' fade-in; see task #32.)
-    //
-    // Kept, because the property is worth holding on its own: no GET /members on
-    // the interaction path, so a DM row can never render its placeholder title.
-    // A first cut asserted `listMembersCalls > 0` before opening, which passed
-    // for the wrong reason — that counter also ticks for the ACTIVE channel.
+    // The drawer is lazy on a phone, so opening it may be the first time a
+    // non-active DM row asks for its roster. What matters to the user is the
+    // settled frame: the row is titled by the peer, not by a placeholder or the
+    // empty DM channel name.
     final rest = restWithDm();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
@@ -503,37 +486,19 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    // The discriminating observable is WHEN the roster is fetched, so measure the
-    // fetch count across the open. (A first cut asserted `listMembersCalls > 0`
-    // before opening and passed against the unfixed code — that counter also
-    // ticks for the ACTIVE channel's roster, which the message pane resolves for
-    // sender names. It measured something real and irrelevant.)
-    final beforeOpen = rest.listMembersCalls;
+    await openConversationDrawer(tester);
 
-    await openMenu(tester);
-
-    // Opening the switcher fetched NOTHING: the DM's peer was already known, so
-    // the row is peer-titled on the frame it appears instead of relabelling from
-    // the placeholder a round-trip later.
-    expect(
-      rest.listMembersCalls,
-      beforeOpen,
-      reason:
-          'opening the switcher must not put a GET /members on the '
-          'interaction path',
-    );
     expect(find.text('alice'), findsWidgets);
     expect(find.text('Direct message'), findsNothing);
   });
 
-  testWidgets('no dropdown-of-one when the duplicate is the ONLY conversation', (
+  testWidgets('a duplicate-only conversation appears once in the drawer', (
     tester,
   ) async {
     setNarrow(tester);
-    // The switcher's EXISTENCE gate has to read the same deduped list its ITEMS
-    // do. When it read the raw [...channels, ...dms], one conversation listed
-    // twice counted as two and drew a switcher over a single item — the chrome
-    // this layout explicitly refuses (cage-match #136, Tesla + Carnot).
+    // The drawer reads the same deduped list as every active-conversation
+    // resolver. When the raw [...channels, ...dms] list leaked through, a single
+    // DM could draw two rows with one id.
     final rest = FakeRestApi(
       channels: const [Channel(id: 'dm1', name: '', kind: ChannelKind.dm)],
     );
@@ -549,9 +514,12 @@ void main() {
     expect(container.read(navigableChannelsProvider).length, 1);
     expect(find.byType(DropdownButton<String>), findsNothing);
     expect(find.text('alice'), findsOneWidget); // a plain title instead
+    await openConversationDrawer(tester);
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
+    expect(find.byKey(const Key('sidebar-channel-dm1')), findsNothing);
   });
 
-  testWidgets('a conversation vanishing while the menu is OPEN does not assert', (
+  testWidgets('a conversation vanishing while the drawer is open does not assert', (
     tester,
   ) async {
     setNarrow(tester);
@@ -565,13 +533,11 @@ void main() {
 
     container.read(selectedChannelIdProvider.notifier).select('dm1');
     await tester.pumpAndSettle();
-    await openMenu(tester);
+    await openConversationDrawer(tester);
 
-    // The DM disappears from under the user's thumb. `value` and `items` are two
-    // currents that must not meet out of phase: they are derived in the SAME
-    // build from the SAME list (active comes from navigable, items partition it),
-    // so the assertion is unreachable by construction — this pins that rather
-    // than leaving it narrated (cage-match #136, Tesla).
+    // The DM disappears from under the user's thumb. The drawer is live, not a
+    // retained overlay snapshot, so the row should vanish and the pick should
+    // self-heal rather than preserving a ghost selection.
     rest.dms = const [];
     container.invalidate(dmsProvider);
     await tester.runAsync(
@@ -583,31 +549,14 @@ void main() {
     // The pick self-heals to a real conversation rather than dangling.
     expect(container.read(selectedChannelIdProvider), isNot('dm1'));
 
-    // ...and TAPPING the ghost row must not resurrect it. The overlay is still
-    // offering `alice` from the snapshot it took when the menu opened, and
-    // `onChanged` runs against the LIVE widget. Writing that dead id back would
-    // leave the display healed (resolveActive falls back) while the Notifier
-    // stays poisoned — and `ref.listen` would not fire again to clean it, so the
-    // user gets yanked into that conversation the moment it is re-minted. Not
-    // asserting the tap was the gap: hearing the two currents without throwing
-    // the switch (cage-match #136, Tesla).
-    final healed = container.read(selectedChannelIdProvider);
-    // Assert the ghost is REALLY still on screen before tapping it. Guarding the
-    // tap behind an `if` would let this pass vacuously the day the overlay stops
-    // retaining the snapshot — a test that skips the branch it exists to exercise.
-    expect(
-      find.text('alice'),
-      findsWidgets,
-      reason: 'the open overlay should still be offering the retired DM',
-    );
-    await tester.tap(find.text('alice').last);
-    await tester.pumpAndSettle();
-    expect(container.read(selectedChannelIdProvider), healed);
+    expect(find.text('alice'), findsNothing);
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('the CARET opens the menu, and the control is a full-size tap '
-      'target', (tester) async {
+  testWidgets('the drawer button opens the conversation list and is full-size', (
+    tester,
+  ) async {
     setNarrow(tester);
     final container = makeContainer(
       rest: restWithDm(),
@@ -619,33 +568,17 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    // Found on a phone, not here: the caret and the aggregate badge were drawn
-    // BESIDE the DropdownButton in a Row, so the one part of the control that
-    // looks like "press me to open this" had no hit area at all — you had to
-    // hit the word. Every test in this file tapped the button by type or the
-    // name by text, so all of them passed against a control whose most obvious
-    // affordance was dead. Tap the caret the way a thumb does: by position.
-    await tester.tapAt(tester.getCenter(find.byIcon(Icons.arrow_drop_down)));
+    final button = find.byType(DrawerButton);
+    await tester.tap(button);
     await tester.pumpAndSettle();
     expect(
       find.text('alice'),
       findsWidgets,
-      reason: 'tapping the caret must open the switcher',
-    );
-
-    // And the other half of "too small": `isDense` collapsed the button under
-    // Material's minimum touch target, so even the half that DID work needed an
-    // accurate press.
-    await tester.tap(find.text('alice').last);
-    await tester.pumpAndSettle();
-    expect(
-      tester.getSize(find.byType(DropdownButton<String>)).height,
-      greaterThanOrEqualTo(kMinInteractiveDimension),
+      reason: 'tapping the drawer button must open the conversation list',
     );
   });
 
-  testWidgets('collapsed, non-active rows are NOT in the tree (so a phone pays '
-      'no per-DM roster fetch until the menu opens)', (tester) async {
+  testWidgets('closed drawer rows are NOT in the tree', (tester) async {
     setNarrow(tester);
     final container = makeContainer(
       rest: restWithDm(),
@@ -657,26 +590,22 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    // This PR's description originally claimed the opposite — that DropdownButton
-    // mounts every item in an IndexedStack, so a collapsed switcher would fetch a
-    // roster per DM in the background. All three cage-match reviewers repeated the
-    // claim back, which is one instrument's error counted four times rather than
-    // corroboration. A throwaway probe refuted it; committing the probe is what
-    // stops the folklore reforming the next time someone "remembers" IndexedStack
-    // (cage-match #136, Tesla).
+    // The drawer is lazy: non-active rows are not part of the closed phone
+    // surface. Opening the drawer is what mounts them.
     expect(find.text('alice'), findsNothing); // the DM (not active)
     expect(find.text('random'), findsNothing); // the other channel (not active)
     expect(find.text('general'), findsOneWidget); // only the ACTIVE row renders
 
-    await openMenu(tester);
+    await openConversationDrawer(tester);
     expect(
       find.text('alice'),
       findsWidgets,
-    ); // opening the menu is what mounts them
+    ); // opening the drawer is what mounts them
   });
 
-  testWidgets('the ACTIVE row carries no mute glyph — the app-bar bell already '
-      'states it', (tester) async {
+  testWidgets('the active muted row carries the mute glyph in the drawer', (
+    tester,
+  ) async {
     setNarrow(tester);
     final container = makeContainer(
       rest: restWithDm(),
@@ -694,16 +623,11 @@ void main() {
         .setConversationMuted('dm1', muted: true, expectUserId: null);
     await tester.pumpAndSettle();
 
-    // The collapsed DropdownButton renders the ACTIVE item inside the app bar,
-    // inches from _MuteConversationAction — which shows the same mute AND is the
-    // control that changes it. Two glyphs for one fact, one of them a decoy that
-    // merely opens a menu.
-    expect(find.byKey(const Key('muted-item-dm1')), findsNothing);
-    // The app-bar BELL is retired, but the state it carried is not: the title
-    // itself now wears the mute glyph, so a silenced conversation still cannot
-    // be mistaken for a quiet one on a phone.
+    // The app-bar bell is retired, but the drawer row still names the state
+    // wherever the conversation list is visible.
     expect(find.byKey(const Key('appbar-mute-conversation')), findsNothing);
-    expect(find.byIcon(Icons.notifications_off), findsOneWidget);
+    await openConversationDrawer(tester);
+    expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
   });
 
   testWidgets('the section header is NOT selectable', (tester) async {
@@ -719,12 +643,11 @@ void main() {
     await tester.pumpAndSettle();
     final before = container.read(selectedChannelIdProvider);
 
-    await openMenu(tester);
+    await openConversationDrawer(tester);
     await tester.tap(find.text('Direct messages'));
     await tester.pumpAndSettle();
 
-    // A disabled item cannot change the selection. (It also carries a null value,
-    // so it can never collide with DropdownButton's one-match-for-`value` rule.)
+    // The section label cannot change the selection.
     expect(container.read(selectedChannelIdProvider), before);
     expect(tester.takeException(), isNull);
   });
@@ -759,7 +682,7 @@ void main() {
     await pumpApp(tester, container);
     await signIn(tester);
     await tester.pumpAndSettle();
-    await openMenu(tester);
+    await openConversationDrawer(tester);
 
     // Both DMs are pickable; the header is not drawn.
     expect(find.text('alice'), findsWidgets);
@@ -767,8 +690,9 @@ void main() {
     expect(find.text('Direct messages'), findsNothing);
   });
 
-  testWidgets('the aggregate unread dot counts DMs — on a phone it is the ONLY '
-      'signal a DM is waiting', (tester) async {
+  testWidgets('the DM drawer row shows unread from a waiting DM', (
+    tester,
+  ) async {
     setNarrow(tester);
     final transport = FakeChatTransport();
     final container = makeContainer(rest: restWithDm(), transport: transport);
@@ -809,64 +733,18 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // The collapsed app bar shows the aggregate dot. Before this slice the
-    // aggregate summed channels only, so a waiting DM was invisible on a phone.
-    expect(find.byKey(const Key('unread-aggregate')), findsOneWidget);
+    await openConversationDrawer(tester);
+    final badge = find.byKey(const Key('sidebar-unread-dm1'));
+    expect(badge, findsOneWidget);
     expect(
-      tester
-          .widget<UnreadBadge>(find.byKey(const Key('unread-aggregate')))
-          .count,
+      tester.widget<UnreadBadge>(badge).count,
       greaterThan(0),
-    );
-
-    // WHERE it sits, not merely that it exists — the assertion this file was
-    // missing. The badge used to render LAST in the switcher row, which put it
-    // flush against the mute bell `ConversationTitleMuteGesture` appends right
-    // after it. The two mean opposite things (attention wanted ELSEWHERE versus
-    // attention suppressed HERE) and six pixels apart they read as one compound
-    // signal. Presence-only assertions were all green throughout, because
-    // nothing pinned the arrangement; a human on a real phone found it in
-    // minutes. So the arrangement is pinned now.
-    final badgeX = tester
-        .getCenter(find.byKey(const Key('unread-aggregate')))
-        .dx;
-    final nameX = tester.getCenter(find.byType(DropdownButton<String>)).dx;
-    expect(
-      badgeX,
-      lessThan(nameX),
-      reason:
-          'The aggregate unread count must sit LEFT of the conversation name, '
-          'beside the caret it belongs to — not at the far right of the title '
-          'where it collides with the mute bell.',
-    );
-
-    // ...and far enough left to be a separate token. Position alone was pinned
-    // and the arrangement still read wrong on a phone: the pill sat 2 logical
-    // pixels from the name, so the count and the first letter fused. A filled
-    // shape against a glyph needs real air, and "LEFT of" is satisfied by zero
-    // gap — which is how a green test coexisted with the defect.
-    final badgeRight = tester.getRect(
-      find.byKey(const Key('unread-aggregate')),
-    ).right;
-    final nameLeft = tester.getRect(find.text('general').first).left;
-    expect(
-      nameLeft - badgeRight,
-      greaterThanOrEqualTo(6.0),
-      reason:
-          'The aggregate badge must not crowd the conversation name — a filled '
-          'pill flush against text reads as one token, not a count beside a '
-          'name.',
     );
   });
 
-  // Is the aggregate badge a CONTROL or a decoration? Task #22 recorded it as
-  // "genuinely inert" and ruled `selectedItemBuilder` out as the fix. The widget
-  // has since moved INTO `selectedItemBuilder`, which draws it inside the
-  // DropdownButton's own hit area — so the note is stale and the badge should
-  // open the menu. Stale-or-true is not a thing to reason about: a decoration
-  // that looks like a control is the defect, and only a tap can tell them apart.
-  testWidgets('tapping the aggregate badge OPENS the switcher — it is inside the '
-      'button hit area, not a decoration beside it', (tester) async {
+  testWidgets('tapping a badged DM row opens that conversation', (
+    tester,
+  ) async {
     setNarrow(tester);
     final transport = FakeChatTransport();
     final container = makeContainer(rest: restWithDm(), transport: transport);
@@ -903,29 +781,17 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final badge = find.byKey(const Key('unread-aggregate'));
-    expect(badge, findsOneWidget);
+    await openConversationDrawer(tester);
+    expect(find.byKey(const Key('sidebar-unread-dm1')), findsOneWidget);
 
-    // NEGATIVE CONTROL: while the menu is shut, every non-active row is a
-    // SizedBox.shrink, so the OTHER channel's name is nowhere on screen. Without
-    // this the positive below would pass against a name that was always drawn.
-    expect(find.text('random'), findsNothing);
-
-    await tester.tap(badge);
+    await tester.tap(find.byKey(const Key('sidebar-dm-dm1')));
     await tester.pumpAndSettle();
 
-    expect(
-      find.text('random'),
-      findsWidgets,
-      reason:
-          'Tapping the aggregate badge must open the conversation switcher. It '
-          'is drawn inside DropdownButton via selectedItemBuilder, so it shares '
-          'the button hit area — if this fails the badge has become decoration '
-          'again and reads as a broken control.',
-    );
+    expect(container.read(selectedChannelIdProvider), 'dm1');
+    expect(find.text('hey'), findsOneWidget);
   });
 
-  testWidgets('a PEER-muted DM renders muted in the menu (peer-aware, like the '
+  testWidgets('a PEER-muted DM renders muted in the drawer (peer-aware, like the '
       'sidebar row)', (tester) async {
     setNarrow(tester);
     final container = makeContainer(
@@ -944,10 +810,10 @@ void main() {
         .setUserMuted('u2', muted: true, expectUserId: null);
     await tester.pumpAndSettle();
 
-    await openMenu(tester);
+    await openConversationDrawer(tester);
 
     // `mutedChannelIdsProvider` alone would answer "not muted" here, and the row
     // would render identically to an idle one (cage-match #135 round 7, Tesla).
-    expect(find.byKey(const Key('muted-item-dm1')), findsOneWidget);
+    expect(find.byKey(const Key('sidebar-muted-dm1')), findsOneWidget);
   });
 }
