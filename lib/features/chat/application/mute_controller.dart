@@ -272,6 +272,28 @@ class ConversationMute {
 
   bool get isMuted => byConversation || byPeer;
 
+  /// The verb a mute control should offer.
+  String get actionLabel => isMuted ? 'Unmute' : 'Mute';
+
+  /// The honest sentence beneath that verb — three states, because what the act
+  /// actually promises differs in each.
+  ///
+  /// PURE, and shared by every surface that offers the control. It was written
+  /// over cage-match #135 rounds 5-11 and the wording is load-bearing: say WHICH
+  /// silence an unmute undoes whenever a PERSON is one of the causes, not only
+  /// when they are the sole cause; and never promise a row goes audible when the
+  /// peer cannot be named. Re-deriving this per surface is how two controls come
+  /// to describe the same act differently.
+  String get actionDetail => isMuted
+      ? (byPeer
+            ? 'This person is muted everywhere — unmute them'
+            : indeterminate
+            ? 'Unmute this conversation'
+            : 'Show unread again')
+      : indeterminate
+      ? 'No unread badge from this conversation'
+      : 'No unread badge';
+
   /// Apply [muted] to whatever is causing the silence.
   ///
   /// Muting sets the CONVERSATION (the narrow, least surprising act — it does not
