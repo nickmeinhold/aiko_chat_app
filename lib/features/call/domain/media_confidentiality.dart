@@ -145,7 +145,7 @@ final mediaRoutingProvider = Provider<MediaRouting>((ref) {
       // userinfo or a path, and a warning is the last place to print either.
       host = Uri.tryParse('//$raw')?.host ?? '';
     }
-  } catch (e, st) {
+  } catch (e) {
     // The aperture was `catch (_)` and swallowed EVERYTHING (Maxwell,
     // cage-match round 1): a genuine bug in `configProvider` — a bad cast, a
     // failed assertion — presented identically to "no SharedPreferences in a
@@ -155,7 +155,10 @@ final mediaRoutingProvider = Provider<MediaRouting>((ref) {
     // degrades to an unattributed warning rather than no warning), so the fix
     // is not a narrower catch — it is leaving a breadcrumb.
     assert(() {
-      debugPrint('media disclosure: island attribution unavailable — $e\n$st');
+      // The MESSAGE, not the stack. The first version printed `$st` too, which
+      // dumped a 60-frame trace into every widget test that mounts this chip
+      // without config — a breadcrumb that buries the trail it exists to leave.
+      debugPrint('media disclosure: island attribution unavailable — $e');
       return true;
     }());
   }
