@@ -15,7 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/test_helpers.dart';
 
 /// The responsive chat shell: a Slack/Element-style left rail on WIDE screens,
-/// collapsing to the shipped phone app-bar-dropdown layout on NARROW screens.
+/// collapsing that same rail into a drawer on NARROW screens.
 ///
 /// The load-bearing property under test is Option A — the body is ALWAYS a Row
 /// whose LAST child is the shared [ChatMessagePane], so resizing across the
@@ -78,7 +78,9 @@ void main() {
   const wide = 1000.0; // ≥ kWideLayoutBreakpoint (720)
   const narrow = 400.0; // < kWideLayoutBreakpoint
 
-  testWidgets('narrow: app-bar dropdown switcher, no sidebar', (tester) async {
+  testWidgets('narrow: app-bar title with drawer switcher, no inline sidebar', (
+    tester,
+  ) async {
     setWidth(tester, narrow);
     final container = makeContainer(
       rest: FakeRestApi(channels: twoChannels),
@@ -90,9 +92,14 @@ void main() {
     await signIn(tester);
 
     expect(find.byType(ChatSidebar), findsNothing);
-    // The phone layout keeps the app-bar dropdown when >1 channel.
-    expect(find.byType(DropdownButton<String>), findsOneWidget);
+    expect(find.byType(DropdownButton<String>), findsNothing);
     expect(find.byType(ChatMessagePane), findsOneWidget);
+    expect(find.byTooltip('Open navigation menu'), findsOneWidget);
+    await openChatDrawer(tester);
+    expect(find.byType(ChatSidebar), findsOneWidget);
+    expect(find.byKey(const Key('sidebar-channel-c1')), findsOneWidget);
+    expect(find.byKey(const Key('sidebar-channel-c2')), findsOneWidget);
+    await closeChatDrawer(tester);
     // Settings stays in the app bar on narrow; SIGN OUT no longer does — it
     // moved into Settings, because a once-a-year action was holding a permanent
     // seat next to Search in a strip you press all day.

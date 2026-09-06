@@ -154,13 +154,11 @@ void main() {
     expect(ids, containsAll(<String>{'c1', 'dm1'}));
   });
 
-  testWidgets('a DM selected on wide survives the resize to narrow — switcher '
-      'included, not gated away', (tester) async {
-    // ≥2 channels so the narrow layout builds the dropdown. This used to be the
-    // exact condition under which a DM activeId fed to DropdownButton.value
-    // asserted, and the fix was a gate that hid the switcher entirely. The gate
-    // is gone (#2798 task #12): the DM is now IN the item list, so `value` has its
-    // match and the user keeps a way out of the conversation.
+  testWidgets('a DM selected on wide survives the resize to narrow — drawer '
+      'available, not gated away', (tester) async {
+    // >=2 channels so the narrow layout has something to leave the DM for. The
+    // phone drawer must stay available with a DM active; hiding navigation there
+    // was the original trap.
     final rest = FakeRestApi(
       channels: const [
         Channel(id: 'c1', name: 'general', kind: ChannelKind.standard),
@@ -188,12 +186,16 @@ void main() {
     tester.view.physicalSize = const Size(400, 900);
     await tester.pumpAndSettle();
 
-    // No DropdownButton value/items assertion — because the DM is now one of the
-    // items, so the switcher stays up and the collapsed button renders the DM's
-    // own row, titled by its peer.
     expect(tester.takeException(), isNull);
-    expect(find.byType(DropdownButton<String>), findsOneWidget);
+    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.byTooltip('Open navigation menu'), findsOneWidget);
     expect(find.text('alice'), findsOneWidget);
+    await openChatDrawer(tester);
+    expect(find.byKey(const Key('sidebar-dm-dm1')), findsOneWidget);
+    expect(
+      tester.widget<ListTile>(find.byKey(const Key('sidebar-dm-dm1'))).selected,
+      isTrue,
+    );
   });
 
   testWidgets(

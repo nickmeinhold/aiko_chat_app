@@ -78,6 +78,21 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
   }
 
+  void setNarrow(WidgetTester tester) {
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+  }
+
+  Future<void> openConversationDetails(
+    WidgetTester tester,
+    String title,
+  ) async {
+    await tester.tap(find.text(title).first);
+    await tester.pumpAndSettle();
+  }
+
   // ── The store: per-user, injective, order-preserving ────────────────────────
 
   Map<MuteTarget, Set<String>> snapshot({
@@ -496,13 +511,10 @@ void main() {
   testWidgets('NARROW: the app bar can mute the conversation being read', (
     tester,
   ) async {
-    // Narrow has no sidebar, so without this the capability would be wide-only —
-    // mutable on the desktop, unreachable on the phone, which is where a noisy
-    // channel is actually felt.
-    tester.view.physicalSize = const Size(400, 900);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+    // Narrow reaches mute through the conversation details screen. Without this
+    // path the capability would be wide-only unless the user already knew the
+    // row-hold accelerator inside the drawer.
+    setNarrow(tester);
 
     final container = makeContainer(
       rest: FakeRestApi(channels: twoChannels),
@@ -514,25 +526,18 @@ void main() {
     await signIn(tester);
     await tester.pumpAndSettle();
 
-    // The dedicated app-bar button is gone — muting on a phone is now the SAME
-    // long-press gesture the sidebar rows use, moved onto the conversation
-    // title. The capability is what this test defends, so it follows the
-    // gesture rather than the button.
+    // The dedicated app-bar button is gone — muting on a phone is in details.
     expect(find.byKey(const Key('appbar-mute-conversation')), findsNothing);
     expect(container.read(mutedChannelIdsProvider), isEmpty);
 
-    await tester.longPress(find.byKey(const Key('mute-gesture-title')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Mute'));
+    await openConversationDetails(tester, 'general');
+    await tester.tap(find.text('Mute this conversation'));
     await settle(tester);
     // c1 is the active conversation (nothing picked → first channel resolves).
     expect(container.read(mutedChannelIdsProvider), contains('c1'));
 
-    // The same gesture unmutes — never a one-way door. The menu item flips its
-    // own label, which is what makes the state legible from the control itself.
-    await tester.longPress(find.byKey(const Key('mute-gesture-title')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Unmute'));
+    // The same visible switch unmutes — never a one-way door.
+    await tester.tap(find.text('Mute this conversation'));
     await settle(tester);
     expect(container.read(mutedChannelIdsProvider), isEmpty);
   });
@@ -725,10 +730,7 @@ void main() {
       'its real scope instead of doing it silently', (tester) async {
     // A one-tap control captioned "this conversation" must not quietly make an
     // account audible in every room (cage-match #135 round 4, Carnot + Tesla).
-    tester.view.physicalSize = const Size(400, 900);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+    setNarrow(tester);
 
     const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
     final rest = FakeRestApi(channels: twoChannels);
@@ -761,23 +763,20 @@ void main() {
         .setUserMuted('u2', muted: true, expectUserId: null);
     await settle(tester);
 
-    // The dedicated button is gone; the long-press menu is the control now. The
-    // DISCLOSURE is what this test defends, and it survived the move — the menu
-    // carries it as a subtitle, where the one-tap button had no room for it and
-    // had to raise a dialog instead.
-    await tester.longPress(find.byKey(const Key('mute-gesture-title')));
-    await tester.pumpAndSettle();
+    // The dedicated button is gone; details is the control now. The DISCLOSURE
+    // is what this test defends, and it lives as the switch subtitle.
+    await openConversationDetails(tester, 'alice');
 
     // The tap DISCLOSES rather than acts: the account mute is still in place...
     expect(container.read(mutedUserIdsProvider), contains('u2'));
     expect(
       find.textContaining('This person is muted everywhere'),
       findsOneWidget,
-      reason: 'the menu must say WHICH silence unmuting would undo',
+      reason: 'the details switch must say WHICH silence unmuting would undo',
     );
 
     // ...and only the explicit choice clears it.
-    await tester.tap(find.text('Unmute').last);
+    await tester.tap(find.text('Mute this conversation'));
     await settle(tester);
     expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
   });
@@ -789,10 +788,7 @@ void main() {
     // case saying "unmute this conversation" while also restoring that account
     // everywhere — the silent global act the disclosure exists to prevent, hiding
     // one flag away (cage-match #135 round 5, Tesla).
-    tester.view.physicalSize = const Size(400, 900);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+    setNarrow(tester);
 
     const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
     final rest = FakeRestApi(channels: twoChannels);
@@ -825,12 +821,9 @@ void main() {
       ..setConversationMuted('dm1', muted: true, expectUserId: null);
     await settle(tester);
 
-    // The dedicated button is gone; the long-press menu is the control now. The
-    // DISCLOSURE is what this test defends, and it survived the move — the menu
-    // carries it as a subtitle, where the one-tap button had no room for it and
-    // had to raise a dialog instead.
-    await tester.longPress(find.byKey(const Key('mute-gesture-title')));
-    await tester.pumpAndSettle();
+    // The dedicated button is gone; details is the control now. The DISCLOSURE
+    // is what this test defends, and it lives as the switch subtitle.
+    await openConversationDetails(tester, 'alice');
 
     expect(
       find.textContaining('This person is muted everywhere'),

@@ -21,8 +21,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'test_helpers.dart';
 import 'ui_fakes.dart';
 
-/// A phone-width viewport: the narrow information architecture (app-bar
-/// dropdown switcher), which is what nearly every user has.
+/// A phone-width viewport: the narrow information architecture (drawer for the
+/// conversation list, title for this conversation), which is what nearly every
+/// user has.
 const walkPhone = Size(400, 900);
 
 /// Wide enough for the sidebar layout — a genuinely different IA above the

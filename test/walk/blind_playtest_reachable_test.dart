@@ -6,11 +6,22 @@
 // failed goal is unattributable and the instrument reports nothing.
 //
 // So this file drives the same goal through the same harness with the answer
-// supplied — a scripted hold on the app-bar title, the path
-// `docs/design/user-paths.html` records for "33 · silence this conversation".
-// It uses a finder ONLY to locate the target, then presses POSITIONALLY through
-// the same code path the blind agent uses. If this is green and the live run is
-// red, the difference is knowledge, which is exactly the thing being measured.
+// supplied — the path `docs/design/user-paths.html` records for
+// "33 · silence this conversation". It uses a finder ONLY to locate the target,
+// then presses POSITIONALLY through the same code path the blind agent uses. If
+// this is green and the live run is red, the difference is knowledge, which is
+// exactly the thing being measured.
+//
+// The documented path CHANGED with task #26, and this file is where that shows
+// up as a number rather than an opinion. It used to be a hold on the app-bar
+// title, because the title was the conversation switcher and mute had nowhere
+// else to live on a phone; the blind sweep scored that path NOT REACHED in six
+// presses. It is now: tap the title, which means THIS CONVERSATION, and press
+// the mute switch on its details. Two taps, no hold, no invisible gesture.
+//
+// This is deliberately NOT a mechanical substitution of the old assertions. The
+// old test proved a long-press this design removes; a sed that made it green
+// would have tested nothing.
 //
 // No model, so it runs free and every time.
 import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
@@ -29,7 +40,7 @@ void main() {
     await loadRealFonts();
   });
 
-  testWidgets('the mute IS reachable by holding the app-bar title, unaided', (
+  testWidgets('the mute IS reachable by tapping the app-bar title, unaided', (
     tester,
   ) async {
     hideDebugChrome();
@@ -47,12 +58,12 @@ void main() {
       agent: (view) async {
         if (!opened) {
           opened = true;
-          return Hold(title, because: 'the documented path');
+          return Tap(title, because: 'the documented path');
         }
-        // The menu is open; the mute item is the only thing in it, drawn just
-        // below the press point. Found by looking, not by name.
-        final item = tester.getCenter(find.byType(PopupMenuItem<bool>).first);
-        return Tap(item, because: 'the one item in the menu');
+        // Conversation details is open; the mute control is the switch on it.
+        // Found by looking, not by name.
+        final mute = tester.getCenter(find.byType(SwitchListTile).first);
+        return Tap(mute, because: 'the notification switch on the details');
       },
       reached: () async => container
           .read(mutesProvider.notifier)
@@ -71,7 +82,10 @@ void main() {
     expect(
       run.presses,
       2,
-      reason: 'the designed path is two presses: hold the title, press mute',
+      reason:
+          'the designed path is two presses: tap the title, press the mute '
+          'switch. This number IS the acceptance test for task #26 — the blind '
+          'sweep scored the old path NOT REACHED in six',
     );
   });
 }
