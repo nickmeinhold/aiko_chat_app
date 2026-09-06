@@ -112,6 +112,28 @@ void main() {
     });
   });
 
+  // DEGRADATION ORDER (Carnot, round 3, non-blocking). The chip is one line with
+  // an ellipsis, so a very long host can truncate it. That is SAFE only because
+  // the claim is the PREFIX and the attribution the suffix — ellipsis eats the
+  // attribution first and the warning survives. That ordering is currently a
+  // property of how the string happens to be built, which is exactly the kind of
+  // accident that gets reversed by a well-meaning edit ("put the island first,
+  // it reads better"). Pinned, so the reversal is loud.
+  test('the claim is the PREFIX, so truncation eats the attribution first', () {
+    const longHost = MediaRouting(
+      confidentiality: MediaConfidentiality.notEndToEndEncrypted,
+      islandHost: 'an-extremely-long-island-hostname.example.org',
+    );
+    expect(longHost.label, startsWith('Not end-to-end encrypted'));
+    expect(
+      longHost.label.indexOf('Not end-to-end encrypted'),
+      lessThan(longHost.label.indexOf('an-extremely-long')),
+      reason:
+          'if the island name ever moves in front of the claim, truncation '
+          'starts eating the warning instead of the attribution',
+    );
+  });
+
   // DRIFT GUARD. The sentence now renders on TWO surfaces — this chip and the
   // Call entry's subtitle. Two controls describing one fact differently is how
   // a disclosure becomes a lie on whichever one you did not look at, so both
