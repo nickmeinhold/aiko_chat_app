@@ -26,6 +26,7 @@ import '../../../app/feature_flags.dart' show callingEnabledProvider;
 
 import '../../chat/application/chat_providers.dart'
     show currentUserProvider, dmConversationIdsProvider;
+import '../../call/domain/media_confidentiality.dart';
 import '../../chat/application/mute_controller.dart';
 import '../../chat/domain/message.dart';
 import '../../chat/presentation/conversation_actions.dart'
@@ -58,6 +59,9 @@ Future<void> showMessageActions(
   // state the user is acting FROM, and a rebuild mid-sheet would flip the verb
   // under their finger.
   final muted = ref.read(mutedUserIdsProvider).contains(userId);
+  // Near-side too, for the same reason as the rest: the sheet must describe the
+  // state the user is acting FROM.
+  final mediaRouting = ref.read(mediaRoutingProvider);
   // BOUND HERE, on the NEAR side of the sheet — beside `muted`, at the instant
   // the user acts.
   //
@@ -75,79 +79,110 @@ Future<void> showMessageActions(
 
   final action = await showModalBottomSheet<_Action>(
     context: context,
+    // SCROLLABLE, and this is a real fix rather than a test accommodation.
+    // Adding the Call entry's disclosure subtitle overflowed the sheet by 31px
+    // in a 800x600 harness — which means a bare `Column` was already ONE ENTRY
+    // away from clipping its own actions on a short screen or at a large text
+    // scale, and the failure mode is a Block button the user cannot reach. The
+    // sheet grew again today; it will grow again later.
     builder: (ctx) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Open (find-or-create) the DM with this sender and go there. Until
-          // this existed, `openDm`'s only caller was Call — so a DM could only
-          // be born as a side effect of a video call and Inc 1's sidebar section
-          // was unreachable for anyone who had never called (#2798).
-          if (!inDm)
-            ListTile(
-              leading: const Icon(Icons.chat_bubble_outline),
-              title: Text('Message $name'),
-              onTap: () => Navigator.pop(ctx, _Action.message),
-            ),
-          // Start a 1:1 A/V call with this sender: the same DM channel, joined
-          // as its LiveKit room. `openDm` is idempotent, so both parties tapping
-          // Call resolve to the SAME room (DM handoff #2633; gating #2726).
-          //
-          // Read on the NEAR side of the sheet, beside `muted` and `inDm`, for
-          // the reason this file already gives: the sheet must describe the
-          // build the user is acting in, decided once before it opens.
-          if (callingEnabled)
-            ListTile(
-              leading: const Icon(Icons.videocam_outlined),
-              title: Text('Call $name'),
-              onTap: () => Navigator.pop(ctx, _Action.call),
-            ),
-          // Mute sits ABOVE the moderation pair deliberately: it is the mild,
-          // reversible, private option, and offering it first means "too noisy"
-          // doesn't have to escalate to a moderation act. Muting is silent and
-          // one-sided — nothing is sent anywhere — so unlike Block it needs no
-          // confirmation step.
-          ListTile(
-            // Bell, not speaker — a speaker-with-slash means call audio in an
-            // app that ships 1:1 A/V (cage-match #135, Maxwell).
-            leading: Icon(
-              muted
-                  ? Icons.notifications_none
-                  : Icons.notifications_off_outlined,
-            ),
-            title: Text(muted ? 'Unmute $name' : 'Mute $name'),
-            // Say EVERYWHERE. This is the only door that writes a
-            // `MuteTarget.user`, and it is the global act — a long-press in
-            // #general quiets that person in every room. The conversation
-            // controls were made to confess when they touch an account mute; the
-            // account door itself was still speaking in the local present
-            // (cage-match #135 round 7, Tesla).
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Open (find-or-create) the DM with this sender and go there. Until
+            // this existed, `openDm`'s only caller was Call — so a DM could only
+            // be born as a side effect of a video call and Inc 1's sidebar section
+            // was unreachable for anyone who had never called (#2798).
+            if (!inDm)
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline),
+                title: Text('Message $name'),
+                onTap: () => Navigator.pop(ctx, _Action.message),
+              ),
+            // Start a 1:1 A/V call with this sender: the same DM channel, joined
+            // as its LiveKit room. `openDm` is idempotent, so both parties tapping
+            // Call resolve to the SAME room (DM handoff #2633; gating #2726).
             //
-            // Present tense only for what actually happens today: there are no
-            // notifications yet, so promising them would be prophecy in the
-            // indicative (round 6, Tesla).
-            subtitle: Text(
-              muted
-                  ? "You'll see unread badges from them again, everywhere"
-                  : "No unread badge from them in any conversation — you'll still "
-                        'see their messages',
+            // Read on the NEAR side of the sheet, beside `muted` and `inDm`, for
+            // the reason this file already gives: the sheet must describe the
+            // build the user is acting in, decided once before it opens.
+            if (callingEnabled)
+              ListTile(
+                leading: const Icon(Icons.videocam_outlined),
+                title: Text('Call $name'),
+                // THE CALLER'S PRE-CONNECT DISCLOSURE (Decision 9d; Carnot,
+                // cage-match round 2). The in-call chip is painted on the call
+                // screen's first frame, which for a CALLER is concurrent with
+                // connect, not before it — `CallScreen.initState` fires
+                // `unawaited(connect())` and returns before anything is painted.
+                // The callee is fine (they must press Answer with the warning on
+                // the same surface); the caller was not.
+                //
+                // The first attempt at this was to document the gap. Carnot
+                // refused that, correctly: a security disclosure whose failure
+                // mode is silence-before-media does not get resolved with prose
+                // when a fix exists. The fix is here, on the action surface —
+                // still an indicator, not a gate, so it keeps Nick's "no
+                // interruption, ever".
+                //
+                // Same sentence as the chip, from [MediaRouting] — see the
+                // subtitle on the mute entry above for why this file states
+                // consequences here at all.
+                subtitle: Text(mediaRouting.sentence),
+                isThreeLine: true,
+                onTap: () => Navigator.pop(ctx, _Action.call),
+              ),
+            // Mute sits ABOVE the moderation pair deliberately: it is the mild,
+            // reversible, private option, and offering it first means "too noisy"
+            // doesn't have to escalate to a moderation act. Muting is silent and
+            // one-sided — nothing is sent anywhere — so unlike Block it needs no
+            // confirmation step.
+            ListTile(
+              // Bell, not speaker — a speaker-with-slash means call audio in an
+              // app that ships 1:1 A/V (cage-match #135, Maxwell).
+              leading: Icon(
+                muted
+                    ? Icons.notifications_none
+                    : Icons.notifications_off_outlined,
+              ),
+              title: Text(muted ? 'Unmute $name' : 'Mute $name'),
+              // Say EVERYWHERE. This is the only door that writes a
+              // `MuteTarget.user`, and it is the global act — a long-press in
+              // #general quiets that person in every room. The conversation
+              // controls were made to confess when they touch an account mute; the
+              // account door itself was still speaking in the local present
+              // (cage-match #135 round 7, Tesla).
+              //
+              // Present tense only for what actually happens today: there are no
+              // notifications yet, so promising them would be prophecy in the
+              // indicative (round 6, Tesla).
+              subtitle: Text(
+                muted
+                    ? "You'll see unread badges from them again, everywhere"
+                    : "No unread badge from them in any conversation — you'll still "
+                          'see their messages',
+              ),
+              onTap: () => Navigator.pop(ctx, _Action.mute),
             ),
-            onTap: () => Navigator.pop(ctx, _Action.mute),
-          ),
-          ListTile(
-            leading: const Icon(Icons.flag_outlined),
-            title: const Text('Report message'),
-            onTap: () => Navigator.pop(ctx, _Action.report),
-          ),
-          ListTile(
-            leading: Icon(Icons.block, color: Theme.of(ctx).colorScheme.error),
-            title: Text(
-              'Block $name',
-              style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+            ListTile(
+              leading: const Icon(Icons.flag_outlined),
+              title: const Text('Report message'),
+              onTap: () => Navigator.pop(ctx, _Action.report),
             ),
-            onTap: () => Navigator.pop(ctx, _Action.block),
-          ),
-        ],
+            ListTile(
+              leading: Icon(
+                Icons.block,
+                color: Theme.of(ctx).colorScheme.error,
+              ),
+              title: Text(
+                'Block $name',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+              ),
+              onTap: () => Navigator.pop(ctx, _Action.block),
+            ),
+          ],
+        ),
       ),
     ),
   );

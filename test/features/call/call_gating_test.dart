@@ -166,6 +166,32 @@ void main() {
       expect(find.text('Block Robin'), findsOneWidget);
     });
 
+    // THE CALLER'S PRE-CONNECT DISCLOSURE (Decision 9d; Carnot, cage-match
+    // round 2). The in-call chip is painted on the call screen's first frame,
+    // which for the CALLER is concurrent with connect rather than before it —
+    // `CallScreen.initState` fires `unawaited(connect())` and returns before
+    // anything paints. The callee has the ring banner; the caller has this.
+    //
+    // So this is the assertion that the caller is warned while they can still
+    // not-call. It goes red if the subtitle is ever dropped for tidiness.
+    testWidgets('the Call entry discloses before the caller can tap it', (
+      tester,
+    ) async {
+      await tester.pumpWidget(harness(enabled: true));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('open-actions'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Call Robin'), findsOneWidget);
+      expect(
+        find.textContaining('not end to end encrypted'),
+        findsOneWidget,
+        reason:
+            'the caller reaches the call screen with connect already in flight, '
+            'so THIS is their only surface that precedes it',
+      );
+    });
+
     testWidgets('gated ON: the Call entry is there', (tester) async {
       // The must-fail arm: proves `findsNothing` above is the gate talking and
       // not a sheet that never opened or a label that has been renamed.

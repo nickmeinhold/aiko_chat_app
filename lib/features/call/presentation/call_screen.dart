@@ -10,6 +10,7 @@ import '../../../app/theme/maritime_theme.dart';
 import '../application/call_end_announcer.dart';
 import '../data/call_session.dart';
 import '../domain/call_connection_state.dart';
+import 'media_confidentiality_chip.dart';
 
 /// Single door for opening a call (#18). Rapid double-taps — or a tap while a
 /// call is already open — would otherwise push N [CallScreen]s, each spinning up
@@ -147,14 +148,31 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                     builder: (context, _, _) => _videoArea(state),
                   ),
                 ),
-                // Status / reconnect banner.
-                if (state != CallConnectionState.connected)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: _statusBanner(state),
+                // Status / reconnect banner, and the disclosure under it.
+                //
+                // The chip is OUTSIDE the state check on purpose: it is drawn
+                // in every state including `connecting`, which is this screen's
+                // first frame and therefore before any media flows. Decision 9d
+                // says the user is told BEFORE connect, and an indicator that
+                // waited for `connected` would arrive after the thing it warns
+                // about.
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (state != CallConnectionState.connected)
+                        _statusBanner(state),
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
+                        child: MediaConfidentialityChip(),
+                      ),
+                    ],
                   ),
+                ),
                 // Local camera PiP (only once we're in the room, and only if we
                 // can publish — a subscribe-only member has no local camera).
                 if ((state == CallConnectionState.connected ||
