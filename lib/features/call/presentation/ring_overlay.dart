@@ -13,6 +13,7 @@ import '../../../app/feature_flags.dart' show callingEnabledProvider;
 import '../../../app/router.dart';
 import '../application/ring_controller.dart';
 import '../domain/call_invite.dart';
+import 'media_confidentiality_chip.dart';
 import 'call_screen.dart' show pushCallOn;
 
 /// Wraps [child] with the ring banner. A no-op (zero layout cost, no overlay)
@@ -85,6 +86,13 @@ class _RingBanner extends ConsumerWidget {
                       'Incoming call',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
+                    // The callee is deciding whether to answer, which is the
+                    // one moment they can still act on this. Compact: the row
+                    // already carries a name and two buttons, so the island
+                    // host moves to the screen reader label rather than
+                    // squeezing the claim itself.
+                    const SizedBox(height: 6),
+                    const MediaConfidentialityChip(compact: true),
                   ],
                 ),
               ),

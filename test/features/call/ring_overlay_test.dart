@@ -1,5 +1,6 @@
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
+import 'package:aiko_chat_app/features/call/domain/media_confidentiality.dart';
 import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
     show resetCallLaunchGuard;
 import 'package:aiko_chat_app/features/call/presentation/ring_overlay.dart';
@@ -58,6 +59,16 @@ void main() {
         // what makes the test exercise the real lookup path rather than a
         // parallel one.
         routerProvider.overrideWithValue(router),
+        // The banner now carries the media disclosure, which would otherwise
+        // reach for the real island config. Pinned here so this file keeps
+        // testing PLACEMENT; the disclosure's own behaviour, including the
+        // branch that does not ship, lives in media_confidentiality_test.dart.
+        mediaRoutingProvider.overrideWithValue(
+          const MediaRouting(
+            confidentiality: MediaConfidentiality.notEndToEndEncrypted,
+            islandHost: 'chat.imagineering.cc',
+          ),
+        ),
       ],
       child: MaterialApp.router(
         routerConfig: router,
@@ -73,6 +84,36 @@ void main() {
     expect(find.text('Answer'), findsNothing);
     expect(find.text('Ignore'), findsNothing);
     expect(find.text('home'), findsOneWidget);
+  });
+
+  // Decision 9d bites hardest right here: this is the last moment the callee
+  // can act on it. An indicator that only appeared inside the call would land
+  // after they had already answered.
+  testWidgets('the ring discloses that media is not encrypted, before Answer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(initial: invite));
+    await tester.pumpAndSettle();
+    expect(find.text('Not encrypted'), findsOneWidget);
+    expect(find.text('Answer'), findsOneWidget);
+
+    // PRESENT is not VISIBLE. This repo has a scar exactly here: the composer's
+    // lit rule laid out 431px wide and ZERO px tall and had never once been
+    // seen, in either theme, since it shipped — while every test that mentioned
+    // it passed. A disclosure nobody can see is the same failure with worse
+    // consequences, so the geometry is asserted rather than assumed.
+    final rect = tester.getRect(find.text('Not encrypted'));
+    expect(rect.width, greaterThan(40));
+    expect(rect.height, greaterThan(10));
+    // On screen, in the banner, at the moment of the decision. Deliberately NOT
+    // asserting it sits above the Answer button: it lives in the caller's
+    // column, which grows downward, while Answer is vertically centred in the
+    // row — so the chip's top is BELOW the button's bottom by a few pixels and
+    // the render is perfectly legible anyway. "Before Answer" is reading order,
+    // not a y-coordinate, and encoding it as one was a false precision that
+    // failed on correct code.
+    expect(rect.top, greaterThanOrEqualTo(0));
+    expect(rect.bottom, lessThan(tester.view.physicalSize.height));
   });
 
   testWidgets('a ring shows the caller, Answer and Ignore over the route', (
