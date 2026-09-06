@@ -69,24 +69,53 @@ final class BlindView {
   final List<Move> history;
 }
 
-/// The only three things an agent may say.
+/// The only things an agent may say.
 sealed class Move {
   const Move();
 }
 
-/// Press this point. The harness taps positionally, never semantically.
-final class Tap extends Move {
-  const Tap(this.at, {this.because = ''});
+/// A press at a point. The harness acts positionally, never semantically.
+sealed class Press extends Move {
+  const Press(this.at, {this.because = ''});
 
   /// In the [BlindView.size] logical coordinate space.
   final Offset at;
 
   /// Optional, for the trail. Never read by the harness.
   final String because;
+}
+
+/// Tap this point.
+final class Tap extends Press {
+  const Tap(super.at, {super.because});
 
   @override
   String toString() =>
-      'Tap(${at.dx.round()}, ${at.dy.round()})${because.isEmpty ? '' : ' — $because'}';
+      'Tap(${at.dx.round()}, ${at.dy.round()})'
+      '${because.isEmpty ? '' : ' — $because'}';
+}
+
+/// Press and hold this point.
+///
+/// A person's vocabulary includes holding, so a tap-only agent overstates how
+/// undiscoverable a long-press control is. It is in the vocabulary for that
+/// reason — and the finding survives either way: an agent that never thinks to
+/// hold IS the discoverability report, and one that holds only after several
+/// taps has its hunt recorded in the press count.
+///
+/// WHAT A HOLD HERE DOES NOT PROVE. `WidgetTester.longPressAt` moves exactly
+/// ZERO pixels — a gesture no human hand performs. A real thumb drifts, and a
+/// recognizer that rejects drift is green under this and dead in the hand. So a
+/// reached goal proves the control EXISTS and is findable; it says nothing
+/// about whether a real thumb can work it. That question belongs to the
+/// gesture's own tests and to a handset.
+final class Hold extends Press {
+  const Hold(super.at, {super.because});
+
+  @override
+  String toString() =>
+      'Hold(${at.dx.round()}, ${at.dy.round()})'
+      '${because.isEmpty ? '' : ' — $because'}';
 }
 
 /// "I cannot find a way from here."
@@ -140,28 +169,60 @@ final class PlaytestRun {
   /// One PNG per screen the agent was shown, including the final one.
   final List<Uint8List> frames;
 
-  /// Taps spent. The discoverability number: this only means something when
-  /// [reached] is true.
-  int get taps => moves.whereType<Tap>().length;
+  /// Presses spent, taps and holds alike. The discoverability number: it only
+  /// means something when [reached] is true.
+  int get presses => moves.whereType<Press>().length;
 
   /// Why it stopped, when it stopped itself.
   String? get stuckReason => moves.whereType<Stuck>().isEmpty
       ? null
       : moves.whereType<Stuck>().last.because;
 
-  /// Write the trail to disk. A failed goal is worth looking at.
+  /// Write the trail to disk: every frame, and the moves beside them.
+  ///
+  /// The moves go to a FILE and not only to stdout, because stdout is the one
+  /// artifact that reliably disappears — clipped by a pipe, truncated by a test
+  /// reporter, scrolled past. A run whose frames survive and whose reasoning
+  /// does not is a set of screenshots nobody can interpret.
   void writeFrames(String dir) {
     Directory(dir).createSync(recursive: true);
     for (var i = 0; i < frames.length; i++) {
       File('$dir/${i.toString().padLeft(2, '0')}.png')
           .writeAsBytesSync(frames[i]);
     }
+    File('$dir/moves.txt').writeAsStringSync(
+      [
+        goal,
+        toString(),
+        '',
+        for (var i = 0; i < moves.length; i++)
+          '${i.toString().padLeft(2, '0')}  ${moves[i]}',
+        '',
+      ].join('\n'),
+    );
   }
 
   @override
   String toString() =>
-      '${reached ? 'REACHED' : 'FAILED '} in $taps tap(s): $goal'
+      '${reached ? 'REACHED' : 'FAILED '} in $presses press(es): $goal'
       '${stuckReason == null ? '' : ' [$stuckReason]'}';
+}
+
+/// Hide the things a user will never meet, before the app is pumped.
+///
+/// Flutter's debug ribbon is a red-and-white striped corner that ships to no
+/// user, and the agent cannot know that: in one run it spent a press on it —
+/// "the striped bell icon in the top-right is the only unexplored control that
+/// could relate to notifications" — and recognised the banner only afterwards.
+/// It also sits directly on top of the settings gear, so it does not merely add
+/// a phantom control, it hides a real one.
+///
+/// MUST be called BEFORE pumping. The banner is built during the app's build,
+/// so flipping this afterwards changes nothing until something rebuilds — a fix
+/// that reads as applied, produces no error, and leaves the ribbon on screen.
+void hideDebugChrome() {
+  WidgetsApp.debugAllowBannerOverride = false;
+  addTearDown(() => WidgetsApp.debugAllowBannerOverride = true);
 }
 
 /// Rasterise the current frame as PNG bytes.
@@ -187,15 +248,15 @@ Future<Uint8List> capturePng(WidgetTester tester) async {
 /// than in the agent is the point: the agent's belief about its own success is
 /// not evidence, and a run where the two disagree is exactly the finding.
 ///
-/// [maxTaps] bounds the hunt. Exhausting it is a result, not an error: an
-/// affordance that takes more than [maxTaps] presses to find is undiscoverable
-/// whether or not it exists.
+/// [maxPresses] bounds the hunt. Exhausting it is a result, not an error: an
+/// affordance that takes more than [maxPresses] presses to find is
+/// undiscoverable whether or not it exists.
 Future<PlaytestRun> playtest(
   WidgetTester tester, {
   required String goal,
   required BlindAgent agent,
   required Future<bool> Function() reached,
-  int maxTaps = 8,
+  int maxPresses = 8,
 }) async {
   final moves = <Move>[];
   final frames = <Uint8List>[];
@@ -213,7 +274,7 @@ Future<PlaytestRun> playtest(
     );
   }
 
-  while (moves.whereType<Tap>().length < maxTaps) {
+  while (moves.whereType<Press>().length < maxPresses) {
     final png = await capturePng(tester);
     frames.add(png);
 
@@ -245,8 +306,13 @@ Future<PlaytestRun> playtest(
           moves: moves,
           frames: frames,
         );
-      case Tap(:final at):
-        await tester.tapAt(at);
+      case Press():
+        switch (move) {
+          case Tap(:final at):
+            await tester.tapAt(at);
+          case Hold(:final at):
+            await tester.longPressAt(at);
+        }
         await tester.pumpAndSettle();
         if (await reached()) {
           frames.add(await capturePng(tester));
