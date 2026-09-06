@@ -134,6 +134,26 @@ ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
   );
 
   final text = _text(base.textTheme, p, font);
+
+  /// Name the reader's face on a style whose widget REPLACES the ambient
+  /// `DefaultTextStyle` instead of merging with it.
+  ///
+  /// Five slots below do that, measured one by one in
+  /// `test/app/theme/theme_text_style_slots_test.dart` — a bare `TextStyle`
+  /// there means the family is genuinely null, not inherited, and the reader's
+  /// chosen face stops at the edge of that control. `hintStyle` is the
+  /// counter-example that keeps this from being a blanket rule: it is just as
+  /// bare and its widget merges, so it needs nothing.
+  ///
+  /// ONLY the family travels. Adopting a whole `TextTheme` entry would import
+  /// its size and weight too and silently relayout controls that never asked
+  /// for it — the family is the property that was wrong, so the family is the
+  /// property that changes.
+  TextStyle faced(TextStyle style) => style.copyWith(
+    fontFamily: text.bodyMedium?.fontFamily,
+    fontFamilyFallback: text.bodyMedium?.fontFamilyFallback,
+  );
+
   return base.copyWith(
     textTheme: text,
     // Flat chrome — separation by hairline, never elevation.
@@ -203,7 +223,7 @@ ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
     ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: p.panelHigh,
-      contentTextStyle: TextStyle(color: p.ink),
+      contentTextStyle: faced(TextStyle(color: p.ink)),
       actionTextColor: p.signal,
       behavior: SnackBarBehavior.floating,
     ),
@@ -222,14 +242,14 @@ ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
       backgroundColor: p.ground,
       selectedIconTheme: IconThemeData(color: p.signal),
       unselectedIconTheme: IconThemeData(color: p.inkDim),
-      selectedLabelTextStyle: TextStyle(color: p.ink),
-      unselectedLabelTextStyle: TextStyle(color: p.inkDim),
+      selectedLabelTextStyle: faced(TextStyle(color: p.ink)),
+      unselectedLabelTextStyle: faced(TextStyle(color: p.inkDim)),
     ),
     iconTheme: IconThemeData(color: p.inkDim),
     chipTheme: ChipThemeData(
       backgroundColor: p.panel,
       side: BorderSide(color: p.hairline),
-      labelStyle: TextStyle(color: p.ink),
+      labelStyle: faced(TextStyle(color: p.ink)),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     ),
     switchTheme: SwitchThemeData(
@@ -252,7 +272,7 @@ ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
         backgroundColor: p.signal,
         foregroundColor: p.onAccent,
         elevation: 0,
-        textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        textStyle: faced(const TextStyle(fontWeight: FontWeight.w600)),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
@@ -274,7 +294,7 @@ ThemeData buildTheme(ThemePalette p, {AppFont font = systemFont}) {
         color: p.panelHigh,
         borderRadius: const BorderRadius.all(Radius.circular(6)),
       ),
-      textStyle: TextStyle(color: p.ink),
+      textStyle: faced(TextStyle(color: p.ink)),
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(color: p.signal),
   );
