@@ -53,27 +53,6 @@ class MediaConfidentialityChip extends ConsumerWidget {
     final routing = ref.watch(mediaRoutingProvider);
     final encrypted = routing.isEndToEndEncrypted;
 
-    // The claim always renders. The island name is an addition to it, never a
-    // precondition for it: an unknown host drops the attribution and the claim
-    // stands unchanged.
-    final attributed = routing.hasAttribution;
-    // "Not END-TO-END encrypted", never the shorter "Not encrypted" (Carnot,
-    // cage-match round 1). The media IS encrypted on the wire — WebRTC mandates
-    // DTLS-SRTP — and is decrypted AT the island. "Not encrypted" is the
-    // rhetorically stronger sentence and the technically false one, and a
-    // disclosure that overstates is still a disclosure that lies, which is the
-    // precise failure this whole feature exists to prevent.
-    //
-    // The tell was in the diff the whole time: the enum is
-    // `notEndToEndEncrypted` and the label said something weaker than its own
-    // type. When the widget's word and the domain's word disagree, the domain
-    // is usually the one that was thought about.
-    final label = encrypted
-        ? 'End-to-end encrypted'
-        : attributed
-        ? 'Not end-to-end encrypted · ${routing.islandHost}'
-        : 'Not end-to-end encrypted';
-
     return Semantics(
       // The screen reader gets the FULL sentence even when the visible chip is
       // compact: the reason to shorten is horizontal space, which costs a
@@ -82,14 +61,11 @@ class MediaConfidentialityChip extends ConsumerWidget {
       // reason: the media is not in the clear ON THE WIRE, it is decrypted AT
       // the island. What the user needs to know is WHO CAN HEAR THEM, so say
       // that instead of a transport claim that is false.
-      label: encrypted
-          ? 'This call is end to end encrypted.'
-          : routing.hasAttribution
-          ? 'This call is not end to end encrypted. ${routing.islandHost} can '
-                'hear and see it.'
-          // Named vaguely because it is not known, not to be gentle about it.
-          : 'This call is not end to end encrypted. The island carrying it can '
-                'hear and see it.',
+      // Both strings come from [MediaRouting], which is also what the Call
+      // entry's subtitle renders. Two surfaces, one source — two controls
+      // describing one fact differently is how a disclosure becomes a lie on
+      // whichever one you did not look at.
+      label: routing.sentence,
       container: true,
       child: ExcludeSemantics(
         child: Container(
@@ -116,7 +92,7 @@ class MediaConfidentialityChip extends ConsumerWidget {
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
-                  label,
+                  routing.label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(

@@ -88,6 +88,47 @@ void main() {
     });
   });
 
+  group('attribution is not an open string', () {
+    // Carnot, round 2: `''` was a sentinel in an open type, so "empty",
+    // "whitespace" and "not resolved yet" were the same value — and a
+    // whitespace host would have rendered as a real attribution, printing
+    // "Not end-to-end encrypted · " at the user.
+    test('null means unattributed', () {
+      const r = MediaRouting(
+        confidentiality: MediaConfidentiality.notEndToEndEncrypted,
+      );
+      expect(r.hasAttribution, isFalse);
+      expect(r.label, 'Not end-to-end encrypted');
+    });
+
+    test('whitespace is not an attribution', () {
+      const r = MediaRouting(
+        confidentiality: MediaConfidentiality.notEndToEndEncrypted,
+        islandHost: '   ',
+      );
+      expect(r.hasAttribution, isFalse);
+      expect(r.label, 'Not end-to-end encrypted');
+      expect(r.sentence, isNot(contains('  can hear')));
+    });
+  });
+
+  // DRIFT GUARD. The sentence now renders on TWO surfaces — this chip and the
+  // Call entry's subtitle. Two controls describing one fact differently is how
+  // a disclosure becomes a lie on whichever one you did not look at, so both
+  // read [MediaRouting] and this pins that they agree on the claim.
+  test('the chip label and the spoken sentence make the same claim', () {
+    expect(unencrypted.label, contains('Not end-to-end encrypted'));
+    expect(unencrypted.sentence, contains('not end to end encrypted'));
+    expect(unencrypted.label, contains('chat.imagineering.cc'));
+    expect(unencrypted.sentence, contains('chat.imagineering.cc'));
+
+    const enc = MediaRouting(
+      confidentiality: MediaConfidentiality.endToEndEncrypted,
+    );
+    expect(enc.label, isNot(contains('Not')));
+    expect(enc.sentence, isNot(contains('not end to end')));
+  });
+
   testWidgets('it names the exposure in words, and names the island', (
     tester,
   ) async {
