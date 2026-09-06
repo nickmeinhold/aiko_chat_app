@@ -38,6 +38,7 @@ import 'package:aiko_chat_app/app/theme/theme_builder.dart';
 import 'package:aiko_chat_app/app/theme/theme_presets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 /// A face the reader can actually pick. The system font is the uninteresting
 /// case — null family on both sides of every comparison.
@@ -88,6 +89,24 @@ Future<void> _pump(WidgetTester tester, Widget child) async {
 }
 
 void main() {
+  // No network from a unit test. `GoogleFonts` otherwise tries to FETCH Inter
+  // over HTTP on the first render, which makes this file slow, flaky offline,
+  // and quietly dependent on fonts.gstatic.com being up.
+  //
+  // Turning fetching off does not weaken the measurement, because the
+  // measurement never needed the GLYPHS — it reads which family the span
+  // RESOLVED to, and `GoogleFonts` names the family whether or not the bytes
+  // ever arrive. The fixture check below is what proves that is still true: if
+  // disabling the fetch ever stopped the family reaching the text theme, every
+  // case would go void rather than silently passing on two nulls.
+  //
+  // It DOES leave a line in the run output, once per render: "allowRuntimeFetching
+  // is false but font Inter-Regular was not found in the application assets".
+  // That is true and harmless — the bytes really are absent — and it is left in
+  // rather than silenced, because the alternative is a test that phones
+  // fonts.gstatic.com to prove something about a string.
+  GoogleFonts.config.allowRuntimeFetching = false;
+
   setUp(() {
     // The fixture check, run before every case rather than once, because a
     // case that silently lost the face would otherwise report a clean pass.
