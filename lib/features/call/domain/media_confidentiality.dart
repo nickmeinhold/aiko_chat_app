@@ -44,6 +44,7 @@
 // by the code it is about. Do not reach for that cache here.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
@@ -91,6 +92,20 @@ class MediaRouting {
   /// than not at all.
   bool get hasAttribution => islandHost.isNotEmpty;
 
+  // COUPLING, named now because it is invisible and will break silently
+  // (Carnot, cage-match round 1). [islandHost] is derived from the API base
+  // URL, which is only the media host because a call is hosted by the island
+  // you are signed in to. Under the island tab's Decision 9 (callee-hosting),
+  // a cross-island call is hosted by the CALLEE's island — one the caller never
+  // chose — and this attribution would then name the wrong operator while the
+  // claim stayed true. That is precisely the case Decision 9d says the
+  // disclosure "bites hardest" on, so it must not be discovered there.
+  //
+  // Not fixed here because cross-island calling does not work at all yet
+  // (Decision 9) and inventing a hosting-island parameter now would model a
+  // thing that does not exist. It is gated: claude-tasks#3697 must not ship
+  // without revisiting THIS field.
+
   bool get isEndToEndEncrypted =>
       confidentiality == MediaConfidentiality.endToEndEncrypted;
 }
@@ -119,9 +134,30 @@ final mediaRoutingProvider = Provider<MediaRouting>((ref) {
     // `Uri.parse(...).host` rather than the mark module's `islandKey`: this is a
     // security sentence, not a drawing, and it should not quietly inherit the
     // normalisation or the cache of the identity-colour machinery.
-    host = Uri.tryParse(ref.watch(configProvider).httpBaseUrl)?.host ?? '';
-  } catch (_) {
-    // No config, no island name, same warning.
+    final raw = ref.watch(configProvider).httpBaseUrl;
+    host = Uri.tryParse(raw)?.host ?? '';
+    if (host.isEmpty && raw.isNotEmpty && !raw.contains('://')) {
+      // A scheme-less base URL ("chat.example.com") PARSES — the whole string
+      // lands in `path` and `host` comes back empty — so the disclosure went
+      // mute for a config shape that is not obviously invalid (Maxwell,
+      // cage-match round 1). Re-parse as authority-only to recover the name.
+      // Deliberately NOT falling back to the raw string: a base URL can carry
+      // userinfo or a path, and a warning is the last place to print either.
+      host = Uri.tryParse('//$raw')?.host ?? '';
+    }
+  } catch (e, st) {
+    // The aperture was `catch (_)` and swallowed EVERYTHING (Maxwell,
+    // cage-match round 1): a genuine bug in `configProvider` — a bad cast, a
+    // failed assertion — presented identically to "no SharedPreferences in a
+    // widget test", so the next person debugging a missing island name would
+    // read a comment saying "no config" while the truth was a TypeError three
+    // layers down. The BEHAVIOUR must stay broad (any failure here still
+    // degrades to an unattributed warning rather than no warning), so the fix
+    // is not a narrower catch — it is leaving a breadcrumb.
+    assert(() {
+      debugPrint('media disclosure: island attribution unavailable — $e\n$st');
+      return true;
+    }());
   }
   return MediaRouting(
     confidentiality: resolveMediaConfidentiality(),

@@ -6,6 +6,7 @@ import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
 import 'package:aiko_chat_app/features/call/presentation/ring_overlay.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aiko_chat_app/app/feature_flags.dart';
@@ -94,7 +95,12 @@ void main() {
   ) async {
     await tester.pumpWidget(harness(initial: invite));
     await tester.pumpAndSettle();
-    expect(find.text('Not encrypted'), findsOneWidget);
+    // Full width now, so the ring names the island too — the chip is no longer
+    // squeezed into the caller's column beside two buttons.
+    expect(
+      find.text('Not end-to-end encrypted · chat.imagineering.cc'),
+      findsOneWidget,
+    );
     expect(find.text('Answer'), findsOneWidget);
 
     // PRESENT is not VISIBLE. This repo has a scar exactly here: the composer's
@@ -102,8 +108,24 @@ void main() {
     // seen, in either theme, since it shipped — while every test that mentioned
     // it passed. A disclosure nobody can see is the same failure with worse
     // consequences, so the geometry is asserted rather than assumed.
-    final rect = tester.getRect(find.text('Not encrypted'));
+    final rect = tester.getRect(
+      find.text('Not end-to-end encrypted · chat.imagineering.cc'),
+    );
     expect(rect.width, greaterThan(40));
+    // NOT ELLIPSIZED. The round-1 fix that corrected the overclaim made the
+    // label longer, and squeezed into the old slot it rendered as
+    // "Not end-to-end …" — the one word carrying the meaning was the word cut,
+    // while `find.text` and this very rect assertion both still passed, because
+    // the finder matches the Text's `data` and ellipsis happens at paint. So
+    // the box is now checked against what the glyphs actually need.
+    final painted = tester.renderObject<RenderParagraph>(
+      find.text('Not end-to-end encrypted · chat.imagineering.cc'),
+    );
+    expect(
+      painted.didExceedMaxLines,
+      isFalse,
+      reason: 'the disclosure is being truncated — the user sees a fragment',
+    );
     expect(rect.height, greaterThan(10));
     // On screen, in the banner, at the moment of the decision. Deliberately NOT
     // asserting it sits above the Answer button: it lives in the caller's
@@ -113,7 +135,13 @@ void main() {
     // not a y-coordinate, and encoding it as one was a false precision that
     // failed on correct code.
     expect(rect.top, greaterThanOrEqualTo(0));
-    expect(rect.bottom, lessThan(tester.view.physicalSize.height));
+    // LOGICAL against LOGICAL. `getRect` is logical; `view.physicalSize` is
+    // physical, and comparing them only happened to pass because this harness
+    // pins devicePixelRatio to 1.0 (Carnot, cage-match round 1) — a check that
+    // is right by coincidence is not a check.
+    final viewportHeight =
+        tester.view.physicalSize.height / tester.view.devicePixelRatio;
+    expect(rect.bottom, lessThan(viewportHeight));
   });
 
   testWidgets('a ring shows the caller, Answer and Ignore over the route', (

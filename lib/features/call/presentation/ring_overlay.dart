@@ -67,7 +67,11 @@ class _RingBanner extends ConsumerWidget {
         color: scheme.surfaceContainerHighest,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
             children: [
               Icon(Icons.videocam, color: scheme.primary),
               const SizedBox(width: 12),
@@ -86,13 +90,6 @@ class _RingBanner extends ConsumerWidget {
                       'Incoming call',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    // The callee is deciding whether to answer, which is the
-                    // one moment they can still act on this. Compact: the row
-                    // already carries a name and two buttons, so the island
-                    // host moves to the screen reader label rather than
-                    // squeezing the claim itself.
-                    const SizedBox(height: 6),
-                    const MediaConfidentialityChip(compact: true),
                   ],
                 ),
               ),
@@ -112,6 +109,22 @@ class _RingBanner extends ConsumerWidget {
                 icon: const Icon(Icons.call),
                 label: const Text('Answer'),
               ),
+                ],
+              ),
+              // The disclosure gets its OWN full-width line rather than a slot
+              // inside the caller's column, and this is a render-driven fix,
+              // not a taste one. Squeezed beside the name and two buttons, the
+              // corrected label ("Not end-to-end encrypted") ELLIPSIZED to
+              // "Not end-to-end …" — the one word carrying the meaning was the
+              // word that got cut. Every test still passed: `find.text` matches
+              // the Text's `data` and the geometry assertion measures the box,
+              // while ellipsis happens at paint. Only looking at the pixels
+              // caught it.
+              //
+              // Full width also buys back the island's name, so the `compact`
+              // variant that existed to drop it has no caller left.
+              const SizedBox(height: 8),
+              const MediaConfidentialityChip(),
             ],
           ),
         ),
