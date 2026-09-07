@@ -8,6 +8,7 @@
 | **Created** | 2026-09-07 |
 | **Thread** | Andy's notes 2026-09-07 ("Server: Name, URL, ☐ Description"), worked through in the app tab |
 | **Reference** | [ADR-0004: Sovereign identity federation](0004-sovereign-identity-federation.md) (identity=key, home-scoped handles, no central directory); `lib/features/settings/domain/island_entry.dart`; claude-tasks#3774 (an evidence viewer must verify signatures itself) |
+| **Prior art — found AFTER drafting** | **claude-tasks#3973** (`project:aiko-chat-island`, 2026-09-06, open, *"crucible it"*) — attestation as a FOUNDATION under #3796, #1962 and the update audit. **This ADR is a consumer of that layer, not a substitute for it.** See "Prior art" below. |
 
 ## Summary
 
@@ -214,6 +215,46 @@ uses, and it cannot be shown as an identicon. Worth revisiting if operator
 attestation adoption is poor: domain control could be a second, weaker tier.
 
 ## Prior art
+
+> **⚠ claude-tasks#3973 was found AFTER this ADR was drafted, and it should have been
+> found before.** The global tracker search that would have surfaced it was run this
+> same day for a different topic and not for "attestation" — the exact miss
+> `feedback_assume_absence_before_inventory` names. Recording it here rather than
+> quietly folding it in, because a citation added late reads identically to one
+> found early, and the difference matters for how much independent weight the
+> convergence below deserves.
+
+**claude-tasks#3973 — "Attestation is the missing foundation under #3796, #1962 and
+the update audit."** Opened 2026-09-06 on the island repo, one day before this ADR,
+at Nick's explicit push (*"attestation solves this and other things!!"*), flagged for
+a crucible. It reaches this ADR's central mechanism independently and states it more
+generally:
+
+> *"`/v1/island` is signed — but **by the island's own key**, so it proves identity,
+> never honesty."*
+
+That is exactly §2's rule (an island signing *"I am operated by K"* is worthless)
+generalised past the operator field to every claim an island makes about itself. Its
+framing is the better one and should govern: **the goal is not preventing a lying
+operator but making dishonesty expensive, specific, and eventually visible** — the
+Certificate Transparency posture, which does not stop a CA mis-issuing and instead
+makes mis-issuance permanently public.
+
+**Consequence for this ADR's status.** ADR-0008 is a *consumer* of that foundation,
+not an alternative to it. Two things follow:
+1. The operator attestation should be **one statement type within #3973's evidence
+   layer**, not a bespoke signing path invented for the picker screen. If #3973's
+   crucible produces a general attestation envelope, §2's payload becomes an instance
+   of it.
+2. The **transparency/visibility half is missing here.** This ADR makes a false
+   operator claim *unrenderable*; it does nothing to make an attempt *visible*. On
+   #3973's framing that is the weaker half of the job, and it is a real gap in §2
+   rather than out of scope.
+
+Convergence note, priced honestly: the app and island tabs reached "self-signature
+proves identity, never honesty" separately, a day apart, from different problems.
+That is genuine corroboration of the principle — and no evidence at all that either
+document's *scope* is right, which is what the crucible is for.
 
 - **ADR-0004** — identity is the key; handles are home-scoped; no central
   directory. This ADR is an application of all three.
