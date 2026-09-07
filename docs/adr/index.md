@@ -25,6 +25,7 @@ The pipeline: ADR (why) → RFC/spec (what) → code (derived, verified against 
 | 0005 | The identity graph | Draft | Nick |
 | 0006 | Sybil resistance: reputation, not personhood | Draft | Nick |
 | 0007 | Porting Aiko Services to other languages | Reserved (Andy's research in progress) | Andy |
+| 0008 | Island self-description and the operator attestation | Draft (island-side half is a blocking dependency) | Nick |
 
 ## The RFC series (protocol specifications)
 
