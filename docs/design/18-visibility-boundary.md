@@ -155,12 +155,50 @@ discovered later in the code it reads as an inconsistency.
 
 Room-level media E2EE is **available now** via LiveKit: insertable streams, all tracks and data
 channels, group calls supported, the SFU forwards packets it cannot decrypt. **No MLS, no
-message-path change.** It is held shut by an island config bolt that exists for a *different*
-door — the message-E2EE problem, which is genuinely hard and genuinely unsolved.
+message-path change.**
 
-Real costs of turning it on: server-side recording, transcription and simulcast layer switching
-become limited; and `island_mode` must split into two signed manifest fields, since advertising
-`moderator` while media is opaque is mislabel-by-omission.
+> **CORRECTION, 2026-09-09 — the premise this section was first written on is false, and it had
+> been carried in memory and in the tracker for weeks.** The record said media E2EE was *"held
+> shut by an island config bolt meant for messages"* (island `config.py`). **It is not, and
+> there is no bolt.**
+>
+> **[island, verified in island source this session]** `island_mode` is the island's elected
+> **moderation posture**, signed into its self-manifest so a client can read it before a user
+> speaks. `moderator` means *the gateway holds plaintext and the report/takedown machinery
+> operates.* The value `e2ee` is schema-reserved for **Phase B (MLS)** — the **message** path —
+> and is hard-rejected at boot in every environment *because advertising it while the gateway
+> holds plaintext would be exactly the mislabel the feature exists to prevent.*
+>
+> **That guard is correct and should stay. It gates a WORD, not a door.**
+>
+> **[app, verified against the locked `livekit_client` 2.10.0]** Media E2EE is **client-side**:
+> `E2EEOptions(keyProvider:)` passed to `Room.connect()`, `EncryptionType.kGcm`. The SFU needs
+> to permit nothing — it forwards packets it cannot decrypt. **Our app simply never passes the
+> argument.**
+
+**What the real costs are, once the false one is removed:**
+
+- **Server-side recording, transcription, egress — vacuous for us.** Verified: no recording,
+  transcription or egress anywhere in the call path, app-side or island-side. These are
+  LiveKit's generic reasons, inherited as though they were ours.
+- **Simulcast layer switching — vacuous at 1:1.** `simulcast: true` is set, but
+  `call_screen.dart:217` renders `remote.first` — a single remote participant. Layer switching
+  between multiple subscribers is not a capability we have.
+- **The manifest split is a CONSEQUENCE, not a blocker.** An island whose *media* is opaque but
+  whose *messages* are plaintext cannot be honestly described by either single word. So
+  `island_mode` would need to split into two signed fields. Real work, downstream of the
+  decision rather than gating it.
+- **Key distribution — this is the actual unbuilt thing.** `E2EEOptions.sharedKey(String)` means
+  **the app supplies the key**, so both ends of a call need the same one. Our sovereign identity
+  keys are Ed25519 (*signing*, not key-agreement), so a call key has to come from somewhere.
+  **For a 1:1 DM this is tractable; for groups it is the key-management problem whose v1 was
+  already struck.** Implementation note for whoever builds it: `setSharedKey` takes a
+  `String` and uses `codeUnits`, so it is a passphrase path — use `setRawKey` for real entropy.
+- **Agent participation — real, and arguably the right answer anyway.** An agent that
+  participates in a call must be a **keyholder, not an eavesdropper**; a pipeline that cannot
+  decrypt cannot run inference. Resident agents ringing handsets is shipped and proven live, so
+  this is not hypothetical — but "an agent in your call holds a key like any other participant"
+  is a better design than "an agent reads your media off the wire."
 
 **And it forces a question rather than avoiding one:** an agent that participates in a call must
 be a **keyholder, not an eavesdropper** — a pipeline that cannot decrypt cannot run inference.
