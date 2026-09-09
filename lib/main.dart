@@ -7,6 +7,7 @@ import 'app/providers.dart';
 import 'app/router.dart';
 import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
+import 'features/notifications/presentation/notification_tap_navigator.dart';
 import 'features/notifications/application/push_providers.dart';
 import 'features/settings/application/island_manifest_provider.dart';
 import 'features/settings/application/theme_mode_controller.dart';
@@ -58,8 +59,12 @@ class AikoChatApp extends ConsumerWidget {
       routerConfig: router,
       // ABOVE the Navigator, so an incoming call reaches you on any route
       // (#2808). `child` is null only before the first route builds.
-      builder: (context, child) =>
-          RingOverlay(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => NotificationTapNavigator(
+        // OUTSIDE the ring overlay: a tapped notification must be honoured even
+        // when nothing is ringing — the ring is long over by the time a human
+        // picks the phone up (measured: 17.55s from invite to tap).
+        child: RingOverlay(child: child ?? const SizedBox.shrink()),
+      ),
     );
   }
 }

@@ -165,12 +165,94 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
   }
 }
 
+/// The channel id from a TAPPED call notification, handed to Dart so the app can
+/// open the conversation the call is in (claude-tasks#3588).
+///
+/// Until this existed the push landed, the handset lit up, and tapping it opened
+/// the app on whatever screen it was last on — indistinguishable to the user
+/// from the app having ignored the call. That is the same silent-failure shape
+/// `ApnsTokenChannel` above was written against, one layer further in.
+///
+/// **THE PAYLOAD KEY IS `c`, ONE CHARACTER.** The island sends exactly
+/// `{"aps": {...}, "c": "<channel_id>"}` and nothing else — the short name is
+/// deliberate there (a 4KB APNs ceiling, and `c` is its only custom field).
+/// Reading `channel_id` or `channelId` here yields nil, routes nowhere, and
+/// reports no problem, which is precisely how this bug family hides.
+///
+/// **IT IS A CHANNEL ID, NEVER A CALL ID.** So this opens the CONVERSATION and
+/// lets the existing ring machinery decide whether there is a live call to
+/// answer. That is deliberate and it is the whole safety argument: `admitRing`
+/// carries nine refusals — signature, block, mute, DM-scope, clock skew, and the
+/// rest — and a tap handler that navigated straight into a call screen would be
+/// a second admission path that honoured none of them. A stale invite therefore
+/// lands the user in the conversation with the call rendered as a call event,
+/// which is honest, rather than joining them to a room nobody is in.
+///
+/// **A TAP CAN ARRIVE BEFORE DART EXISTS.** On a cold start from a killed app,
+/// iOS delivers the tap and *then* the engine spins up. So a tap with no
+/// listener is HELD, not dropped, and drained when Dart subscribes. One slot,
+/// not a list — unlike the token waiters above, where each caller owns a
+/// continuation that must not be lost. Here the value is a navigation intent and
+/// the newest one is the only correct destination.
+final class NotificationTapChannel: NSObject, FlutterStreamHandler {
+  static let shared = NotificationTapChannel()
+
+  private var sink: FlutterEventSink?
+
+  /// A tap that arrived with nobody listening yet. See the cold-start note above.
+  private var pending: String?
+
+  func register(with registrar: FlutterPluginRegistrar) {
+    FlutterEventChannel(
+      name: "cc.imagineering.aikoChatApp/notifications/taps",
+      binaryMessenger: registrar.messenger()
+    ).setStreamHandler(self)
+  }
+
+  /// Called from the `UNUserNotificationCenterDelegate` with the tapped
+  /// notification's `userInfo`.
+  func tapped(userInfo: [AnyHashable: Any]) {
+    guard let channelId = userInfo["c"] as? String, !channelId.isEmpty else {
+      // Not a call notification, or a payload shape we do not understand. Say so
+      // rather than routing somewhere arbitrary — a wrong destination is worse
+      // than none, and this line is the only evidence a reader would ever get.
+      NSLog("[tap] notification tapped with no usable `c` key; not routing")
+      return
+    }
+    if let sink = sink {
+      sink(channelId)
+    } else {
+      pending = channelId
+    }
+  }
+
+  func onListen(
+    withArguments _: Any?, eventSink events: @escaping FlutterEventSink
+  ) -> FlutterError? {
+    sink = events
+    if let held = pending {
+      pending = nil
+      events(held)
+    }
+    return nil
+  }
+
+  func onCancel(withArguments _: Any?) -> FlutterError? {
+    sink = nil
+    return nil
+  }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    // Claim the delegate BEFORE super, so a cold launch caused by a tap is not
+    // delivered to nobody. `didReceive` fires after the delegate is set, and on
+    // a tap-launch iOS calls it once the app finishes launching.
+    UNUserNotificationCenter.current().delegate = self
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -178,6 +260,11 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "ApnsTokenChannel") {
       ApnsTokenChannel.shared.register(with: registrar)
+    }
+    if let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "NotificationTapChannel")
+    {
+      NotificationTapChannel.shared.register(with: registrar)
     }
   }
 
@@ -204,5 +291,36 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
     ApnsTokenChannel.shared.failed()
     super.application(
       application, didFailToRegisterForRemoteNotificationsWithError: error)
+  }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+  /// The user tapped a notification. The ONLY reason this class exists.
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    NotificationTapChannel.shared.tapped(
+      userInfo: response.notification.request.content.userInfo)
+    super.userNotificationCenter(
+      center, didReceive: response, withCompletionHandler: completionHandler)
+  }
+
+  /// A notification arriving while the app is FOREGROUND.
+  ///
+  /// Returns no presentation options, which PRESERVES today's behaviour rather
+  /// than changing it: with no delegate installed iOS suppresses the banner for
+  /// a foregrounded app, and claiming the delegate would otherwise silently
+  /// alter that for every notification type, not just calls. A foregrounded app
+  /// already receives the invite over the websocket and draws `RingOverlay`, so
+  /// a banner would double the same event.
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler:
+      @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    completionHandler([])
   }
 }
