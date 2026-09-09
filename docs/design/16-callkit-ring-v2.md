@@ -117,6 +117,71 @@ rejected explicitly rather than silently — it trades the one property this des
 
 ---
 
+## §1d — The trilemma, and why it dissolves rather than forces a choice
+
+Framed by the island tab (2026-09-09), and it is the sharpest statement of what §1c and design
+12's Decision 4 are circling:
+
+- **(A)** A ring is earned by an established relationship.
+- **(B)** `RingAllowlistStore` is device-local and publishes nothing.
+- **(C)** The ring/no-ring fork sits at the island's send door, because there is no on-device
+  window in which to reconsider.
+
+*"The decision has to be made where the fact isn't. Any two work, all three don't."*
+
+**They are contradictory only if ring/no-ring is binary. It is not.**
+
+| outcome | who can determine it |
+|---|---|
+| **silent** — no push ever leaves the island | island only |
+| **momentary ring** — VoIP sent, Swift verifies, fails, ends immediately | device only |
+| **sustained ring** — VoIP sent, Swift verifies, passes | device only |
+
+Device-local consent fully determines *momentary vs sustained*. **That is the on-device window
+(C) says does not exist** — bounded to the report-then-end interval, but real. Only
+*silent vs momentary* requires a decision where the fact is not.
+
+So A + B + C-as-stated is contradictory, and **A + B + C′ is consistent**, where C′ is the
+narrower true claim: **only the island can produce silence.** That is §0's "no *sustained* ring
+before proof" restated as a topology rather than a caveat.
+
+**The question the dissolution leaves is not "which two do we keep" but "what is a momentary
+ring worth, and to whom?"** Two costs with different owners:
+
+- **The user** — a quarter-second buzz through silent mode and DND from someone they refused.
+  Bounded, and it is exactly the harassment surface, and it is *observable by the attacker*.
+- **Us** — flaw 9 (§7a). A bad report-and-end ratio costs VoIP delivery fleet-wide.
+
+### The escape arm, kept open and not adopted
+
+The island tab's pick is a **blind-signed ring capability** — the island verifies a capability
+it cannot read, so a refused caller gets *silence* rather than a momentary ring. That is the
+only mechanism on the table that buys the first row of the table above, so it stays alive.
+
+**Three objections, recorded so the arm is not adopted by default:**
+
+1. **Revocation asymmetry — disqualifying in this shape.** Device-local consent revokes at the
+   enforcement point, instantly, by the person being woken. A minted capability sits **in the
+   caller's hands** and cannot be revoked, only expired — inverting who holds the off switch in
+   a mechanism whose whole purpose is that the sleeper controls it. Not hypothetical:
+   **claude-tasks#3521** is open on exactly this class (*"revoking consent mid-ring makes the
+   hangup unadmittable — the ring runs its full 30s"*). Short expiry is the only fix; short
+   expiry needs frequent re-minting; re-minting needs a live channel, which a locked handset
+   does not have. The island tab's own key-staleness worry and this are one defect seen from
+   two ends.
+2. **The ruling it cites does not reach it.** Nick's 2026-08-25 sender-anonymity ruling is about
+   what the island *learns*, not about what gates a ring. claude-tasks#3781: *"This decision
+   makes the ring SAFE without making it ANONYMOUS — the app tab had bundled those and they are
+   orthogonal."* Reading it as a mandate for a consent mechanism re-bundles what that comment
+   unbundled.
+3. **Distribution.** A capability must reach the caller over some channel, which is a new trust
+   surface. Device-local consent needs no distribution at all — its main virtue, not an
+   incidental one.
+
+**Position: A + B + C′ is this design's spine.** The capability arm is the named escape **if
+flaw 9 measurement shows the report-and-end ratio is untenable** — a measurement, not a
+preference. Neither document should harden around it before that number exists.
+
 ## §2 — The ring ceiling: design 12's Decision 1c inverts. SURFACED, NOT DECIDED.
 
 Design 12 records:
@@ -158,9 +223,21 @@ signed end held in `RingController._ended`. It does not survive the case that ma
 final Map<String, List<({CallEnd end, DateTime at})>> _ended = {};
 ```
 
-Plain in-memory Dart state. **Empty by construction on a push-woken cold start** — which
-CallKit makes the normal case, not the exotic one. A ring has three endings (ceiling, signed
-hangup, post-hoc refusal) and v1 moved only one of them to the layer that is actually alive.
+Plain in-memory Dart state. **Empty by construction on a push-woken cold start** — and the
+controller's own docstring says push makes that the *normal* case rather than the exotic one:
+*"the island wakes a handset on the INVITE body only, so a cold start processes the invitation
+first by construction and the end is an ordinary afterthought."*
+
+**It is worse than a cold-start problem, and v1 missed this too** (caught by the island tab,
+2026-09-09, verifying rather than conceding). `_forget` bounds `_ended` to
+`kCallInviteFreshness * 2` on the **warm** path as well, with its own comment saying so:
+*"this can only ever hold the last few seconds of calls."* So the signed end is not merely
+absent on cold start — **it has a seconds-wide applicability window always.** The honest
+statement of the occupancy case (claude-tasks#3159) is therefore not "occupancy covers an
+edge": it is **the sentinel has a seconds-wide applicability window and occupancy does not.**
+
+A ring has three endings (ceiling, signed hangup, post-hoc refusal) and v1 moved only one of
+them to the layer that is actually alive.
 
 **Design: the App Group end-buffer** (`ends/<islandMsgId>` in §1a). The end-wake writes it;
 Swift reads it before reporting and ends the call immediately if the invite it names is
@@ -321,9 +398,28 @@ Every VoIP delivery must be reported to CallKit before the handler returns. So:
 The one thing this document does assert: the third arm is the worst of the three, because it
 fails precisely in the state the mechanism exists for (§3's cold start), and fails silently.
 
-**Unmeasured and load-bearing:** whether `reportCall(with:endedAt:)` alone satisfies the
-must-report rule. That is a one-device experiment and it gates the arm choice. **It should be
-run before the arm is picked, not after.**
+### 7b. The island tab's predicate fix, and the tree it sits in
+
+The island tab (2026-09-09) corrected design 12 Decision 4's fork in response to this finding:
+it was never **call / not-call** — an end *is* call-related, which is how the stop became a
+start. The right predicate is **ring-starting / not-ring-starting**, under which an invite is
+VoIP and an end is not. Adopted as correct.
+
+**But do not harden Decision 4 around it yet, because one experiment may make it unnecessary:**
+
+```
+Does reportCall(with:endedAt:) ALONE satisfy the must-report rule?
+├─ YES → ends ride VoIP. Guaranteed wake, no second ring.
+│        The predicate fix is unnecessary; Decision 5's transport stands.
+└─ NO  → ends must go alert. The predicate fix is NECESSARY, and
+         "does an alert wake a locked, RINGING handset in time?"
+         becomes load-bearing and needs its own two-handset measurement.
+```
+
+**Unmeasured and load-bearing:** the top node. **One device, no island** — send a local VoIP
+push, report only `endedAt`, observe whether iOS complains or degrades delivery. It gates the
+arm choice and half the time it moots the second question entirely. **Run it before the arm is
+picked, not after.**
 
 ### 7a. The revocation ceiling (flaw 9)
 
@@ -363,8 +459,13 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
 1. **§3a + §3 retention** — replace the pinned two-clock invariant, re-bind `_ended`. Correct
    under every arm of §2, so it is safe first. **Blocked on `kPushDeliverySlack` having a
    derivation.**
-2. **§7's one-device experiment** — does `reportCall(with:endedAt:)` alone satisfy the
-   must-report rule? Cheap, decisive, and it gates §7's arm.
+2. **§7b's one-device experiment** — does `reportCall(with:endedAt:)` alone satisfy the
+   must-report rule? One handset, no island, decisive, and it gates §7's arm. **Run first: it
+   may moot the two-handset alert-wake measurement below.**
+2b. **The two-handset alert-wake measurement**, only on the NO branch — ring one device, send
+   the end as an alert push, observe whether it lands and how late. The island tab drives its
+   half. Worth batching with the two-device NAT measurement PR #169 already owes, since both
+   need two real handsets on real networks.
 3. **§2 decided by Nick.** The ceiling's owner. Everything about enforcement branches on it.
 4. **§4 the UUID map**, then **§1 the Swift admission path** — one change, since the delegate
    cannot report without the map.
