@@ -294,7 +294,12 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
   }
 }
 
-extension AppDelegate: UNUserNotificationCenterDelegate {
+// NOT `extension AppDelegate: UNUserNotificationCenterDelegate`.
+// `FlutterAppDelegate` ALREADY declares that conformance, so restating it is a
+// "Redundant conformance" compile error — one that neither `flutter analyze`
+// nor the Dart suite can see, because both stop at the language boundary. This
+// file's own methods are `override`s for exactly that reason.
+extension AppDelegate {
   /// The user tapped a notification. The ONLY reason this class exists.
   override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
