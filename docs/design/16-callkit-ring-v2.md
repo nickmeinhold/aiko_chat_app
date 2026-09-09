@@ -170,10 +170,12 @@ only mechanism on the table that buys the first row of the table above, so it st
    does not have. The island tab's own key-staleness worry and this are one defect seen from
    two ends.
 2. **The ruling it cites does not reach it.** Nick's 2026-08-25 sender-anonymity ruling is about
-   what the island *learns*, not about what gates a ring. claude-tasks#3781: *"This decision
+   what the island *learns*, not about what gates a ring. claude-tasks#3745: *"This decision
    makes the ring SAFE without making it ANONYMOUS — the app tab had bundled those and they are
    orthogonal."* Reading it as a mandate for a consent mechanism re-bundles what that comment
-   unbundled.
+   unbundled. **And the sentence after it cuts harder against the capability arm than anything
+   either tab argued:** *"restricting the caller set SHRINKS the anonymity set. Friends/consent
+   makes the island's picture of who-rang-whom more precise, not less."*
 3. **Distribution.** A capability must reach the caller over some channel, which is a new trust
    surface. Device-local consent needs no distribution at all — its main virtue, not an
    incidental one.
