@@ -16,6 +16,11 @@ enum CallConnectionState {
   /// The deployment has video disabled (island returned 503). Not an error to
   /// retry — the affordance should be hidden/disabled where this is known.
   videoUnavailable,
+
+  /// The other party left. TERMINAL, and deliberately NOT [failed]: the call
+  /// happened and is now over. A failure invites a retry; this has nobody left
+  /// to reach, so the copy, the icon and the toolbar all differ.
+  ended,
 }
 
 /// The outcome of a single [LiveKitCallService.connect] attempt. Split so the
