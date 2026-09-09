@@ -38,7 +38,8 @@ The flaw-5 decision dissolved v1's headline crisis. Recorded here so nobody re-d
 reported to CallKit before the delivery handler returns, so the arm is
 *verify → report → immediately end on failure*, never *verify-or-silence*. A forged or
 unverifiable push still produces a momentary ring. That residual is not cosmetic: it is the
-input to flaw 9 (§7), where a bad report-and-end ratio costs VoIP delivery fleet-wide.
+input to flaw 9 (§7), where a sustained report-and-end pattern costs VoIP delivery on the
+affected device (see the correction at §7a — not fleet-wide).
 
 The gate v1 adopted — *no `CXProviderDelegate` line until flaw 5 is decided* — is **spent**,
 its stated condition having cleared on 2026-09-01. Note for anyone reading the tracker: the
@@ -132,7 +133,8 @@ rejected explicitly rather than silently — it trades the one property this des
 > **report-and-immediately-end IS the iOS 13 abuse pattern the must-report rule was written to
 > kill** — an app taking a VoIP push and not ringing. So flaw 9 is not a ratio to tune; routing
 > refused callers through that cell is doing the prohibited thing systematically, and the
-> penalty is fleet-wide revocation.
+> consequence is per-device denial of VoIP delivery (corrected at §7a; the strike said
+> fleet-wide revocation and that was never checked).
 >
 > **The precise error was mine and it is about spendability, not physics.** The momentary cell
 > exists; it is a **malformed-push failure mode**, not a destination a design may route refused
@@ -185,7 +187,7 @@ ring worth, and to whom?"** Two costs with different owners:
 
 - **The user** — a quarter-second buzz through silent mode and DND from someone they refused.
   Bounded, and it is exactly the harassment surface, and it is *observable by the attacker*.
-- **Us** — flaw 9 (§7a). A bad report-and-end ratio costs VoIP delivery fleet-wide.
+- **Us** — flaw 9 (§7a). A sustained report-and-end pattern costs VoIP delivery per device.
 
 ### The escape arm, kept open and not adopted
 
@@ -467,9 +469,40 @@ picked, not after.**
 
 ### 7a. The revocation ceiling (flaw 9)
 
-A `should_wake` hole, or a retraction that is not actually sub-second, produces a fleet-wide
-report-and-end ratio, and **Apple revokes VoIP privileges for that**. The failure mode is
-losing the right to ring *anyone*. Design 12 Decision 7 priced harassment; v1 did not price
+
+> **CORRECTION, 2026-09-10 — "fleet-wide revocation" was wrong, three times over.**
+> Nick asked whether Apple *penalises* or *denies*. Fetched the source rather than
+> answering from the memory that produced the word. Apple, verbatim:
+>
+> > *"On iOS 13.0 and later, if you fail to report a call to CallKit, the system
+> > will terminate your app. Repeatedly failing to report calls may cause the
+> > system to stop delivering any more VoIP push notifications to your app."*
+>
+> - **It is DENIAL OF DELIVERY, not a penalty or a revoked entitlement.** Nothing
+>   is taken away; the OS simply stops handing pushes to the app.
+> - **"The system" is the OS ON THE DEVICE, and "your app" scopes it there.** No
+>   evidence for anything fleet-wide, and direct corroboration for per-device:
+>   `CSDVoIPApplicationKillCounts`, found on this handset tonight, lives in the
+>   **device-local** `com.apple.TelephonyUtilities` preferences domain.
+> - **"May cause" — not deterministic**, and recovery is not established either
+>   way, so "unrecoverable" was also unearned.
+>
+> **The conclusion survives and the reason improves.** A single failure already
+> terminates the app, and per-device denial is *harder* to detect than a
+> fleet-wide event, not easier: it accumulates silently on the devices that take
+> the most calls, so calling quietly stops working for the heaviest users with no
+> error surfacing anywhere. That is this project's recurring failure shape, and it
+> argues for arm (a) more strongly than the overclaim did.
+>
+> Provenance of the error: the phrase entered as Tesla's temper wording
+> (*"Apple revokes VoIP privileges for that"*), and I restated it four times —
+> into this document twice, into design 18, and into a live ruling to the island
+> tab — each time as established fact. Nobody checked it because it was never
+> written as a claim.
+
+A `should_wake` hole, or a retraction that is not actually sub-second, produces a sustained
+report-and-end pattern, and **the system stops delivering VoIP pushes to the app on that
+device**. The failure mode is calling silently ceasing to work, device by device. Design 12 Decision 7 priced harassment; v1 did not price
 revocation. **It is priced here as a hard ceiling on §0's residual and on §1c arm (b):**
 report-and-end must be rare, which means the verify set must be *right*, not merely *fast*.
 
