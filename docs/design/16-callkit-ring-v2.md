@@ -117,7 +117,42 @@ rejected explicitly rather than silently — it trades the one property this des
 
 ---
 
-## §1d — The trilemma, and why it dissolves rather than forces a choice
+## §1d — The trilemma — **STRUCK 2026-09-09, REVISION OWED**
+
+> **DO NOT BUILD OR CITE THIS SECTION.** The `/design-temper` on island design 12a
+> (4/4 RECAST) struck the dissolution below, and the strike holds. Tesla: *"The trilemma did
+> not dissolve; it was recategorized into a cell Apple does not sell."*
+>
+> **What survives:** the three-outcome table is factually right about what the device *can do*.
+> Swift can **decide** sustain-vs-retract before reporting.
+>
+> **What fails, and it is the load-bearing half:** Swift cannot **enact** silence.
+> `reportNewIncomingCall` is an async RPC to SpringBoard, and `reportCall(endedAt:)` races
+> "unknown UUID" before completion against a full-screen flash after it. More decisively,
+> **report-and-immediately-end IS the iOS 13 abuse pattern the must-report rule was written to
+> kill** — an app taking a VoIP push and not ringing. So flaw 9 is not a ratio to tune; routing
+> refused callers through that cell is doing the prohibited thing systematically, and the
+> penalty is fleet-wide revocation.
+>
+> **The precise error was mine and it is about spendability, not physics.** The momentary cell
+> exists; it is a **malformed-push failure mode**, not a destination a design may route refused
+> callers into. §0's downgrade ("no *sustained* ring before proof") is as far as the claim goes.
+>
+> **Consequence: refusal cannot be routed through the device**, which puts the trilemma back
+> where the island tab found it. The revision is owed and is not attempted tonight.
+>
+> **Diagnosis worth keeping** (island tab's, and it indicts both tabs equally): *"we both needed
+> a third cell to keep device-local consent and VoIP in the same design."* My §1d and their
+> headline were the same wish, reached independently — which is precisely why agreeing with each
+> other proved nothing.
+>
+> **(C) is NOT the escape.** Moved to a research appendix in 12a, on Tesla's warning that
+> *"production will grab it at the first Apple warning, long before anyone who does this for a
+> living has spoken."* Its unlinkability is not low-confidence, it is **spent**: the island
+> stores an attributable invite on a named channel and holds the device token, and on a
+> self-hosted island the anonymity set is a household.
+
+## §1d (struck) — the original argument, kept as the record
 
 Framed by the island tab (2026-09-09), and it is the sharpest statement of what §1c and design
 12's Decision 4 are circling:
@@ -289,9 +324,16 @@ the signed body. Two failures follow if the map is left implicit:
 
 1. The caller mints the call id **client-side** as a ULID in the signed invite body
    (`aiko:call/2 <ulid>`). ULID is 128 bits → lossless as a `UUID`. Zero island schema.
-2. The island carries that id verbatim in the push payload. It is **not** authoritative — it
+2. ~~The island carries that id verbatim in the push payload. It is **not** authoritative — it
    is a lookup hint. Swift verifies the signed bytes and takes the id **from the signed body**,
-   never from the payload envelope.
+   never from the payload envelope.~~ **CORRECTED 2026-09-09 — "never" is false under
+   must-report.** On a verification *failure* there is no trusted signed ULID, and a report is
+   still mandatory, so the failure path has no id but the payload's. Carnot and Tesla
+   independently landed on the only self-consistent contract, adopted here: **always report the
+   payload UUID; admit only if the signed ULID equals it; on mismatch, end the id already
+   reported; never report a second id.** The island tab's own "authoritative by construction"
+   was vacuous in the other direction — the island neither mints nor checks the UUID, so an
+   attacker copying a **live** UUID into their own signed invite has it carried faithfully.
 3. The CallKit `UUID` **is** that ULID. The end-buffer is keyed on it. `replyTo` on the end
    sentinel remains the **server ULID** of the invite row (`reference_reply_to_is_server_ulid_fk`
    — a `client_msg_id` there refuses the whole frame), so the buffer stores both and the map is
