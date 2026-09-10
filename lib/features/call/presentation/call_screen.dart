@@ -22,6 +22,27 @@ import 'media_confidentiality_chip.dart';
 /// double-fired open resolves to the same room, and this dedups the screen.)
 bool _callLaunchInFlight = false;
 
+/// Set when the mounted call route has reached [CallConnectionState.ended].
+///
+/// "A call route is open" and "a call is live" STOP BEING THE SAME FACT the
+/// moment an ended call screen stays mounted waiting to be closed — which is
+/// exactly what this feature now does, deliberately, rather than vanishing
+/// under the reader. Without this split the ring banner would refuse a genuine
+/// new call with "You're already in a call" for a call that is over.
+bool _mountedCallEnded = false;
+
+/// Whether a call route is currently open — live OR ended-but-not-yet-closed.
+bool get isCallRouteOpen => _callLaunchInFlight;
+
+/// Whether the user is in a LIVE call.
+///
+/// Exposed because [pushCallOn] silently returns while a route is open, and the
+/// ring banner's Answer is the one caller for whom that silence is
+/// user-visible: it stops the ring first, then no-ops, so the banner vanishes
+/// and no call opens. A caller that can be refused has to be able to ask — and
+/// has to be told the truth about which of the two conditions refused it.
+bool get isInLiveCall => _callLaunchInFlight && !_mountedCallEnded;
+
 Future<void> pushCall(
   BuildContext context,
   String channelId, {
@@ -97,11 +118,22 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       channelId: widget.channelId,
     );
     _endAnnouncer = ref.read(callEndAnnouncerProvider);
+    // This route owns the module-level liveness flag for its whole lifetime:
+    // cleared on mount, set when the call ends, cleared again on dispose so a
+    // later call never inherits a stale `ended`.
+    _mountedCallEnded = false;
+    _session.state.addListener(_trackLiveness);
     unawaited(_session.connect());
+  }
+
+  void _trackLiveness() {
+    _mountedCallEnded = _session.state.value == CallConnectionState.ended;
   }
 
   @override
   void dispose() {
+    _session.state.removeListener(_trackLiveness);
+    _mountedCallEnded = false;
     // Fire-and-forget: leave() tears down the room + disposes the session's
     // notifiers. The child ValueListenableBuilders unsubscribe first (children
     // unmount before this parent), so disposing the notifiers here is safe.
@@ -213,12 +245,27 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         _session.message.value ?? 'Call connection failed',
       );
     }
+    if (state == CallConnectionState.ended) {
+      return _centeredMessage(Icons.call_end, 'Call ended');
+    }
     final remote = _session.service.remoteParticipants.values;
-    final remoteVideo = remote.isEmpty ? null : _videoOf(remote.first);
+    final peer = remote.isEmpty ? null : remote.first;
+    final remoteVideo = _videoOf(peer);
     if (remoteVideo != null) {
       return VideoTrackRenderer(remoteVideo, fit: VideoViewFit.contain);
     }
-    // Connected but no remote video yet → waiting.
+    if (peer != null) {
+      // THEY ARE HERE, with their camera off. `_videoOf` returns null both for
+      // "no participant" and for "participant with no unmuted video", so these
+      // two used to render identically — telling you someone who is talking to
+      // you has not arrived. It also covers the mid-call camera toggle:
+      // TrackMuted bumps, and this screen used to announce their departure.
+      //
+      // No name in the copy: participant identity is baked into the JWT the
+      // island minted, and `VideoToken` carries only token/url/room, so the app
+      // cannot name them — and a wrong name is worse than none.
+      return _centeredMessage(Icons.videocam_off, 'Their camera is off');
+    }
     return _centeredMessage(
       Icons.hourglass_empty,
       state == CallConnectionState.connecting
@@ -287,6 +334,23 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   }
 
   Widget _toolbar(CallConnectionState state) {
+    if (state == CallConnectionState.ended) {
+      // The red hang-up circle is a lie twice over here: there is nothing left
+      // to end, and red reads as danger for what is simply the call being over.
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        color: Colors.black38,
+        child: Center(
+          child: FilledButton.icon(
+            // Same canPop fallback the leave button carries: a deep-linked
+            // /call/:id has an empty stack.
+            onPressed: () => context.canPop() ? context.pop() : context.go('/'),
+            icon: const Icon(Icons.close),
+            label: const Text('Close'),
+          ),
+        ),
+      );
+    }
     final live =
         state == CallConnectionState.connected ||
         state == CallConnectionState.reconnecting;

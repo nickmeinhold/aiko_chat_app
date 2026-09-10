@@ -14,7 +14,7 @@ import '../../../app/router.dart';
 import '../application/ring_controller.dart';
 import '../domain/call_invite.dart';
 import 'media_confidentiality_chip.dart';
-import 'call_screen.dart' show pushCallOn;
+import 'call_screen.dart' show isCallRouteOpen, isInLiveCall, pushCallOn;
 
 /// Wraps [child] with the ring banner. A no-op (zero layout cost, no overlay)
 /// whenever nothing is ringing.
@@ -72,43 +72,43 @@ class _RingBanner extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-            children: [
-              Icon(Icons.videocam, color: scheme.primary),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      caller,
-                      style: Theme.of(context).textTheme.titleMedium,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                children: [
+                  Icon(Icons.videocam, color: scheme.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          caller,
+                          style: Theme.of(context).textTheme.titleMedium,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          'Incoming call',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
                     ),
-                    Text(
-                      'Incoming call',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-              // "Ignore", NOT "Decline". The caller is never told — there is no
-              // signal back to them until the island's occupancy endpoint lands
-              // (claude-tasks#3159). "Decline" implies they hear about it; the
-              // word would be the lie, so the honest word does the work instead
-              // of a disclaimer.
-              TextButton(
-                onPressed: () =>
-                    ref.read(incomingRingProvider.notifier).stopRinging(),
-                child: const Text('Ignore'),
-              ),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                onPressed: () => _answer(context, ref),
-                icon: const Icon(Icons.call),
-                label: const Text('Answer'),
-              ),
+                  ),
+                  // "Ignore", NOT "Decline". The caller is never told — there is no
+                  // signal back to them until the island's occupancy endpoint lands
+                  // (claude-tasks#3159). "Decline" implies they hear about it; the
+                  // word would be the lie, so the honest word does the work instead
+                  // of a disclaimer.
+                  TextButton(
+                    onPressed: () =>
+                        ref.read(incomingRingProvider.notifier).stopRinging(),
+                    child: const Text('Ignore'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    onPressed: () => _answer(context, ref),
+                    icon: const Icon(Icons.call),
+                    label: const Text('Answer'),
+                  ),
                 ],
               ),
               // The disclosure gets its OWN full-width line rather than a slot
@@ -133,6 +133,36 @@ class _RingBanner extends ConsumerWidget {
   }
 
   void _answer(BuildContext context, WidgetRef ref) {
+    // A call is already open. `pushCallOn` would return silently (its latch is
+    // held for the whole duration of the live call, since `router.push`
+    // resolves only on pop), so stopping the ring first would make the banner
+    // vanish with no call and no message — the user presses the primary button
+    // and the call disappears. Reachable, not theoretical: this banner is
+    // mounted above the Navigator and draws over the live call screen.
+    //
+    // The ring is deliberately LEFT RINGING. Answering is refused, not the
+    // invitation — the user can still Ignore it, or end the current call and
+    // answer within the remaining ring window.
+    if (isInLiveCall) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("You're already in a call")));
+      return;
+    }
+    // A call route is open but the call is OVER — the user is sitting on "Call
+    // ended" and has not pressed Close. Refusing here would be the same dead
+    // button, for a call that no longer exists. Pop the spent screen and let
+    // the answer through: `pushCallOn`'s latch is released BY that pop (its
+    // `router.push` future resolves there), so the push has to wait a turn.
+    if (isCallRouteOpen) {
+      final router = ref.read(routerProvider);
+      if (router.canPop()) router.pop();
+      Future<void>.delayed(Duration.zero, () {
+        ref.read(incomingRingProvider.notifier).stopRinging();
+        pushCallOn(router, invite.channelId);
+      });
+      return;
+    }
     // Ring stopped FIRST, synchronously, before navigating: pushCall awaits
     // until the call route pops, so clearing afterwards would leave the banner
     // painted over the live call for its whole duration.

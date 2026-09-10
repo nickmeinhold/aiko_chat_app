@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../application/push_telemetry.dart';
+import '../domain/token_kind.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -51,7 +52,18 @@ class PendingUnregisterStore {
   /// eviction is LOGGED rather than silent — dropping a debt means an island row
   /// this client can no longer clean up, which is exactly the thing the class
   /// exists to prevent, so it must never happen quietly.
-  static const _maxPerIsland = 16;
+  /// Cap per island PER KIND, not per island.
+  ///
+  /// RE-ARGUED rather than inherited when the second kind arrived (design 16 v2
+  /// §5 asked for exactly that). The NUMBER survives; its SCOPE changes. With
+  /// one shared list, eviction is oldest-first and kind-blind, so a burst of
+  /// alert-token churn would evict the VoIP debt — and the two are not equally
+  /// valuable. A dropped alert debt is a stray banner. A dropped VoIP debt is a
+  /// routable row for a signed-out user, which under CallKit is a STRANGER'S
+  /// HANDSET RINGING FULL-SCREEN for the previous owner.
+  ///
+  /// Worst case doubles to 32 tokens per island, a few KB. That is not a cost.
+  static const _maxPerKind = 16;
 
   // Nullable so a test double can subclass and override the methods without a
   // real SharedPreferences (mirrors [CachedUserStore]). The real store is always
@@ -79,8 +91,8 @@ class PendingUnregisterStore {
   /// Synchronous: the read is off already-loaded SharedPreferences, so the drain
   /// adds no await to the sign-in path. A corrupt value reads as "nothing owed"
   /// rather than throwing — an unpayable debt must never brick a sign-in.
-  List<String> read(String islandBaseUrl) =>
-      List.unmodifiable(_all()[islandBaseUrl] ?? const <String>[]);
+  List<String> read(String islandBaseUrl, TokenKind kind) =>
+      List.unmodifiable(_all()[islandBaseUrl]?[kind] ?? const <String>[]);
 
   /// Record that [islandBaseUrl] is owed a DELETE for [token].
   ///
@@ -92,11 +104,17 @@ class PendingUnregisterStore {
   /// that does NOT throw, and callers must act on it: a debt that did not persist
   /// is a backstop that does not exist, which is indistinguishable from success
   /// unless somebody looks.
-  Future<bool> remember(String islandBaseUrl, String token) => _mutate((all) {
-    final owed = all.putIfAbsent(islandBaseUrl, () => <String>[]);
+  Future<bool> remember(
+    String islandBaseUrl,
+    TokenKind kind,
+    String token,
+  ) => _mutate((all) {
+    final owed = all
+        .putIfAbsent(islandBaseUrl, () => <TokenKind, List<String>>{})
+        .putIfAbsent(kind, () => <String>[]);
     if (owed.contains(token)) return false; // already owed — nothing to write
     owed.add(token);
-    while (owed.length > _maxPerIsland) {
+    while (owed.length > _maxPerKind) {
       final dropped = owed.removeAt(0);
       // REDACTED (cage-match, Tesla). A push token is a routing secret — the
       // REST layer keeps it out of URLs so it never reaches an access log or a
@@ -110,7 +128,7 @@ class PendingUnregisterStore {
       telemetry.debtDropped(
         islandBaseUrl,
         PushTelemetry.ref(dropped),
-        _maxPerIsland,
+        _maxPerKind,
       );
     }
     return true;
@@ -121,17 +139,23 @@ class PendingUnregisterStore {
   /// Removes only the named token — never the island's whole entry. A drain can
   /// be in flight while a fresh unpair records a NEWER token for the same island,
   /// and clearing the entry wholesale would discharge a debt that was never paid.
-  Future<bool> forget(String islandBaseUrl, String token) => _mutate((all) {
-    final owed = all[islandBaseUrl];
-    if (owed == null || !owed.remove(token)) return false; // nothing to write
-    if (owed.isEmpty) all.remove(islandBaseUrl);
-    return true;
-  });
+  Future<bool> forget(String islandBaseUrl, TokenKind kind, String token) =>
+      _mutate((all) {
+        final byKind = all[islandBaseUrl];
+        final owed = byKind?[kind];
+        if (owed == null || !owed.remove(token))
+          return false; // nothing to write
+        if (owed.isEmpty) byKind!.remove(kind);
+        if (byKind!.isEmpty) all.remove(islandBaseUrl);
+        return true;
+      });
 
   /// Run [change] against the stored map under the write chain, persisting only
   /// if it reports an actual change. Returns the persistence flag (`true` when
   /// there was nothing to write — the desired state already holds).
-  Future<bool> _mutate(bool Function(Map<String, List<String>>) change) {
+  Future<bool> _mutate(
+    bool Function(Map<String, Map<TokenKind, List<String>>>) change,
+  ) {
     final result = _writes.then((_) async {
       final all = _all();
       if (!change(all)) return true;
@@ -142,19 +166,84 @@ class PendingUnregisterStore {
     return result;
   }
 
-  Map<String, List<String>> _all() {
+  /// Decode the ledger, TOTALLY, over BOTH shapes.
+  ///
+  /// **A LEGACY ENTRY IS AN ALERT ENTRY, and that is measured rather than
+  /// assumed.** No build has ever minted a VoIP token, so a kindless list can
+  /// only ever have held alert tokens. It is the same fact the island's
+  /// `server_default='alert'` rests on.
+  ///
+  /// This totality is the sharp edge of the whole change. `read`'s contract is
+  /// that "a corrupt value reads as nothing owed" — so a format change that
+  /// made every live ledger unreadable would SILENTLY DISCHARGE EVERY
+  /// OUTSTANDING DEBT, leaving island rows that nothing will ever clear. That
+  /// is the one failure this class exists to prevent, caused by the migration
+  /// meant to strengthen it.
+  ///
+  /// Tolerance is PER ISLAND ENTRY, not per file: one unreadable entry drops one
+  /// island, where the old whole-map `catch` emptied the ledger.
+  Map<String, Map<TokenKind, List<String>>> _all() {
     final raw = _prefs!.getString(_key);
     if (raw == null) return {};
+    final Map<String, dynamic> decoded;
     try {
-      return (jsonDecode(raw) as Map).map(
-        (k, v) => MapEntry(k as String, (v as List).cast<String>().toList()),
-      );
+      decoded = (jsonDecode(raw) as Map).cast<String, dynamic>();
     } catch (_) {
       return {};
     }
+    final out = <String, Map<TokenKind, List<String>>>{};
+    for (final entry in decoded.entries) {
+      try {
+        final value = entry.value;
+        if (value is List) {
+          // LEGACY: island -> [tokens]. Alert by construction.
+          out[entry.key] = {TokenKind.alert: value.cast<String>().toList()};
+        } else if (value is Map) {
+          final byKind = <TokenKind, List<String>>{};
+          for (final k in value.entries) {
+            // MERGE, NEVER ASSIGN (Tesla, round 1). [TokenKind.fromLedger] is
+            // TOTAL — every
+            // name it cannot speak becomes `alert` — and that totality is right
+            // where it was designed to be used, decoding a value, because a
+            // throw there would read as "nothing owed" and discharge every
+            // obligation. Used to MINT A MAP KEY it is the opposite fail
+            // direction: a ledger written by a later build that knows a third
+            // kind gives `{"alert": [a], "critical": [c]}`, both keys fold to
+            // `alert`, and a plain assign DROPS whichever came first. The alert
+            // drain then deletes only the survivor and the other row is leaked
+            // forever — the exact kind-blind-drain bug cc43303 removed,
+            // reopened for the kind nobody has added yet.
+            //
+            // Merging keeps every token and lets the alert drain DELETE them,
+            // which is this store's stated fail direction: an over-delete
+            // degrades reach, an under-delete leaks a routable row nothing can
+            // clear. The island's DELETE matches on (user_id, token) and never
+            // on kind, so a token drained under the wrong kind is still the
+            // right row removed.
+            (byKind[TokenKind.fromLedger(k.key as String)] ??= <String>[])
+                .addAll((k.value as List).cast<String>());
+          }
+          out[entry.key] = byKind;
+        }
+      } catch (_) {
+        continue; // one island unreadable, the rest still owed
+      }
+    }
+    return out;
   }
 
-  Future<bool> _write(Map<String, List<String>> all) => all.isEmpty
+  Future<bool> _write(Map<String, Map<TokenKind, List<String>>> all) =>
+      all.isEmpty
       ? _prefs!.remove(_key)
-      : _prefs!.setString(_key, jsonEncode(all));
+      : _prefs!.setString(
+          _key,
+          jsonEncode(
+            all.map(
+              (island, byKind) => MapEntry(
+                island,
+                byKind.map((kind, tokens) => MapEntry(kind.wire, tokens)),
+              ),
+            ),
+          ),
+        );
 }

@@ -14,6 +14,7 @@
 import 'dart:async';
 
 import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/features/notifications/domain/token_kind.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show AccountSuspended;
@@ -28,6 +29,9 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/test_helpers.dart';
 
 class _FakeSource implements PushTokenSource {
+  @override
+  TokenKind get kind => TokenKind.alert;
+
   _FakeSource({this.token = 'tok-1', this.granted = true});
 
   String? token;
@@ -551,7 +555,7 @@ void main() {
       // handset always owes exactly the token it is about to re-register.
       await container
           .read(pendingUnregisterStoreProvider)
-          .remember(island, 'tok-1');
+          .remember(island, TokenKind.alert, 'tok-1');
 
       await container.read(authControllerProvider.notifier).signInWithPasskey();
       await pumpEventQueue();
@@ -572,7 +576,9 @@ void main() {
         reason: 'the live pairing survives — the drain did not eat it',
       );
       expect(
-        container.read(pendingUnregisterStoreProvider).read(island),
+        container
+            .read(pendingUnregisterStoreProvider)
+            .read(island, TokenKind.alert),
         isEmpty,
         reason: 'and the debt is discharged',
       );

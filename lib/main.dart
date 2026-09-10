@@ -7,6 +7,8 @@ import 'app/providers.dart';
 import 'app/router.dart';
 import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
+import 'features/notifications/presentation/notification_tap_navigator.dart';
+import 'features/notifications/data/fcm_token_source.dart';
 import 'features/notifications/application/push_providers.dart';
 import 'features/settings/application/island_manifest_provider.dart';
 import 'features/settings/application/theme_mode_controller.dart';
@@ -20,6 +22,14 @@ Future<void> main() async {
   // Bundled typefaces carry licence obligations that Flutter's automatic
   // package-licence collection cannot see (it does not read `assets/`).
   registerFontLicences();
+  // ANDROID ONLY, and the guard is inside the callee. Without this
+  // `FirebaseMessaging.instance` throws `noAppExists` on the first Android push
+  // call, `DeviceRegistrar.start()` throws at its first line, and the failure is
+  // swallowed into `pairingFailed` telemetry — so no Android device has ever
+  // registered a token and nothing ever said so. The method has existed with
+  // zero callers; its own doc warned against calling it from `main`
+  // unconditionally, which its internal platform guard already prevents.
+  await FcmTokenSource.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
   runApp(
     ProviderScope(
@@ -58,8 +68,12 @@ class AikoChatApp extends ConsumerWidget {
       routerConfig: router,
       // ABOVE the Navigator, so an incoming call reaches you on any route
       // (#2808). `child` is null only before the first route builds.
-      builder: (context, child) =>
-          RingOverlay(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => NotificationTapNavigator(
+        // OUTSIDE the ring overlay: a tapped notification must be honoured even
+        // when nothing is ringing — the ring is long over by the time a human
+        // picks the phone up (measured: 17.55s from invite to tap).
+        child: RingOverlay(child: child ?? const SizedBox.shrink()),
+      ),
     );
   }
 }

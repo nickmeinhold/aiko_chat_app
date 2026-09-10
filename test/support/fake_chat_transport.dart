@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
 import 'package:aiko_chat_app/features/notifications/domain/apns_environment.dart';
+import 'package:aiko_chat_app/features/notifications/domain/token_kind.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/call/domain/video_token.dart';
@@ -194,6 +195,7 @@ class FakeChatRestApi implements ChatRestApi {
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
+    TokenKind kind = TokenKind.alert,
     ApnsEnvironment? apnsEnvironment,
   }) => throw UnimplementedError();
   @override

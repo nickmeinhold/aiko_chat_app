@@ -4,6 +4,7 @@ import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
 import 'package:aiko_chat_app/features/legal/application/eula_controller.dart';
 import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
+import 'package:aiko_chat_app/features/notifications/application/notification_tap_providers.dart';
 import 'package:aiko_chat_app/features/notifications/domain/push_token_source.dart';
 import 'package:aiko_chat_app/features/settings/application/island_directory_provider.dart';
 import 'package:aiko_chat_app/main.dart';
@@ -160,6 +161,12 @@ ProviderContainer makeContainer({
       // then renders the bundled seed set.
       islandDirectoryProvider.overrideWith((ref) async => const []),
       pushTokenSourceProvider.overrideWithValue(pushSource),
+      // No platform behind the tap channels in a widget test: the Apple source
+      // opens an EventChannel with no handler, and the Android one reaches for
+      // `FirebaseMessaging.instance`, which throws with no Firebase app
+      // configured. Same reason `pushTokenSourceProvider` is stubbed one line
+      // up. Tests that exercise tap routing override this with a fake source.
+      notificationTapSourceProvider.overrideWithValue(null),
     ],
   );
   return container;
