@@ -183,9 +183,15 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
 /// **IT IS A CHANNEL ID, NEVER A CALL ID.** So this opens the CONVERSATION and
 /// lets the existing ring machinery decide whether there is a live call to
 /// answer. That is deliberate and it is the whole safety argument: `admitRing`
-/// carries nine refusals — signature, block, mute, DM-scope, clock skew, and the
-/// rest — and a tap handler that navigated straight into a call screen would be
-/// a second admission path that honoured none of them. A stale invite therefore
+/// carries TWELVE start-gate refusals and a tap handler that navigated straight
+/// into a call screen would be a second admission path honouring none of them.
+///
+/// **TWELVE, AND `grep -c "startGate: true"` ANSWERS NINE.** `startGate`
+/// DEFAULTS to true, so the three that declare only `refusedAnAttempt` are
+/// invisible to the obvious grep — and they include `unverifiedOrigin`, the
+/// signature check, which is the one gate this product's whole thesis rests on.
+/// The enum is the census (`call_invite_test.dart` asserts set equality against
+/// the flags); any prose count, including this one, is a copy that can drift. A stale invite therefore
 /// lands the user in the conversation with the call rendered as a call event,
 /// which is honest, rather than joining them to a room nobody is in.
 ///
