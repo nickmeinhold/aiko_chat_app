@@ -460,6 +460,11 @@ class GatewayRestApi implements ChatRestApi {
     return _resolvedKind(asked: kind, body: response.data);
   }
 
+  /// Distinguishes "the island omitted `token_kind`" from "the island sent
+  /// `token_kind: null`". A plain null cannot: `body['token_kind']` is null for
+  /// both, and only one of them is a compatible old island.
+  static const Object _absent = Object();
+
   /// The kind the island resolved this registration to, or [DeviceKindRefused]
   /// if that is not what was asked for.
   ///
@@ -490,12 +495,30 @@ class GatewayRestApi implements ChatRestApi {
     required TokenKind asked,
     required Map<String, dynamic>? body,
   }) {
-    final echoed = body?['token_kind'];
+    // NO BODY IS NOT AN ANSWER. A 201 we could not parse — an empty body, a
+    // content-type drift, a proxy that ate it — verified NOTHING, and reading it
+    // as a resolved `alert` would make this check's success value identical to
+    // its saw-nothing value. That is the defect this check exists to catch,
+    // committed by the check itself (Carnot, round 1). The old-island exception
+    // is about a field the island CHOSE to omit; it says nothing about a
+    // response that never arrived in a readable form.
+    if (body == null) {
+      throw DeviceKindRefused(asked: asked, resolved: null);
+    }
+    // THREE STATES, not two, and `Map[]` erases the difference between the last
+    // two. `containsKey` is what separates them:
+    //   - key absent      -> an island built before the column existed; `alert`
+    //   - key present null -> a contract violation (the response schema types it
+    //                         non-nullable), so REFUSE rather than default
+    //   - key present set  -> parse it, and refuse anything out of set
+    final echoed = body.containsKey('token_kind')
+        ? body['token_kind']
+        : _absent;
     // ABSENT IS A VALUE, and it is `alert` — the same reading applied on the way
     // out. That is what makes an island with no answer correct for an alert
     // token and refused for a VoIP one, out of one comparison and with no
     // version check anywhere.
-    final resolved = echoed == null
+    final resolved = identical(echoed, _absent)
         ? TokenKind.alert
         : TokenKind.values.where((k) => k.wire == echoed).firstOrNull;
     if (resolved != asked) {

@@ -266,11 +266,18 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
 /// for messages" is a NORMAL, permanent state to model, not an error to log.
 /// The reverse pairing is normal too, on a device that has never run this build.
 ///
-/// Registered unconditionally at launch rather than behind the calling gate:
-/// `desiredPushTypes` is what makes iOS mint the token, and a token that only
-/// exists once the user opens a call screen is a token the island cannot ring.
-/// The island refuses to send to a device it has no VoIP row for, which is the
-/// gate that actually holds.
+/// **NO TOKEN IS MINTED BY THIS BUILD.** The channels below are registered and
+/// the plumbing is complete, but nothing arms the registry — see the note where
+/// `start()` used to be. So `currentToken` answers nil, no VoIP row is ever
+/// registered island-side, and no VoIP push can be sent to this device.
+///
+/// An earlier version of this comment asserted the opposite — "registered
+/// unconditionally at launch... a token that only exists once the user opens a
+/// call screen is a token the island cannot ring" — which described the
+/// INTENDED end state as though it were the current one. That argument is sound
+/// and it is not yet implemented; leaving it here read as a design already in
+/// force, which is how the next reader adds the one line that arms VoIP delivery
+/// with nothing to report to.
 final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
   static let shared = PushKitTokenChannel()
 
@@ -305,15 +312,26 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
     ).setStreamHandler(self)
   }
 
-  /// Begin registration. Idempotent.
-  func start() {
-    guard registry == nil else { return }
-    let registry = PKPushRegistry(queue: .main)
-    registry.delegate = self
-    // Assigning `desiredPushTypes` is what triggers minting. Nothing else does.
-    registry.desiredPushTypes = [.voIP]
-    self.registry = registry
-  }
+  // THERE IS DELIBERATELY NO `start()` IN THIS BUILD, and its absence is the
+  // safety property — not an omission to be tidied up by the next reader.
+  //
+  // Constructing a PKPushRegistry and assigning `desiredPushTypes` is the ONLY
+  // thing that arms VoIP delivery. Armed without a CXProvider to report to, the
+  // first VoIP push terminates the app, and repeated terminations make iOS stop
+  // delivering VoIP pushes to this app on this device — a per-device denial that
+  // no reinstall undoes quickly.
+  //
+  // An earlier revision kept `start()` here, unused, and rested the safety on
+  // the fact that nothing called it. Kelvin, round 1: "the only thing preventing
+  // this is the prayer that start() is never called — that's not engineering."
+  // Correct, and a negative proof about the whole program is exactly the shape
+  // that a later one-line edit breaks silently. So the method is GONE: `registry`
+  // is never non-nil, the delegate callbacks below are unreachable by
+  // construction rather than by convention, and there is nothing to call.
+  //
+  // It comes back with the CXProvider, in the same increment, taking the
+  // provider as a parameter — so an armed registry without something to report
+  // to becomes unconstructable rather than merely unwise (#3609).
 
   private func currentToken(_ result: @escaping FlutterResult) {
     if let token = lastReported { return result(token) }
@@ -378,10 +396,15 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
   /// on this device (Apple, PKPushRegistryDelegate; per-device denial of
   /// delivery, not a revoked entitlement).
   ///
-  /// NOT WIRED YET — the CXProvider path is the next increment. Until it exists
-  /// this method must not be reachable, which is why the island only sends VoIP
-  /// to a device that registered a `voip` token, and this build registers one
-  /// only once there is something to report to.
+  /// UNREACHABLE IN THIS BUILD, structurally: nothing constructs a
+  /// PKPushRegistry (there is no `start()`), so no registry can ever hold this
+  /// object as its delegate and iOS has no VoIP delivery to make. The log line
+  /// exists to be loud if that ever stops being true.
+  ///
+  /// It is deliberately NOT a `fatalError`. If the invariant above were somehow
+  /// broken, crashing here produces the same app termination iOS would impose
+  /// anyway, while also burning the crash as our own — and a deliberate crash on
+  /// a user's handset is a worse answer than a log the next build can find.
   func pushRegistry(
     _ registry: PKPushRegistry,
     didReceiveIncomingPushWith payload: PKPushPayload,

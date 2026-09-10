@@ -35,7 +35,7 @@ class _EchoingAdapter implements HttpClientAdapter {
   /// and not just the kind: an island that omits the field is a real island
   /// (every build before the field existed), and it has to be expressible here
   /// or the backward-compatibility row cannot be written.
-  final Map<String, dynamic> echo;
+  final Map<String, dynamic>? echo;
 
   @override
   Future<ResponseBody> fetch(
@@ -48,7 +48,10 @@ class _EchoingAdapter implements HttpClientAdapter {
       jsonDecode(utf8.decode(chunks.expand((c) => c).toList()))
           as Map<String, dynamic>,
     );
-    return jsonBody(201, jsonEncode(echo));
+    // `null` echo means a 201 with a body we cannot read at all — an empty
+    // body, a content-type drift, a proxy that ate it. A real state, and
+    // distinct from every key-level state below.
+    return jsonBody(201, echo == null ? '' : jsonEncode(echo));
   }
 
   @override
@@ -57,7 +60,7 @@ class _EchoingAdapter implements HttpClientAdapter {
 
 void main() {
   (GatewayRestApi, List<Map<String, dynamic>>) island(
-    Map<String, dynamic> echo,
+    Map<String, dynamic>? echo,
   ) {
     final bodies = <Map<String, dynamic>>[];
     final dio = Dio(BaseOptions(baseUrl: 'http://x'))
@@ -154,6 +157,43 @@ void main() {
           kind: TokenKind.alert,
         ),
         TokenKind.alert,
+      );
+    });
+
+    // CARNOT, ROUND 1 — and it is this check committing the very defect it
+    // exists to catch. `body?['token_kind']` was null for THREE different
+    // worlds, and only one of them is a compatible old island. Collapsing them
+    // made the check's SUCCESS value identical to its SAW-NOTHING value.
+    test('REFUSES an alert register whose 201 had no readable body', () async {
+      final (api, _) = island(null);
+      await expectLater(
+        api.registerDevice(
+          platform: DevicePlatform.apns,
+          token: 'tok-alert',
+          kind: TokenKind.alert,
+        ),
+        throwsA(isA<DeviceKindRefused>()),
+      );
+    });
+
+    // The response schema types `token_kind` non-nullable and REQUIRED, so an
+    // explicit null is a contract violation, not an old island being quiet.
+    // `Map[]` cannot tell it from an omitted key; `containsKey` can.
+    test('REFUSES an explicit token_kind: null — absent and null are not the '
+        'same answer', () async {
+      final (api, _) = island({
+        'id': 'dev-1',
+        'platform': 'apns',
+        'apns_environment': 'production',
+        'token_kind': null,
+      });
+      await expectLater(
+        api.registerDevice(
+          platform: DevicePlatform.apns,
+          token: 'tok-alert',
+          kind: TokenKind.alert,
+        ),
+        throwsA(isA<DeviceKindRefused>()),
       );
     });
 
