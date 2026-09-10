@@ -503,7 +503,7 @@ class GatewayRestApi implements ChatRestApi {
     // is about a field the island CHOSE to omit; it says nothing about a
     // response that never arrived in a readable form.
     if (body == null) {
-      throw DeviceKindRefused(asked: asked, resolved: null);
+      throw DeviceKindRefused(asked: asked, resolved: null, echoed: false);
     }
     // THREE STATES, not two, and `Map[]` erases the difference between the last
     // two. `containsKey` is what separates them:
@@ -522,7 +522,14 @@ class GatewayRestApi implements ChatRestApi {
         ? TokenKind.alert
         : TokenKind.values.where((k) => k.wire == echoed).firstOrNull;
     if (resolved != asked) {
-      throw DeviceKindRefused(asked: asked, resolved: resolved);
+      // `echoed` carries whether the island STATED this kind or we inferred it
+      // from silence. Both are `alert` by the time they reach here, and a
+      // diagnosis that cannot tell them apart reads a quiet wire as an answer.
+      throw DeviceKindRefused(
+        asked: asked,
+        resolved: resolved,
+        echoed: !identical(echoed, _absent),
+      );
     }
     // `asked`, not `resolved`, only because the compiler cannot narrow a
     // nullable through an inequality. They are the same value on this line —

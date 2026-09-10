@@ -79,7 +79,11 @@ class PushTelemetry {
         fields: {
           'token': tokenRef,
           'asked': asked,
-          'resolved': resolved ?? 'unparseable',
+          // null covers two ISLAND-side states that both mean "we did not get
+          // a kind we can name": a value out of our set, and a wire that said
+          // nothing. The caller collapses them; what matters to a reader is
+          // that neither is an echo to be trusted.
+          'resolved': resolved ?? 'no-usable-echo',
           'consequence': 'device-will-not-ring',
         },
       );

@@ -394,7 +394,9 @@ class DeviceRegistrar {
       _telemetry.registerKindRefused(
         PushTelemetry.ref(token),
         e.asked.wire,
-        e.resolved?.wire,
+        // A kind we INFERRED from an island's silence is reported as the
+        // silence, never as an answer it did not give.
+        e.echoed ? e.resolved?.wire : null,
       );
       await _settle(token, generation, epoch, confirmed: false);
       return;

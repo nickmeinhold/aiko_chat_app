@@ -201,9 +201,27 @@ class PendingUnregisterStore {
         } else if (value is Map) {
           final byKind = <TokenKind, List<String>>{};
           for (final k in value.entries) {
-            byKind[TokenKind.fromWire(k.key as String)] = (k.value as List)
-                .cast<String>()
-                .toList();
+            // MERGE, NEVER ASSIGN (Tesla, round 1). `fromWire` is TOTAL — every
+            // name it cannot speak becomes `alert` — and that totality is right
+            // where it was designed to be used, decoding a value, because a
+            // throw there would read as "nothing owed" and discharge every
+            // obligation. Used to MINT A MAP KEY it is the opposite fail
+            // direction: a ledger written by a later build that knows a third
+            // kind gives `{"alert": [a], "critical": [c]}`, both keys fold to
+            // `alert`, and a plain assign DROPS whichever came first. The alert
+            // drain then deletes only the survivor and the other row is leaked
+            // forever — the exact kind-blind-drain bug cc43303 removed,
+            // reopened for the kind nobody has added yet.
+            //
+            // Merging keeps every token and lets the alert drain DELETE them,
+            // which is this store's stated fail direction: an over-delete
+            // degrades reach, an under-delete leaks a routable row nothing can
+            // clear. The island's DELETE matches on (user_id, token) and never
+            // on kind, so a token drained under the wrong kind is still the
+            // right row removed.
+            (byKind[TokenKind.fromWire(k.key as String)] ??= <String>[]).addAll(
+              (k.value as List).cast<String>(),
+            );
           }
           out[entry.key] = byKind;
         }

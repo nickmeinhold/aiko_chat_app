@@ -75,7 +75,11 @@ enum TokenKind {
 /// carries the FACT and the reader does no inference. `DeviceKindRefused(asked:
 /// voip, resolved: alert)` closes a diagnosis that `error=DioException` cannot.
 class DeviceKindRefused implements Exception {
-  const DeviceKindRefused({required this.asked, required this.resolved});
+  const DeviceKindRefused({
+    required this.asked,
+    required this.resolved,
+    this.echoed = true,
+  });
 
   /// The kind this client declared, from the token source.
   final TokenKind asked;
@@ -90,7 +94,20 @@ class DeviceKindRefused implements Exception {
   /// name, which is not a thing to pair a token to.
   final TokenKind? resolved;
 
+  /// Whether the island actually STATED a kind, as opposed to us inferring one
+  /// from its silence.
+  ///
+  /// Without this, [resolved] destroys the distinction that matters most to a
+  /// reader: an island that echoed `alert` and an island that said nothing both
+  /// arrive here as [TokenKind.alert], and a log line would swear the island
+  /// answered when the wire was quiet (Tesla + Carnot, round 1, reached
+  /// independently). The inference is still the right one — absent means alert,
+  /// which is what keeps an old island working — but a diagnosis needs to know
+  /// it WAS an inference.
+  final bool echoed;
+
   @override
   String toString() =>
-      'DeviceKindRefused(asked: ${asked.wire}, resolved: ${resolved?.wire})';
+      'DeviceKindRefused(asked: ${asked.wire}, '
+      'resolved: ${resolved?.wire}, echoed: $echoed)';
 }

@@ -148,4 +148,31 @@ void main() {
       );
     });
   });
+  // TESLA, round 1. `fromWire` is TOTAL — anything it cannot speak becomes
+  // `alert` — which is correct where it was designed to be used and is the
+  // WRONG fail direction when it mints a MAP KEY. A ledger written by a later
+  // build that knows a third kind folds two distinct keys onto `alert`, and a
+  // plain assign drops whichever arrived first.
+  group('a ledger written by a build that knows a kind this one does not', () {
+    test('MERGES the unknown kind into alert instead of overwriting it — no '
+        'token is silently dropped', () async {
+      final store = await _store({
+        _key: jsonEncode({
+          _island: {
+            'alert': ['tok-alert'],
+            'critical': ['tok-future'],
+          },
+        }),
+      });
+
+      // RED-PROOF: with `byKind[...] = ...` instead of a merge, this reads
+      // ['tok-future'] only — tok-alert is gone, leaked as a routable row that
+      // nothing can ever clear. That is the kind-blind-drain bug cc43303
+      // removed, reopened for the kind nobody has added yet.
+      expect(
+        store.read(_island, TokenKind.alert),
+        containsAll(<String>['tok-alert', 'tok-future']),
+      );
+    });
+  });
 }
