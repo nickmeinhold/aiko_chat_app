@@ -995,9 +995,38 @@ void main() {
   group('the two clocks are different numbers', () {
     // Conflating the staleness gate with the ring duration is how you ring for a
     // call that already ended (Nick, 2026-08-15). Pin that they are distinct.
-    test('staleness gate is 10s; ring duration is longer', () {
+    //
+    // THE 2026-08-15 REASONING SURVIVES THE CEILING MOVING, and this group is
+    // kept rather than retired to prove it. Design 16 v2 §3a requires that when
+    // the ceiling moved to the island the pinned invariant be REPLACED in the
+    // same commit, never deleted to make a suite green — because deleting it
+    // retires an invariant instead of restating it.
+    //
+    // What the invariant asserts is unchanged for the path it now names: an
+    // invitation still fresh enough to ADMIT must still have ring time left, or
+    // the app admits a call and immediately stops ringing it. That is true of
+    // the in-app ring whoever owns the CallKit one.
+    test('staleness gate is 10s; the in-app ring is longer', () {
       expect(kCallInviteFreshness, const Duration(seconds: 10));
-      expect(kCallRingDuration, greaterThan(kCallInviteFreshness));
+      expect(kInAppRingDuration, greaterThan(kCallInviteFreshness));
+    });
+
+    // THE GAP THE RENAME OPENS, STATED RATHER THAN PAPERED OVER. There is now a
+    // THIRD clock — the island's ring lease, which bounds the CallKit ring this
+    // process cannot end. Nothing in this repo pins it against
+    // `kCallInviteFreshness`, and nothing here can: the value lives on the
+    // island and is not on the wire.
+    //
+    // So the same conflation Nick named on 2026-08-15 is reachable again one
+    // layer out — a lease shorter than the freshness window would let the island
+    // ring a handset for an invitation this app would refuse as stale, and the
+    // two halves would disagree about whether a call is happening. This test
+    // cannot catch that. It is named here so the absence is a known hole rather
+    // than an unexamined one, and it belongs in the cross-repo contract.
+    test('the in-app constant does NOT claim to bound the CallKit ring', () {
+      // Guards the DOC, not the number: the constant is advisory for one path,
+      // and a future edit that quietly re-broadens it should have to notice.
+      expect(kInAppRingDuration, const Duration(seconds: 30));
     });
   });
 
