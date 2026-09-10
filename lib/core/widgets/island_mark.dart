@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -135,10 +136,21 @@ class IslandMark extends StatelessWidget {
     this.onTap,
     this.hitPadding = EdgeInsets.zero,
     this.islandPubkey,
+    this.sunAltitude,
   });
 
   final String baseUrl;
   final double size;
+
+  /// Where the sun is over THIS ISLAND, +1 noon to -1 midnight — see
+  /// `island_daylight.dart`.
+  ///
+  /// NULL DRAWS THE MARK EXACTLY AS IT DREW BEFORE any of this existed, and
+  /// that is the common path: no island publishes a timezone yet. It is the
+  /// island's day, never the viewer's — a mark showing your own time-of-day on
+  /// another island's face would be decorative and quietly dishonest about
+  /// whose day it is.
+  final double? sunAltitude;
 
   /// Tapping the mark should take you to the island picker — the mark answers
   /// "where am I", so the obvious next question is "can I go somewhere else".
@@ -173,6 +185,7 @@ class IslandMark extends StatelessWidget {
       painter: IslandPainter(
         identity: identity,
         rim: Theme.of(context).colorScheme.outline,
+        sunAltitude: sunAltitude,
       ),
     );
     final name = label ?? islandKey(baseUrl);
@@ -215,18 +228,45 @@ class IslandMark extends StatelessWidget {
 /// field — the shape is generated, so its bounds are the only honest statement
 /// of what a reader sees.
 class IslandPainter extends CustomPainter {
-  IslandPainter({required this.identity, required this.rim});
+  IslandPainter({
+    required this.identity,
+    required this.rim,
+    this.sunAltitude,
+    this.moonIllumination,
+    this.showSoundings = false,
+  });
 
   final IslandIdentity identity;
   final Color rim;
+
+  /// See [IslandMark.sunAltitude]. Null → no daylight expression at all.
+  final double? sunAltitude;
+
+  /// The moon's illuminated fraction, 0 new to 1 full. Null → no moonlight.
+  final double? moonIllumination;
+
+  /// Chart soundings in the water. OFF by default — see [_paintSoundings];
+  /// unlike everything else here it is not gated on the island having a clock,
+  /// so switching it on changes every mark for everyone.
+  final bool showSoundings;
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = Offset(size.width / 2, size.height / 2);
     final r = size.width / 2;
 
-    // The water.
-    canvas.drawCircle(c, r, Paint()..color = identity.water);
+    // The water, LIT DIRECTIONALLY — this single gradient is both the day/night
+    // dimming and the terminator, because they were never two things.
+    //
+    // The first cut drew a uniform dim PLUS a shadow band on top, and the two
+    // fought: if the whole disc darkens, the terminator has nothing to fall
+    // across, so the boundary was invisible at every hour. Here the sun's
+    // altitude is evaluated at the TOP and BOTTOM of the disc and the fill
+    // interpolates between them, so a fade is what the mark IS rather than a
+    // layer added to it. At noon both ends sit in the lit range and it reads as
+    // flat daylight; at midnight both sit dark; through dawn and dusk the
+    // boundary genuinely sweeps.
+    canvas.drawCircle(c, r, _waterPaint(c, r));
 
     // A hairline rim, in the app's own outline colour — the one place the mark
     // acknowledges the surrounding theme, so it sits in the design rather than
@@ -240,7 +280,15 @@ class IslandPainter extends CustomPainter {
         ..color = rim,
     );
 
-    canvas.drawPath(landPath(size), _landPaint());
+    _paintSoundings(canvas, size);
+    canvas.drawPath(landPath(size), _landPaint(size));
+    // After the land so the glow sits ON the shore, before the point lights so
+    // they are not blurred into it.
+    _paintBioluminescence(canvas, size);
+
+    // Last: the lantern sits ON TOP of the night, or the night would put it out.
+    _paintStars(canvas, size);
+    _paintLantern(canvas, size);
   }
 
   /// The coastline, as a path — extracted so it can be MEASURED.
@@ -317,18 +365,375 @@ class IslandPainter extends CustomPainter {
   /// darkened, which at 18px read as a hole punched in a coloured disc: the
   /// silhouette did no identifying work at all. It keeps a trace of the water's
   /// hue rather than going white, so the medallion stays one colour idea.
-  Paint _landPaint() {
+  /// The night factor: 0 in full day, 1 at midnight.
+  double get _night =>
+      sunAltitude == null ? 0 : ((1 - sunAltitude!) / 2).clamp(0.0, 1.0);
+
+  /// How dark it is at a given sun altitude: 0 full day, 1 full night.
+  ///
+  /// **SMOOTHSTEP ACROSS A NARROW BAND, NOT A LINEAR RAMP, and the difference
+  /// is the whole feature.** Linear in altitude, fed a linear spatial ramp,
+  /// produces another linear ramp — a gradient whose LEVEL shifts with the hour
+  /// but which never contains an edge. No width or depth tuning can put a
+  /// boundary into it, because a straight line has none to find. The first two
+  /// attempts here were both tuning a model that could not represent the target
+  /// state.
+  ///
+  /// A terminator is a steep transition that MOVES: near-flat in full daylight,
+  /// near-flat in full night, and steep across the horizon. [_horizonWidth] is
+  /// how soft that edge is — the sun is a disc rather than a point, so it must
+  /// not be a hard cut either.
+  static const _horizonWidth = 0.42;
+
+  double _nightFactor(double altitude) {
+    final x = ((-altitude + _horizonWidth) / (2 * _horizonWidth)).clamp(
+      0.0,
+      1.0,
+    );
+    return x * x * (3 - 2 * x);
+  }
+
+  /// The sun's altitude AT A POINT on the disc, north-to-south.
+  ///
+  /// [t] runs 0 at the top edge to 1 at the bottom. The spread is what makes a
+  /// terminator possible at all: with a single altitude for the whole mark
+  /// there is no boundary to see, only a dimmer. 1.15 is slightly more than the
+  /// disc so dawn and dusk push the boundary right across rather than parking
+  /// it permanently in view.
+  double _altitudeAt(double t) =>
+      (sunAltitude! + (0.5 - t) * 1.6).clamp(-1.0, 1.0);
+
+  /// Water colour for a given local altitude. HUE NEVER MOVES — identity lives
+  /// there, and an island at midnight must still be unmistakably that island.
+  /// Only lightness and saturation ride the sun, which is the channel identity
+  /// is not using.
+  /// How much this altitude sits IN the horizon band, 0 away from it, 1 on it.
+  ///
+  /// Golden hour is a real optical fact and a nearly free one here: light near
+  /// the horizon travels through more atmosphere, the short wavelengths
+  /// scatter out, and what lands is warm. The terminator band already exists as
+  /// a computed quantity, so tinting it costs one lerp and buys the single most
+  /// recognisable thing about dawn and dusk.
+  double _goldenness(double altitude) =>
+      (1 - (altitude.abs() / _horizonWidth)).clamp(0.0, 1.0);
+
+  Color _waterAt(double altitude) {
     final hsl = HSLColor.fromColor(identity.water);
+    final night = _nightFactor(altitude);
+    final base = hsl
+        // Not to zero: a black disc stops being a colour and the island stops
+        // being recognisable, which costs the mark its whole job to buy a
+        // slightly better sunset.
+        .withLightness((hsl.lightness - 0.30 * night).clamp(0.06, 1.0))
+        // Colour drains at night the way it does for an eye at night — but
+        // ONLY 22%, down from 50%. Rendered as a fleet of 24 the heavier drain
+        // pulled every island toward a common dusty pastel: identity was
+        // preserved in the hue and COMPRESSED in practice, so the marks became
+        // hardest to tell apart at exactly the hour you most need to know which
+        // island you are looking at. n=2 could not show this; n=24 showed it
+        // immediately. The mark's job outranks the atmosphere.
+        .withSaturation((hsl.saturation * (1 - 0.22 * night)).clamp(0.0, 1.0))
+        .toColor();
+    // Warm, but gently — 0.30 max. The hue is the island's IDENTITY, and a
+    // sunset that repaints every island the same amber would trade the mark's
+    // whole job for a nice sky.
+    final gold = Color.lerp(
+      base,
+      const Color(0xFFE08A4A),
+      0.30 * _goldenness(altitude),
+    )!;
+    // MOONLIGHT, and only where it is actually night. A cold pale wash whose
+    // strength is the illuminated fraction, so an island's nights differ across
+    // a month instead of all being the same night. Capped low (0.22) for the
+    // same reason as the sunset: identity lives in the hue.
+    final moon = moonIllumination;
+    if (moon == null) return gold;
+    return Color.lerp(gold, const Color(0xFFBFD4E8), 0.22 * moon * night)!;
+  }
+
+  Paint _waterPaint(Offset c, double r) {
+    if (sunAltitude == null) return Paint()..color = identity.water;
+    // Five stops rather than two: lightness through a night factor is not
+    // linear in the parameter, so a two-stop ramp visibly bends the wrong way
+    // through dusk.
+    const n = 12;
     return Paint()
-      ..color = hsl
-          .withLightness(0.86)
-          .withSaturation((hsl.saturation * 0.5).clamp(0.0, 1.0))
-          .toColor();
+      ..shader = ui.Gradient.linear(
+        Offset(c.dx, c.dy - r),
+        Offset(c.dx, c.dy + r),
+        [for (var i = 0; i < n; i++) _waterAt(_altitudeAt(i / (n - 1)))],
+        [for (var i = 0; i < n; i++) i / (n - 1)],
+      );
+  }
+
+  /// Depth soundings: the little marks a printed chart scatters in its water.
+  ///
+  /// **NOT TIME-DRIVEN, and that makes it a different KIND of change from
+  /// everything else here.** Sun, moon, lantern and stars all vanish when
+  /// `sunAltitude` is null, so the shipped mark is untouched until an island
+  /// publishes a timezone. Soundings are chart furniture: they would be there
+  /// at every hour, on every island, for every user, immediately. So this is
+  /// gated on its own flag and defaults OFF — changing what every mark looks
+  /// like always is a decision, not a detail.
+  ///
+  /// Kept extremely faint and few. A real chart's soundings are dense because
+  /// it is a metre wide; at 18px beside the composer, four legible dots would
+  /// be four pieces of noise competing with the silhouette that does the
+  /// identifying.
+  void _paintSoundings(Canvas canvas, Size size) {
+    if (!showSoundings) return;
+    final land = landPath(size);
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = size.width / 2;
+    final unit = size.width / 44.0;
+    final hsl = HSLColor.fromColor(identity.water);
+    final ink = hsl
+        .withLightness((hsl.lightness + 0.22).clamp(0.0, 1.0))
+        .toColor();
+    var rnd = (identity.shapeSeed * 40503) & 0x7FFFFFFF;
+    final placed = <Offset>[];
+    final minGap = size.width * 0.17;
+    for (var i = 0; i < 260 && placed.length < 6; i++) {
+      rnd = (rnd * 1103515245 + 12345) & 0x7FFFFFFF;
+      final x = c.dx - r + (rnd % 1000) / 1000.0 * 2 * r;
+      rnd = (rnd * 1103515245 + 12345) & 0x7FFFFFFF;
+      final y = c.dy - r + (rnd % 1000) / 1000.0 * 2 * r;
+      final p = Offset(x, y);
+      if ((p - c).distance > r * 0.82) continue;
+      // Off the land, and not hugging it either — a sounding printed on the
+      // coastline reads as a defect in the outline.
+      if (land.contains(p)) continue;
+      if (land.contains(p.translate(unit * 2, 0)) ||
+          land.contains(p.translate(-unit * 2, 0))) {
+        continue;
+      }
+      if (placed.any((q) => (q - p).distance < minGap)) continue;
+      canvas.drawCircle(
+        p,
+        0.55 * unit,
+        Paint()..color = ink.withValues(alpha: 0.30),
+      );
+      placed.add(p);
+    }
+  }
+
+  /// Bioluminescence: the coastline glows faintly at deep night.
+  ///
+  /// Real, and the reason it belongs on THIS mark rather than being whimsy: the
+  /// glow happens where water moves against land, which is exactly the path
+  /// this painter already has. It costs one stroke of a path already computed.
+  ///
+  /// DEEP NIGHT ONLY, and under the moon's own wash — a bright moon drowns it,
+  /// which is true of the real thing and also keeps the two night effects from
+  /// competing for the same pixels.
+  void _paintBioluminescence(Canvas canvas, Size size) {
+    final deep = ((_night - 0.72) / 0.28).clamp(0.0, 1.0);
+    if (deep <= 0) return;
+    // Drowned by moonlight, the way it actually is.
+    final moonDamp = 1 - 0.75 * (moonIllumination ?? 0);
+    final strength = deep * moonDamp;
+    if (strength <= 0.02) return;
+    final unit = size.width / 44.0;
+    canvas.drawPath(
+      landPath(size),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4 * unit
+        ..color = const Color(0xFF7FE7D4).withValues(alpha: 0.34 * strength)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 1.6 * unit),
+    );
+  }
+
+  /// A few faint stars on the night water.
+  ///
+  /// SEEDED FROM THE ISLAND, so your island always has YOUR stars — the same
+  /// argument as the lantern's bay. They are drawn on the water only: a star
+  /// over the land would read as a second lantern, and the mark is a chart seen
+  /// from above, where the sky is the sea.
+  ///
+  /// Deliberately few and faint. This is the detail most likely to tip the mark
+  /// from atmospheric into busy, and it lives at 18px beside the composer where
+  /// four bright dots would just be noise.
+  void _paintStars(Canvas canvas, Size size) {
+    final glow = ((_night - 0.55) / 0.30).clamp(0.0, 1.0);
+    if (glow <= 0) return;
+    final land = landPath(size);
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = size.width / 2;
+    final unit = size.width / 44.0;
+    var rnd = (identity.shapeSeed * 2654435761) & 0x7FFFFFFF;
+    final placed = <Offset>[];
+    // THREE, AND SPACED. Uniform random over the water clumps — two dots a few
+    // pixels apart read as a rendering artefact rather than a sky, which is
+    // exactly what the first cut looked like. A minimum separation is the
+    // cheapest thing that makes scattered points read as stars.
+    final minGap = size.width * 0.22;
+    for (var i = 0; i < 200 && placed.length < 3; i++) {
+      rnd = (rnd * 1103515245 + 12345) & 0x7FFFFFFF;
+      final x = c.dx - r + (rnd % 1000) / 1000.0 * 2 * r;
+      rnd = (rnd * 1103515245 + 12345) & 0x7FFFFFFF;
+      final y = c.dy - r + (rnd % 1000) / 1000.0 * 2 * r;
+      final p = Offset(x, y);
+      // Inside the disc, off the land, and off the rim (a star ON the hairline
+      // reads as a chip in the edge).
+      if ((p - c).distance > r * 0.86) continue;
+      if (land.contains(p)) continue;
+      if (placed.any((q) => (q - p).distance < minGap)) continue;
+      rnd = (rnd * 1103515245 + 12345) & 0x7FFFFFFF;
+      final twinkle = 0.35 + (rnd % 100) / 100.0 * 0.45;
+      canvas.drawCircle(
+        p,
+        0.5 * unit,
+        Paint()
+          ..color = const Color(0xFFFFFFFF).withValues(alpha: twinkle * glow),
+      );
+      placed.add(p);
+    }
+  }
+
+  /// A single warm light on the land after dark. Somebody is awake.
+  ///
+  /// **CLOCK-DERIVED, NOT PRESENCE.** It says nothing about whether anyone is
+  /// actually there — presence was declined on shape (claude-tasks#3885: an
+  /// ambient signal is safe when it is act-caused and self-expiring, and
+  /// presence is neither, leaking by accumulation until it is a sleep diary).
+  /// This is a drawing of a place at night, not a report about a person, and it
+  /// accumulates nothing because it is a pure function of the hour.
+  ///
+  /// Placed from the SHAPE SEED, so an island's lantern is always in the same
+  /// bay — part of its identity rather than a twinkle. Rejection-sampled inside
+  /// the coastline: a lantern floating in the water is a firefly, and the whole
+  /// charm is that it is on the land.
+  void _paintLantern(Canvas canvas, Size size) {
+    // Fades in through dusk rather than switching on — a pop at a threshold
+    // would make the mark flicker at exactly the hour people are watching it.
+    final glow = ((_night - 0.45) / 0.35).clamp(0.0, 1.0);
+    if (glow <= 0) return;
+
+    final land = landPath(size);
+    final b = land.getBounds();
+    var rnd = identity.shapeSeed | 1;
+    Offset? spot;
+    // INTERIOR, NOT MERELY INSIDE. Accepting the first point that satisfies
+    // `contains` puts the lantern on the COASTLINE almost every time: the
+    // bounding box is mostly water at its corners, so the first hit is
+    // overwhelmingly likely to be just barely within the outline. Rendered at
+    // 160px both islands had their light half in the sea. Requiring a margin —
+    // four probes around the candidate must ALSO be land — pushes it into the
+    // island's body, which is the only place a lantern makes sense.
+    // A LANTERN WANTS A HARBOUR. Two rounds of this were wrong in opposite
+    // directions: take the first point inside the outline and it lands ON the
+    // coast (the bounding box is mostly water, so the first hit hugs the
+    // edge); require a fat margin from the coast and it converges on the
+    // island's MIDDLE, which reads as a bullseye. Across 24 islands the fat
+    // blobby silhouettes all lit up dead centre.
+    //
+    // So the test is now two-sided: far enough from the water not to be
+    // floating in it, and CLOSE enough that there is water nearby — which is
+    // what a harbour is. Distance-from-coast alone can only ever push inland;
+    // it has no way to express "near the shore".
+    final margin = size.width * 0.045;
+    final harbourReach = size.width * 0.16;
+    final candidates = <Offset>[];
+    for (var i = 0; i < 240 && candidates.length < 24; i++) {
+      // Deterministic LCG, so the lantern never moves between frames or
+      // devices: an island's light is always in the same bay.
+      rnd = (rnd * 1103515245 + 12345) & 0x7FFFFFFF;
+      final x = b.left + (rnd % 1000) / 1000.0 * b.width;
+      rnd = (rnd * 1103515245 + 12345) & 0x7FFFFFFF;
+      final y = b.top + (rnd % 1000) / 1000.0 * b.height;
+      final p = Offset(x, y);
+      if (!land.contains(p)) continue;
+      // Not on the waterline.
+      if (!land.contains(p.translate(margin, 0)) ||
+          !land.contains(p.translate(-margin, 0)) ||
+          !land.contains(p.translate(0, margin)) ||
+          !land.contains(p.translate(0, -margin))) {
+        continue;
+      }
+      // ...but within sight of it. At least one direction must reach water
+      // inside `harbourReach`, which excludes the deep interior.
+      final nearShore =
+          !land.contains(p.translate(harbourReach, 0)) ||
+          !land.contains(p.translate(-harbourReach, 0)) ||
+          !land.contains(p.translate(0, harbourReach)) ||
+          !land.contains(p.translate(0, -harbourReach));
+      if (!nearShore) continue;
+      candidates.add(p);
+    }
+    if (candidates.isNotEmpty) {
+      spot = candidates[(identity.shapeSeed >> 3) % candidates.length];
+    }
+    // A shape so thin that 48 samples all missed. Draw nothing rather than
+    // guess a point — an off-island lantern is worse than none.
+    if (spot == null) return;
+
+    final unit = size.width / 44.0;
+    canvas.drawCircle(
+      spot,
+      2.6 * unit,
+      Paint()
+        ..color = const Color(0xFFFFC46B).withValues(alpha: 0.16 * glow)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 2.2 * unit),
+    );
+    canvas.drawCircle(
+      spot,
+      0.9 * unit,
+      Paint()..color = const Color(0xFFFFD79A).withValues(alpha: 0.95 * glow),
+    );
+  }
+
+  /// Land colour at a given local altitude.
+  ///
+  /// Land dims with the water but stays PALE RELATIVE TO IT, always — that
+  /// contrast is what makes the silhouette do identifying work at all. Drawn
+  /// dark it reads at 18px as a hole punched in a coloured disc, which is what
+  /// the first cut of this mark did. So night moves both and never closes the
+  /// gap: 0.86 down to 0.56, against water going 0.42 down to 0.12.
+  Color _landAt(double altitude) {
+    final hsl = HSLColor.fromColor(identity.water);
+    final night = _nightFactor(altitude);
+    return hsl
+        .withLightness(0.86 - 0.30 * night)
+        .withSaturation((hsl.saturation * 0.5).clamp(0.0, 1.0))
+        .toColor();
+  }
+
+  /// THE TERMINATOR CROSSES THE COASTLINE.
+  ///
+  /// The land used to take a single global night factor while the water was lit
+  /// directionally, so the boundary swept the sea and stopped dead at the
+  /// shore — a brightly lit island floating on a dark ocean, which is not a
+  /// thing that happens. The land now reads from the same [_altitudeAt] as the
+  /// water, over the same disc-spanning axis, so one boundary crosses the whole
+  /// mark.
+  Paint _landPaint(Size size) {
+    if (sunAltitude == null) {
+      final hsl = HSLColor.fromColor(identity.water);
+      return Paint()
+        ..color = hsl
+            .withLightness(0.86)
+            .withSaturation((hsl.saturation * 0.5).clamp(0.0, 1.0))
+            .toColor();
+    }
+    const n = 12;
+    final r = size.width / 2;
+    final c = Offset(size.width / 2, size.height / 2);
+    return Paint()
+      ..shader = ui.Gradient.linear(
+        Offset(c.dx, c.dy - r),
+        Offset(c.dx, c.dy + r),
+        [for (var i = 0; i < n; i++) _landAt(_altitudeAt(i / (n - 1)))],
+        [for (var i = 0; i < n; i++) i / (n - 1)],
+      );
   }
 
   @override
   bool shouldRepaint(IslandPainter old) =>
       old.identity.water != identity.water ||
       old.identity.shapeSeed != identity.shapeSeed ||
-      old.rim != rim;
+      old.rim != rim ||
+      old.sunAltitude != sunAltitude ||
+      old.moonIllumination != moonIllumination ||
+      old.showSoundings != showSoundings;
 }
