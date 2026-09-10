@@ -78,6 +78,7 @@ class _IslandPickerScreenState extends ConsumerState<IslandPickerScreen> {
               for (final entry in islands)
                 _IslandTile(
                   label: entry.label,
+                  description: entry.description,
                   url: entry.httpBaseUrl,
                   selected: _isCurrent(entry.httpBaseUrl, current),
                   onTap: () => _select(entry.httpBaseUrl, entry.label),
@@ -172,9 +173,20 @@ class _IslandTile extends StatelessWidget {
     required this.url,
     required this.selected,
     required this.onTap,
+    this.description,
   });
 
   final String label;
+
+  /// The island's own one-line blurb, when it publishes one.
+  ///
+  /// COSMETIC by ADR-0008: a directory entry is untrusted self-description, and
+  /// this field sits in the tier that is safe to render as-is — the worst a
+  /// lying island can do here is describe itself badly. It is also explicitly
+  /// OPTIONAL there ("absent is fine"), and neither live island publishes one
+  /// today, so the absent path is the common path and must look exactly like
+  /// the tile did before this existed.
+  final String? description;
   final String url;
   final bool selected;
   final VoidCallback onTap;
@@ -188,7 +200,26 @@ class _IslandTile extends StatelessWidget {
         color: selected ? theme.colorScheme.primary : null,
       ),
       title: Text(label),
-      subtitle: Text(url),
+      // The URL stays visible whatever else is here: it is the island's
+      // IDENTITY, while the description is only its self-description. Demoting
+      // the address to make room for a blurb would trade the checkable fact for
+      // the unverifiable one.
+      subtitle: description == null
+          ? Text(url)
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(description!),
+                Text(
+                  url,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+      isThreeLine: description != null,
       trailing: selected
           ? Text(
               'Connected',
