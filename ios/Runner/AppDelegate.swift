@@ -311,14 +311,28 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
 
   private func currentToken(_ result: @escaping FlutterResult) {
     if let token = lastReported { return result(token) }
-    if let data = registry?.pushToken(for: .voIP) {
+    // NOT STARTED — answer nil NOW, never queue. There is no PushKit analogue of
+    // `didFailToRegisterForRemoteNotifications`, so a waiter parked here has
+    // nothing that can ever drain it. That is not a stall, it is permanent:
+    // `DeviceRegistrar.start()` awaits this call with `_refreshes` already
+    // non-null, and its idempotency guard then turns every LATER `start()` into
+    // a no-op — the whole pairing wedged for the life of the process, silently,
+    // including the ALERT token that works today.
+    guard let registry else { return result(nil) }
+    if let data = registry.pushToken(for: .voIP) {
       let hex = PushKitTokenChannel.hex(data)
       lastReported = hex
       return result(hex)
     }
-    // Not minted yet — wait for the delegate rather than answering null, which
-    // Dart cannot distinguish from "this device has no VoIP token".
+    // Started but not minted yet. Waiting is right — a nil here is
+    // indistinguishable to Dart from "this device has no VoIP token" — but it is
+    // BOUNDED, for the same reason: iOS may simply never call back, and an
+    // unbounded wait wedges the caller rather than failing.
     waiters.append { result($0) }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+      guard let self, !self.waiters.isEmpty, self.lastReported == nil else { return }
+      self.drainWaiters(with: nil)
+    }
   }
 
   private static func hex(_ data: Data) -> String {
