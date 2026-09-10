@@ -254,7 +254,7 @@ class FakeRestApi implements ChatRestApi {
   Object? registerDeviceThrowsAfterLanding;
 
   @override
-  Future<TokenKind> registerDevice({
+  Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
     TokenKind kind = TokenKind.alert,
@@ -283,11 +283,9 @@ class FakeRestApi implements ChatRestApi {
     if (registerDeviceThrowsAfterLanding != null) {
       throw registerDeviceThrowsAfterLanding!;
     }
-    // A cooperating island echoes what it was asked for. A REFUSING one is
-    // modelled with [registerDeviceThrowsAfterLanding], which is already the
-    // knob for "the row landed and then the call failed" — exactly what a kind
-    // refusal is, and why this fake needs no new machinery for it.
-    return kind;
+    // A REFUSING island is modelled with [registerDeviceThrowsAfterLanding],
+    // already the knob for "the row landed and then the call failed" — exactly
+    // what a kind refusal is, and why this fake needs no new machinery for it.
   }
 
   /// The kind each register declared, positionally paired with

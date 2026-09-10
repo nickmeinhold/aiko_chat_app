@@ -192,7 +192,7 @@ class FakeChatRestApi implements ChatRestApi {
   @override
   Future<void> deleteAccount() => throw UnimplementedError();
   @override
-  Future<TokenKind> registerDevice({
+  Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
     TokenKind kind = TokenKind.alert,

@@ -104,15 +104,18 @@ void main() {
   });
 
   group('what comes back', () {
-    test('returns the resolved kind when the island agrees', () async {
+    // Success is the ABSENCE of a refusal — `registerDevice` returns nothing,
+    // because the only caller already knows the kind it asked for and a bare
+    // TokenKind could not say whether the island stated it or we inferred it.
+    test('ACCEPTS a voip register the island echoed back as voip', () async {
       final (api, _) = island(row('voip'));
-      expect(
-        await api.registerDevice(
+      await expectLater(
+        api.registerDevice(
           platform: DevicePlatform.apns,
           token: 'tok-voip',
           kind: TokenKind.voip,
         ),
-        TokenKind.voip,
+        completes,
       );
     });
 
@@ -150,13 +153,13 @@ void main() {
     // comparison decides both rows.
     test('ACCEPTS an alert register an old island did not echo', () async {
       final (api, _) = island(row(null));
-      expect(
-        await api.registerDevice(
+      await expectLater(
+        api.registerDevice(
           platform: DevicePlatform.apns,
           token: 'tok-alert',
           kind: TokenKind.alert,
         ),
-        TokenKind.alert,
+        completes,
       );
     });
 

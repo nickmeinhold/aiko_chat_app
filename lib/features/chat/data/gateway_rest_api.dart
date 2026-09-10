@@ -430,7 +430,7 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
-  Future<TokenKind> registerDevice({
+  Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
     TokenKind kind = TokenKind.alert,
@@ -457,7 +457,7 @@ class GatewayRestApi implements ChatRestApi {
         },
       ),
     );
-    return _resolvedKind(asked: kind, body: response.data);
+    _resolvedKind(asked: kind, body: response.data);
   }
 
   /// Distinguishes "the island omitted `token_kind`" from "the island sent
@@ -491,7 +491,7 @@ class GatewayRestApi implements ChatRestApi {
   /// so an out-of-set value is refused rather than defaulted. Same enum, opposite
   /// fail direction, because one path is weak-signal capture and this one is a
   /// mutation we are about to call successful.
-  TokenKind _resolvedKind({
+  void _resolvedKind({
     required TokenKind asked,
     required Map<String, dynamic>? body,
   }) {
@@ -520,7 +520,7 @@ class GatewayRestApi implements ChatRestApi {
     // version check anywhere.
     final resolved = identical(echoed, _absent)
         ? TokenKind.alert
-        : TokenKind.values.where((k) => k.wire == echoed).firstOrNull;
+        : TokenKind.fromEcho(echoed);
     if (resolved != asked) {
       // `echoed` carries whether the island STATED this kind or we inferred it
       // from silence. Both are `alert` by the time they reach here, and a
@@ -531,10 +531,6 @@ class GatewayRestApi implements ChatRestApi {
         echoed: !identical(echoed, _absent),
       );
     }
-    // `asked`, not `resolved`, only because the compiler cannot narrow a
-    // nullable through an inequality. They are the same value on this line —
-    // that is precisely what the throw above establishes.
-    return asked;
   }
 
   @override

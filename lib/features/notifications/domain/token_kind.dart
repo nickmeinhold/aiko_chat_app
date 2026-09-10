@@ -37,15 +37,46 @@ enum TokenKind {
   /// than trusted to survive a rename.
   final String wire;
 
-  /// Parse a stored or received value, defaulting to [alert].
+  /// Decode a value from OUR OWN stored ledger. Total, and never throws.
   ///
-  /// TOTAL, and never throws. It is read while decoding the unregister debt
-  /// ledger, where a throw would be read as "nothing owed" and would silently
-  /// discharge every outstanding obligation.
-  static TokenKind fromWire(String? value) => switch (value) {
+  /// Unknown folds to [alert] deliberately: this is read while decoding the
+  /// unregister debt ledger, where a throw would be read as "nothing owed" and
+  /// would silently discharge every outstanding obligation. Weak-signal capture
+  /// fails OPEN.
+  ///
+  /// **NOT FOR ANYTHING ARRIVING FROM THE WIRE** — use [fromEcho]. The two roles
+  /// have OPPOSITE fail directions, and a single forgiving parser serving both
+  /// is a trap that has now been sprung twice from two directions: once as a
+  /// silent data loss (folding two ledger keys onto one map key, dropping a
+  /// debt) and once as the observation that the API invites the next reader to
+  /// reuse it at the response boundary and reintroduce the silent downgrade this
+  /// type exists to prevent. Naming the roles is the fix; a comment asking the
+  /// next editor to be careful is not.
+  ///
+  /// Even here, a caller building a MAP KEYED ON THE RESULT must merge rather
+  /// than assign — totality means distinct inputs collide.
+  static TokenKind fromLedger(String? value) => switch (value) {
     'voip' => TokenKind.voip,
     _ => TokenKind.alert,
   };
+
+  /// Parse a kind the ISLAND stated. Strict: null when the value is not one this
+  /// build has a model of.
+  ///
+  /// The opposite fail direction from [fromLedger], and for the reason that
+  /// governs the whole type: an irreversible mutation we are about to call
+  /// successful fails CLOSED. Folding an unrecognised kind to [alert] here would
+  /// pair a token to delivery semantics we cannot name.
+  ///
+  /// Takes `Object?` rather than `String?` because it reads decoded JSON, where
+  /// a non-string is a real thing the wire can produce and is exactly as
+  /// unusable as an unknown string.
+  static TokenKind? fromEcho(Object? value) {
+    for (final kind in TokenKind.values) {
+      if (kind.wire == value) return kind;
+    }
+    return null;
+  }
 }
 
 /// The island resolved a device registration to a kind other than the one this

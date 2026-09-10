@@ -389,8 +389,13 @@ abstract interface class ChatRestApi {
   /// island-side — which is what lets an alert registration keep working against
   /// an island built before the field existed.
   ///
-  /// Returns the kind the island RESOLVED, and throws [DeviceKindRefused] when
-  /// that is not [kind]. This is the one check on this path that fails closed,
+  /// Throws [DeviceKindRefused] when the island resolved a kind other than
+  /// [kind]. It returns NOTHING on success deliberately: the only caller already
+  /// knows the kind it asked for, so a returned value would be information no
+  /// one reads — and a bare [TokenKind] could not say whether the island STATED
+  /// it or we inferred it from silence, which is the one thing a reader would
+  /// want it for (Carnot, round 3). The guarantee is the throw, and the throw
+  /// carries the provenance. This is the one check on this path that fails closed,
   /// and it is fail-closed because the failure it screens for is silent: a VoIP
   /// token stored as an alert row draws an ordinary push, and the handset does
   /// not ring for a call it was told about. The 201's echo is the only moment
@@ -405,7 +410,7 @@ abstract interface class ChatRestApi {
   /// the caller's to swallow: a device that cannot register is a device that
   /// will not be woken, which is a degradation and never a reason to block
   /// sign-in.
-  Future<TokenKind> registerDevice({
+  Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
     TokenKind kind = TokenKind.alert,

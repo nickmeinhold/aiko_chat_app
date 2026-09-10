@@ -201,7 +201,8 @@ class PendingUnregisterStore {
         } else if (value is Map) {
           final byKind = <TokenKind, List<String>>{};
           for (final k in value.entries) {
-            // MERGE, NEVER ASSIGN (Tesla, round 1). `fromWire` is TOTAL — every
+            // MERGE, NEVER ASSIGN (Tesla, round 1). [TokenKind.fromLedger] is
+            // TOTAL — every
             // name it cannot speak becomes `alert` — and that totality is right
             // where it was designed to be used, decoding a value, because a
             // throw there would read as "nothing owed" and discharge every
@@ -219,9 +220,8 @@ class PendingUnregisterStore {
             // clear. The island's DELETE matches on (user_id, token) and never
             // on kind, so a token drained under the wrong kind is still the
             // right row removed.
-            (byKind[TokenKind.fromWire(k.key as String)] ??= <String>[]).addAll(
-              (k.value as List).cast<String>(),
-            );
+            (byKind[TokenKind.fromLedger(k.key as String)] ??= <String>[])
+                .addAll((k.value as List).cast<String>());
           }
           out[entry.key] = byKind;
         }
