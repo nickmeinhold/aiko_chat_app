@@ -4,6 +4,7 @@ import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../../notifications/domain/device_platform.dart';
 import '../../notifications/domain/apns_environment.dart';
+import '../../notifications/domain/token_kind.dart';
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import '../domain/gateway_capabilities.dart';
@@ -383,13 +384,31 @@ abstract interface class ChatRestApi {
   /// against a sandbox-defaulted island draws a bare `400 BadDeviceToken` from
   /// APNs and the handset simply never rings (claude-tasks#3450, island #3386).
   ///
+  /// [kind] declares which DELIVERY SEMANTICS [token] carries. OPTIONAL on the
+  /// wire and OMITTED for [TokenKind.alert], because absent means alert
+  /// island-side — which is what lets an alert registration keep working against
+  /// an island built before the field existed.
+  ///
+  /// Returns the kind the island RESOLVED, and throws [DeviceKindRefused] when
+  /// that is not [kind]. This is the one check on this path that fails closed,
+  /// and it is fail-closed because the failure it screens for is silent: a VoIP
+  /// token stored as an alert row draws an ordinary push, and the handset does
+  /// not ring for a call it was told about. The 201's echo is the only moment
+  /// the two kinds are distinguishable from this side of the wire.
+  ///
+  /// An ABSENT `token_kind` in the response resolves to [TokenKind.alert],
+  /// exactly as it does on the way out. So an island with no answer is fine for
+  /// an alert token and refused for a VoIP one, which falls out of the same
+  /// comparison rather than needing a version check.
+  ///
   /// Throws [Unauthorized] on a terminal auth rejection. Every other failure is
   /// the caller's to swallow: a device that cannot register is a device that
   /// will not be woken, which is a degradation and never a reason to block
   /// sign-in.
-  Future<void> registerDevice({
+  Future<TokenKind> registerDevice({
     required DevicePlatform platform,
     required String token,
+    TokenKind kind = TokenKind.alert,
     ApnsEnvironment? apnsEnvironment,
   });
 

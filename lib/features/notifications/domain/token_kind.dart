@@ -47,3 +47,50 @@ enum TokenKind {
     _ => TokenKind.alert,
   };
 }
+
+/// The island resolved a device registration to a kind other than the one this
+/// client asked for — including an island too old to have an answer.
+///
+/// ## Why this is a refusal and not a warning
+///
+/// A VoIP token stored as an `alert` row is not a weaker ring, it is no ring:
+/// the island sends an ordinary alert push to a PushKit token and the handset
+/// stays silent for a call it was told about. Nothing downstream observes that.
+/// The 201's echo is the only moment the two kinds are distinguishable, so it is
+/// the only place the check can live.
+///
+/// ## What it does NOT mean
+///
+/// Not "the row was not written". The island answered, so it holds a row keyed
+/// on this token — with semantics we did not ask for. The registrar's
+/// ambiguous-landing tail is therefore the correct handler and not a fallback:
+/// the unregister debt stays owed, and the pairing is deliberately NOT recorded
+/// as registered, so the next session edge tries again rather than skipping a
+/// device it believes is paired.
+///
+/// ## Carrying the fact, not the body
+///
+/// Both fields are enum values or null. This type never touches a response body,
+/// a path, or a message, for the same reason [PushFailure] does not: the log
+/// carries the FACT and the reader does no inference. `DeviceKindRefused(asked:
+/// voip, resolved: alert)` closes a diagnosis that `error=DioException` cannot.
+class DeviceKindRefused implements Exception {
+  const DeviceKindRefused({required this.asked, required this.resolved});
+
+  /// The kind this client declared, from the token source.
+  final TokenKind asked;
+
+  /// The kind the island came back with, or null when it named a value this
+  /// build has no model of.
+  ///
+  /// NULL IS NOT "ABSENT". An absent field is a resolved `alert` — that is the
+  /// wire contract in both directions, and it is what keeps an alert
+  /// registration working against an island built before the field existed.
+  /// Null here means the island answered with a kind whose semantics we cannot
+  /// name, which is not a thing to pair a token to.
+  final TokenKind? resolved;
+
+  @override
+  String toString() =>
+      'DeviceKindRefused(asked: ${asked.wire}, resolved: ${resolved?.wire})';
+}

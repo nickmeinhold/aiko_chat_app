@@ -26,8 +26,14 @@ const _island = 'https://island.example';
 const _otherIsland = 'https://elsewhere.example';
 
 class _FakeSource implements PushTokenSource {
+  /// SETTABLE, and it must stay settable. With this pinned to `alert` — the
+  /// same value `registerDevice` defaults to — a registrar that never passed a
+  /// kind at all would be indistinguishable from one that reads it from here.
+  /// The assertion would be true and the fixture unable to reach the state that
+  /// makes it interesting.
+  TokenKind kindValue = TokenKind.alert;
   @override
-  TokenKind get kind => TokenKind.alert;
+  TokenKind get kind => kindValue;
 
   bool granted = true;
   String? token = 'tok-1';
@@ -767,6 +773,69 @@ void main() {
             'row ours, so a debt would drain at the next sign-in and remove it',
       );
     });
+  });
+
+  // A refused kind is the one failure on this path where the row DEFINITELY
+  // exists and is DEFINITELY wrong. Everything else here is either "landed and
+  // correct" or "may not have landed at all"; this is a third state, and the
+  // question these pin is whether it is handled as the second one — which is
+  // what makes it safe — rather than as the first.
+  group('a kind the island refused to honour', () {
+    test('leaves the debt STANDING — the row exists and something must be able '
+        'to clear it', () async {
+      // Modelled with `registerDeviceThrowsAfterLanding` deliberately: a kind
+      // refusal IS a landed row followed by a failed call, which is exactly what
+      // that knob means. Using `registerDeviceThrows` would model the island
+      // rejecting before the write, and would quietly test the Unauthorized
+      // path's premise instead of this one.
+      api.registerDeviceThrowsAfterLanding = const DeviceKindRefused(
+        asked: TokenKind.voip,
+        resolved: TokenKind.alert,
+      );
+      await registrar.start();
+      await pumpEventQueue();
+
+      expect(
+        pending.read(_island, TokenKind.alert),
+        contains('tok-1'),
+        reason:
+            'the island holds a row for tok-1 with semantics we did not ask '
+            'for; discharging the debt here would leave it routable forever',
+      );
+    });
+
+    test('does NOT record the pairing — the next session edge must retry, not '
+        'skip a device it believes is paired', () async {
+      api.registerDeviceThrowsAfterLanding = const DeviceKindRefused(
+        asked: TokenKind.voip,
+        resolved: TokenKind.alert,
+      );
+      await registrar.start();
+      await pumpEventQueue();
+
+      // THE WHOLE DEFECT, if this ever reads `tok-1`: skip-if-same would return
+      // before the wire on every subsequent register, and a handset that cannot
+      // ring would stay that way permanently while the app believes it is paired.
+      expect(registrar.registeredToken, isNull);
+    });
+
+    test(
+      'declares the SOURCE\'s kind on the wire, not a caller-chosen one',
+      () async {
+        // The kind is a property of the registry the token came from, which is why
+        // it lives on PushTokenSource. This pins that the registrar reads it from
+        // there rather than defaulting — a registrar that always sent `alert`
+        // would pass every other test in this file.
+        // voip, NOT alert: `registerDevice` defaults to alert, so a source pinned
+        // to alert makes this assertion true whether or not the registrar reads
+        // the source at all.
+        source.kindValue = TokenKind.voip;
+        await registrar.start();
+        await pumpEventQueue();
+        expect(api.registeredKinds, isNotEmpty);
+        expect(api.registeredKinds, everyElement(TokenKind.voip));
+      },
+    );
   });
 
   // A register is an OBLIGATION from the moment it is on the wire. Both of these

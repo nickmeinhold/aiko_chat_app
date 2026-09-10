@@ -9,6 +9,7 @@ import '../../call/domain/video_token.dart';
 import '../../moderation/domain/moderation_models.dart';
 import '../../notifications/domain/device_platform.dart';
 import '../../notifications/domain/apns_environment.dart';
+import '../../notifications/domain/token_kind.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../../services/secure_token_store.dart';
 import '../domain/channel.dart';
@@ -429,25 +430,82 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
-  Future<void> registerDevice({
+  Future<TokenKind> registerDevice({
     required DevicePlatform platform,
     required String token,
+    TokenKind kind = TokenKind.alert,
     ApnsEnvironment? apnsEnvironment,
-  }) => _authedCall(
-    () => _authed.post(
-      '/v1/devices',
-      // The key is OMITTED rather than sent as null when we have no answer. The
-      // island's contract distinguishes the two: absent means "resolve it from
-      // APNS_USE_SANDBOX", and an explicit null is an out-of-set value at a
-      // boundary that answers 422 — which would fail the whole registration
-      // instead of degrading one field.
-      data: {
-        'platform': platform.wire,
-        'token': token,
-        if (apnsEnvironment != null) 'apns_environment': apnsEnvironment.wire,
-      },
-    ),
-  );
+  }) async {
+    final response = await _authedCall(
+      () => _authed.post<Map<String, dynamic>>(
+        '/v1/devices',
+        // The key is OMITTED rather than sent as null when we have no answer. The
+        // island's contract distinguishes the two: absent means "resolve it from
+        // APNS_USE_SANDBOX", and an explicit null is an out-of-set value at a
+        // boundary that answers 422 — which would fail the whole registration
+        // instead of degrading one field.
+        //
+        // `token_kind` follows the identical rule for the identical reason, and
+        // omitting it for `alert` is load-bearing rather than tidy: absent means
+        // alert island-side, so an alert registration keeps working unchanged
+        // against an island built before the column existed.
+        data: {
+          'platform': platform.wire,
+          'token': token,
+          if (kind != TokenKind.alert) 'token_kind': kind.wire,
+          if (apnsEnvironment != null) 'apns_environment': apnsEnvironment.wire,
+        },
+      ),
+    );
+    return _resolvedKind(asked: kind, body: response.data);
+  }
+
+  /// The kind the island resolved this registration to, or [DeviceKindRefused]
+  /// if that is not what was asked for.
+  ///
+  /// ## Why this does not lean on the schema
+  ///
+  /// The island's `RegisterDeviceResp` lists `token_kind` in its `required` set,
+  /// and this function deliberately does not depend on that. The required-ness is
+  /// EMERGENT from the field being non-Optional there — nothing pins it — so a
+  /// field made Optional for an unrelated reason would drop it from `required`
+  /// with every test on both sides staying green, including this check, if this
+  /// check were trusting the declaration that moved. A verifier that shares a
+  /// failure mode with the thing it verifies is not a second instrument.
+  ///
+  /// So the rule reads only the value that actually arrived, and asks whether it
+  /// is the kind we asked for. Nothing here asks whether anything promised the
+  /// field would be there.
+  ///
+  /// ## Why an unparseable kind is refused where the ledger accepts it
+  ///
+  /// [TokenKind.fromWire] is total and folds anything unknown to `alert`, which
+  /// is right where it is used: a throw while decoding the unregister debt ledger
+  /// would read as "nothing owed" and discharge every outstanding obligation.
+  /// Here the same fold would pair a token to semantics this build cannot name,
+  /// so an out-of-set value is refused rather than defaulted. Same enum, opposite
+  /// fail direction, because one path is weak-signal capture and this one is a
+  /// mutation we are about to call successful.
+  TokenKind _resolvedKind({
+    required TokenKind asked,
+    required Map<String, dynamic>? body,
+  }) {
+    final echoed = body?['token_kind'];
+    // ABSENT IS A VALUE, and it is `alert` — the same reading applied on the way
+    // out. That is what makes an island with no answer correct for an alert
+    // token and refused for a VoIP one, out of one comparison and with no
+    // version check anywhere.
+    final resolved = echoed == null
+        ? TokenKind.alert
+        : TokenKind.values.where((k) => k.wire == echoed).firstOrNull;
+    if (resolved != asked) {
+      throw DeviceKindRefused(asked: asked, resolved: resolved);
+    }
+    // `asked`, not `resolved`, only because the compiler cannot narrow a
+    // nullable through an inequality. They are the same value on this line —
+    // that is precisely what the throw above establishes.
+    return asked;
+  }
 
   @override
   // DELETE with a body: the island reads the token from the payload rather than

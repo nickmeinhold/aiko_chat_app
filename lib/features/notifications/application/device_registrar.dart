@@ -7,6 +7,7 @@ import '../data/pending_unregister_store.dart';
 import 'push_telemetry.dart';
 import '../domain/apns_environment.dart';
 import '../domain/push_token_source.dart';
+import '../domain/token_kind.dart';
 
 /// Keeps this island's belief about "where do I push to reach this user" in step
 /// with the platform's belief about "what is this device's token".
@@ -368,8 +369,35 @@ class DeviceRegistrar {
       await _api.registerDevice(
         platform: _source.platform,
         token: token,
+        kind: _source.kind,
         apnsEnvironment: await _apnsEnvironment(),
       );
+    } on DeviceKindRefused catch (e) {
+      // DEFINITELY LANDED, WITH THE WRONG SEMANTICS. The island answered, so it
+      // holds a row keyed on this token — one that will draw an alert push for a
+      // PushKit token, or the reverse. That is a handset which does not ring, and
+      // nothing else in this app can see it.
+      //
+      // Deliberately falls through to the AMBIGUOUS tail below rather than
+      // getting its own: that tail already does both correct things, and does
+      // them for reasons that hold here verbatim. The debt stays owed (a row
+      // exists and something must be able to clear it), and the pairing is NOT
+      // recorded as registered, so the next session edge retries instead of
+      // skipping a device it believes is paired. A `_registered` write here is
+      // the whole defect — it would make the wrong row permanent by declaring
+      // the right one done.
+      //
+      // What it is NOT is [Unauthorized]'s discharge-the-debt path. That one is
+      // correct because the island rejected the write BEFORE the row existed;
+      // here the row exists, and discharging would aim the next drain at nothing
+      // while leaving a routable row behind forever.
+      _telemetry.registerKindRefused(
+        PushTelemetry.ref(token),
+        e.asked.wire,
+        e.resolved?.wire,
+      );
+      await _settle(token, generation, epoch, confirmed: false);
+      return;
     } on Unauthorized {
       // DEFINITELY-NOT-LANDED: the island rejected this before writing, so the
       // obligation written above is owed for a row that does not exist. Discharge
