@@ -162,10 +162,10 @@ class DeviceRegistrar {
   /// because tokens rotate and two offline sign-outs can leave two live rows.
   /// One failure does not abandon the rest.
   Future<void> drainPending() async {
-    for (final token in _pending.read(_islandBaseUrl)) {
+    for (final token in _pending.read(_islandBaseUrl, _source.kind)) {
       try {
         await _api.unregisterDevice(token);
-        if (!await _pending.forget(_islandBaseUrl, token)) {
+        if (!await _pending.forget(_islandBaseUrl, _source.kind, token)) {
           _telemetry.debtPaidButUnclearable(PushTelemetry.ref(token));
         }
       } catch (e) {
@@ -249,7 +249,7 @@ class DeviceRegistrar {
     // The write's RESULT is checked, not discarded: SharedPreferences reports a
     // persistence failure by returning false rather than throwing, and a debt
     // that did not persist is a backstop that does not exist.
-    if (!await _pending.remember(_islandBaseUrl, token)) {
+    if (!await _pending.remember(_islandBaseUrl, _source.kind, token)) {
       _telemetry.debtRecordFailed(PushTelemetry.ref(token));
     }
     _settling = _attemptUnregister(token, credential);
@@ -288,7 +288,7 @@ class DeviceRegistrar {
     if (credential == null) return;
     try {
       await _api.unregisterDevice(token, credential: credential);
-      await _pending.forget(_islandBaseUrl, token);
+      await _pending.forget(_islandBaseUrl, _source.kind, token);
     } catch (e) {
       _telemetry.unregisterDeferred(e);
     }
@@ -361,7 +361,7 @@ class DeviceRegistrar {
     // debt discharged in error costs one redundant DELETE and never a lost row.
     // This is the same fail-toward-deletion the design's governing principle
     // names: an over-delete degrades reach, an under-delete leaks.
-    if (!await _pending.remember(_islandBaseUrl, token)) {
+    if (!await _pending.remember(_islandBaseUrl, _source.kind, token)) {
       _telemetry.registerObligationUnrecorded(PushTelemetry.ref(token));
     }
     try {
@@ -375,7 +375,7 @@ class DeviceRegistrar {
       // obligation written above is owed for a row that does not exist. Discharge
       // it — an unearned debt aims a DELETE at whatever holds this token next.
       // Not ours to handle otherwise: the auth controller owns that transition.
-      await _pending.forget(_islandBaseUrl, token);
+      await _pending.forget(_islandBaseUrl, _source.kind, token);
       rethrow;
     } catch (e) {
       _telemetry.registerFailed(PushTelemetry.ref(token), e);
@@ -442,7 +442,7 @@ class DeviceRegistrar {
       // discharged. This is the ONLY place it is discharged on the success path —
       // a stale or ambiguous register leaves it standing, which is what makes a
       // lost response and a mid-flight kill both safe.
-      await _pending.forget(_islandBaseUrl, token);
+      await _pending.forget(_islandBaseUrl, _source.kind, token);
       return;
     }
 
@@ -484,7 +484,7 @@ class DeviceRegistrar {
     // Owing a DELETE still beats issuing one inline: the token is stable per
     // install, so an inline delete could match a row the NEXT session already
     // registered, whereas the drain runs strictly before the next start.
-    if (!await _pending.remember(_islandBaseUrl, token)) {
+    if (!await _pending.remember(_islandBaseUrl, _source.kind, token)) {
       _telemetry.registerStaleRowUnrecorded(PushTelemetry.ref(token));
     }
   }

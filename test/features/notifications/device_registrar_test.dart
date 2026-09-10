@@ -11,6 +11,7 @@
 import 'dart:async';
 
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
+import 'package:aiko_chat_app/features/notifications/domain/token_kind.dart';
 import 'package:aiko_chat_app/features/notifications/application/device_registrar.dart';
 import 'package:aiko_chat_app/features/notifications/data/pending_unregister_store.dart';
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
@@ -25,6 +26,9 @@ const _island = 'https://island.example';
 const _otherIsland = 'https://elsewhere.example';
 
 class _FakeSource implements PushTokenSource {
+  @override
+  TokenKind get kind => TokenKind.alert;
+
   bool granted = true;
   String? token = 'tok-1';
   final refreshes = StreamController<String>.broadcast();
@@ -244,7 +248,7 @@ void main() {
       // that only becomes durable in a later microtask is lost to a process kill
       // at exactly the moment it is needed.
       expect(api.unregisteredDevices, isEmpty);
-      expect(pending.read(_island), [
+      expect(pending.read(_island, TokenKind.alert), [
         'tok-1',
       ], reason: 'and the debt is durable');
 
@@ -286,7 +290,7 @@ void main() {
       await registrar.settled;
 
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         ['tok-1'],
         reason:
             'recording the debt only on failure would lose it in the two cases '
@@ -300,7 +304,7 @@ void main() {
       await registrar.unpair(credential: 'cred-a');
       await registrar.settled;
 
-      expect(pending.read(_island), isEmpty);
+      expect(pending.read(_island, TokenKind.alert), isEmpty);
     });
 
     test(
@@ -312,7 +316,7 @@ void main() {
         await registrar.settled;
 
         expect(api.unregisteredDevices, isEmpty);
-        expect(pending.read(_island), ['tok-1']);
+        expect(pending.read(_island, TokenKind.alert), ['tok-1']);
       },
     );
 
@@ -326,14 +330,14 @@ void main() {
 
       final unpairing = registrar.unpair(credential: 'cred-a');
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         isEmpty,
         reason: 'precondition: the write really is in flight, not instant',
       );
 
       await unpairing;
 
-      expect(pending.read(_island), ['tok-1']);
+      expect(pending.read(_island, TokenKind.alert), ['tok-1']);
     });
 
     test('unpair without start is a no-op, not a spurious debt', () async {
@@ -341,7 +345,7 @@ void main() {
       await registrar.settled;
 
       expect(api.unregisteredDevices, isEmpty);
-      expect(pending.read(_island), isEmpty);
+      expect(pending.read(_island, TokenKind.alert), isEmpty);
     });
 
     test('after sign-out, a late rotation does NOT re-register — the stream is '
@@ -399,13 +403,13 @@ void main() {
         isEmpty,
         reason: 'no inline DELETE — it could match the next session\'s row',
       );
-      expect(pending.read(_island), ['tok-1']);
+      expect(pending.read(_island, TokenKind.alert), ['tok-1']);
     });
   });
 
   group('draining the debt', () {
     test('drain pays the island back and clears the record', () async {
-      await pending.remember(_island, 'tok-owed');
+      await pending.remember(_island, TokenKind.alert, 'tok-owed');
 
       await registrar.drainPending();
 
@@ -417,17 +421,17 @@ void main() {
             'the drain runs inside a live session, so the interceptor resolves '
             'the credential — carrying one by value would be the teardown path',
       );
-      expect(pending.read(_island), isEmpty);
+      expect(pending.read(_island, TokenKind.alert), isEmpty);
     });
 
     test('a failed drain KEEPS the debt — an unreachable island is one we '
         'still owe', () async {
-      await pending.remember(_island, 'tok-owed');
+      await pending.remember(_island, TokenKind.alert, 'tok-owed');
       api.unregisterDeviceThrows = Exception('offline');
 
       await registrar.drainPending();
 
-      expect(pending.read(_island), ['tok-owed']);
+      expect(pending.read(_island, TokenKind.alert), ['tok-owed']);
     });
 
     test('an OBSERVED over-delete is restored — the straggler signals the live '
@@ -502,7 +506,7 @@ void main() {
       await registrar.settled;
       await pumpEventQueue();
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         isEmpty,
         reason:
             'precondition: the second unpair paid its own debt, so nothing is '
@@ -513,7 +517,7 @@ void main() {
       await pumpEventQueue();
 
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         contains('tok-1'),
         reason:
             'the restore may have created a row for a handset nobody is signed '
@@ -580,22 +584,22 @@ void main() {
 
     test('a debt owed to ANOTHER island is not paid here — after a gateway '
         'switch the DELETE would be addressed to the wrong island', () async {
-      await pending.remember(_otherIsland, 'tok-elsewhere');
+      await pending.remember(_otherIsland, TokenKind.alert, 'tok-elsewhere');
 
       await registrar.drainPending();
 
       expect(api.unregisteredDevices, isEmpty);
-      expect(pending.read(_otherIsland), ['tok-elsewhere']);
+      expect(pending.read(_otherIsland, TokenKind.alert), ['tok-elsewhere']);
     });
 
     test('registering a token discharges an older debt for it, so the next '
         'drain cannot delete the live row', () async {
-      await pending.remember(_island, 'tok-1');
+      await pending.remember(_island, TokenKind.alert, 'tok-1');
 
       await registrar.start();
 
       expect(registrar.registeredToken, 'tok-1');
-      expect(pending.read(_island), isEmpty);
+      expect(pending.read(_island, TokenKind.alert), isEmpty);
     });
   });
 
@@ -628,7 +632,7 @@ void main() {
       await pumpEventQueue();
 
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         contains('tok-2'),
         reason:
             'the island may hold tok-2 for a session that has ended, and no '
@@ -655,7 +659,7 @@ void main() {
       await pumpEventQueue();
 
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         isNot(contains('tok-2')),
         reason: 'the island rejected this before writing anything',
       );
@@ -691,7 +695,7 @@ void main() {
             'the newer token is the desired one; a straggler cannot undo it',
       );
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         contains('tok-1'),
         reason:
             'tok-1 may have been written and nobody wants it — fail toward '
@@ -756,7 +760,7 @@ void main() {
       );
       expect(api.registeredDevices.last.token, 'tok-1');
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         isNot(contains('tok-1')),
         reason:
             'and it must NOT also be owed a delete — the restatement made this '
@@ -790,7 +794,7 @@ void main() {
       await pumpEventQueue();
 
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         contains('tok-1'),
         reason:
             'the island may hold tok-1 for a session that has just ended, and '
@@ -817,7 +821,7 @@ void main() {
       await registrar.unpair(credential: 'cred-a');
 
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         contains('tok-1'),
         reason:
             'durable NOW, with the POST still on the wire — a kill here must not '
@@ -862,7 +866,7 @@ void main() {
             'case hit.)',
       );
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         isNot(contains('tok-2')),
         reason:
             'and the LIVE token must not be owed a delete — that would aim the '
@@ -916,7 +920,7 @@ void main() {
             'roll the pairing back to a token FCM will not re-emit',
       );
       expect(
-        pending.read(_island),
+        pending.read(_island, TokenKind.alert),
         isNot(contains('tok-2')),
         reason:
             'and the LIVE platform token must never be owed a delete — the next '
@@ -934,25 +938,25 @@ void main() {
       // Sign out offline owing tok-1, rotate, sign out offline again, and the
       // overwrite meant tok-1's row on the island could never be drained by this
       // client. A ledger that silently drops entries is not a ledger.
-      await pending.remember(_island, 'tok-1');
-      await pending.remember(_island, 'tok-2');
+      await pending.remember(_island, TokenKind.alert, 'tok-1');
+      await pending.remember(_island, TokenKind.alert, 'tok-2');
 
-      expect(pending.read(_island), ['tok-1', 'tok-2']);
+      expect(pending.read(_island, TokenKind.alert), ['tok-1', 'tok-2']);
     });
 
     test('the drain pays off EVERY owed token, not just the newest', () async {
-      await pending.remember(_island, 'tok-1');
-      await pending.remember(_island, 'tok-2');
+      await pending.remember(_island, TokenKind.alert, 'tok-1');
+      await pending.remember(_island, TokenKind.alert, 'tok-2');
 
       await registrar.drainPending();
 
       expect(api.unregisteredDevices, ['tok-1', 'tok-2']);
-      expect(pending.read(_island), isEmpty);
+      expect(pending.read(_island, TokenKind.alert), isEmpty);
     });
 
     test('one failed debt does not abandon the others', () async {
-      await pending.remember(_island, 'tok-1');
-      await pending.remember(_island, 'tok-2');
+      await pending.remember(_island, TokenKind.alert, 'tok-1');
+      await pending.remember(_island, TokenKind.alert, 'tok-2');
       var calls = 0;
       api.onUnregister = (_) {
         if (++calls == 1) throw Exception('transient');
@@ -960,7 +964,7 @@ void main() {
 
       await registrar.drainPending();
 
-      expect(pending.read(_island), [
+      expect(pending.read(_island, TokenKind.alert), [
         'tok-1',
       ], reason: 'the failed one stays owed; the other is paid and cleared');
     });
@@ -971,12 +975,12 @@ void main() {
       // interleave and silently drop an entry. Fired together, not awaited in
       // turn, which is how a settling unpair and a discharging register meet.
       await Future.wait([
-        pending.remember(_island, 'tok-a'),
-        pending.remember(_island, 'tok-b'),
-        pending.remember(_island, 'tok-c'),
+        pending.remember(_island, TokenKind.alert, 'tok-a'),
+        pending.remember(_island, TokenKind.alert, 'tok-b'),
+        pending.remember(_island, TokenKind.alert, 'tok-c'),
       ]);
 
-      expect(pending.read(_island).toList()..sort(), [
+      expect(pending.read(_island, TokenKind.alert).toList()..sort(), [
         'tok-a',
         'tok-b',
         'tok-c',
@@ -986,22 +990,22 @@ void main() {
     test(
       'discharge removes only the named token — a NEWER debt is left alone',
       () async {
-        await pending.remember(_island, 'tok-old');
-        await pending.remember(_island, 'tok-new');
+        await pending.remember(_island, TokenKind.alert, 'tok-old');
+        await pending.remember(_island, TokenKind.alert, 'tok-new');
 
         // A drain of the old token completing late must not discharge the new one.
-        await pending.forget(_island, 'tok-old');
+        await pending.forget(_island, TokenKind.alert, 'tok-old');
 
-        expect(pending.read(_island), ['tok-new']);
+        expect(pending.read(_island, TokenKind.alert), ['tok-new']);
       },
     );
 
     test('debts for different islands coexist', () async {
-      await pending.remember(_island, 'tok-a');
-      await pending.remember(_otherIsland, 'tok-b');
+      await pending.remember(_island, TokenKind.alert, 'tok-a');
+      await pending.remember(_otherIsland, TokenKind.alert, 'tok-b');
 
-      expect(pending.read(_island), ['tok-a']);
-      expect(pending.read(_otherIsland), ['tok-b']);
+      expect(pending.read(_island, TokenKind.alert), ['tok-a']);
+      expect(pending.read(_otherIsland, TokenKind.alert), ['tok-b']);
     });
 
     test('a corrupt record reads as nothing owed rather than throwing — an '
@@ -1013,18 +1017,18 @@ void main() {
         await SharedPreferences.getInstance(),
       );
 
-      expect(store.read(_island), isEmpty);
+      expect(store.read(_island, TokenKind.alert), isEmpty);
     });
 
     test('the debt survives a new store instance — the point of it being '
         'durable rather than in-memory', () async {
-      await pending.remember(_island, 'tok-1');
+      await pending.remember(_island, TokenKind.alert, 'tok-1');
 
       final reopened = PendingUnregisterStore(
         await SharedPreferences.getInstance(),
       );
 
-      expect(reopened.read(_island), ['tok-1']);
+      expect(reopened.read(_island, TokenKind.alert), ['tok-1']);
     });
   });
 }
