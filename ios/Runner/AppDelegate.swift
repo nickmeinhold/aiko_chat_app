@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import PushKit
 import UserNotifications
 
 /// The APNs device token, taken from Apple DIRECTLY.
@@ -243,6 +244,155 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
   }
 }
 
+/// The PushKit VoIP token, handed to Dart so the island can ring this handset
+/// like a telephone (Nick, 2026-09-09: "ringing like a telephone is
+/// non-negotiable").
+///
+/// A SECOND, INDEPENDENT REGISTRY — not a variant of [ApnsTokenChannel]. It has
+/// its own token, its own rotation callbacks, and its own permission story, and
+/// conflating the two is how a device ends up registered under the wrong
+/// `token_kind` and simply never rings.
+///
+/// **THE PERMISSION ASYMMETRY IS THE PART THAT SURPRISES.** A PushKit VoIP token
+/// requires NO user permission at all; an APNs alert token requires granted
+/// notification permission. So a user who declines notifications has a VoIP
+/// token and will never have an alert token — "reachable for calls, unreachable
+/// for messages" is a NORMAL, permanent state to model, not an error to log.
+/// The reverse pairing is normal too, on a device that has never run this build.
+///
+/// Registered unconditionally at launch rather than behind the calling gate:
+/// `desiredPushTypes` is what makes iOS mint the token, and a token that only
+/// exists once the user opens a call screen is a token the island cannot ring.
+/// The island refuses to send to a device it has no VoIP row for, which is the
+/// gate that actually holds.
+final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
+  static let shared = PushKitTokenChannel()
+
+  private var registry: PKPushRegistry?
+  private var sink: FlutterEventSink?
+
+  /// The last token handed to Dart, so a re-registration reporting the SAME
+  /// value is not published as a rotation — the same reason [ApnsTokenChannel]
+  /// keeps one.
+  private var lastReported: String?
+
+  /// Callers of `currentToken` waiting on the first delegate callback. A LIST,
+  /// not one slot, for the reason spelled out on [ApnsTokenChannel.waiters]: a
+  /// dropped continuation is a Dart future that never completes and a device
+  /// never registered.
+  private var waiters: [(String?) -> Void] = []
+
+  func register(with registrar: FlutterPluginRegistrar) {
+    FlutterMethodChannel(
+      name: "cc.imagineering.aikoChatApp/pushkit",
+      binaryMessenger: registrar.messenger()
+    ).setMethodCallHandler { [weak self] call, result in
+      guard let self else { return result(FlutterMethodNotImplemented) }
+      switch call.method {
+      case "currentToken": self.currentToken(result)
+      default: result(FlutterMethodNotImplemented)
+      }
+    }
+    FlutterEventChannel(
+      name: "cc.imagineering.aikoChatApp/pushkit/refreshes",
+      binaryMessenger: registrar.messenger()
+    ).setStreamHandler(self)
+  }
+
+  /// Begin registration. Idempotent.
+  func start() {
+    guard registry == nil else { return }
+    let registry = PKPushRegistry(queue: .main)
+    registry.delegate = self
+    // Assigning `desiredPushTypes` is what triggers minting. Nothing else does.
+    registry.desiredPushTypes = [.voIP]
+    self.registry = registry
+  }
+
+  private func currentToken(_ result: @escaping FlutterResult) {
+    if let token = lastReported { return result(token) }
+    if let data = registry?.pushToken(for: .voIP) {
+      let hex = PushKitTokenChannel.hex(data)
+      lastReported = hex
+      return result(hex)
+    }
+    // Not minted yet — wait for the delegate rather than answering null, which
+    // Dart cannot distinguish from "this device has no VoIP token".
+    waiters.append { result($0) }
+  }
+
+  private static func hex(_ data: Data) -> String {
+    // RAW bytes as lowercase hex. Never `data.description`, for the reason the
+    // APNs path documents: the island stores whatever we send and a mismatch
+    // only ever surfaces as silence.
+    data.map { String(format: "%02x", $0) }.joined()
+  }
+
+  // MARK: PKPushRegistryDelegate
+
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didUpdate credentials: PKPushCredentials,
+    for type: PKPushType
+  ) {
+    guard type == .voIP else { return }
+    let token = PushKitTokenChannel.hex(credentials.token)
+    let isRotation = lastReported != nil && lastReported != token
+    lastReported = token
+    drainWaiters(with: token)
+    if isRotation { sink?(token) }
+  }
+
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didInvalidatePushTokenFor type: PKPushType
+  ) {
+    guard type == .voIP else { return }
+    lastReported = nil
+    drainWaiters(with: nil)
+  }
+
+  /// A VoIP push arrived. **Reporting to CallKit here is MANDATORY before the
+  /// completion handler returns** — iOS terminates the app otherwise, and
+  /// repeated failures make the system stop delivering VoIP pushes to this app
+  /// on this device (Apple, PKPushRegistryDelegate; per-device denial of
+  /// delivery, not a revoked entitlement).
+  ///
+  /// NOT WIRED YET — the CXProvider path is the next increment. Until it exists
+  /// this method must not be reachable, which is why the island only sends VoIP
+  /// to a device that registered a `voip` token, and this build registers one
+  /// only once there is something to report to.
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didReceiveIncomingPushWith payload: PKPushPayload,
+    for type: PKPushType,
+    completion: @escaping () -> Void
+  ) {
+    NSLog("[pushkit] VoIP push received with no CXProvider wired — see #3609")
+    completion()
+  }
+
+  private func drainWaiters(with token: String?) {
+    let pending = waiters
+    waiters = []
+    for waiter in pending { waiter(token) }
+  }
+}
+
+extension PushKitTokenChannel: FlutterStreamHandler {
+  func onListen(
+    withArguments _: Any?, eventSink events: @escaping FlutterEventSink
+  ) -> FlutterError? {
+    sink = events
+    return nil
+  }
+
+  func onCancel(withArguments _: Any?) -> FlutterError? {
+    sink = nil
+    return nil
+  }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   override func application(
@@ -265,6 +415,11 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
       forPlugin: "NotificationTapChannel")
     {
       NotificationTapChannel.shared.register(with: registrar)
+    }
+    if let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "PushKitTokenChannel")
+    {
+      PushKitTokenChannel.shared.register(with: registrar)
     }
   }
 
