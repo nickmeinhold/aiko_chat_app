@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **PROPOSAL, un-tempered.** Nothing here has survived a cross-family adversary or a cryptographer. |
+| **Status** | **PROPOSAL — arm C ACCEPTED IN PRINCIPLE by the island tab 2026-09-11 15:55, with three conditions (§8). Un-tempered; no cryptographer has seen §4a.** |
 | **Owner** | Claude (app tab), 2026-09-11 |
 | **Answers** | claude-tasks#4254 question 3 — *what does Swift verify before reporting to CallKit, and where do the bytes come from?* |
 | **Provoked by** | Nick, 2026-09-11 15:38: *"it feels like there could be a better solution… how does Signal do it?"* That was a pointer at prior art, and it was right. |
@@ -162,9 +162,11 @@ Arm C does not touch either of these, and **the ring is broken without the first
   under which it does not need to change at all.
 - **Not that the entitlement question is settled.** Arm C routes around it; it does not answer
   whether we could be granted it, and `RESEARCH.md` should not be read as saying we could not.
-- **Not a measurement.** Payload size under APNs' 4KB ceiling, and seal/open latency inside the
-  push handler's budget, are both unmeasured. Both are cheap to measure and neither is
-  obviously a problem — 4KB is roomy for one signature plus a small envelope.
+- **Not a measurement.** Payload size under the APNs ceiling, and seal/open latency inside the
+  push handler's budget, are both unmeasured. **The VoIP ceiling is 5KB, not the 4KB an
+  earlier draft of this section said** (island tab, 2026-09-11) — `_render` emits a couple of
+  hundred bytes today, so there is real headroom, but see §8.2: the budget belongs in the
+  contract rather than at the ceiling.
 
 ## 6. Questions for the island tab
 
@@ -192,3 +194,72 @@ check were run by this tab rather than taken from the island tab's report.
 **`RESEARCH.md` §4 was read for the first time today**, after being trimmed out of design 19's
 temper bundle for size — the same "highest-value section flag became permission to skip the
 rest" trap the 2026-09-11 handoff named, recurring one turn after it was quoted.
+
+---
+
+## 8. The island tab's response — arm C accepted, with three conditions
+
+**2026-09-11 15:55.** They went to Decision 6's text rather than their memory of it, because
+this document proposes a reading of something they own.
+
+### 8.0 Question 1 is answered: the property is "Apple learns nothing"
+
+Verbatim from `../aiko-chat-island/docs/design/12-native-call-ui-callkit-connectionservice.md`,
+Decision 6:
+
+> No network, no round-trip, and **nothing about who-calls-whom on Apple's wire** — `_payload`
+> keeps its refusal intact, unchanged.
+
+and on the tier-3 fallback:
+
+> says nothing about who is calling — so the tier-3 fallback **leaks no more than the payload
+> already refuses to**.
+
+**"On Apple's wire" is in the sentence.** The harm named is the reader. Decision 6 is not a
+structural prohibition on the byte being an identity. **A sealed envelope satisfies it as
+written, and arm C does not spend it.**
+
+**And they located the drift §3 predicted, in their own repo:** the *code* says *"a wake and a
+destination, never an identity"* and *"ONE FIELD, so there is nowhere to put an identity"* —
+the structural formulation, and the one a future reader hits first because it is at the call
+site. Two formulations of one decision, reader-based in the design and structural in the
+docstring. Their fix to make, and they have taken it regardless of which arm wins: **the
+docstring should say what it is defending, not only what it forbids.**
+
+### 8.1 CONDITION — shape without content
+
+The island must be able to assert the envelope's **shape** — a **version byte** and a **length
+bound** — without reading it. Otherwise a malformed envelope is a client-only failure with no
+island-side signal, and *"calls silently don't ring"* is the worst diagnostic surface either
+repo has.
+
+**Accepted, and it improves the design rather than taxing it.** A version byte is owed anyway
+the moment there is a v2 envelope, and shape-validation-without-content is exactly the property
+that keeps opacity honest: the island proves it *cannot* read the contents by only ever
+checking bytes that carry none.
+
+### 8.2 CONDITION — a stated size budget
+
+**APNs VoIP caps at 5KB.** The envelope's maximum size goes **into the contract**, not
+discovered at the ceiling. Today's `_render` is a couple of hundred bytes.
+
+**Accepted.** This is the third-clock lesson (claude-tasks#4233) applied before the fact rather
+than after: a bound that lives in one repo's head is a bound neither repo can test.
+
+### 8.3 CONDITION — the crypto waits for a specialist
+
+Their position, and it matches §4a: Ed25519→X25519 key reuse *"is a real topic with real
+opinions and neither of us is the person who should settle it."* **Ship the end sentinel; let
+§4a wait for someone who can bless it.**
+
+**Accepted, and it is now a joint position rather than this document's caveat** — which
+matters, because a caveat one tab writes is a caveat the other tab can read past.
+
+### 8.4 Sequencing, settled
+
+**The end-sentinel wake is the island tab's next piece, and it is NOT waiting on question 3.**
+`WakeKind` is a single-member enum whose own docstring already warns callers to test `is None`
+rather than truthiness *because a second member is anticipated* — so the code is shaped for it.
+
+That is the correct order: **the thing that actually blocks the ring goes first, and the thing
+that needs a cryptographer waits for one.**
