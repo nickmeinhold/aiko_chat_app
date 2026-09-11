@@ -787,7 +787,20 @@ extension VoipSpike: CXProviderDelegate {
   }
 
   func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-    log("ended by user")
+    // NOT "ended by user", which is what this line said when it was inherited
+    // from the #4178 spike — and it cost this run a wrong reading.
+    //
+    // A CXEndCallAction says the call ended; it does NOT say who ended it, and
+    // the label asserted an actor the callback cannot observe. On 2026-09-12
+    // every one of these fired exactly 60s after a `report` push — iOS's own
+    // unanswered-incoming timeout — and was read as the operator dismissing
+    // rings, until Nick said "no I never dismissed it". Four words against an
+    // instrument that had been agreeing with itself all night.
+    //
+    // So the line now records WHAT HAPPENED and leaves WHY to the analysis,
+    // which has the timestamps. An unanswered CallKit ring self-expires at
+    // ~60s, and that periodicity is itself the discriminator.
+    log("CXEndCallAction \(action.callUUID)")
     action.fulfill()
   }
 }
