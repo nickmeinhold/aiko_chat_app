@@ -90,12 +90,27 @@ const Duration kInAppRingDuration = Duration(seconds: 30);
 /// either — the call it ends is named by the signed `replyTo`, which is inside
 /// the same signature (see [admitCallEnd]).
 ///
-/// WHY THIS IS A SMALLER DOOR THAN THE INVITE. The island does not need to learn
-/// it: `push_service` wakes a handset only on the INVITE body, so an end message
-/// is an ordinary message to the gateway and this stays an app-side change. And
-/// the privilege runs the safe way — forging a *stop* suppresses a ring, which a
-/// hostile island could achieve anyway by dropping the invite; forging a *start*
-/// lights a camera.
+/// WHY THIS IS A SMALLER DOOR THAN THE INVITE — and the privilege still runs the
+/// safe way: forging a *stop* suppresses a ring, which a hostile island could
+/// achieve anyway by dropping the invite; forging a *start* lights a camera.
+///
+/// ~~The island does not need to learn it: `push_service` wakes a handset only on
+/// the INVITE body, so an end message is an ordinary message to the gateway and
+/// this stays an app-side change.~~ **FALSE SINCE CALLKIT — STRUCK 2026-09-11.**
+///
+/// **It was true of the IN-APP ring and CallKit inverts it.** A running app holds
+/// a socket, so an end arrives over fanout and the gateway never needs to know
+/// what these bytes mean. **A locked handset holds no socket** — so the one
+/// message that can stop a ring is the one message nothing delivers, and the
+/// island must wake on this body too or a caller hangs up and the callee's phone
+/// rings on until the island's lease expires (design 16 v2 §3, *"a phone ringing
+/// for a corpse"*).
+///
+/// So this is **no longer an app-side change**. The island tab is adding
+/// `WakeKind.CALL_END` against this exact byte string (claude-tasks#4254 §4b).
+/// Struck rather than rewritten because the *reasoning* is the useful part: a
+/// statement about what a peer must know can be true of one delivery path and
+/// false of the next, without either repo editing a line.
 ///
 /// Worded to mirror the invite so a client predating the feature degrades to a
 /// readable line rather than breaking — the human words trailing the machine
