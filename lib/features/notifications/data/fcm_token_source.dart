@@ -3,6 +3,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 
 import '../domain/device_platform.dart';
+import '../domain/token_kind.dart';
 import '../domain/apns_environment.dart';
 import '../domain/push_token_source.dart';
 
@@ -38,6 +39,9 @@ class FcmTokenSource implements PushTokenSource {
     if (defaultTargetPlatform != TargetPlatform.android) return;
     if (Firebase.apps.isEmpty) await Firebase.initializeApp();
   }
+
+  @override
+  TokenKind get kind => TokenKind.alert;
 
   @override
   DevicePlatform get platform => DevicePlatform.fcm;

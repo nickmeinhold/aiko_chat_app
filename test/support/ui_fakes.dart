@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
 import 'package:aiko_chat_app/features/notifications/domain/apns_environment.dart';
+import 'package:aiko_chat_app/features/notifications/domain/token_kind.dart';
 import 'package:aiko_chat_app/features/auth/data/passkey_auth_client.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
@@ -256,6 +257,7 @@ class FakeRestApi implements ChatRestApi {
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
+    TokenKind kind = TokenKind.alert,
     ApnsEnvironment? apnsEnvironment,
   }) async {
     // YIELD FIRST, for the same reason unregisterDevice does: an async body runs
@@ -275,12 +277,20 @@ class FakeRestApi implements ChatRestApi {
       token: token,
       apnsEnvironment: apnsEnvironment,
     ));
+    registeredKinds.add(kind);
     deviceCalls.add((op: 'register', token: token));
     liveRows.add(token);
     if (registerDeviceThrowsAfterLanding != null) {
       throw registerDeviceThrowsAfterLanding!;
     }
+    // A REFUSING island is modelled with [registerDeviceThrowsAfterLanding],
+    // already the knob for "the row landed and then the call failed" — exactly
+    // what a kind refusal is, and why this fake needs no new machinery for it.
   }
+
+  /// The kind each register declared, positionally paired with
+  /// [registeredDevices].
+  final List<TokenKind> registeredKinds = [];
 
   /// Fails the next [unregisterDevice] — for proving a failed attempt KEEPS the
   /// durable debt rather than silently discharging it.

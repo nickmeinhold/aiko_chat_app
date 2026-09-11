@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import PushKit
 import UserNotifications
 
 /// The APNs device token, taken from Apple DIRECTLY.
@@ -165,12 +166,286 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
   }
 }
 
+/// The channel id from a TAPPED call notification, handed to Dart so the app can
+/// open the conversation the call is in (claude-tasks#3588).
+///
+/// Until this existed the push landed, the handset lit up, and tapping it opened
+/// the app on whatever screen it was last on — indistinguishable to the user
+/// from the app having ignored the call. That is the same silent-failure shape
+/// `ApnsTokenChannel` above was written against, one layer further in.
+///
+/// **THE PAYLOAD KEY IS `c`, ONE CHARACTER.** The island sends exactly
+/// `{"aps": {...}, "c": "<channel_id>"}` and nothing else — the short name is
+/// deliberate there (a 4KB APNs ceiling, and `c` is its only custom field).
+/// Reading `channel_id` or `channelId` here yields nil, routes nowhere, and
+/// reports no problem, which is precisely how this bug family hides.
+///
+/// **IT IS A CHANNEL ID, NEVER A CALL ID.** So this opens the CONVERSATION and
+/// lets the existing ring machinery decide whether there is a live call to
+/// answer. That is deliberate and it is the whole safety argument: `admitRing`
+/// carries TWELVE start-gate refusals and a tap handler that navigated straight
+/// into a call screen would be a second admission path honouring none of them.
+///
+/// **TWELVE, AND `grep -c "startGate: true"` ANSWERS NINE.** `startGate`
+/// DEFAULTS to true, so the three that declare only `refusedAnAttempt` are
+/// invisible to the obvious grep — and they include `unverifiedOrigin`, the
+/// signature check, which is the one gate this product's whole thesis rests on.
+/// The enum is the census (`call_invite_test.dart` asserts set equality against
+/// the flags); any prose count, including this one, is a copy that can drift. A stale invite therefore
+/// lands the user in the conversation with the call rendered as a call event,
+/// which is honest, rather than joining them to a room nobody is in.
+///
+/// **A TAP CAN ARRIVE BEFORE DART EXISTS.** On a cold start from a killed app,
+/// iOS delivers the tap and *then* the engine spins up. So a tap with no
+/// listener is HELD, not dropped, and drained when Dart subscribes. One slot,
+/// not a list — unlike the token waiters above, where each caller owns a
+/// continuation that must not be lost. Here the value is a navigation intent and
+/// the newest one is the only correct destination.
+final class NotificationTapChannel: NSObject, FlutterStreamHandler {
+  static let shared = NotificationTapChannel()
+
+  private var sink: FlutterEventSink?
+
+  /// A tap that arrived with nobody listening yet. See the cold-start note above.
+  private var pending: String?
+
+  func register(with registrar: FlutterPluginRegistrar) {
+    FlutterEventChannel(
+      name: "cc.imagineering.aikoChatApp/notifications/taps",
+      binaryMessenger: registrar.messenger()
+    ).setStreamHandler(self)
+  }
+
+  /// Called from the `UNUserNotificationCenterDelegate` with the tapped
+  /// notification's `userInfo`.
+  func tapped(userInfo: [AnyHashable: Any]) {
+    guard let channelId = userInfo["c"] as? String, !channelId.isEmpty else {
+      // Not a call notification, or a payload shape we do not understand. Say so
+      // rather than routing somewhere arbitrary — a wrong destination is worse
+      // than none, and this line is the only evidence a reader would ever get.
+      NSLog("[tap] notification tapped with no usable `c` key; not routing")
+      return
+    }
+    if let sink = sink {
+      sink(channelId)
+    } else {
+      pending = channelId
+    }
+  }
+
+  func onListen(
+    withArguments _: Any?, eventSink events: @escaping FlutterEventSink
+  ) -> FlutterError? {
+    sink = events
+    if let held = pending {
+      pending = nil
+      events(held)
+    }
+    return nil
+  }
+
+  func onCancel(withArguments _: Any?) -> FlutterError? {
+    sink = nil
+    return nil
+  }
+}
+
+/// The PushKit VoIP token, handed to Dart so the island can ring this handset
+/// like a telephone (Nick, 2026-09-09: "ringing like a telephone is
+/// non-negotiable").
+///
+/// A SECOND, INDEPENDENT REGISTRY — not a variant of [ApnsTokenChannel]. It has
+/// its own token, its own rotation callbacks, and its own permission story, and
+/// conflating the two is how a device ends up registered under the wrong
+/// `token_kind` and simply never rings.
+///
+/// **THE PERMISSION ASYMMETRY IS THE PART THAT SURPRISES.** A PushKit VoIP token
+/// requires NO user permission at all; an APNs alert token requires granted
+/// notification permission. So a user who declines notifications has a VoIP
+/// token and will never have an alert token — "reachable for calls, unreachable
+/// for messages" is a NORMAL, permanent state to model, not an error to log.
+/// The reverse pairing is normal too, on a device that has never run this build.
+///
+/// **NO TOKEN IS MINTED BY THIS BUILD.** The channels below are registered and
+/// the plumbing is complete, but nothing arms the registry — see the note where
+/// `start()` used to be. So `currentToken` answers nil, no VoIP row is ever
+/// registered island-side, and no VoIP push can be sent to this device.
+///
+/// An earlier version of this comment asserted the opposite — "registered
+/// unconditionally at launch... a token that only exists once the user opens a
+/// call screen is a token the island cannot ring" — which described the
+/// INTENDED end state as though it were the current one. That argument is sound
+/// and it is not yet implemented; leaving it here read as a design already in
+/// force, which is how the next reader adds the one line that arms VoIP delivery
+/// with nothing to report to.
+final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
+  static let shared = PushKitTokenChannel()
+
+  private var registry: PKPushRegistry?
+  private var sink: FlutterEventSink?
+
+  /// The last token handed to Dart, so a re-registration reporting the SAME
+  /// value is not published as a rotation — the same reason [ApnsTokenChannel]
+  /// keeps one.
+  private var lastReported: String?
+
+  /// Callers of `currentToken` waiting on the first delegate callback. A LIST,
+  /// not one slot, for the reason spelled out on [ApnsTokenChannel.waiters]: a
+  /// dropped continuation is a Dart future that never completes and a device
+  /// never registered.
+  private var waiters: [(String?) -> Void] = []
+
+  func register(with registrar: FlutterPluginRegistrar) {
+    FlutterMethodChannel(
+      name: "cc.imagineering.aikoChatApp/pushkit",
+      binaryMessenger: registrar.messenger()
+    ).setMethodCallHandler { [weak self] call, result in
+      guard let self else { return result(FlutterMethodNotImplemented) }
+      switch call.method {
+      case "currentToken": self.currentToken(result)
+      default: result(FlutterMethodNotImplemented)
+      }
+    }
+    FlutterEventChannel(
+      name: "cc.imagineering.aikoChatApp/pushkit/refreshes",
+      binaryMessenger: registrar.messenger()
+    ).setStreamHandler(self)
+  }
+
+  // THERE IS DELIBERATELY NO `start()` IN THIS BUILD, and its absence is the
+  // safety property — not an omission to be tidied up by the next reader.
+  //
+  // Constructing a PKPushRegistry and assigning `desiredPushTypes` is the ONLY
+  // thing that arms VoIP delivery. Armed without a CXProvider to report to, the
+  // first VoIP push terminates the app, and repeated terminations make iOS stop
+  // delivering VoIP pushes to this app on this device — a per-device denial that
+  // no reinstall undoes quickly.
+  //
+  // An earlier revision kept `start()` here, unused, and rested the safety on
+  // the fact that nothing called it. Kelvin, round 1: "the only thing preventing
+  // this is the prayer that start() is never called — that's not engineering."
+  // Correct, and a negative proof about the whole program is exactly the shape
+  // that a later one-line edit breaks silently. So the method is GONE: `registry`
+  // is never non-nil, the delegate callbacks below are unreachable by
+  // construction rather than by convention, and there is nothing to call.
+  //
+  // It comes back with the CXProvider, in the same increment, taking the
+  // provider as a parameter — so an armed registry without something to report
+  // to becomes unconstructable rather than merely unwise (#3609).
+
+  private func currentToken(_ result: @escaping FlutterResult) {
+    if let token = lastReported { return result(token) }
+    // NOT STARTED — answer nil NOW, never queue. There is no PushKit analogue of
+    // `didFailToRegisterForRemoteNotifications`, so a waiter parked here has
+    // nothing that can ever drain it. That is not a stall, it is permanent:
+    // `DeviceRegistrar.start()` awaits this call with `_refreshes` already
+    // non-null, and its idempotency guard then turns every LATER `start()` into
+    // a no-op — the whole pairing wedged for the life of the process, silently,
+    // including the ALERT token that works today.
+    guard let registry else { return result(nil) }
+    if let data = registry.pushToken(for: .voIP) {
+      let hex = PushKitTokenChannel.hex(data)
+      lastReported = hex
+      return result(hex)
+    }
+    // Started but not minted yet. Waiting is right — a nil here is
+    // indistinguishable to Dart from "this device has no VoIP token" — but it is
+    // BOUNDED, for the same reason: iOS may simply never call back, and an
+    // unbounded wait wedges the caller rather than failing.
+    waiters.append { result($0) }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+      guard let self, !self.waiters.isEmpty, self.lastReported == nil else { return }
+      self.drainWaiters(with: nil)
+    }
+  }
+
+  private static func hex(_ data: Data) -> String {
+    // RAW bytes as lowercase hex. Never `data.description`, for the reason the
+    // APNs path documents: the island stores whatever we send and a mismatch
+    // only ever surfaces as silence.
+    data.map { String(format: "%02x", $0) }.joined()
+  }
+
+  // MARK: PKPushRegistryDelegate
+
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didUpdate credentials: PKPushCredentials,
+    for type: PKPushType
+  ) {
+    guard type == .voIP else { return }
+    let token = PushKitTokenChannel.hex(credentials.token)
+    let isRotation = lastReported != nil && lastReported != token
+    lastReported = token
+    drainWaiters(with: token)
+    if isRotation { sink?(token) }
+  }
+
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didInvalidatePushTokenFor type: PKPushType
+  ) {
+    guard type == .voIP else { return }
+    lastReported = nil
+    drainWaiters(with: nil)
+  }
+
+  /// A VoIP push arrived. **Reporting to CallKit here is MANDATORY before the
+  /// completion handler returns** — iOS terminates the app otherwise, and
+  /// repeated failures make the system stop delivering VoIP pushes to this app
+  /// on this device (Apple, PKPushRegistryDelegate; per-device denial of
+  /// delivery, not a revoked entitlement).
+  ///
+  /// UNREACHABLE IN THIS BUILD, structurally: nothing constructs a
+  /// PKPushRegistry (there is no `start()`), so no registry can ever hold this
+  /// object as its delegate and iOS has no VoIP delivery to make. The log line
+  /// exists to be loud if that ever stops being true.
+  ///
+  /// It is deliberately NOT a `fatalError`. If the invariant above were somehow
+  /// broken, crashing here produces the same app termination iOS would impose
+  /// anyway, while also burning the crash as our own — and a deliberate crash on
+  /// a user's handset is a worse answer than a log the next build can find.
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didReceiveIncomingPushWith payload: PKPushPayload,
+    for type: PKPushType,
+    completion: @escaping () -> Void
+  ) {
+    NSLog("[pushkit] VoIP push received with no CXProvider wired — see #3609")
+    completion()
+  }
+
+  private func drainWaiters(with token: String?) {
+    let pending = waiters
+    waiters = []
+    for waiter in pending { waiter(token) }
+  }
+}
+
+extension PushKitTokenChannel: FlutterStreamHandler {
+  func onListen(
+    withArguments _: Any?, eventSink events: @escaping FlutterEventSink
+  ) -> FlutterError? {
+    sink = events
+    return nil
+  }
+
+  func onCancel(withArguments _: Any?) -> FlutterError? {
+    sink = nil
+    return nil
+  }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    // Claim the delegate BEFORE super, so a cold launch caused by a tap is not
+    // delivered to nobody. `didReceive` fires after the delegate is set, and on
+    // a tap-launch iOS calls it once the app finishes launching.
+    UNUserNotificationCenter.current().delegate = self
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -178,6 +453,16 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "ApnsTokenChannel") {
       ApnsTokenChannel.shared.register(with: registrar)
+    }
+    if let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "NotificationTapChannel")
+    {
+      NotificationTapChannel.shared.register(with: registrar)
+    }
+    if let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "PushKitTokenChannel")
+    {
+      PushKitTokenChannel.shared.register(with: registrar)
     }
   }
 
@@ -204,5 +489,41 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
     ApnsTokenChannel.shared.failed()
     super.application(
       application, didFailToRegisterForRemoteNotificationsWithError: error)
+  }
+}
+
+// NOT `extension AppDelegate: UNUserNotificationCenterDelegate`.
+// `FlutterAppDelegate` ALREADY declares that conformance, so restating it is a
+// "Redundant conformance" compile error — one that neither `flutter analyze`
+// nor the Dart suite can see, because both stop at the language boundary. This
+// file's own methods are `override`s for exactly that reason.
+extension AppDelegate {
+  /// The user tapped a notification. The ONLY reason this class exists.
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    NotificationTapChannel.shared.tapped(
+      userInfo: response.notification.request.content.userInfo)
+    super.userNotificationCenter(
+      center, didReceive: response, withCompletionHandler: completionHandler)
+  }
+
+  /// A notification arriving while the app is FOREGROUND.
+  ///
+  /// Returns no presentation options, which PRESERVES today's behaviour rather
+  /// than changing it: with no delegate installed iOS suppresses the banner for
+  /// a foregrounded app, and claiming the delegate would otherwise silently
+  /// alter that for every notification type, not just calls. A foregrounded app
+  /// already receives the invite over the websocket and draws `RingOverlay`, so
+  /// a banner would double the same event.
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler:
+      @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    completionHandler([])
   }
 }

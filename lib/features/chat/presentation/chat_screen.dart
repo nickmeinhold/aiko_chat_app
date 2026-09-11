@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../call/domain/call_invite.dart';
+import '../../notifications/application/notification_tap_providers.dart';
 import '../../../core/widgets/island_mark.dart';
 import '../../../app/theme/maritime_theme.dart';
 import '../../../core/mark/mark_avatar.dart';
@@ -105,6 +106,30 @@ class ChatScreen extends ConsumerWidget {
       if (!next.any((c) => c.id == sel)) {
         ref.read(selectedChannelIdProvider.notifier).clear();
       }
+    });
+
+    // A tapped call notification names a CHANNEL, and this is where that pick
+    // can actually stick (claude-tasks#3588). Two listeners, because the tap and
+    // the readiness can arrive in either order: a cold start launched BY the tap
+    // holds it for seconds while both sources load, and a tap on an app already
+    // running finds them already settled.
+    //
+    // Gated on the SAME `ready` predicate everything else here uses. Selecting
+    // before both lists settle would be healed straight back to null by the
+    // listener above, which is the self-heal doing its job on a pick made too
+    // early — the tap would vanish and nothing would say why.
+    void applyPendingTap() {
+      if (!ref.read(chatRepositoryProvider).hasValue) return;
+      final tapped = ref.read(pendingCallTapProvider.notifier).take();
+      if (tapped == null) return;
+      ref.read(selectedChannelIdProvider.notifier).select(tapped);
+    }
+
+    ref.listen(chatRepositoryProvider, (_, next) {
+      if (next.hasValue) applyPendingTap();
+    });
+    ref.listen(pendingCallTapProvider, (_, next) {
+      if (next != null) applyPendingTap();
     });
 
     final isWide = MediaQuery.sizeOf(context).width >= kWideLayoutBreakpoint;

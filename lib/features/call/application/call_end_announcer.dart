@@ -38,13 +38,13 @@ import '../domain/call_invite.dart';
 /// instant is an intent you will lose.
 class CallEndAnnouncer {
   CallEndAnnouncer(this._ref, {Duration? ackWait})
-    : _ackWait = ackWait ?? kCallRingDuration;
+    : _ackWait = ackWait ?? kInAppRingDuration;
 
   final Ref _ref;
 
   /// How long to wait for the invitation's ack before giving up.
   ///
-  /// NOT A TUNED NUMBER: it is [kCallRingDuration], because after that the
+  /// NOT A TUNED NUMBER: it is [kInAppRingDuration], because after that the
   /// peer's ring has expired on its own and there is nothing left to stop. A
   /// bound derived from the thing it is bounding, rather than picked.
   final Duration _ackWait;
@@ -299,4 +299,4 @@ final callEndAnnouncerProvider = Provider<CallEndAnnouncer>(
 /// inconvenient: it was a shim that got disposed by an ordinary invalidate, so
 /// the announcement failed through the class's own swallow and the test passed
 /// for the wrong reason (cage-match round 2 — twice, in fact).
-final callEndAckWaitProvider = Provider<Duration>((_) => kCallRingDuration);
+final callEndAckWaitProvider = Provider<Duration>((_) => kInAppRingDuration);

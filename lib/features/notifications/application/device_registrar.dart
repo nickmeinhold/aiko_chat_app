@@ -7,6 +7,7 @@ import '../data/pending_unregister_store.dart';
 import 'push_telemetry.dart';
 import '../domain/apns_environment.dart';
 import '../domain/push_token_source.dart';
+import '../domain/token_kind.dart';
 
 /// Keeps this island's belief about "where do I push to reach this user" in step
 /// with the platform's belief about "what is this device's token".
@@ -162,10 +163,10 @@ class DeviceRegistrar {
   /// because tokens rotate and two offline sign-outs can leave two live rows.
   /// One failure does not abandon the rest.
   Future<void> drainPending() async {
-    for (final token in _pending.read(_islandBaseUrl)) {
+    for (final token in _pending.read(_islandBaseUrl, _source.kind)) {
       try {
         await _api.unregisterDevice(token);
-        if (!await _pending.forget(_islandBaseUrl, token)) {
+        if (!await _pending.forget(_islandBaseUrl, _source.kind, token)) {
           _telemetry.debtPaidButUnclearable(PushTelemetry.ref(token));
         }
       } catch (e) {
@@ -249,7 +250,7 @@ class DeviceRegistrar {
     // The write's RESULT is checked, not discarded: SharedPreferences reports a
     // persistence failure by returning false rather than throwing, and a debt
     // that did not persist is a backstop that does not exist.
-    if (!await _pending.remember(_islandBaseUrl, token)) {
+    if (!await _pending.remember(_islandBaseUrl, _source.kind, token)) {
       _telemetry.debtRecordFailed(PushTelemetry.ref(token));
     }
     _settling = _attemptUnregister(token, credential);
@@ -288,7 +289,7 @@ class DeviceRegistrar {
     if (credential == null) return;
     try {
       await _api.unregisterDevice(token, credential: credential);
-      await _pending.forget(_islandBaseUrl, token);
+      await _pending.forget(_islandBaseUrl, _source.kind, token);
     } catch (e) {
       _telemetry.unregisterDeferred(e);
     }
@@ -361,21 +362,50 @@ class DeviceRegistrar {
     // debt discharged in error costs one redundant DELETE and never a lost row.
     // This is the same fail-toward-deletion the design's governing principle
     // names: an over-delete degrades reach, an under-delete leaks.
-    if (!await _pending.remember(_islandBaseUrl, token)) {
+    if (!await _pending.remember(_islandBaseUrl, _source.kind, token)) {
       _telemetry.registerObligationUnrecorded(PushTelemetry.ref(token));
     }
     try {
       await _api.registerDevice(
         platform: _source.platform,
         token: token,
+        kind: _source.kind,
         apnsEnvironment: await _apnsEnvironment(),
       );
+    } on DeviceKindRefused catch (e) {
+      // DEFINITELY LANDED, WITH THE WRONG SEMANTICS. The island answered, so it
+      // holds a row keyed on this token — one that will draw an alert push for a
+      // PushKit token, or the reverse. That is a handset which does not ring, and
+      // nothing else in this app can see it.
+      //
+      // Deliberately falls through to the AMBIGUOUS tail below rather than
+      // getting its own: that tail already does both correct things, and does
+      // them for reasons that hold here verbatim. The debt stays owed (a row
+      // exists and something must be able to clear it), and the pairing is NOT
+      // recorded as registered, so the next session edge retries instead of
+      // skipping a device it believes is paired. A `_registered` write here is
+      // the whole defect — it would make the wrong row permanent by declaring
+      // the right one done.
+      //
+      // What it is NOT is [Unauthorized]'s discharge-the-debt path. That one is
+      // correct because the island rejected the write BEFORE the row existed;
+      // here the row exists, and discharging would aim the next drain at nothing
+      // while leaving a routable row behind forever.
+      _telemetry.registerKindRefused(
+        PushTelemetry.ref(token),
+        e.asked.wire,
+        // A kind we INFERRED from an island's silence is reported as the
+        // silence, never as an answer it did not give.
+        e.echoed ? e.resolved?.wire : null,
+      );
+      await _settle(token, generation, epoch, confirmed: false);
+      return;
     } on Unauthorized {
       // DEFINITELY-NOT-LANDED: the island rejected this before writing, so the
       // obligation written above is owed for a row that does not exist. Discharge
       // it — an unearned debt aims a DELETE at whatever holds this token next.
       // Not ours to handle otherwise: the auth controller owns that transition.
-      await _pending.forget(_islandBaseUrl, token);
+      await _pending.forget(_islandBaseUrl, _source.kind, token);
       rethrow;
     } catch (e) {
       _telemetry.registerFailed(PushTelemetry.ref(token), e);
@@ -442,7 +472,7 @@ class DeviceRegistrar {
       // discharged. This is the ONLY place it is discharged on the success path —
       // a stale or ambiguous register leaves it standing, which is what makes a
       // lost response and a mid-flight kill both safe.
-      await _pending.forget(_islandBaseUrl, token);
+      await _pending.forget(_islandBaseUrl, _source.kind, token);
       return;
     }
 
@@ -484,7 +514,7 @@ class DeviceRegistrar {
     // Owing a DELETE still beats issuing one inline: the token is stable per
     // install, so an inline delete could match a row the NEXT session already
     // registered, whereas the drain runs strictly before the next start.
-    if (!await _pending.remember(_islandBaseUrl, token)) {
+    if (!await _pending.remember(_islandBaseUrl, _source.kind, token)) {
       _telemetry.registerStaleRowUnrecorded(PushTelemetry.ref(token));
     }
   }

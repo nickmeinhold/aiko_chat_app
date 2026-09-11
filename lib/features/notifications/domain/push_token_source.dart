@@ -1,4 +1,5 @@
 import 'device_platform.dart';
+import 'token_kind.dart';
 import 'apns_environment.dart';
 
 /// Where a push token comes from — the seam between [DeviceRegistrar]'s
@@ -39,6 +40,13 @@ abstract class PushTokenSource {
   /// Which service issued these tokens, and therefore which one the island must
   /// talk to. See [DevicePlatform] for why this is not simply the OS.
   DevicePlatform get platform;
+
+  /// Which delivery semantics this source's tokens carry.
+  ///
+  /// On the SOURCE rather than passed to the registrar, so a registrar whose
+  /// kind disagrees with its token stream is unconstructable. The kind is a
+  /// property of the REGISTRY the token came from, not a configuration choice.
+  TokenKind get kind;
 
   /// Which APNs host will accept this source's tokens, or null when there is no
   /// answer to give — FCM has no such split, and a platform channel that is not

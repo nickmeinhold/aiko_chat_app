@@ -64,10 +64,22 @@ const String kCallInviteBody = 'aiko:call/1 · 📞 started a call';
 /// scrollback) and must stay silent.
 const Duration kCallInviteFreshness = Duration(seconds: 10);
 
-/// How long a ring rings once admitted — a human-reaction clock. After this it
-/// stops ringing; the invitation remains in history as the record that it
-/// happened.
-const Duration kCallRingDuration = Duration(seconds: 30);
+/// How long the IN-APP ring rings once admitted — a human-reaction clock. After
+/// this it stops ringing; the invitation remains in history as the record that
+/// it happened.
+///
+/// ADVISORY, AND SCOPED TO THE PATH DART CAN ACTUALLY REACH. A CallKit ring is
+/// system UI drawn from the push payload before the Flutter engine exists, and
+/// it does not self-expire. Nothing in this process can end it: a Dart `Timer`
+/// needs an isolate the OS has not started, and a Swift timer sits in a process
+/// iOS may suspend the moment the handler returns. The island holds that
+/// ceiling as a ring lease (Nick, 2026-09-09).
+///
+/// So this governs the ring drawn by this app while it is alive, and says
+/// nothing about the one drawn on a locked handset. Reading it as the ceiling
+/// for both is how a constant that enforces nothing gets cited as though it
+/// does.
+const Duration kInAppRingDuration = Duration(seconds: 30);
 
 /// The pinned END body — the caller saying "I hung up". **Signed and durable —
 /// never edit this string.**
@@ -304,7 +316,7 @@ CallEndDecision admitCallEnd(
 ///
 /// FRESHNESS NEEDS NO CLOCK, and that falls out of the binding: a replayed end
 /// can only match an invitation still live, and a live invitation is at most
-/// [kCallRingDuration] old. Re-delivery is idempotent.
+/// [kInAppRingDuration] old. Re-delivery is idempotent.
 bool endsInvite(CallEnd end, CallInvite invite) {
   // Only the account that started the call may end it, and only in the channel
   // it was started in. (Inherited caveat: `sender` is server-supplied and outside

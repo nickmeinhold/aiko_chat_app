@@ -3,7 +3,7 @@
 /// The ring listens to [ChatRepository.inboundMessages] (cross-channel, because
 /// a call must reach you in a DM you are not looking at), funnels every message
 /// through [admitRing] — the single trust decision — and holds the admitted
-/// invitation for [kCallRingDuration] or until the user answers or declines.
+/// invitation for [kInAppRingDuration] or until the user answers or declines.
 library;
 
 import 'dart:async';
@@ -106,7 +106,7 @@ class RingController extends Notifier<CallInvite?> {
     final live = _live;
     if (live == null) return null;
     final left =
-        kCallRingDuration - DateTime.now().toUtc().difference(live.startedAt);
+        kInAppRingDuration - DateTime.now().toUtc().difference(live.startedAt);
     if (left <= Duration.zero) {
       _settle(live);
       return null;
@@ -307,7 +307,7 @@ class RingController extends Notifier<CallInvite?> {
     // "logging is broken" — and an instrument that reads the same either way is
     // not an instrument.
     _telemetry.ringStarted(invite.channelId, now.difference(invite.startedAt));
-    // ONE equation of motion. Arming an absolute `kCallRingDuration` here while
+    // ONE equation of motion. Arming an absolute `kInAppRingDuration` here while
     // `_republish` derived the remaining time from `startedAt` meant a ring's
     // length depended on whether a rebuild happened to occur: an invite signed
     // 9s ago rang 30s without a rebuild, ~21s with one (cage-match #139 R5,

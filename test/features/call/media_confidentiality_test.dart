@@ -19,9 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   Widget harness(MediaRouting routing) => ProviderScope(
     overrides: [mediaRoutingProvider.overrideWithValue(routing)],
-    child: const MaterialApp(
-      home: Scaffold(body: MediaConfidentialityChip()),
-    ),
+    child: const MaterialApp(home: Scaffold(body: MediaConfidentialityChip())),
   );
 
   const unencrypted = MediaRouting(
@@ -46,7 +44,9 @@ void main() {
   // exactly when a human needs to be told to revisit the resolver.
   test('the hardcoded negative still matches reality: no media E2EE in lib/', () {
     final offenders = <String>[];
-    final pattern = RegExp(r'\b(e2eeOptions|E2EEOptions|frameCryptor|keyProvider)\b');
+    final pattern = RegExp(
+      r'\b(e2eeOptions|E2EEOptions|frameCryptor|keyProvider)\b',
+    );
     for (final f in Directory('lib').listSync(recursive: true)) {
       if (f is! File || !f.path.endsWith('.dart')) continue;
       for (final line in f.readAsLinesSync()) {
@@ -204,9 +204,7 @@ void main() {
   ) async {
     await tester.pumpWidget(
       const ProviderScope(
-        child: MaterialApp(
-          home: Scaffold(body: MediaConfidentialityChip()),
-        ),
+        child: MaterialApp(home: Scaffold(body: MediaConfidentialityChip())),
       ),
     );
     expect(tester.takeException(), isNull);
@@ -238,8 +236,7 @@ void main() {
     expect(RegExp(r'^Not encrypted\b').hasMatch(label), isFalse);
   });
 
-  test('the island is named by the host, never by the manifest display name',
-      () {
+  test('the island is named by the host, never by the manifest display name', () {
     // A disclosure must not let its subject choose the words describing it: an
     // island calling itself "Secure Private Chat" would otherwise print that
     // inside the warning about it. The host is the one identifier in the

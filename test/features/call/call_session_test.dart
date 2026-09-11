@@ -35,10 +35,15 @@ class _FakeService extends LiveKitCallService {
   final List<ConnectionResult> scripted;
   int connectCalls = 0;
   int enableMediaCalls = 0;
+  int disconnectCalls = 0;
   final _lost = StreamController<String?>.broadcast();
+  final _peerLeft = StreamController<void>.broadcast();
 
   @override
   Stream<String?> get connectionLost => _lost.stream;
+
+  @override
+  Stream<void> get peerLeft => _peerLeft.stream;
 
   @override
   Future<ConnectionResult> connect(VideoToken token) async {
@@ -53,19 +58,22 @@ class _FakeService extends LiveKitCallService {
   Future<void> enableMedia() async => enableMediaCalls++;
 
   @override
-  Future<void> disconnect() async {}
+  Future<void> disconnect() async => disconnectCalls++;
 
   @override
   Future<void> dispose() async {
     if (!_lost.isClosed) await _lost.close();
+    if (!_peerLeft.isClosed) await _peerLeft.close();
   }
 
   void fireLost() => _lost.add('test-drop');
+  void firePeerLeft() => _peerLeft.add(null);
 }
 
 const _token = VideoToken(token: 't', url: 'wss://x', room: 'c1');
 
 void main() {
+  _peerDepartureTests();
   group('CallSession.connect', () {
     test('happy path → connected + media enabled', () async {
       final service = _FakeService([ConnectionResult.connected]);
@@ -214,5 +222,151 @@ void main() {
         expect(service.connectCalls, 1); // only the initial connect ran
       },
     );
+  });
+}
+
+/// The peer leaving is a TERMINAL, idempotent transition that must stop the
+/// local camera. Every test here is a defect that shipped, or a defect the fix
+/// itself could introduce.
+void _peerDepartureTests() {
+  group('the peer leaving ends the call', () {
+    test(
+      'firing peerLeft flips to ended, clears the message, disconnects ONCE',
+      () async {
+        final svc = _FakeService([ConnectionResult.connected]);
+        final session = CallSession(
+          api: _FakeApi(),
+          channelId: 'c1',
+          service: svc,
+        );
+        await session.connect();
+        svc.firePeerLeft();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(session.state.value, CallConnectionState.ended);
+        expect(session.message.value, isNull);
+        expect(svc.disconnectCalls, 1);
+      },
+    );
+
+    test('a SECOND departure does not disconnect twice (idempotent)', () async {
+      final svc = _FakeService([ConnectionResult.connected]);
+      final session = CallSession(
+        api: _FakeApi(),
+        channelId: 'c1',
+        service: svc,
+      );
+      await session.connect();
+      svc.firePeerLeft();
+      svc.firePeerLeft();
+      await Future<void>.delayed(Duration.zero);
+      expect(svc.disconnectCalls, 1);
+    });
+
+    test(
+      'THE CRITICAL ONE: nothing re-opens media after the peer has gone',
+      () async {
+        // The race the constructor subscription exists for: a departure observed
+        // while connect() is still awaiting, whose tail would otherwise go on to
+        // call enableMedia() and publish a camera into an empty room. "The camera
+        // stops once" passing as "the camera stops".
+        final svc = _FakeService([ConnectionResult.connected]);
+        final session = CallSession(
+          api: _FakeApi(),
+          channelId: 'c1',
+          service: svc,
+        );
+        await session.connect();
+        final mediaBefore = svc.enableMediaCalls;
+        svc.firePeerLeft();
+        await Future<void>.delayed(Duration.zero);
+        await session.connect(); // whatever tries next must be refused
+        expect(svc.enableMediaCalls, mediaBefore);
+        expect(session.state.value, CallConnectionState.ended);
+      },
+    );
+
+    test('leave() still tears down AFTER the call ended', () async {
+      // `leave()` guards on _disposed only, deliberately: every other recheck
+      // is widened to `|| _over` because they guard work that must not happen,
+      // and this one guards TEARDOWN, which must.
+      final svc = _FakeService([ConnectionResult.connected]);
+      final session = CallSession(
+        api: _FakeApi(),
+        channelId: 'c1',
+        service: svc,
+      );
+      await session.connect();
+      svc.firePeerLeft();
+      await Future<void>.delayed(Duration.zero);
+      await session.leave(); // must not throw, must dispose
+      expect(svc.disconnectCalls, greaterThanOrEqualTo(1));
+    });
+  });
+
+  group('peerHasLeft — the pure predicate', () {
+    test('nobody has arrived yet is NOT a departure', () {
+      expect(
+        peerHasLeft(
+          everJoined: false,
+          reconnecting: false,
+          alreadyAnnounced: false,
+          remoteCount: 0,
+        ),
+        isFalse,
+      );
+    });
+
+    test('MUST-FAIL ARM: a mid-ICE-restart empty map is NOT a departure', () {
+      // A full ICE restart clears the participant map and emits
+      // ParticipantDisconnected for everyone still in the room. Without this
+      // conjunct a three-second blip ends a live call and cuts the camera —
+      // strictly worse than the bug being fixed.
+      expect(
+        peerHasLeft(
+          everJoined: true,
+          reconnecting: true,
+          alreadyAnnounced: false,
+          remoteCount: 0,
+        ),
+        isFalse,
+      );
+    });
+
+    test('already announced does not fire twice', () {
+      expect(
+        peerHasLeft(
+          everJoined: true,
+          reconnecting: false,
+          alreadyAnnounced: true,
+          remoteCount: 0,
+        ),
+        isFalse,
+      );
+    });
+
+    test('POSITIVE CONTROL: joined, settled, empty IS a departure', () {
+      expect(
+        peerHasLeft(
+          everJoined: true,
+          reconnecting: false,
+          alreadyAnnounced: false,
+          remoteCount: 0,
+        ),
+        isTrue,
+      );
+    });
+
+    test('a peer still present is never a departure', () {
+      expect(
+        peerHasLeft(
+          everJoined: true,
+          reconnecting: false,
+          alreadyAnnounced: false,
+          remoteCount: 1,
+        ),
+        isFalse,
+      );
+    });
   });
 }

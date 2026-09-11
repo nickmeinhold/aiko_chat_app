@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../domain/device_platform.dart';
+import '../domain/token_kind.dart';
 import '../domain/apns_environment.dart';
 import '../domain/push_token_source.dart';
 import '../application/push_telemetry.dart';
@@ -43,6 +44,9 @@ class ApnsTokenSource implements PushTokenSource {
   final PushTelemetry _telemetry;
   final MethodChannel _methods;
   final EventChannel _refreshes;
+
+  @override
+  TokenKind get kind => TokenKind.alert;
 
   @override
   DevicePlatform get platform => DevicePlatform.apns;

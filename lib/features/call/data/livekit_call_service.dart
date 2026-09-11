@@ -80,6 +80,16 @@ const RTCIceTransportPolicy kCallIceTransportPolicy =
 ///    [VideoTrackRenderer], which *does* signal demand, so the AITW defaults are
 ///    exactly wrong for us.
 /// 3. The URL comes from the token response, never hardcoded.
+/// Has the peer left? Pure, so the two inverted-risk branches are provable
+/// without an SFU: nobody-ever-arrived and mid-ICE-restart must BOTH read false.
+@visibleForTesting
+bool peerHasLeft({
+  required bool everJoined,
+  required bool reconnecting,
+  required bool alreadyAnnounced,
+  required int remoteCount,
+}) => everJoined && !reconnecting && !alreadyAnnounced && remoteCount == 0;
+
 class LiveKitCallService {
   Room? _room;
   EventsListener<RoomEvent>? _listener;
@@ -94,6 +104,44 @@ class LiveKitCallService {
   /// Fires when the room drops after a successful connect (terminal
   /// `RoomDisconnectedEvent`). [CallSession] listens and runs the backoff loop.
   Stream<String?> get connectionLost => _connectionLostController.stream;
+
+  /// Fires ONCE when the room becomes empty of remote participants HAVING held
+  /// one. This class reports the fact; [CallSession] decides what it means.
+  final _peerLeftController = StreamController<void>.broadcast();
+  Stream<void> get peerLeft => _peerLeftController.stream;
+
+  /// Has a remote participant EVER been observed here?
+  ///
+  /// Latched from an OBSERVATION of `remoteParticipants`, never from
+  /// `ParticipantConnectedEvent`. Participants already in the room when we join
+  /// are built straight from the join response and emit no connect event — that
+  /// event only fires for people who arrive AFTER you. The callee always joins
+  /// second, so an event-derived latch works perfectly for the caller and is
+  /// silently dead for the callee, and a one-device test cannot tell them apart.
+  bool _peerHasJoined = false;
+  bool _peerLeftAnnounced = false;
+
+  /// True between `RoomReconnectingEvent` and `RoomReconnectedEvent`.
+  ///
+  /// A full ICE restart CLEARS the remote-participant map and emits
+  /// `ParticipantDisconnectedEvent` for everyone still in the room. Without this
+  /// conjunct a three-second network blip would end a live call and cut the
+  /// camera — strictly worse than the bug being fixed.
+  ///
+  /// **UNVERIFIED ORDERING, and it is the sharpest unknown here.** Two event
+  /// orderings decide whether this suppression works and neither has been
+  /// observed on a real reconnect: whether `RoomReconnecting` precedes the
+  /// disconnect burst, and whether `RoomReconnected` precedes the re-created
+  /// participants. The experiment is one device on a live call with airplane
+  /// mode toggled, logging the event order. Until it is run, the post-reconnect
+  /// re-check below is deliberately DEFERRED rather than immediate, so a
+  /// momentarily-empty map on the reconnected edge cannot read as a departure.
+  bool _roomReconnecting = false;
+
+  /// Set when the call is over. The publish-side latch: nothing re-opens the
+  /// camera after the peer has gone.
+  bool _callOver = false;
+  Timer? _postReconnectCheck;
 
   /// Mirror-of-truth toggles for the media toolbar. Flipped only after the
   /// underlying enable/disable actually lands, so the UI never lies.
@@ -185,7 +233,9 @@ class LiveKitCallService {
       // Listener BEFORE connect so no early event is missed.
       _listener = _room!.createListener();
       void bump(dynamic _) {
-        if (!_disposed) tracksRevision.value++;
+        if (_disposed) return;
+        tracksRevision.value++;
+        _evaluatePeerPresence();
       }
 
       _listener!
@@ -205,7 +255,22 @@ class LiveKitCallService {
         ..on<TrackMutedEvent>(bump)
         ..on<TrackUnmutedEvent>(bump)
         ..on<ParticipantConnectedEvent>(bump)
-        ..on<ParticipantDisconnectedEvent>(bump);
+        ..on<ParticipantDisconnectedEvent>(bump)
+        // RoomResumingEvent is deliberately NOT bound: a resume does not clear
+        // the participant map, so it produces no false departure.
+        ..on<RoomReconnectingEvent>((_) => _roomReconnecting = true)
+        ..on<RoomReconnectedEvent>((_) {
+          _roomReconnecting = false;
+          // DEFERRED, not immediate — see `_roomReconnecting`. If the rejoin's
+          // participants land after this edge, an immediate re-check would read
+          // a successful reconnect as a departure, inverting the very failure
+          // the suppression exists to prevent.
+          _postReconnectCheck?.cancel();
+          _postReconnectCheck = Timer(
+            const Duration(seconds: 3),
+            _evaluatePeerPresence,
+          );
+        });
 
       await _room!.connect(
         token.url,
@@ -225,6 +290,9 @@ class LiveKitCallService {
 
       _state = CallConnectionState.connected;
       _hasConnected = true;
+      // Latches `_peerHasJoined` for the CALLEE, whose peer is already present
+      // in the join response and therefore never fires a connect event.
+      _evaluatePeerPresence();
       return ConnectionResult.connected;
     } catch (e) {
       // Clean up the half-built room/listener; each wrapped so one failure
@@ -245,7 +313,9 @@ class LiveKitCallService {
   /// Enable the local camera + mic after a successful connect. Camera failure
   /// (permission denied) degrades to audio-only rather than crashing the call.
   Future<void> enableMedia() async {
-    if (!_canPublish) return; // subscribe-only — never prompt for the camera.
+    // `_callOver` first: nothing may re-open a camera into a room the peer
+    // has left, including `connect()`'s own tail if the departure raced it.
+    if (_callOver || !_canPublish) return;
     final lp = _room?.localParticipant;
     if (lp == null) return;
     try {
@@ -265,7 +335,7 @@ class LiveKitCallService {
   }
 
   Future<void> setCameraEnabled(bool enabled) async {
-    if (enabled && !_canPublish) return; // subscribe-only can't publish.
+    if (enabled && (_callOver || !_canPublish)) return;
     final lp = _room?.localParticipant;
     if (lp == null) return;
     // Same catch as enableMedia (Tesla: "same door, same catch") — a mid-call
@@ -280,7 +350,7 @@ class LiveKitCallService {
   }
 
   Future<void> setMicrophoneEnabled(bool enabled) async {
-    if (enabled && !_canPublish) return; // subscribe-only can't publish.
+    if (enabled && (_callOver || !_canPublish)) return;
     final lp = _room?.localParticipant;
     if (lp == null) return;
     try {
@@ -293,6 +363,26 @@ class LiveKitCallService {
 
   /// Tear down the current room without disposing the service (a reconnect will
   /// build a fresh room). Safe to call when already disconnected.
+  /// Evaluate peer presence from an OBSERVATION, on every bump.
+  void _evaluatePeerPresence() {
+    if (_disposed) return;
+    final remotes = _room?.remoteParticipants ?? const {};
+    if (remotes.isNotEmpty && !_roomReconnecting) {
+      _peerHasJoined = true;
+      return;
+    }
+    if (peerHasLeft(
+      everJoined: _peerHasJoined,
+      reconnecting: _roomReconnecting,
+      alreadyAnnounced: _peerLeftAnnounced,
+      remoteCount: remotes.length,
+    )) {
+      _peerLeftAnnounced = true;
+      _callOver = true;
+      if (!_peerLeftController.isClosed) _peerLeftController.add(null);
+    }
+  }
+
   Future<void> disconnect() async {
     _hasConnected = false;
     try {
@@ -319,6 +409,10 @@ class LiveKitCallService {
     cameraEnabled.dispose();
     micEnabled.dispose();
     tracksRevision.dispose();
+    _postReconnectCheck?.cancel();
+    if (!_peerLeftController.isClosed) {
+      await _peerLeftController.close();
+    }
     if (!_connectionLostController.isClosed) {
       await _connectionLostController.close();
     }

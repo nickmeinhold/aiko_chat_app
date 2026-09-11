@@ -216,7 +216,7 @@ void main() {
       elapsed,
       lessThan(const Duration(seconds: 25)),
       reason:
-          'it must stop PROMPTLY, not by out-waiting kCallRingDuration — a ring '
+          'it must stop PROMPTLY, not by out-waiting kInAppRingDuration — a ring '
           'that merely expires is the bug, not the fix',
     );
     // ignore: avoid_print

@@ -25,7 +25,16 @@ class CallSession {
     List<Duration>? reconnectDelays,
   }) : _api = api,
        service = service ?? LiveKitCallService(),
-       _reconnectDelays = reconnectDelays ?? _defaultReconnectDelays;
+       _reconnectDelays = reconnectDelays ?? _defaultReconnectDelays {
+    // Subscribed in the CONSTRUCTOR, not in `connect()`, so the arm is live
+    // before `Room.connect` returns. `_evaluatePeerPresence` can fire from a
+    // bump while `connect()` is still awaiting, and with no listener yet that
+    // departure would be lost — while `connect()`'s tail went on to call
+    // `enableMedia()` and open the camera into a room nobody is in.
+    // `this.service`, not `service`: the constructor PARAMETER shadows the
+    // field here and is nullable.
+    _peerLeftSub = this.service.peerLeft.listen((_) => unawaited(end()));
+  }
 
   final ChatRestApi _api;
   final String channelId;
@@ -48,6 +57,13 @@ class CallSession {
 
   bool _isReconnecting = false;
   StreamSubscription<String?>? _connectionLostSub;
+  StreamSubscription<void>? _peerLeftSub;
+
+  /// The call is over. The SECOND terminal condition, alongside [_disposed],
+  /// and every `_disposed` recheck below is widened to include it — without
+  /// that the reconnect loop cheerfully re-mints a token and re-enables media
+  /// after the peer has gone.
+  bool _over = false;
 
   /// Set by [leave]; read after every `await` in the reconnect loop so work
   /// that resumes after the user left can't mutate disposed state.
@@ -59,17 +75,40 @@ class CallSession {
 
   /// Fetch a token and connect. Sets [state]/[message] for the UI and returns
   /// the [ConnectionResult] so the caller can react (e.g. skip media on fail).
+  /// THE CALL IS OVER — one door, idempotent, the only transition into
+  /// [CallConnectionState.ended].
+  ///
+  /// Both signals land here (the transport's `peerLeft`, and the peer's signed
+  /// end once wired) so there is exactly one place that stops publishing and
+  /// exactly one place that can race. The state flip PRECEDES the await
+  /// deliberately: the UI must stop lying on the current frame, not after a
+  /// network teardown completes.
+  Future<void> end() async {
+    if (_disposed || _over) return;
+    _over = true;
+    _isReconnecting = false; // nothing left to reconnect TO.
+    state.value = CallConnectionState.ended;
+    message.value = null; // else the banner repeats the centre copy.
+    await service.disconnect(); // unpublishes + stops the tracks: camera off.
+  }
+
   Future<ConnectionResult> connect() async {
+    // BEFORE the state write, not after. Every other guard in this file sits
+    // after an await, because it is protecting against a change that happened
+    // DURING one; this one protects against re-entry into a terminal state, and
+    // the very first line is already destructive — it would repaint "Call
+    // ended" as "Connecting…" for a call with nobody left in it.
+    if (_disposed || _over) return ConnectionResult.roomFailed;
     state.value = CallConnectionState.connecting;
     final result = await _connectOnce();
-    if (_disposed) return result;
+    if (_disposed || _over) return result;
 
     switch (result) {
       case ConnectionResult.connected:
       case ConnectionResult.alreadyConnected:
         _listenForConnectionLoss();
         await service.enableMedia();
-        if (_disposed) return result;
+        if (_disposed || _over) return result;
         state.value = CallConnectionState.connected;
         message.value = null;
       case ConnectionResult.videoUnavailable:
@@ -104,7 +143,7 @@ class CallSession {
     } catch (_) {
       return ConnectionResult.roomFailed; // 5xx/other; retry
     }
-    if (_disposed) return ConnectionResult.roomFailed;
+    if (_disposed || _over) return ConnectionResult.roomFailed;
     return service.connect(token);
   }
 
@@ -114,11 +153,15 @@ class CallSession {
 
   void _listenForConnectionLoss() {
     _connectionLostSub?.cancel();
+    // `_peerLeftSub` is NOT touched here. It is subscribed once in the
+    // constructor and cancelled once in `leave()`: this method runs on every
+    // connect, so cancelling it here would kill the departure arm before the
+    // first call even started, and nothing re-subscribes.
     _connectionLostSub = service.connectionLost.listen(_handleConnectionLost);
   }
 
   Future<void> _handleConnectionLost(String? reason) async {
-    if (_isReconnecting || _disposed) return;
+    if (_isReconnecting || _disposed || _over) return;
     _isReconnecting = true;
     state.value = CallConnectionState.reconnecting;
 
@@ -130,21 +173,21 @@ class CallSession {
             '(${attempt + 1}/$maxAttempts)…';
 
         await Future.delayed(_reconnectDelays[attempt]);
-        if (_disposed) return; // user left during the backoff.
+        if (_disposed || _over) return; // user left during the backoff.
 
         // The dead room must be torn down before a fresh connect — connect()
         // no-ops if it still thinks it is connected.
         await service.disconnect();
-        if (_disposed) return;
+        if (_disposed || _over) return;
 
         final result = await _connectOnce();
-        if (_disposed) return;
+        if (_disposed || _over) return;
 
         if (result == ConnectionResult.connected ||
             result == ConnectionResult.alreadyConnected) {
           _listenForConnectionLoss();
           await service.enableMedia();
-          if (_disposed) return;
+          if (_disposed || _over) return;
           state.value = CallConnectionState.connected;
           message.value = null;
           return;
@@ -178,10 +221,17 @@ class CallSession {
 
   /// Leave the call and dispose everything. Idempotent.
   Future<void> leave() async {
+    // `_disposed` ONLY — deliberately NOT `|| _over`. Every other recheck in
+    // this file is widened to both because they guard work that must not happen
+    // after the call ends; this one guards TEARDOWN, which must still happen.
+    // Returning early on `_over` would leave an ended call's notifiers and its
+    // LiveKit room undisposed for the life of the process.
     if (_disposed) return;
     _disposed = true;
     await _connectionLostSub?.cancel();
     _connectionLostSub = null;
+    await _peerLeftSub?.cancel();
+    _peerLeftSub = null;
     _isReconnecting = false;
     await service.dispose();
     state.dispose();

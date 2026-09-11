@@ -17,6 +17,7 @@ import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/settings/application/island_directory_provider.dart';
+import 'package:aiko_chat_app/features/settings/domain/island_entry.dart';
 import 'package:aiko_chat_app/features/settings/presentation/island_picker_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -314,7 +315,10 @@ void main() {
   });
 
   group('IslandPickerScreen', () {
-    Future<ProviderContainer> pumpPicker(WidgetTester tester) async {
+    Future<ProviderContainer> pumpPicker(
+      WidgetTester tester, {
+      List<IslandEntry> directory = const [],
+    }) async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       final store = InMemoryTokenStore(
@@ -339,7 +343,7 @@ void main() {
           // No live directory here — these tests exercise the picker/switch flow,
           // not discovery. An empty result makes the screen render the known seed
           // set and fires no real network (which would leak a pending timer).
-          islandDirectoryProvider.overrideWith((ref) async => const []),
+          islandDirectoryProvider.overrideWith((ref) async => directory),
         ],
       );
       await container.read(authControllerProvider.future);
@@ -352,6 +356,54 @@ void main() {
       await tester.pumpAndSettle();
       return container;
     }
+
+    testWidgets(
+      'an island that publishes a description shows it, and keeps the URL',
+      (tester) async {
+        // ADR-0008 puts `description` in the COSMETIC tier — untrusted
+        // self-description, safe to render as-is. The URL stays because it is
+        // the island's IDENTITY; demoting the checkable fact to make room for
+        // the unverifiable one would be the wrong trade.
+        final container = await pumpPicker(
+          tester,
+          directory: const [
+            IslandEntry(
+              label: 'Imagineering',
+              httpBaseUrl: 'https://chat.imagineering.cc',
+              description: "Imagineering's island",
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        expect(find.text("Imagineering's island"), findsOneWidget);
+        expect(find.text('https://chat.imagineering.cc'), findsOneWidget);
+      },
+    );
+
+    testWidgets('ABSENT IS FINE: no description renders exactly the old tile', (
+      tester,
+    ) async {
+      // The common path today — neither live island publishes one — and the
+      // one this change must not disturb. A description-shaped hole (an empty
+      // line, a stray separator) would be a regression on every tile for a
+      // field nobody has filled in yet.
+      final container = await pumpPicker(
+        tester,
+        directory: const [
+          IslandEntry(label: 'Enspyr', httpBaseUrl: 'https://chat.enspyr.co'),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      expect(find.text('Enspyr'), findsOneWidget);
+      expect(find.text('https://chat.enspyr.co'), findsOneWidget);
+      final tile = tester.widget<ListTile>(
+        find.ancestor(of: find.text('Enspyr'), matching: find.byType(ListTile)),
+      );
+      expect(tile.isThreeLine, isFalse);
+      expect(tile.subtitle, isA<Text>());
+    });
 
     testWidgets('renders the presets and marks the active gateway', (
       tester,

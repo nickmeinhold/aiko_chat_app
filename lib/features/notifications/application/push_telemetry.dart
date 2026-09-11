@@ -62,6 +62,32 @@ class PushTelemetry {
     error: error,
   );
 
+  /// The island resolved a registration to a kind we did not ask for.
+  ///
+  /// SEPARATE FROM [registerFailed] on purpose. That site's `error:` field
+  /// projects to a type name, which would say `DeviceKindRefused` and stop —
+  /// true, and short of the one thing a reader needs, which is WHICH WAY. Both
+  /// values here are enum wire strings from a closed set, so naming them carries
+  /// no more than the type name already does.
+  ///
+  /// `consequence` is stated rather than left to be inferred: an alert row
+  /// holding a PushKit token is a handset that does not ring for a call, and
+  /// that is invisible everywhere else in this app.
+  void registerKindRefused(String tokenRef, String asked, String? resolved) =>
+      _log.severe(
+        'push.register.kind_refused',
+        fields: {
+          'token': tokenRef,
+          'asked': asked,
+          // null covers two ISLAND-side states that both mean "we did not get
+          // a kind we can name": a value out of our set, and a wire that said
+          // nothing. The caller collapses them; what matters to a reader is
+          // that neither is an echo to be trusted.
+          'resolved': resolved ?? 'no-usable-echo',
+          'consequence': 'device-will-not-ring',
+        },
+      );
+
   /// A POST whose response was lost. The row MAY exist; nothing re-examines it.
   void registerObligationUnrecorded(String tokenRef) => _log.warning(
     'push.register.obligation_unrecorded',

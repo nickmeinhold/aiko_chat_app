@@ -360,7 +360,7 @@ void main() {
     'the ring window is measured from the SIGNED start, rebuild or not',
     () async {
       // One state, one equation of motion. `_consider` used to arm an absolute
-      // kCallRingDuration while `_republish` derived the remainder from
+      // kInAppRingDuration while `_republish` derived the remainder from
       // startedAt, so a ring's length depended on whether a rebuild happened
       // (cage-match #139 R5, Carnot). An invitation already older than the ring
       // window must not ring at all — even though it is inside the 10s freshness
@@ -373,7 +373,7 @@ void main() {
       // a real signature; drive it directly to pin the arithmetic.
       final ctl = container.read(incomingRingProvider.notifier);
       expect(
-        kCallRingDuration > kCallInviteFreshness,
+        kInAppRingDuration > kCallInviteFreshness,
         isTrue,
         reason: 'if this inverts, the admission gate alone bounds the ring',
       );
@@ -397,7 +397,7 @@ void main() {
   test(
     'the caller hanging up STOPS the ring — the whole point of #3198',
     () async {
-      // Without this the callee rings for the rest of kCallRingDuration for a call
+      // Without this the callee rings for the rest of kInAppRingDuration for a call
       // that is already over, and answering it joins an empty room. The ring
       // self-terminating at 30s bounds the damage; this makes the stop PROMPT.
       await warmDms();
