@@ -587,9 +587,125 @@ Every VoIP delivery must be reported to CallKit before the handler returns. So:
 - call only `reportCall(with:endedAt:)` ⇒ **unverified** whether Apple counts that as reported;
 - downgrade the end to an alert push ⇒ **a locked ringing phone never hears it**.
 
-**This may become a disagreement with Decision 5's transport, and it is not resolved here.**
+> **UPDATE 2026-09-11 — see §7c.** The first bullet is **resolved**: the payload gains a `"k"`
+> discriminator, so an end can no longer be mistaken for an invite. The third is **resolved**:
+> `CALL_END` routes to VoIP rows only. **The second is still open and now GATES this arm** —
+> `"k"` removes the ambiguity but not the must-report obligation, so a hangup is a momentary
+> ring unless `reportCall(endedAt:)` alone counts as reported (claude-tasks#4180).
+
+**This became a disagreement with Decision 5's transport and was resolved WITH the island tab
+rather than against it — §7c.** What follows is the pre-resolution framing, kept as the record.
 The one thing this document does assert: the third arm is the worst of the three, because it
 fails precisely in the state the mechanism exists for (§3's cold start), and fails silently.
+
+### 7c. The wake-kind discriminator — settled 2026-09-11, and what it does NOT settle
+
+**The island tab is adding a second payload field, `"k"`, carried on EVERY wake with both
+values explicit** (claude-tasks#4254 §4b):
+
+```
+invite   {"aps": {...}, "c": "<channel>", "k": "call_invite"}
+end      {"aps": {...}, "c": "<channel>", "k": "call_end"}
+```
+
+Explicit on both rather than absence-means-invite, so **a missing key is a defect you can
+detect rather than a default you silently inherit**.
+
+**Not a Decision 6 question, and the app tab did not escalate it.** The moment an end wake is
+sent at all, Apple sees two wakes for `c` some seconds apart and **learns the call duration
+from the timing, labelled or not**. `"k"` names what the sequence already gives away; it names
+no person, no direction, no identity. One case the island tab's argument did not cover and
+which survives it: **a LONE `call_end` with no preceding invite** — invite throttled, expired,
+or device off — does tell Apple something timing alone would not. Strictly smaller than the
+`c` correlator already conceded, so the verdict holds.
+
+#### The client's total function on `k` — this is the app tab's obligation
+
+| `k` | client behaviour |
+|---|---|
+| `"call_invite"` | report to CallKit, verify, sustain or end |
+| `"call_end"` | report (must-report is unconditional), then immediately end the call it names |
+| **unknown, or missing** | **report, then immediately end. NEVER sustain.** |
+
+**The third row is the load-bearing one.** It means a third `WakeKind` added later can never
+become a spurious ring on an older build — it degrades into the momentary cell, which §1e
+classes as a malformed-input failure mode rather than a destination. Recorded in the island's
+`WakeKind` source too, so it is a shared invariant rather than a client implementation detail.
+
+#### THE PART `"k"` DOES NOT SETTLE, and it is this section's own second bullet
+
+`"k"` removes the **ambiguity**. It does not discharge the **must-report obligation**.
+
+A VoIP delivery must be reported before the handler returns — including an end wake. So
+*"report, then immediately end"* for `k == "call_end"` is **a momentary ring on a hangup**
+unless `reportCall(with:endedAt:)` alone satisfies the rule. **That is exactly the unverified
+second bullet above, and it is still unverified.**
+
+So **§9's one-device experiment (claude-tasks#4180) still gates this arm.** If
+`reportCall(endedAt:)` alone counts as reported, an end wake is silent. If it does not, every
+hangup buzzes the callee's handset for an instant. Bounded, survivable, and **not something to
+discover on a user's phone** — the experiment is one handset and decisive.
+
+#### The permissive-decoder obligation — an invariant that lives in unwritten code
+
+The island's ability to add `"e"` (the sealed envelope, §4c / design 20) later **without a
+payload version bump** rests entirely on a property of a Swift handler **that does not exist
+yet**:
+
+> **`didReceiveIncomingPushWith` reads the keys it knows and IGNORES the rest.** No schema
+> validation, no strict decode, no failing closed on an unexpected key.
+
+**Stated here as a client obligation rather than left as a natural implementation choice**,
+because the risk is not getting it wrong today — it is someone writing a tidy strict decoder
+in six months and silently removing the peer repo's ability to evolve the wire. Nothing fails
+when that happens; it surfaces a year later as *"why can't we add a field?"*. **A cross-repo
+dependency on a future implementation detail is invisible to both repos' tests by
+construction**, so the only place it can live is here.
+
+Corollary, and the reason no field is reserved: an `"e"` shipped now as empty-or-placeholder
+would be *sometimes absent, sometimes default, sometimes real* — **the exact collapse `"k"`
+was made explicit to avoid.** Additive later is free; reserved now is not.
+
+#### The end wake's authenticity — a precondition with a named expiry
+
+**Today an unauthenticated end wake is NOT a ring-kill primitive**, and the reason is a
+precondition rather than a property:
+
+> An end wake can only be emitted downstream of a message `create_outbound` accepted — so the
+> sender cleared the block set, the ban gate and the conduct gate. **The set of parties who
+> can kill a ring is exactly the person you are on the call with, who can hang up anyway.**
+
+**It becomes a real primitive the moment that stops being true** — a third writer, a relay, or
+a federation path. Written down as a precondition so the day it changes, the gap is **visible
+rather than inherited**. (An earlier app-tab framing called it a live primitive; that
+overreached, and the island tab's correction is what is recorded here.)
+
+#### Two more limits, stated rather than left to read as solved
+
+- **`c` names a channel, not a call.** Once two calls can overlap in one channel, an end wake
+  carrying only `c` cannot say which to end. Unambiguous by construction today; resolved
+  properly when the call id ships inside the envelope (§4c).
+- **`CALL_END` routes to VOIP rows only** (island tab's call, and correct). An alert push runs
+  no app code so it cannot end a CallKit ring, and rendering *"Incoming call / Tap to join"*
+  for a hangup is a notification that actively lies about what happened.
+
+**A useful consequence: VoIP token registration is itself the feature flag.** Every device row
+on both live islands is `token_kind='alert'`, so the end wake ships completely inert — the
+first end wake in existence will be to a build that registered a VoIP token, i.e. one written
+against this contract. **There is no window in which an old build receives an end wake and
+reports it as a ring.**
+
+#### Filed, not fixed: the wake budget is asymmetric
+
+The per-recipient wake budget is **6/min in one bucket**, and a call now costs **two** wakes.
+At three calls a minute the throttled wake could be an **END** — and a dropped stop is
+strictly worse than a dropped start: a missed call you can return, a phone ringing for a
+corpse you cannot.
+
+**And it is not bounded by a number either repo can test.** A dropped end is bounded only by
+the island's ring lease, and **that lease is not on the wire** — claude-tasks#4233, the third
+clock. Dropped-end plus unpinned-lease is unbounded in practice, not in principle. Filed with
+#4233 rather than as a standalone island nit, because it is the same shape.
 
 ### 7b. The island tab's predicate fix, and the tree it sits in
 
@@ -684,8 +800,10 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
    under every arm of §2, so it is safe first. **Blocked on `kPushDeliverySlack` having a
    derivation.**
 2. **§7b's one-device experiment** — does `reportCall(with:endedAt:)` alone satisfy the
-   must-report rule? One handset, no island, decisive, and it gates §7's arm. **Run first: it
-   may moot the two-handset alert-wake measurement below.**
+   must-report rule? One handset, no island, decisive. **Now gates the END WAKE, not just
+   §7's arm** (§7c): the island is shipping `WakeKind.CALL_END` and the client's response to
+   it is *report-then-end* — which is a momentary ring on every hangup unless this measurement
+   says otherwise. **Run first: it may moot the two-handset alert-wake measurement below.**
 2b. **The two-handset alert-wake measurement**, only on the NO branch — ring one device, send
    the end as an alert push, observe whether it lands and how late. The island tab drives its
    half. Worth batching with the two-device NAT measurement PR #169 already owes, since both
@@ -711,7 +829,11 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
 
 - **`kPushDeliverySlack`** has no value and no derivation (§3).
 - **Key-set freshness at wake time** — §1c, three arms, recommendation stated not decided.
-- **Does `reportCall(with:endedAt:)` count as reported?** — §7, unmeasured, gates an arm.
+- **Does `reportCall(with:endedAt:)` count as reported?** — §7, unmeasured, and it now
+  **gates the END WAKE itself** (§7c): if it does not count, every hangup buzzes the callee's
+  handset for an instant. One handset, decisive — claude-tasks#4180.
+- **The permissive-decoder obligation** — §7c. An invariant living in code nobody has written,
+  which the peer repo's ability to evolve the payload depends on.
 - ~~**Who owns the ring ceiling**~~ — **CLOSED**: the island, Nick 2026-09-09 21:43, re-affirmed
   2026-09-11 (§2). It opened a successor: **the island's ring lease is not on the wire**, so
   neither the §3 retention bound nor any test here can be pinned against it — claude-tasks#4233.
