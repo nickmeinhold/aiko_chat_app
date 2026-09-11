@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:aiko_chat_app/features/call/data/ring_allowlist_store.dart';
+import 'package:aiko_chat_app/features/call/domain/ring_consent.dart';
 import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,13 +44,16 @@ void main() {
       // the 1054 passing tests missed it because none of them touched the store.
       final s = await storeFor(alice);
       expect(s.read(chan).keys, isEmpty);
-      expect(await s.allow(chan, resident), isTrue);
+      expect(await s.allow(chan, resident), ConsentChange.changed);
       expect(s.read(chan).keys, {resident});
     });
 
     test('revoking from an EMPTY store does not throw either', () async {
       final s = await storeFor(alice);
-      expect(await s.revoke(chan, resident), isTrue);
+      // UNCHANGED, and this line is the #3518 fix visible from the oldest test
+      // in the file: there was nothing to withdraw, and the store used to call
+      // that success because the preferences write succeeded.
+      expect(await s.revoke(chan, resident), ConsentChange.unchanged);
       expect(s.read(chan).keys, isEmpty);
     });
 
@@ -95,11 +99,11 @@ void main() {
       final aliceStore = RingAllowlistStore(prefs, alice);
       final bobStore = RingAllowlistStore(prefs, bob);
 
-      expect(await aliceStore.allow(chan, resident), isTrue);
+      expect(await aliceStore.allow(chan, resident), ConsentChange.changed);
       expect(aliceStore.read(chan).keys, {resident});
       expect(bobStore.read(chan).keys, isEmpty, reason: 'Bob inherits nothing');
 
-      expect(await bobStore.allow(chan, stranger), isTrue);
+      expect(await bobStore.allow(chan, stranger), ConsentChange.changed);
       expect(aliceStore.read(chan).keys, {
         resident,
       }, reason: "Bob cannot edit Alice's");
@@ -108,8 +112,11 @@ void main() {
     test('signed out, nobody can read or grant', () async {
       final s = await storeFor(null);
       expect(s.read(chan).keys, isEmpty);
-      expect(await s.allow(chan, resident), isFalse);
-      expect(await s.revoke(chan, resident), isFalse);
+      // NOSUBJECT, not a generic falsehood: there is no signed-in user whose
+      // consent this would be, which is a different fact from a bad key or a
+      // failed write (claude-tasks#3518).
+      expect(await s.allow(chan, resident), ConsentChange.noSubject);
+      expect(await s.revoke(chan, resident), ConsentChange.noSubject);
     });
   });
 
@@ -199,7 +206,11 @@ void main() {
     test('a malformed key is refused at the moment of consent', () async {
       final s = await storeFor(alice);
       for (final bad in ['', 'not-a-key', 'z', 'zzzz', resident.substring(1)]) {
-        expect(await s.allow(chan, bad), isFalse, reason: 'allow("$bad")');
+        expect(
+          await s.allow(chan, bad),
+          ConsentChange.malformedKey,
+          reason: 'allow("$bad")',
+        );
       }
       expect(s.read(chan).keys, isEmpty);
     });
@@ -209,7 +220,7 @@ void main() {
       await s.allow(chan, resident);
       await s.allow(chan, stranger);
       expect(s.read(chan).keys, {resident, stranger});
-      expect(await s.revoke(chan, resident), isTrue);
+      expect(await s.revoke(chan, resident), ConsentChange.changed);
       expect(s.read(chan).keys, {stranger});
     });
 
@@ -379,6 +390,129 @@ void main() {
       await s.allow(chan, resident);
       await s.dropLegacyGlobalConsent();
       expect(s.read(chan).keys, {resident});
+    });
+  });
+
+  // claude-tasks#3518. The old `bool` reported whether BYTES LANDED, never
+  // whether the COVENANT MOVED — so `true` covered "granted" and "was already
+  // granted", and `false` covered "malformed key", "signed out" and "the write
+  // failed". Five outcomes on two values.
+  //
+  // THE MUST-FAIL ARM FOR THIS WHOLE GROUP is the first test: under the old
+  // bool it could not be written at all, because there was no value for
+  // `revoke` to return that distinguished a real withdrawal from a no-op. If a
+  // future refactor collapses ConsentChange back toward a bool, that test is
+  // the one that goes red first.
+  group('a mutation reports what it DID, not whether a write happened (#3518)', () {
+    test(
+      'revoking a key that was never granted is UNCHANGED, not success',
+      () async {
+        final s = await storeFor(alice);
+        await s.allow(chan, resident);
+
+        expect(
+          await s.revoke(chan, stranger),
+          ConsentChange.unchanged,
+          reason: 'stranger was never consented here — nothing was withdrawn',
+        );
+        expect(s.read(chan).keys, {
+          resident,
+        }, reason: 'and the real grant must be untouched by the no-op');
+      },
+    );
+
+    test('revoking in a room with no grants at all is UNCHANGED', () async {
+      final s = await storeFor(alice);
+      expect(
+        await s.revoke('dm:no:such:room', resident),
+        ConsentChange.unchanged,
+      );
+    });
+
+    test('revoking a key that IS granted is CHANGED', () async {
+      final s = await storeFor(alice);
+      await s.allow(chan, resident);
+      expect(await s.revoke(chan, resident), ConsentChange.changed);
+      expect(s.read(chan).keys, isEmpty);
+    });
+
+    // The twin defect #3518 does not name. `allow` had the same flattening and
+    // a worse one — three meanings on its `false` — and fixing only the
+    // reported instance is how the same bug gets filed again next month.
+    test('granting a key that is ALREADY granted is UNCHANGED', () async {
+      final s = await storeFor(alice);
+      expect(await s.allow(chan, resident), ConsentChange.changed);
+      expect(
+        await s.allow(chan, resident),
+        ConsentChange.unchanged,
+        reason: 'the covenant did not move; only the same bytes were re-stated',
+      );
+      expect(s.read(chan).keys, {resident});
+    });
+
+    test(
+      'a malformed key is MALFORMEDKEY on GRANT — it names nothing that could '
+      'ever ring',
+      () async {
+        final s = await storeFor(alice);
+        for (final bad in [
+          '',
+          'not-a-key',
+          'z',
+          'zzzz',
+          resident.substring(1),
+        ]) {
+          expect(
+            await s.allow(chan, bad),
+            ConsentChange.malformedKey,
+            reason: 'allow("$bad")',
+          );
+        }
+        expect(s.read(chan).keys, isEmpty);
+      },
+    );
+
+    // REVOKE IS DELIBERATELY ASYMMETRIC HERE, and this test exists because the
+    // reason lived only in a comment. `revoke` accepts a malformed key and
+    // removes the LITERAL, "so a store corrupted by hand can still be cleaned up
+    // through the front door". Refusing it would close the only exit from a
+    // corrupt store — amputating a capability to make the new enum tidy, which
+    // is the opposite of the fix #3518 asked for.
+    //
+    // So a malformed revoke is not an input error; it is a cleanup that either
+    // found something or did not.
+    test('revoke ACCEPTS a malformed key and reports what it found', () async {
+      // Nothing stored under that literal: a no-op, not a refusal.
+      final empty = await storeFor(alice);
+      expect(await empty.revoke(chan, 'not-a-key'), ConsentChange.unchanged);
+
+      // A hand-corrupted store with a junk literal in it: the front door works,
+      // and it reports that it actually removed something.
+      final corrupt = await storeFor(
+        alice,
+        seed: {'aiko_ring_consent_$alice': '{"$chan":["not-a-key"]}'},
+      );
+      expect(await corrupt.revoke(chan, 'not-a-key'), ConsentChange.changed);
+      expect(corrupt.read(chan).keys, isEmpty);
+    });
+
+    test('signed out is NOSUBJECT — a different fact from a bad key', () async {
+      final s = await storeFor(null);
+      expect(await s.allow(chan, resident), ConsentChange.noSubject);
+      expect(await s.revoke(chan, resident), ConsentChange.noSubject);
+      // And the ORDER matters: signed-out is checked before the key is parsed,
+      // so a malformed key while signed out still reports the subject problem.
+      // There is no consent to be malformed ABOUT.
+      expect(await s.allow(chan, 'not-a-key'), ConsentChange.noSubject);
+    });
+
+    test('isSettled means the end-state holds, which is what the bool meant to '
+        'ask', () async {
+      expect(ConsentChange.changed.isSettled, isTrue);
+      expect(ConsentChange.unchanged.isSettled, isTrue);
+      expect(ConsentChange.malformedKey.isSettled, isFalse);
+      expect(ConsentChange.noSubject.isSettled, isFalse);
+      expect(ConsentChange.notPersisted.isSettled, isFalse);
     });
   });
 }

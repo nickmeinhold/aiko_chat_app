@@ -2,6 +2,7 @@ import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/call/application/ring_allowlist_provider.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
+import 'package:aiko_chat_app/features/call/domain/ring_consent.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/application/mute_controller.dart';
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';
@@ -605,7 +606,15 @@ void main() {
         final granted = await container
             .read(ringConsentByChannelProvider.notifier)
             .allow(dmId, await myMultikey());
-        expect(granted, isTrue, reason: 'precondition: the grant persisted');
+        // CHANGED, not merely `isSettled`: this is a fresh grant in a fresh
+        // container, so the covenant must actually have MOVED. `isSettled`
+        // would also pass on `unchanged`, which here would mean the precondition
+        // silently did nothing and the test below proved the wrong thing.
+        expect(
+          granted,
+          ConsentChange.changed,
+          reason: 'precondition: the grant persisted',
+        );
 
         transport.emitMessage(await inbound(kind: SenderKind.llm));
         await pump();

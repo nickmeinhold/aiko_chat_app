@@ -133,3 +133,59 @@ class RingConsentBook {
 
   bool get isEmpty => _byChannel.isEmpty;
 }
+
+/// What a consent mutation actually DID — the answer a `bool` could not give.
+///
+/// `RingAllowlistStore.allow` and `.revoke` both used to return the result of
+/// the preferences write, which reports **whether bytes landed** and never
+/// **whether the covenant moved**. So `true` covered "granted" and "was already
+/// granted", and `false` covered "malformed key", "nobody is signed in" and
+/// "the write failed" — five outcomes flattened onto two values, with the
+/// distinctions a caller needs collapsed on both sides (claude-tasks#3518).
+///
+/// THE DEFECT IS A CLASS, NOT AN INSTANCE. #3518 names `revoke` only, because
+/// that is where it was spotted. `allow` had the identical flattening and a
+/// worse one — three meanings on its `false`. Fixing the named instance and
+/// leaving its twin six lines away is how a second bug of the same shape gets
+/// filed next month.
+///
+/// WHY AN ENUM AND NOT A RICHER BOOL. This is a closed set of outcomes that a
+/// caller must branch on, and the future consent UI (claude-tasks#3575) branches
+/// on it to decide what to tell the user. A confirmation toast shown on
+/// [unchanged] is a success message for a no-op — which is the precise failure
+/// #3518 predicted would ship the day that UI lands.
+enum ConsentChange {
+  /// The covenant moved and the change persisted. The only success.
+  changed,
+
+  /// The store already said this — granting a key already granted, or revoking
+  /// one that was never there. **Nothing was written**, because there was
+  /// nothing to write.
+  ///
+  /// NOT AN ERROR, and that is why it is not folded into [notPersisted]. The
+  /// requested end-state holds. A caller that only needs "is it so now?" may
+  /// treat this and [changed] alike; a caller that reports to a human must not.
+  unchanged,
+
+  /// The multikey is not a well-formed ed25519 Multikey, so it names nothing
+  /// that could ever ring. Input error, distinguishable from storage failure.
+  malformedKey,
+
+  /// Nobody is signed in, so there is no subject whose consent this would be.
+  ///
+  /// Kept separate from [malformedKey] because it is not about the key at all —
+  /// and separate from [notPersisted] because nothing was attempted.
+  noSubject,
+
+  /// The write was attempted and did not persist. The one outcome a caller
+  /// should retry or surface as a fault.
+  notPersisted;
+
+  /// Did the requested end-state hold when this returned?
+  ///
+  /// The convenience the old `bool` was REACHING for and got wrong: it answered
+  /// "did a write succeed", which is true for a no-op and false for a state that
+  /// was already correct. [changed] and [unchanged] both mean *the consent now
+  /// says what you asked it to say*.
+  bool get isSettled => this == changed || this == unchanged;
+}

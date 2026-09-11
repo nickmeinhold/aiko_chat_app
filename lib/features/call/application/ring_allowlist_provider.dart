@@ -69,20 +69,37 @@ class RingAllowlist extends Notifier<RingConsentBook> {
   RingConsent consentIn(String channelId) => state.consentIn(channelId);
 
   /// Consent to be rung by [multikey]; republishes so a live ring path sees it
-  /// immediately. Returns false if the key is malformed or the write failed —
-  /// and on failure the state is left ALONE rather than optimistically updated,
-  /// so what callers observe is what actually persisted.
-  Future<bool> allow(String channelId, String multikey) async {
-    final store = ref.read(ringAllowlistStoreProvider);
-    if (!await store.allow(channelId, multikey)) return false;
-    return _publish(store);
-  }
+  /// immediately. On anything but a settled outcome the state is left ALONE
+  /// rather than optimistically updated, so what callers observe is what
+  /// actually persisted.
+  ///
+  /// RETURNS THE OUTCOME, NOT A BOOL (claude-tasks#3518). This notifier is the
+  /// single door the consent UI (claude-tasks#3575) will mutate through, so it
+  /// is the layer that must be able to say *"already granted"* differently from
+  /// *"granted"* — a confirmation toast shown on [ConsentChange.unchanged] is a
+  /// success message for a no-op.
+  Future<ConsentChange> allow(String channelId, String multikey) =>
+      _mutate((store) => store.allow(channelId, multikey));
 
-  /// Withdraw consent, and republish. Same failure handling as [allow].
-  Future<bool> revoke(String channelId, String multikey) async {
+  /// Withdraw consent, and republish. Same outcome handling as [allow].
+  Future<ConsentChange> revoke(String channelId, String multikey) =>
+      _mutate((store) => store.revoke(channelId, multikey));
+
+  /// The shared body of [allow] and [revoke] — one door, so the publish rule
+  /// cannot be right in one and wrong in the other.
+  ///
+  /// **A failed republish does NOT downgrade the outcome**, and the distinction
+  /// is not cosmetic. [_publish] returns false only when the signed-in identity
+  /// changed while the write was in flight; the write itself persisted, and it
+  /// was correct for the subject that requested it. Reporting that as a storage
+  /// failure would tell the caller its consent did not take when it did.
+  Future<ConsentChange> _mutate(
+    Future<ConsentChange> Function(RingAllowlistStore) write,
+  ) async {
     final store = ref.read(ringAllowlistStoreProvider);
-    if (!await store.revoke(channelId, multikey)) return false;
-    return _publish(store);
+    final outcome = await write(store);
+    if (outcome.isSettled) _publish(store);
+    return outcome;
   }
 
   /// Republish, but ONLY if [store] is still the one this session is reading.
