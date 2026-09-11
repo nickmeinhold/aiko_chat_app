@@ -870,8 +870,22 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
 
 - **Android.** ConnectionService, full-screen intent, FCM's single token — design 12 Decision 8.
   The Play `USE_FULL_SCREEN_INTENT` declaration (claude-tasks#3615) has been required since
-  31 May 2024, is a store-review gate rather than a code gate, and is **slower than the build**.
-  Start it before the code.
+  31 May 2024 and is **slower than the build**. ~~A store-review gate rather than a code gate.
+  Start it before the code.~~ **BACKWARDS — struck 2026-09-12.**
+
+  **It cannot start before the code.** The Console declaration does not appear until a bundle
+  **declaring the permission** has been uploaded, and `USE_FULL_SCREEN_INTENT` was in none of
+  our manifests — so this bullet sent Nick to a Console page with no such row on it. Fixed by
+  `a243f2b` (`feat/android-full-screen-intent-permission`), verified in the built APK via
+  `aapt2 dump permissions` rather than in the manifest source, because merging is the layer
+  where a correct file yields a wrong artifact.
+
+  **The sentence was right about the LATENCY and wrong about the ORDER, which is the worst
+  pairing** — it reads as sequencing diligence and points at an empty page. The true order is
+  *declare the permission → upload a bundle → the declaration appears → fill it in*, and only
+  the last step is Nick's. Found because he went to do it, not by review: three cage-match
+  rounds and a four-family temper never touched it, because it is a claim about a console
+  neither reads.
 - **Sender anonymity.** Nick's 2026-08-25 ruling (the island learns neither who is friends with
   whom nor who is calling) remains unreconciled with designs 12/16 building the ring as a
   stored, attributable message. claude-tasks#3745, and it stays a **separate** thread: this
