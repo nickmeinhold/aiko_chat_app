@@ -591,7 +591,7 @@ Every VoIP delivery must be reported to CallKit before the handler returns. So:
 > discriminator, so an end can no longer be mistaken for an invite. The third is **resolved**:
 > `CALL_END` routes to VoIP rows only. **The second is still open and now GATES this arm** —
 > `"k"` removes the ambiguity but not the must-report obligation, so a hangup is a momentary
-> ring unless `reportCall(endedAt:)` alone counts as reported (claude-tasks#4180).
+> ring unless `reportCall(endedAt:)` alone counts as reported (claude-tasks#4178).
 
 **This became a disagreement with Decision 5's transport and was resolved WITH the island tab
 rather than against it — §7c.** What follows is the pre-resolution framing, kept as the record.
@@ -641,10 +641,23 @@ A VoIP delivery must be reported before the handler returns — including an end
 unless `reportCall(with:endedAt:)` alone satisfies the rule. **That is exactly the unverified
 second bullet above, and it is still unverified.**
 
-So **§9's one-device experiment (claude-tasks#4180) still gates this arm.** If
+So **§9's one-device experiment (claude-tasks#4178) still gates this arm.** If
 `reportCall(endedAt:)` alone counts as reported, an end wake is silent. If it does not, every
 hangup buzzes the callee's handset for an instant. Bounded, survivable, and **not something to
 discover on a user's phone** — the experiment is one handset and decisive.
+
+**#4178 already carries a working harness and, more importantly, the reason the first run was
+VOID.** The 2026-09-09 spike launched via `devicectl … --console`, which holds a usage
+assertion and left the app *running-active-visible* — **must-report governs waking a SUSPENDED
+app**, so enforcement was never engaged, both arms read identically, and no conclusion was
+admissible. The negative control (report nothing at all, four times) did not trigger
+termination, which is the only reason anyone knows the run was void rather than a result.
+
+**It carries a PRE-REGISTERED STOPPING RULE and this section defers to it:** *if the negative
+control does not trigger enforcement, no conclusion is admissible.* A valid harness is
+install → launch → background → **let it suspend**, no console attach, logs read after the
+fact via `log collect`. **Whatever this section wants to be true, a run that cannot produce
+the failure cannot clear it.**
 
 #### The permissive-decoder obligation — an invariant that lives in unwritten code
 
@@ -831,7 +844,7 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
 - **Key-set freshness at wake time** — §1c, three arms, recommendation stated not decided.
 - **Does `reportCall(with:endedAt:)` count as reported?** — §7, unmeasured, and it now
   **gates the END WAKE itself** (§7c): if it does not count, every hangup buzzes the callee's
-  handset for an instant. One handset, decisive — claude-tasks#4180.
+  handset for an instant. One handset, decisive — claude-tasks#4178.
 - **The permissive-decoder obligation** — §7c. An invariant living in code nobody has written,
   which the peer repo's ability to evolve the payload depends on.
 - ~~**Who owns the ring ceiling**~~ — **CLOSED**: the island, Nick 2026-09-09 21:43, re-affirmed
