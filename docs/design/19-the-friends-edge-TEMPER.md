@@ -1,10 +1,17 @@
 # TEMPER — design 19, the friends edge
 
-**Overall verdict: DISSOLVE** (decisive — two adversary families, independently)
+**Overall verdict: DISSOLVE** (UNANIMOUS — all three adversary families, independently)
 
 **Struck:** 2026-09-11, bundle = design 19 + `RESEARCH.md` + a peer-repo fact sheet.
-**Families seated:** Maxwell (Claude) + Kelvin (Gemini 2.5 Pro) + Carnot (GPT/Codex).
-**Dark seat:** Tesla (Grok) — see *Panel integrity* below. Wu (Kimi K3) disabled upstream.
+**Families seated:** Maxwell (Claude) + Kelvin (Gemini 2.5 Pro) + Carnot (GPT/Codex) +
+Tesla (Grok). **Full panel.** Wu (Kimi K3) disabled upstream.
+
+> **CORRECTION, same session.** This document first recorded Tesla as a DARK SEAT. That was
+> wrong, and the error was mine, not the instrument's: Tesla's output file was read **while
+> the process was still writing it** (263 bytes at the time, a preamble), and the partial was
+> banked as the result. The completion notification arrived afterwards. The finished strike is
+> 10KB, votes **DISSOLVE**, and contains findings no other family reached. Everything below is
+> the corrected record. See *Panel integrity*.
 
 This is a **verdict, not a design**. It goes back to the island tab as a finding.
 
@@ -17,12 +24,17 @@ This is a **verdict, not a design**. It goes back to the island tab as a finding
 | **Kelvin** (Gemini) | **DISSOLVE** | *"The design pays a cost the owner has explicitly forbidden to buy a capability the system already has."* |
 | **Carnot** (GPT) | **DISSOLVE** | *"Its remaining justification is doing negative work: the shipped conduct gate already closes 100% of the wake harm, while the friends edge creates exactly the durable, enumerable social graph the owner previously rejected."* |
 | **Maxwell** (Claude) | RECAST — *"and the recast is mostly a DELETION"* | The ring justification was re-scoped into gating who may MESSAGE you, and it is that un-ruled extra reach that manufactures the artifact. |
-| **Tesla** (Grok) | *dark* | Produced no verdict. Not a SOUND vote. |
+| **Tesla** (Grok) | **DISSOLVE** | *"The resonant frequency is not a stranger ULID. It is the first unfriend that erases a living DM, or the first operator dump of the table you were told the island must never hold."* |
 
 **Convergence, and it was not seeded.** Kelvin and Maxwell independently reached the same
 falsifier — *block is already the un-reply* — from different directions, and neither was
 handed it: the fact sheet given to the panel never mentioned blocking. Kelvin reasoned it
 from design 19 §0's own text; Maxwell filed it as the highest-value unverified premise.
+Tesla arrived at the same place by a third route — that the edge **cannot express** the
+property it is sold on (below) — and named the existing send-path block alongside `#3343`.
+
+**Three of three adversary families DISSOLVE. The author instance was the sole holdout, and
+its verdict is the weakest evidence in the room by construction.**
 
 ---
 
@@ -76,6 +88,24 @@ identity graph.**
    out of the panel's jurisdiction). But note the panel did not need §3 resolved to reach
    DISSOLVE — flaw 1 is sufficient on its own.
 
+2b. **THE TOMBSTONE GRAPH — §11c under-counted its own blast radius.** Tesla, and no other
+   family reached it. A **signed withdrawal persists relationship HISTORY, not a snapshot.**
+   At 46 users the sensitive query is not *"who talks to whom"* — that is already inferable
+   from DM membership — it is **"who is missing, who withdrew."** That table does not exist
+   anywhere today. **This design mints it**, and it mints it as a durable, signed, enumerable
+   artifact. The very revocability sold as the edge's advantage is what creates the worst
+   version of the artifact Nick objected to. DISPOSITION: fold into §11c if any friends
+   primitive is ever revived.
+
+2c. **Withdrawal is INCOHERENT as specified — the edge cannot express the property it is
+   sold on.** Tesla. §5 gates `POST /v1/dm` create and gets ring-gating *"by consequence"*, so
+   a withdrawal that **destroys** the channel couples *"stop ringing me"* to *"delete our
+   conversation"* — nobody uses that at 3am — and a withdrawal that **leaves** the channel
+   does not stop the invite. **The property actually wanted is revocable ring permission
+   without erasing the conversation, and §4–§5 cannot express it. `#3343` can.** This is the
+   same conclusion as flaw 1 reached from the opposite end: not *"the property already
+   exists"* but *"this mechanism could not deliver it anyway."*
+
 3. **Scope smuggle: §0 argues the RING, §5 gates DM CREATION.** Maxwell. Neither cited ruling
    says strangers may not DM you — 2026-08-23 says *friends is a first-class primitive*,
    2026-09-11 says *build the gate before the ring ships*. A much larger product decision is
@@ -112,17 +142,61 @@ identity graph.**
 
 ---
 
+## A strike that landed on THIS MORNING'S FOLD-IN, not on the design
+
+**§11a overclaims, and Tesla named it (Charge E).** §11a was written hours before the strike
+and concluded that the option set *"has one member left"*. That is stronger than the evidence:
+
+- The NSE measurement establishes **closed today, for this spike** — `CXError` code 2, a
+  missing `com.apple.developer.usernotifications.filtering` entitlement — **not closed
+  forever**. Apple's documented rationale for that path is *"when your server can't determine
+  whether an outgoing notification is a request for a VoIP call"*, and §10 records that
+  **MLS kills the cleartext `CALL_INVITE_BODY` comparison** — i.e. this project moves
+  *toward* Apple's stated grant criterion, not away from it.
+- Tesla's phrasing: using a missing entitlement on a pre-MLS VoIP path to spend the 2026-08-25
+  ruling **permanently**, while ignoring the already-shipped conduct substitute, is
+  *"prophecy read backwards."*
+- **And the option table omitted a fifth member** — the substitute already merged. §3a's
+  *"the alternative is that the ring cannot be gated at all"* is false on the strike-context's
+  own fact 4: the conduct gate covers 100% of the wake path. **§3a is not a hard remainder;
+  it is a frame that hides SUBSTITUTES.**
+
+DISPOSITION: **correct §11a in design 19.** The claim is time-boxed and spike-boxed, and the
+correction was owed whatever the verdict was.
+
+**One sharpening of §11c, also Tesla's:** *"the conduct predicate creates none"* is slightly
+loud — the island already holds routing pairs as DM membership. The harm Nick named is a
+**first-class enumerable social graph**, which the edge still newly creates. The argument
+survives; the wording overreaches.
+
+---
+
 ## Charge C — §6 and §7, tested rather than rubber-stamped
 
-- **§7 (grandfathering existing DM partners): RECOMMENDATION HOLDS,** and the reasoning
-  improves it. Derived-from-conduct is exactly what the shipped gate is, so the two answers
-  must match — that symmetry is the finding, and it survives all three strikes.
-- **§6 (what a request carries): RECOMMENDATION IS RIGHT AND INCOMPLETE.** "Show the
-  identity, neuter the payload" (Signal Message Requests, MSC2403) is sound prior art, but it
-  answers the cosmetic half; the constraint-violating half — durable cross-process rate
-  limiting vs `no_refused_ring_record`, flaw 4 — is what needed testing and was not resolved.
-- Kelvin's framing, worth keeping: both recommendations *"are arguments for a first-contact
-  gate in general, not this one in particular. They should be applied to the SURVIVING gate."*
+**Both recommendations were REJECTED on the full panel. They were folded in hours before the
+strike, from prior art, and had been challenged by nobody — which is exactly why they were put
+up. Tesla rejected both outright; recording that reversal is the point of having asked.**
+
+- **§7 (grandfathering): REJECTED — and the reason is structural, not preferential.** The
+  recommendation was *yes, and the answer must match §10's*. Tesla: **that symmetry is a
+  rhetorical trap.** Deriving a *query* from `Message` rows is not the same act as
+  **materialising** `is-friend-of`. And it collides head-on with §3a's un-forgeability: the
+  island **cannot mint a signature**, so silent grandfathering is either (a) forged
+  island-attested edges, (b) a fork of the primitive into signed-vs-derived, or (c) not
+  grandfathering at all but a **signing campaign that severs everyone who does not sign.**
+  The prior art does not transfer either — **Signal grandfathered a client-side filter, not a
+  signed identity edge.** Maxwell's "the answers must match" reasoning is withdrawn.
+- **§6 (what a request carries): REJECTED AS STATED, and it contradicts §11d.** The
+  recommendation was *show the identity, neuter the payload*. Tesla: blurred avatars and
+  un-linkified URLs are **internet-scale abuse hygiene — spam-frame machinery that §11d had
+  just disqualified.** At 46 people the value is a **legible** decision, so identity-adjacent
+  signal should be **clear, not neutered**; neutering makes consent *worse*. And MSC2403's
+  reason field **reimports the free-text harassment surface** the fork claimed to close. **If
+  SUBSTITUTES holds, the friend-request channel should not be built at all** — first contact
+  at 46 people is already *"they are in a room with you"* or an out-of-band knock, and the
+  ring is already gated by conduct.
+- Kelvin's framing survives both: the recommendations *"are arguments for a first-contact gate
+  in general, not this one in particular. They should be applied to the SURVIVING gate."*
 
 ---
 
@@ -168,14 +242,28 @@ stake against. What it means concretely:
 
 ## Panel integrity — read this before weighting the verdict
 
-- **Three of four families seated; Tesla (Grok) went dark**, returning 144 bytes claiming a
-  truncated bundle and producing no verdict. A retry with a 60KB bundle was run. **A dark
-  seat is a coverage gap, not a SOUND vote** — Tesla's bias is under-counted blast radius and
-  future failure modes, so that is the lens this strike is thinnest on.
-- **Two DISSOLVEs meet the decisive threshold** and the deciding flaw was independently
-  verified against source, so the verdict does not rest on adversary agreement alone.
+- **All four families seated. The verdict is unanimous across the three adversaries.** The
+  deciding flaw was additionally verified against island source, so it does not rest on
+  agreement alone.
+- **TESLA WAS FILED AS DARK AND WAS NOT, AND THE MECHANISM IS WORTH MORE THAN THE
+  CORRECTION.** Its output file was read **while the process was still writing** — 263 bytes,
+  a preamble announcing an intent to keep reading — and that partial was banked as *"no
+  verdict produced"*. The completion notification for that very process arrived afterwards
+  and was available. **A file being written and a file that is finished are different
+  epistemic states, and `wc -c` cannot tell them apart**; the instrument that can is the
+  process exit, which had not happened yet. This is the four-states crux (absence / silence /
+  default / refusal) recurring inside the very session that named it, one substrate over: a
+  partial read as a refusal.
+  **Cost had it stood:** Tesla is the only family that found the tombstone graph and the
+  withdrawal-incoherence flaw, and the only one that rejected BOTH §6 and §7 — the two
+  recommendations every other family let pass. The seat most likely to be written off as
+  empty was the one carrying the findings nobody else had.
+- **Tesla also struck this panel's own fold-in**, not just the design — see the §11a
+  overclaim above. An adversary correcting the framing it was handed is the one thing a
+  shared premise bundle cannot do for itself.
 - **Maxwell is the author instance** and its own verdict (RECAST) is the weakest evidence
-  here by construction — it is recorded, and it is the one that was outvoted.
+  here by construction — it is recorded, and it is the one that was outvoted **3–1**. Two of
+  its Charge C answers were reversed by Tesla and are marked withdrawn above.
 - **The first launch of all three adversaries died silently** (backgrounding a CLI inside an
   already-backgrounded call orphans the child). Kelvin produced 0 bytes and Carnot no file.
   Caught by checking file sizes rather than by the absence of output — a 0-byte reviewer and

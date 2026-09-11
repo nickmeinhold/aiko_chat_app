@@ -370,8 +370,27 @@ is **46**. And the survey notes the polarity is against us twice over: Orca is a
 membership proof), for which **no published analogue was found**, and whose anonymity
 arithmetic is *worse* because the set shrinks from "all users" to "my friends".
 
-**So the option set actually available to this project is (i) or (ii)-at-46-users or (iii).**
-That is the fact §3a needed and did not have.
+~~**So the option set actually available to this project is (i) or (ii)-at-46-users or
+(iii).**~~ — **CORRECTED 2026-09-11 BY THE TEMPER (Tesla, charge E). This sentence
+overclaimed, and the correction was owed whatever the verdict was.**
+
+Two errors in it:
+
+1. **"Closed" is time-boxed and spike-boxed, not permanent.** The measurement establishes
+   that *this* spike lacked `com.apple.developer.usernotifications.filtering` **today**.
+   Apple's documented rationale for granting that path is *"when your server can't determine
+   whether an outgoing notification is a request for a VoIP call"* — and §10 records that
+   **MLS kills the cleartext `CALL_INVITE_BODY` comparison**, which moves this project
+   *toward* that criterion rather than away. Spending a standing ruling permanently on a
+   pre-MLS entitlement refusal is, in Tesla's words, *"prophecy read backwards."*
+2. **The table omitted a fifth member: the substitute already merged.** §3a's
+   *"the alternative is that the ring cannot be gated at all"* is false — the shipped conduct
+   gate covers 100% of the wake path. **§3a was not a hard remainder. It was a frame that hid
+   SUBSTITUTES**, which is the verdict the full panel then reached.
+
+The surviving true claim is narrower and still useful: **no shipped or specified system was
+found that renders a server-side relational ring verdict without learning something about the
+relation**, and the on-device escape is **not available to this project today**.
 
 ### 11b. Matrix is the confirming case, and §0 independently reinvented its resolution
 
@@ -406,8 +425,15 @@ and the two halves land differently on the two mechanisms in this document:
 
 | | Durable enumerable artifact | Inference from behaviour |
 |---|---|---|
-| **Conduct gate (§10)** | **Creates none.** The predicate reads `Message(channel_id, sender_user_id)` rows that exist for routing regardless | Yes — the island learns who may ring whom, by answering |
+| **Conduct gate (§10)** | **Creates no NEW one.** The predicate reads `Message(channel_id, sender_user_id)` rows that exist for routing regardless. (Tempered sharpening: the island already holds routing pairs as DM membership — the claim is "mints no first-class enumerable graph", not "holds nothing") | Yes — the island learns who may ring whom, by answering |
 | **Friends edge (§1)** | **Creates one.** A signed, mutual, enumerable Principal→Principal table — precisely the artifact Nick named on 2026-08-25 | Yes, identically |
+
+**AND THE TEMPER FOUND THIS TABLE UNDER-COUNTS ITS OWN ARGUMENT.** A **signed withdrawal
+persists relationship HISTORY, not a snapshot** — so the edge mints a *tombstone graph*, and
+at 46 users the sensitive query is not *"who talks to whom"* (already inferable from DM
+membership) but **"who is missing, who withdrew."** No such table exists anywhere today. The
+revocability sold as this edge's advantage is precisely what creates the worst version of the
+artifact Nick objected to.
 
 **This is a cost on the friends edge that §10 never priced, and it cuts toward SUBSTITUTES.**
 The two mechanisms are equivalent on behavioural inference and are *not* equivalent on the
