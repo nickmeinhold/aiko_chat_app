@@ -717,6 +717,30 @@ unconditional rule cannot take the bad branch.** A conditional one is only as go
 liveness check selecting it, and that check reads state a hostile or throttled island
 controls.
 
+#### And the cost is REAL — measured blind, 2026-09-12
+
+**A report-and-end is PERCEPTIBLE.** Not silent, not sub-threshold: a brief flash and buzz.
+
+Run blind because the operator had by then been told to expect a flash, and an expectation is
+exactly what produces one. Two pushes 100s apart, assignment coin-tossed into a file and not
+printed, the operator asked to describe each before the reveal:
+
+| | operator, blind | device record | actual |
+|---|---|---|---|
+| push 1 | *brief flash / buzz then gone* | **no 60s expiry** — ended early | `reportend` |
+| push 2 | *full sustained ring* | **60s self-expiry** | `report` |
+
+**Two instruments that fail differently agreed** — a human with sensory access and no
+knowledge of the assignment, and a timestamp pattern in a container file. That is the
+corroboration the first reading of this experiment never had, and it is why the arm is being
+called rather than inferred.
+
+**So §7's fork resolves to its second branch, and it was the one this document hoped against:**
+*"every hangup buzzes the callee's handset for an instant."* Bounded, survivable, and now a
+**product** question — is a buzz-per-hangup acceptable, or does the end wake want a quieter
+transport — rather than an engineering unknown. It is no longer "not something to discover on
+a user's phone": it was discovered on a handset, deliberately, at the cost of one evening.
+
 #### The permissive-decoder obligation — an invariant that lives in unwritten code
 
 The island's ability to add `"e"` (the sealed envelope, §4c / design 20) later **without a
@@ -906,9 +930,11 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
   any successful report resets, so §7a's flaw-9 "ratio" is a **run length** and normal call
   traffic cannot accumulate one. **It opened two successors:** (a) the must-report status of
   `endedAt`-alone against a LIVE ring is **still unmeasured** — retraction was proven,
-  reporting was not — which is why §7c's rule stays unconditional; and (b) whether a
-  report-and-end is **perceptible** as a flash, which decides the arm's cost and needs an
-  isolated probe.
+  reporting was not — which is why §7c's rule stays unconditional; and (b) ~~whether a
+  report-and-end is perceptible~~ **ANSWERED: it is.** Measured blind the same night — a brief
+  flash and buzz, called correctly by an operator who did not know the assignment and confirmed
+  by the 60s-expiry signature. **So a buzz per hangup is the standing cost, and that is now a
+  product question rather than an engineering unknown.**
 - **The permissive-decoder obligation** — §7c. An invariant living in code nobody has written,
   which the peer repo's ability to evolve the payload depends on.
 - ~~**Who owns the ring ceiling**~~ — **CLOSED**: the island, Nick 2026-09-09 21:43, re-affirmed
