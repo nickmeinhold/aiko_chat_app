@@ -303,6 +303,34 @@ final class VoipSpike: NSObject {
     // silenced the console; using NSLog alone never reached the relay.
     NSLog("[VOIP-SPIKE] %@", message)
     os_log("[VOIP-SPIKE] %{public}@", log: spikeLog, type: .default, message)
+    VoipSpike.appendToFile(message)
+  }
+
+  /// A THIRD instrument, and the only one that needs neither root nor a console.
+  ///
+  /// `log collect --device-udid` requires root, and `devicectl … --console` holds
+  /// a usage assertion that keeps the app running-active-visible — which is what
+  /// VOIDED the 2026-09-09 run, because must-report governs waking a SUSPENDED
+  /// app. A file in the app's own container is readable afterwards with
+  /// `devicectl device copy from`, needs no password, and holds no assertion.
+  ///
+  /// APPEND-ONLY AND TIMESTAMPED, because the question this experiment turns on
+  /// is a SEQUENCE — "did the push counter restart at 1?" — and a snapshot
+  /// cannot answer it. A process that iOS killed leaves its lines behind here;
+  /// it cannot leave a callback.
+  static func appendToFile(_ message: String) {
+    let df = ISO8601DateFormatter()
+    let line = "\(df.string(from: Date())) pid=\(ProcessInfo.processInfo.processIdentifier) \(message)\n"
+    guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+    else { return }
+    let url = dir.appendingPathComponent("spike.log")
+    if let handle = try? FileHandle(forWritingTo: url) {
+      handle.seekToEndOfFile()
+      handle.write(Data(line.utf8))
+      try? handle.close()
+    } else {
+      try? Data(line.utf8).write(to: url)
+    }
   }
 }
 
