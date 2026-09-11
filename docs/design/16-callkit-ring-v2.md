@@ -221,7 +221,7 @@ only mechanism on the table that buys the first row of the table above, so it st
 flaw 9 measurement shows the report-and-end ratio is untenable** — a measurement, not a
 preference. Neither document should harden around it before that number exists.
 
-## §2 — The ring ceiling: design 12's Decision 1c inverts. SURFACED, NOT DECIDED.
+## §2 — The ring ceiling: design 12's Decision 1c inverts. **DECIDED — the island owns it.**
 
 Design 12 records:
 
@@ -235,20 +235,47 @@ enforcer. Today's derivation in `RingController._republish()` is the right *shap
 computed from the signed `signedAtMs`, never restarted, so no rebuild extends a ring — and the
 derivation is worth keeping wherever it ends up running.
 
-**The island tab's position (2026-09-09, cross-tab):** the island takes the ceiling back and
-enforces it with an end-push, on the reasoning that an enforcer which exists beats a contract
-line that reads well and does nothing. **The app tab agrees on the engineering.**
+**THE RULING. Nick, 2026-09-09 21:43 AEST (*"yep"*), re-affirmed 2026-09-11 08:41 (*"island"*):
+the island takes the ceiling and enforces it with a ring-lease expiry.** This reverses island
+design 12's Decision 1c. It is not a preference between two workable designs — the app
+*provably cannot* enforce it, per the paragraph above, so there was one candidate enforcer and
+the decision names it.
 
-**This document does not record that as settled, and the agreement is why.** Two Claude tabs
-concurring is not corroboration — a wrong answer wearing two signatures survives review better
-than either error alone, because the second signature reads as verification. This reverses a
-recorded decision in a peer repo's design of record. **It is Nick's call, and it is put to him
-with both positions rather than tie-broken by mutual agreement between the two parties who
-would be relieved of the work.** Routed as claude-tasks#3744 finding 1.
+**This section said "SURFACED, NOT DECIDED" for two days, and that cost a round.** The doc was
+authored 2026-09-09; the ruling landed at 21:43 the same day and never reached the page. On
+2026-09-11 the app tab read this section, believed the question open, and put it to Nick as a
+fresh decision — so he answered it twice. **A re-ruling that reads as fresh is how a settled
+decision quietly gets re-litigated.** The record was the tell and this repo did not hold it;
+the island tab did. The original framing is preserved below rather than deleted, because the
+reason it was framed that way is still correct and still binding on the next such call.
 
-Downstream of whichever way it goes: **`kCallRingDuration` acquires a second enforcer or moves
-outright.** If the island owns it, the Dart constant becomes advisory for the in-app path only
-and must be renamed to say so.
+> **The framing that produced the question, kept as the record.** The island tab's position
+> (2026-09-09, cross-tab) was that the island takes the ceiling back, on the reasoning that an
+> enforcer which exists beats a contract line that reads well and does nothing; the app tab
+> agreed on the engineering. **Two Claude tabs concurring is not corroboration** — a wrong
+> answer wearing two signatures survives review better than either error alone, because the
+> second signature reads as verification. It reversed a recorded decision in a peer repo's
+> design of record. So it was put to Nick with both positions rather than tie-broken by mutual
+> agreement between the two parties who would be relieved of the work. That was right, and the
+> answer came back the same evening. Routed as claude-tasks#3744 finding 1.
+
+### What the ruling has already cost downstream, and what it has not yet
+
+**DONE (`e1259f6`, on `main`):** `kCallRingDuration` → **`kInAppRingDuration`**. The constant is
+advisory for the in-app ring only; it never bounded the CallKit ring and now says so. The
+pinned two-clock invariant of §3a was **restated, not retired**, in the same commit — the
+2026-08-15 reasoning holds unchanged for the path the constant now names: an invitation still
+fresh enough to ADMIT must still have ring time left, or the app admits a call and immediately
+stops ringing it.
+
+**OPEN — the third clock, and it is not fixable in this repo.** The island's ring lease now
+bounds a CallKit ring this process cannot end, and **that value is not on the wire.** Nothing
+here can assert against it. A lease shorter than `kCallInviteFreshness` lets the island ring a
+handset for an invitation this app would refuse as stale, and the two halves then disagree
+about whether a call is happening — the exact conflation Nick named on 2026-08-15, reachable
+again one layer out. No test on either side alone catches it. It belongs in the cross-repo
+contract: either the lease crosses the wire, or both sides pin against a shared constant with a
+drift test. Filed as **claude-tasks#4233**.
 
 ---
 
@@ -289,7 +316,12 @@ the bound must change: under CallKit an invitation can be admitted for as long a
 ringing. A hangup garbage-collected at 20s while a 30s ring is audible is **a phone ringing for
 a corpse because we forgot the stop**.
 
-New bound: `kCallRingDuration + kPushDeliverySlack`.
+New bound: **the island's ring lease** + `kPushDeliverySlack`. Written against a local
+constant before §2 was decided; with the ceiling on the island the first term is **not a value
+this repo holds**, which makes this bound the second live
+instance of the third clock (§2, claude-tasks#4233) rather than an arithmetic fix. Until the
+lease crosses the wire the honest implementation is a bound the app cannot derive — so this is
+**open, and blocked on the cross-repo contract, not on a number**.
 
 > **`kPushDeliverySlack` still has no value and no derivation.** It is the honest name for a
 > number this design needs and has not earned: *how late can a stop arrive and still matter?*
@@ -297,9 +329,14 @@ New bound: `kCallRingDuration + kPushDeliverySlack`.
 > observed on 2026-08-31 between a caller pressing call and the tap arriving — which is a
 > calibration input for the ring *duration*, not for delivery slack. **Open.**
 
-### 3a. The pinned two-clock invariant must be replaced in the same commit
+### 3a. The pinned two-clock invariant must be replaced in the same commit — **DONE, `e1259f6`**
 
-`call_invite_test.dart:996` pins `kCallRingDuration > kCallInviteFreshness`, in a group named
+**Discharged as specified.** The rename landed with the invariant restated in the same commit,
+the 2026-08-15 reasoning shown to still hold for the path the constant now names, and the hole
+the rename opens (the third clock) written into the test file as a named absence rather than
+left unexamined. The requirement below is kept because it binds the next such move.
+
+`call_invite_test.dart:996` pinned `kCallRingDuration > kCallInviteFreshness`, in a group named
 *'the two clocks are different numbers'*, with Nick's 2026-08-15 reasoning in the comment
 above it. If the clocks collapse, both lines go red **correctly**.
 
@@ -556,7 +593,9 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
 - **`kPushDeliverySlack`** has no value and no derivation (§3).
 - **Key-set freshness at wake time** — §1c, three arms, recommendation stated not decided.
 - **Does `reportCall(with:endedAt:)` count as reported?** — §7, unmeasured, gates an arm.
-- **Who owns the ring ceiling** — §2, a cross-repo decision-of-record conflict, Nick's.
+- ~~**Who owns the ring ceiling**~~ — **CLOSED**: the island, Nick 2026-09-09 21:43, re-affirmed
+  2026-09-11 (§2). It opened a successor: **the island's ring lease is not on the wire**, so
+  neither the §3 retention bound nor any test here can be pinned against it — claude-tasks#4233.
 - **The ring/record cells** — §6a, product, routing recommended not asserted.
 - **The in-app ring path** — whether it is genuinely the same path as the push-woken one, or
   whether moving the ceiling amputates it. Carried from v1 and still unexamined.
