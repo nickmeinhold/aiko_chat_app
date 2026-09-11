@@ -1,0 +1,35 @@
+## CarnotCodeCarver's Design Strike
+
+**Verdict:** DISSOLVE
+
+**Summary:** no real engine matches the Carnot cycle; a reviewer's job is to say how far short we are. Design 19 falls short because its remaining justification for a durable friends edge is doing negative work: the shipped conduct gate already closes 100% of the wake harm, while the friends edge creates exactly the durable, enumerable Principal-to-Principal social graph the owner previously rejected. Withdrawability is real, but it does not carry the weight of adding a first-class island-held social graph for the ring use case.
+
+**Fatal flaws:**
+- The design keeps the wrong object in frame. The immediate safety problem is cold-start wake from a stranger. The shipped conduct gate already gates 100% of that wake path: `should_wake` returns `CALL_INVITE` or `None`, ordinary messages never wake, and the recipient-posted predicate blocks first-contact ringing. The friends edge solves a broader social-graph problem that is not required to ship the ring safely.
+- Withdrawability is over-priced. The conduct gate is unrevocable, but the unrevocable grant only says: someone you once conversed with may wake you. That is a real weakness, but the design already has the smaller corrective primitive named: per-conversation mute / ring policy. Revocability should be added at the interruption surface, not by minting a global mutual friendship edge.
+- §11c is sound and undercuts the design. The conduct gate creates no new durable artifact; it reads `Message` rows already required for routing. The friends edge creates a signed, mutual, enumerable Principal-to-Principal table. On behavioural inference both mechanisms leak similarly; on the owner’s explicit 2026-08-25 objection, the friends edge is strictly worse.
+- The design conflates consent-to-converse, consent-to-ring, and social friendship. Dijkstra would complain that the abstraction is already lying: friendship grants reach, gates DM creation, implies ring permission, and becomes an identity-graph primitive. Those are separable permissions with different revocation and migration semantics.
+- The proposed §3a resolution preserves unforgeability but spends un-observability, which the owner specifically named as the protected property. Signed acceptances prove the island cannot forge the pair; they do not answer the objection that the island must not hold the pair. That conflict must be surfaced to the owner, not laundered into an engineering compromise.
+- §11a’s conclusion is too eager. The research headline’s device-decider escape is closed for this project by later measurement: missing notification-filtering entitlement, Apple-granted only, rejected even for a stronger E2EE applicant. So the available options are not ‘server edge versus scale-free device privacy’; they are server-side predicate choices. Once in that frame, the least-entropy design is the shipped conduct gate plus narrower ring controls.
+- The design under-counts blast radius. A first-class `is-friend-of` edge will infect ADR semantics, migrations, UI, friend requests, abuse/rate-limit surfaces, cross-island assumptions, agent policy, and future discovery. The conduct gate has almost none of that blast radius. As Feynman’s lesson goes, the first principle is not to fool yourself; this design fools itself by calling that expansion a ring gate.
+- The ‘Principal, not Participant’ argument is plausible for agents but no longer decisive, because the established shipped predicate filters the recipient, not the sender. Agents are not excluded. The removed weakness was not cosmetic; it deletes one of the few reasons the edge had to precede rather than be substituted by the conduct gate.
+
+**Charge A — withdrawability:** Withdrawability cannot carry PRECEDES. It identifies a missing user control, but the reversible mechanism should be per-conversation / per-principal ring permission or mute layered on the wake decision, not a durable mutual friendship primitive. In thermodynamic terms, the design spends a lot of free energy to reverse the wrong state variable. A reply-history predicate is irreversible; that does not imply the replacement must be a global social graph.
+
+**Charge B — durable artifact:** §11c is the killing argument for the ring use case. It correctly separates behavioural inference from a durable enumerable artifact. The conduct gate leaks by operation but adds no new table; the friends edge creates the exact queryable social graph previously rejected. Something could still justify that artifact as a product primitive, but not the cold-start ring problem. Hamming’s question applies: what are the important problems? The important problem here is interruption consent, not cataloguing relationships.
+
+**Charge C — §6/§7:** §6 should be resolved as recommended: show identity, neuter payload. A first-contact request must not be a DM, must not wake, and should expose enough identity to make a consent decision while defanging harassment vectors: no linkification, blurred or constrained media, structured reason/knock, persistent rate limit. §7 should also be resolved as yes if an edge ships: existing DM partners must be grandfathered, because silently severing live conversations is worse and because the conduct gate already accepts consent-by-conduct. But grandfathering further proves this is not pure explicit friendship; it is derived reach policy wearing friendship’s coat.
+
+**What holds:**
+- The design is right that an app-local allowlist cannot directly gate an island-side push decision under the current PushKit path.
+- The design is right that signed acceptances preserve unforgeability: the island can store and verify consent records it cannot mint.
+- The design is right that friend requests must be outside DM creation and must never wake or ring.
+- The design is right that `vouches-for` must not be softened into friendship; bonded accountability and casual reach are different primitives.
+- The design is right to surface the 2026-08-25 versus 2026-09-11 conflict rather than pretending there is no contradiction.
+
+**Fold back:**
+- Treat the shipped conduct gate as SUBSTITUTE for the friends edge for the ring launch.
+- Add the smaller missing reversible control: per-conversation or per-principal ring mute/allow policy, with no refused-ring stored row and no pairwise abuse ledger that violates `project_no_refused_ring_record`.
+- If product still wants friendship, recast it as a separate social primitive with its own owner-confirmed acceptance of the durable graph cost, not as a prerequisite for safe ringing.
+- Keep first-contact request design only if a friends/contact product proceeds: identity shown, payload neutered, no DM, no wake, durable rate limit.
+- Bring §3 back to the owner explicitly: signed acceptances solve forgery, not observability; they do not settle the prohibition on the island holding the pair. The second law says entropy increases; this design increases stored social entropy and cannot pretend it is reversible.

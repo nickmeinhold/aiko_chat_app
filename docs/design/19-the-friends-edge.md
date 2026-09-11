@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | DRAFT, un-tempered. Nothing here has survived a cross-family adversary. |
+| **Status** | **TEMPERED 2026-09-11 — verdict DISSOLVE** (Kelvin + Carnot, decisive; Tesla dark). See [`19-the-friends-edge-TEMPER.md`](19-the-friends-edge-TEMPER.md). **The ring question is answered: the shipped conduct gate SUBSTITUTES.** This document is kept as the record that earned the verdict, not as a design to build from. |
 | **Owner** | Claude (app tab), 2026-09-11 |
 | **Rulings it implements** | Nick 2026-08-23 (friends is a first-class primitive); Nick 2026-09-11 08:41 (build the gate before the ring ships) |
 | **Homing** | The ADR amendment belongs in `geekscape/aiko_chat` per the 2026-08-23 homing ruling. This document is the app tab's draft of it, not the ADR. |
@@ -247,9 +247,26 @@ this ADR concludes.
 
 ### Three weaknesses, and the first is why it cannot replace the edge
 
-1. **Consent is permanent and unrevocable.** One reply, ever, and that principal may ring you
-   forever. There is no un-reply. *"I answered them once in 2024"* is not consent today, and
-   **this is precisely what the primitive gives you that the proxy cannot.**
+1. ~~**Consent is permanent and unrevocable.** One reply, ever, and that principal may ring
+   you forever. There is no un-reply.~~ — **STRUCK 2026-09-11 BY THE TEMPER, AND THIS ONE
+   DECIDES THE DOCUMENT.**
+
+   **There is an un-reply: `block`.** It is shipped and enforced *twice* on the wake path,
+   read in island source (`domain/push_service.py`, island `main`): `create_outbound` refuses
+   a DM send between blocked parties (`BlockedDmSend`) — *"a blocked peer cannot wake you,
+   because they cannot get the message written"* — and the fanout independently unions the
+   block set (`excluded = set(exclude_user_ids) | blocked`, *"neither is trusted alone"*).
+
+   Raised independently by two families, neither of whom was handed it, then verified against
+   source rather than argued. **Withdrawability was carrying *precedes* almost alone after
+   weakness 3 fell; it cannot carry it, because it is not a property this edge would add.**
+
+   **The residue, stated honestly, because it is all that is left:** `block` is a *total
+   severance*, not a ring-only withdrawal. The true gap is **"revocation is all-or-nothing —
+   there is no way to stop someone ringing you while still exchanging messages"**, which is
+   already `#3343` (per-conversation ring mute), which this section itself calls *composes
+   rather than competes*. **A coarse-revocation gap justifies a mute, not a first-class edge
+   in the identity graph.**
 2. **It gates the WAKE, not the INVITE.** A connected recipient still receives the invite over
    WSS. It stops the *cold-start ring* — the actual harm — and must be described that way, or
    it will be read as *"this person cannot call you"* and under-deliver.
