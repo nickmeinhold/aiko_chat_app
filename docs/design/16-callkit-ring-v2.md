@@ -659,6 +659,64 @@ install → launch → background → **let it suspend**, no console attach, log
 fact via `log collect`. **Whatever this section wants to be true, a run that cannot produce
 the failure cannot clear it.**
 
+#### MEASURED 2026-09-12 — the arm is clear, and success creates a new hazard
+
+**iPhone 14 Pro / iOS 26.6.1, sandbox APNs. claude-tasks#4278.** Harness, sender and raw
+record all committed this time (`spike/voip-must-report-endlive`, `1f3b3c1`,
+`tool/probes/voip-must-report-2026-09-12.log`) — the two prior runs used a sender that lived
+only in a shell history, which made a committed harness read as reproducible when it was not.
+
+**`reportNewIncomingCall` followed immediately by `reportCall(endedAt:)` COUNTS AS
+REPORTED.** Seven consecutive, no plain report between, pid unchanged. So `k == "call_end"`
+is safe to route over VoIP, and the momentary-ring cost is the one this section priced.
+
+**Must-report is a CONSECUTIVE-violation counter that any successful report RESETS.** Four
+consecutive `silent` pushes terminate; **five interleaved with reports never do.** #4178's
+"three unreported pushes" was the tolerance window read as a threshold on *frequency* — it is
+a threshold on **run length**. §7a prices flaw 9 as a report-and-end *ratio* and §1e owns that
+ratio as an unmeasured assumption; **it is not a ratio.** Normal call traffic cannot
+accumulate, because every end wake is preceded by an invite wake that reports successfully.
+
+> **The 4 is soft; the reset is hard.** #4178 saw termination on the *second* push, tonight on
+> the fourth — the kill counter is device-local and carries history
+> (`CSDVoIPApplicationKillCounts`). Treat the number as "small, varies with device history",
+> never as a budget to spend. What survives is the reset.
+
+#### The optimisation this measurement earns, and why the rule above stays UNCONDITIONAL
+
+**Written down because the next reader will otherwise delete the rule as redundant.** Raised
+by the island tab within the hour, and it is the mirror of the finding itself.
+
+The same run established, by a separate observable, that **`reportCall(with:endedAt:)` alone
+RETRACTS a live ring** — proven by a *missing* event: an unanswered CallKit ring self-expires
+at ~60s, ten of twelve `report` pushes fired `CXEndCallAction` exactly 60s later, and the only
+two that did not are the two rings the `endlive` pushes ended.
+
+That makes `endedAt`-alone look like a strict improvement on the live-ring branch: no report,
+no buzz, ring gone. **Do not take it**, and the reason must be stated at its true strength:
+
+> **The must-report status of `endedAt`-alone against a LIVE ring is UNMEASURED.** #4178
+> proved it fails for an id iOS has never seen — the *stale* case. Arm (a) ran in an
+> interleaved shape, which the counter finding above proves cannot punish anything, so it
+> could observe *retraction* and could not observe *reporting*. **Two propositions about one
+> call; the run proved one.** Reading #4178's stale result onto the live case is an inference,
+> not a measurement, and the whole rule would then rest on it.
+
+**And the branch is selected by input the client does not control.** A **lone end** — an end
+wake whose invite never arrived (throttled, expired, device off) — has no live ring, so an
+`endedAt`-alone optimisation degenerates into exactly the `endonly` shape #4178 measured as a
+violation. Four consecutive lone ends is four consecutive violations with no good report
+between them: **the one production path to the cliff the counter finding leaves open.**
+
+The island tab has taken the matching half — the per-recipient wake budget (6/min, one bucket,
+two wakes per call) throttles *invites* while *ends* still go out, which is the island
+**manufacturing** lone ends. It moves from a filed nuisance to a safety item on #4265.
+
+**So the rule is unconditional not because report-and-end is cheapest, but because an
+unconditional rule cannot take the bad branch.** A conditional one is only as good as the
+liveness check selecting it, and that check reads state a hostile or throttled island
+controls.
+
 #### The permissive-decoder obligation — an invariant that lives in unwritten code
 
 The island's ability to add `"e"` (the sealed envelope, §4c / design 20) later **without a
@@ -842,9 +900,15 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
 
 - **`kPushDeliverySlack`** has no value and no derivation (§3).
 - **Key-set freshness at wake time** — §1c, three arms, recommendation stated not decided.
-- **Does `reportCall(with:endedAt:)` count as reported?** — §7, unmeasured, and it now
-  **gates the END WAKE itself** (§7c): if it does not count, every hangup buzzes the callee's
-  handset for an instant. One handset, decisive — claude-tasks#4178.
+- ~~**Does `reportCall(with:endedAt:)` count as reported?**~~ — **MEASURED 2026-09-12**
+  (claude-tasks#4278, §7c). Report-then-immediately-end **counts**; the end wake is safe over
+  VoIP at the cost of a momentary ring. Must-report is a *consecutive*-violation counter that
+  any successful report resets, so §7a's flaw-9 "ratio" is a **run length** and normal call
+  traffic cannot accumulate one. **It opened two successors:** (a) the must-report status of
+  `endedAt`-alone against a LIVE ring is **still unmeasured** — retraction was proven,
+  reporting was not — which is why §7c's rule stays unconditional; and (b) whether a
+  report-and-end is **perceptible** as a flash, which decides the arm's cost and needs an
+  isolated probe.
 - **The permissive-decoder obligation** — §7c. An invariant living in code nobody has written,
   which the peer repo's ability to evolve the payload depends on.
 - ~~**Who owns the ring ceiling**~~ — **CLOSED**: the island, Nick 2026-09-09 21:43, re-affirmed
