@@ -7,6 +7,13 @@ v1 remains in the repo as the record that earned this one; it is not the design 
 **Tier:** trust boundary. `admitRing` is the app's single trust decision and this design moves
 part of it into Swift. Cage-match by law before any of it merges.
 
+**AMENDED 2026-09-11 (v3) by [`20-the-sealed-ring-envelope.md`](20-the-sealed-ring-envelope.md).**
+§0's flaw-2 bullet, §1's admission input and §4's UUID contract were all written against a
+payload that does not exist. Design 20 supplies the missing input — a **sealed envelope** — and
+the island tab has accepted it **in principle, with conditions** (design 20 §8). It is **not
+built and not blessed**: §4a's key material has not been seen by a cryptographer, and nothing
+below should be implemented ahead of that.
+
 **Peer record:** `../aiko-chat-island/docs/design/12-native-call-ui-callkit-connectionservice.md`.
 Where this document disagrees with design 12 the disagreement is **marked and surfaced**, never
 folded in silently — see §2, which reverses one of design 12's recorded assignments and does not
@@ -27,8 +34,22 @@ The flaw-5 decision dissolved v1's headline crisis. Recorded here so nobody re-d
   costume of a fact about the device. Swift is alive in
   `pushRegistry(_:didReceiveIncomingPushWith:)`; Ed25519 verification is CryptoKit and takes
   microseconds; the consented key set is small, device-local and known before the push lands.
-- **Flaw 2 is not a contradiction.** Proof needs nothing from the payload, so design 12
-  Decision 6's opacity survives intact.
+- **Flaw 2 is not a contradiction** — ~~Proof needs nothing from the payload, so design 12
+  Decision 6's opacity survives intact.~~ **STRUCK 2026-09-11. The CONCLUSION holds and the
+  REASON was false**, which is the worst shape for a sentence to survive in.
+
+  **Proof needs EVERYTHING from the payload.** The island's `_render` emits
+  `{"aps": {...}, "c": channel_id}` and its own docstring says `"c"` is the only custom field,
+  so Swift had no signed bytes to verify and this document's whole admission architecture had
+  no input. Read in island source 2026-09-11; the island tab confirmed it the same day.
+
+  **Decision 6's opacity does survive — by encryption, not by omission.** Design 20's arm C
+  puts the signed invite in the payload **sealed to the callee**, so Apple sees ciphertext and
+  *"nothing about who-calls-whom on Apple's wire"* stays true as Decision 6 words it.
+
+  **Why this survived a 4/4 temper:** the sentence was TRUE about its object (opacity survives)
+  and false about its mechanism, and a design temper interrogates the claims it is handed. The
+  claim *"there are signed bytes in the payload"* was never stated, so it was never struck.
 - **The privacy cost v1 priced against arm (iii) does not exist.**
   `lib/features/call/data/ring_allowlist_store.dart` is device-local by design and publishes
   nothing. Nothing about ring consent reaches the island.
@@ -55,14 +76,23 @@ recast changes.
 
 ```
 VoIP push ──► pushRegistry(_:didReceiveIncomingPushWith:)   [Swift, always alive]
-                 │
-                 ├─ read App Group state  (consented keys · ends · mute · block)
-                 ├─ verify Ed25519 over the signed bytes         (CryptoKit)
-                 ├─ reportNewIncomingCall(with:update:)          (MANDATORY, always)
-                 └─ on failure: reportCall(with:endedAt:reason:) (immediately)
-                                                        │
-Dart, when it next runs ──► maintains the App Group cache ◄──────┘
+   │             │
+   │             ├─ OPEN the sealed envelope  (device key)   ◄── design 20 arm C
+   │             ├─ read App Group state  (consented keys · ends · mute · block)
+   │             ├─ verify Ed25519 over the signed bytes         (CryptoKit)
+   │             ├─ reportNewIncomingCall(with:update:)          (MANDATORY, always)
+   │             └─ on failure: reportCall(with:endedAt:reason:) (immediately)
+   │                                                     │
+   └─ carries: "c" (channel) + a SEALED ENVELOPE         │
+      holding the signed invite and the call id          │
+                                                          │
+Dart, when it next runs ──► maintains the App Group cache ◄┘
 ```
+
+**The first line is new and it is the whole amendment.** Until design 20 this diagram's
+verify step had no input: the payload carried a channel id and nothing else. *Where the
+signed bytes come from* was never written down in either repo, which is how it went unnoticed
+through a four-family temper — see §0's struck flaw-2 bullet.
 
 **The division of labour is the design.** Swift owns *this ring, right now*, from bytes plus
 cached state, with no isolate. Dart owns *what the cache contains*, on its own schedule. The
@@ -118,7 +148,7 @@ rejected explicitly rather than silently — it trades the one property this des
 
 ---
 
-## §1d — The trilemma — **STRUCK 2026-09-09, REVISION OWED**
+## §1d — The trilemma — **STRUCK 2026-09-09; REVISION DELIVERED 2026-09-11, see §1e**
 
 > **DO NOT BUILD OR CITE THIS SECTION.** The `/design-temper` on island design 12a
 > (4/4 RECAST) struck the dissolution below, and the strike holds. Tesla: *"The trilemma did
@@ -153,6 +183,52 @@ rejected explicitly rather than silently — it trades the one property this des
 > living has spoken."* Its unlinkability is not low-confidence, it is **spent**: the island
 > stores an attributable invite on a named channel and holds the device token, and on a
 > self-hosted island the anonymity set is a household.
+
+## §1e — The owed revision, and two facts delivered it rather than an argument
+
+**This discharges claude-tasks#4181.** §1d's strike ended *"refusal cannot be routed through
+the device… the revision is owed and is not attempted tonight."* The revision was not written
+that night because the missing piece was not an argument. **Two things shipped since, and
+between them the question dissolves.**
+
+### Fact 1 — the conduct gate is DEPLOYED, so the island now produces silence
+
+**2026-09-11 ~14:41 AEST, v0.11.1, both islands.** Verified by this tab rather than taken on
+report: `/health` reads `ref=v0.11.1` / `git_sha=4539cfe9` on `chat.enspyr.co` and
+`chat.imagineering.cc`, and `git merge-base --is-ancestor b7dafac 4539cfe9` is **true** — the
+gate is in the *running* build, not merely on `main`.
+
+§1d's table said the `silent` outcome is producible by **the island only**. **It now is.** A
+stranger's invite produces no push at all, so there is no device-side refusal to route.
+
+### Fact 2 — arm C changes WHAT the device is refusing
+
+Design 20: with the gate live, Swift's verification no longer answers *"may this stranger ring
+me"* — the island answered it upstream. It answers **"is this island lying to me?"**
+
+**That is what retires the strike's objection.** §1d was struck because routing *refused
+callers* through report-and-immediately-end is the iOS 13 abuse pattern the must-report rule
+exists to kill — doing the prohibited thing **systematically**. Under the deployed gate the
+device-side end fires only on a **forged or hostile-island push**, which is a malformed-input
+failure mode and not a population being routed through it.
+
+**Which is exactly the distinction §0 drew and §1d's strike affirmed:** *"The momentary cell
+exists; it is a malformed-push failure mode, not a destination a design may route refused
+callers into."* The strike was right, and the DEPLOYMENT is what moved this design off that
+destination — not a re-argument.
+
+### What this does NOT settle, stated plainly
+
+- **The report-and-end ratio is now an ASSUMPTION WITH AN OWNER, not a measurement.** "Forged
+  pushes are rare" is load-bearing for flaw 9 and nobody has a number. The island tab named
+  this as the thing someone has to own; **this document owns it and does not pretend to have
+  measured it.** If the ratio is ever non-trivial in the field, flaw 9 returns unchanged.
+- **A + B + C′ survives intact.** Arm C adds confidentiality to bytes that had to travel
+  anyway; it changes nothing about who can produce which outcome.
+- **The blind-signed capability arm stays available and stays unadopted**, on its original
+  three objections — the revocation asymmetry is still disqualifying in that shape.
+
+---
 
 ## §1d (struck) — the original argument, kept as the record
 
@@ -359,6 +435,12 @@ the signed body. Two failures follow if the map is left implicit:
 - **Payload reuse of a live UUID** ⇒ identity-as-mutable-key: call N stops call N−1, or two
   invites collapse into one system call.
 
+> **AMENDED 2026-09-11 (v3).** The contract below was written against a payload carrying a
+> cleartext id. Under design 20 arm C **the call id ships INSIDE the sealed envelope**, and
+> that change is strictly in this section's favour — see §4c. Points 1 and 3 stand unchanged;
+> point 2's corrected rule is *superseded, not wrong*, and is kept because the reasoning that
+> produced it is what makes §4c safe.
+
 **The client contract, stated:**
 
 1. The caller mints the call id **client-side** as a ULID in the signed invite body
@@ -379,6 +461,34 @@ the signed body. Two failures follow if the map is left implicit:
    written down once, here.
 
 **Cost, stated:** invite wire v2, with a v1 read path forever.
+
+### 4c. Under arm C the id is INSIDE the envelope, and the attack closes
+
+Point 2 above exists because an attacker could copy a **live** UUID into their own signed
+invite and have the island carry it faithfully — the island neither mints nor checks it. That
+forced the awkward rule *always report the payload id; admit only if the signed ULID equals
+it; end on mismatch*.
+
+**Sealing the envelope removes the attacker's write access to the id.** The id travels inside
+ciphertext only the callee can open, alongside the signature that authenticates it, so
+`payload id` and `signed id` stop being two values that can disagree — **there is one id, and
+it is already proven by the time Swift can read it.**
+
+**Three consequences, all favourable:**
+
+- The mismatch arm becomes **unreachable rather than merely handled**, which retires the
+  identity-as-mutable-key hazard this section was written to survive.
+- **The must-report obligation is unchanged.** A push that fails to open, or whose signature
+  fails, still gets reported and immediately ended — §0's *"no sustained ring before proof"*
+  is exactly as strong and no stronger.
+- **A UUID must still be reported when the envelope cannot be opened.** With no readable id
+  there is nothing to report but a locally-minted one, and it will match nothing. That is
+  correct: the call it names does not exist, and the end that follows is the point.
+
+**OPEN, and it belongs to the island tab's condition 1** (design 20 §8.1): the island asserts
+the envelope's **version byte and length bound** without reading it. A malformed envelope must
+therefore be distinguishable **island-side** from a well-formed one it cannot read — otherwise
+the failure is client-only and presents as *"calls silently don't ring"*.
 
 ---
 
@@ -581,8 +691,17 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
    half. Worth batching with the two-device NAT measurement PR #169 already owes, since both
    need two real handsets on real networks.
 3. **§2 decided by Nick.** The ceiling's owner. Everything about enforcement branches on it.
+3b. **The island's end-sentinel wake.** **THE ACTUAL BLOCKER, and it is arm-independent** —
+   without it a caller hangs up and the callee's handset rings on. Island design 12 calls it
+   *"the real island blocker"* itself; the island tab has taken it as its next piece and is
+   **not** waiting on the payload question. **Nothing below should be built before it.**
+3c. **The sealed envelope contract** (design 20) — the payload shape, the version byte and
+   length bound the island asserts without reading (§8.1), and the size budget written into
+   the contract rather than discovered at the 5KB ceiling (§8.2). **Gated on a cryptographer
+   seeing design 20 §4a**; neither tab may bless the key material.
 4. **§4 the UUID map**, then **§1 the Swift admission path** — one change, since the delegate
-   cannot report without the map.
+   cannot report without the map. **Now downstream of 3c**: the map's id lives inside the
+   envelope (§4c), so the envelope contract precedes it.
 5. **§5 token kinds**, sequenced after claude-tasks#3723.
 6. **§6a filled** by whoever Nick routes it to; **§6 tap handling** built with it.
 
@@ -596,6 +715,10 @@ report-and-end must be rare, which means the verify set must be *right*, not mer
 - ~~**Who owns the ring ceiling**~~ — **CLOSED**: the island, Nick 2026-09-09 21:43, re-affirmed
   2026-09-11 (§2). It opened a successor: **the island's ring lease is not on the wire**, so
   neither the §3 retention bound nor any test here can be pinned against it — claude-tasks#4233.
+- **What does Swift verify, and where do the bytes come from?** — **ANSWERED IN PRINCIPLE**
+  (design 20 arm C; island tab accepting, with three conditions, design 20 §8), **OPEN IN
+  FACT** until a cryptographer has seen design 20 §4a. claude-tasks#4254.
+- **The forged-push ratio** — §1e. An assumption this document now owns, not a measurement.
 - **The ring/record cells** — §6a, product, routing recommended not asserted.
 - **The in-app ring path** — whether it is genuinely the same path as the push-woken one, or
   whether moving the ceiling amputates it. Carried from v1 and still unexamined.
@@ -607,6 +730,15 @@ Claude (app tab), 2026-09-09. Grounded by reading, this session: `call_invite.da
 `ring_overlay.dart`, `AppDelegate.swift`, `feature_flags.dart`, design 16 v1 + its temper
 end-to-end, island design 12's headings, and claude-tasks#3609/#3744/#3745/#3781/#3782
 end-to-end including comments.
+
+**AMENDED 2026-09-11 (v3).** §0's flaw-2 bullet struck, §1's admission input defined, §4c
+added, §1e written (discharging claude-tasks#4181), §9 resequenced, open questions updated.
+**The inherited-claims caveat below is what this amendment is about:** the v2 statement that
+`_payload` was "not read against island source by this tab" was accurate, and the section it
+sat under — §0's *"proof needs nothing from the payload"* — was built on exactly that unread
+source. **The caveat named the risk correctly and nobody followed the pointer for two days.**
+Island internals ARE now read against source for the specific claims in §0, §1e and §4c:
+`_render`, `should_wake`, `CALL_INVITE_BODY`, and the block enforcement on the wake path.
 
 **Claims inherited rather than verified, marked as such:** everything about island internals is
 design 12's or the island tab's and is attributed at each point — `create_outbound` /
