@@ -113,7 +113,7 @@ class RingAllowlistStore {
   /// store; the test covering it says plainly that it cannot go red today.
   Future<void> _writes = Future<void>.value();
 
-  Future<bool> _serialize(Future<bool> Function() mutate) {
+  Future<ConsentChange> _serialize(Future<ConsentChange> Function() mutate) {
     final result = _writes.then((_) => mutate());
     // The chain must not break on an error, or every later mutation is dropped.
     _writes = result.then((_) {}, onError: (_) {});
@@ -183,18 +183,29 @@ class RingAllowlistStore {
   /// alternate-but-valid textual form would be written into a register the ring
   /// path never consults, and `revoke` would only remove the exact text. Decode
   /// then re-encode, so what is stored is byte-identical to what is matched.
-  Future<bool> allow(String channelId, String multikey) async {
-    if (_userId == null) return false;
+  Future<ConsentChange> allow(String channelId, String multikey) async {
+    if (_userId == null) return ConsentChange.noSubject;
     final String canonical;
     try {
       canonical = encodeMultikey(decodeMultikey(multikey));
     } on OriginError {
-      return false;
+      return ConsentChange.malformedKey;
     }
-    return _serialize(() {
+    return _serialize(() async {
       final all = {...readAll()};
+      // ALREADY GRANTED IS NOT A GRANT. The old code wrote the identical bytes
+      // back and returned the write's success, so re-consenting to a key that
+      // was already consented reported the same value as the first grant ever
+      // made. Checked INSIDE the serialised section, never before it: the
+      // decision and the write must see the same snapshot, or a concurrent
+      // grant lands between them (the race `_serialize` exists to remove).
+      if (all[channelId]?.contains(canonical) ?? false) {
+        return ConsentChange.unchanged;
+      }
       all[channelId] = {...?all[channelId], canonical};
-      return _write(all);
+      return await _write(all)
+          ? ConsentChange.changed
+          : ConsentChange.notPersisted;
     });
   }
 
@@ -207,8 +218,8 @@ class RingAllowlistStore {
   /// is the direct consequence of consent being per-conversation: a covenant made
   /// four times must be unmade four times, and pretending otherwise would make
   /// "revoke" mean something different from "allow".
-  Future<bool> revoke(String channelId, String multikey) async {
-    if (_userId == null) return false;
+  Future<ConsentChange> revoke(String channelId, String multikey) async {
+    if (_userId == null) return ConsentChange.noSubject;
     String canonical = multikey;
     try {
       canonical = encodeMultikey(decodeMultikey(multikey));
@@ -217,8 +228,15 @@ class RingAllowlistStore {
       // the literal anyway rather than refusing, so a store corrupted by hand can
       // still be cleaned up through the front door.
     }
-    return _serialize(() {
+    return _serialize(() async {
       final all = {...readAll()};
+      // NOTHING TO WITHDRAW IS NOT A WITHDRAWAL (claude-tasks#3518). The old
+      // code returned the preferences write's result, so revoking a key that was
+      // never granted — or a room that never existed — reported success. A
+      // confirmation toast on that value is a success message for a no-op.
+      if (!(all[channelId]?.contains(canonical) ?? false)) {
+        return ConsentChange.unchanged;
+      }
       final remaining = {...?all[channelId]}..remove(canonical);
       // PRUNE THE EMPTY ROOM. A channel key mapped to an empty list is a record
       // of a covenant that no longer exists, and it would keep the whole map
@@ -230,7 +248,9 @@ class RingAllowlistStore {
       } else {
         all[channelId] = remaining;
       }
-      return _write(all);
+      return await _write(all)
+          ? ConsentChange.changed
+          : ConsentChange.notPersisted;
     });
   }
 

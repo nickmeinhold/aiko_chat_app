@@ -62,7 +62,7 @@ void main() {
         await c
             .read(ringConsentByChannelProvider.notifier)
             .allow(chan, resident),
-        isTrue,
+        ConsentChange.changed,
       );
       // Read the PROVIDER, not the store — this is the value `admitRing` is given.
       expect(
@@ -86,7 +86,7 @@ void main() {
         await c
             .read(ringConsentByChannelProvider.notifier)
             .revoke(chan, resident),
-        isTrue,
+        ConsentChange.changed,
       );
       expect(
         c.read(ringConsentByChannelProvider.notifier).consentIn(chan).keys,
@@ -149,7 +149,7 @@ void main() {
       await c
           .read(ringConsentByChannelProvider.notifier)
           .allow(chan, 'not-a-key'),
-      isFalse,
+      ConsentChange.malformedKey,
     );
     expect(
       c.read(ringConsentByChannelProvider.notifier).consentIn(chan).keys,
@@ -170,7 +170,7 @@ void main() {
         await c
             .read(ringConsentByChannelProvider.notifier)
             .allow(chan, resident),
-        isFalse,
+        ConsentChange.noSubject,
       );
     },
   );
