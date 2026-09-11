@@ -3,6 +3,11 @@ import UIKit
 import PushKit
 import UserNotifications
 
+// SPIKE ONLY — see VoipSpike at the foot of this file. Branch:
+// spike/voip-must-report-endlive. Revert with `git branch -D`.
+import CallKit
+import os
+
 /// The APNs device token, taken from Apple DIRECTLY.
 ///
 /// Not via FlutterFire, and the reason is not purity. On iOS Apple is already a
@@ -446,6 +451,9 @@ extension PushKitTokenChannel: FlutterStreamHandler {
     // delivered to nobody. `didReceive` fires after the delegate is set, and on
     // a tap-launch iOS calls it once the app finishes launching.
     UNUserNotificationCenter.current().delegate = self
+    // SPIKE ONLY. This is the line that ARMS VoIP delivery on this build —
+    // the one thing `PushKitTokenChannel` deliberately has no method for.
+    VoipSpike.shared.start()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -525,5 +533,261 @@ extension AppDelegate {
       @escaping (UNNotificationPresentationOptions) -> Void
   ) {
     completionHandler([])
+  }
+}
+
+// ============================================================================
+// SPIKE ONLY — everything below this line is throwaway.
+// Branch: spike/voip-must-report-endlive
+// ============================================================================
+
+/// **SPIKE — NOT PRODUCT CODE. This exists to answer TWO questions with a
+/// device instead of an argument** (claude-tasks#4278, follow-up to #4178).
+///
+/// #4178 established, at exactly its measured scope:
+///
+/// 1. `reportCall(with:endedAt:)` **alone, for a UUID iOS has never seen**,
+///    does not satisfy must-report — terminated identically to reporting
+///    nothing. That is the **stale** case.
+/// 2. **Three unreported pushes** → per-device VoIP delivery stops, while APNs
+///    keeps answering `HTTP/2 200`.
+///
+/// Claim 2 is about **unreported** pushes. Report-and-end is a *reported* push
+/// and no arm of #4178 touched it. Both arms below are about reported pushes.
+///
+/// - `mode: "report"` — **POSITIVE CONTROL**, and it doubles as arm (a)'s
+///   setup: a normal `reportNewIncomingCall` that MUST produce a visible ring,
+///   whose UUID is persisted for `endlive` to end. Until this rings, a null
+///   reading from any other arm is a fact about the harness, not about iOS.
+/// - `mode: "endlive"` — **ARM (a).** End the call `report` just started, while
+///   CallKit is still ringing it. This is what the client code would actually
+///   do on a `k == "call_end"` wake. **If ending a live ring satisfies
+///   must-report, the end wake is silent in exactly the case it exists for**
+///   and costs a buzz only on a stale arrival.
+/// - `mode: "reportend"` — **ARM (b).** `reportNewIncomingCall` then
+///   immediately `reportCall(endedAt:)` for the same UUID. Run 4+ consecutively:
+///   the interesting threshold is the escalation, not the single push. This is
+///   the floor, and it decides buzz-vs-blackout.
+/// - `mode: "silent"` — **NEGATIVE CONTROL.** Report nothing at all. This arm
+///   MUST be punished; it is the undisputed violation. If iOS tolerates even
+///   this, the instrument is not measuring must-report on this OS build and
+///   **no conclusion may be drawn from any other arm.** Pre-registered stopping
+///   rule, inherited from #4178.
+///
+/// **The arms are chosen by the PAYLOAD, not by a build flag**, so one install
+/// runs the control and the experiment and the two cannot drift apart.
+///
+/// THE OBSERVABLE IS A SEQUENCE, NOT A CALLBACK. "iOS killed the app" has no
+/// delegate method. It shows up as `pid=` changing and the `push #` counter
+/// restarting at 1 — which is why every line below is appended to a timestamped
+/// file in the app's own container rather than logged to a console that cannot
+/// stay attached across a VoIP relaunch.
+private let spikeLog = OSLog(subsystem: "cc.imagineering.voipspike", category: "spike")
+
+final class VoipSpike: NSObject {
+  static let shared = VoipSpike()
+
+  private var registry: PKPushRegistry?
+  private var provider: CXProvider?
+
+  /// Pushes seen since launch. A termination between two sends shows up as this
+  /// restarting at 1 — the observable the whole experiment turns on.
+  private var seen = 0
+
+  /// The UUID of the call `report` most recently started, in `UserDefaults`
+  /// rather than in memory.
+  ///
+  /// **It has to survive a process death to be an instrument at all.** Arm (a)
+  /// asks what happens when push 2 ends push 1's ring; if push 1's arm is the
+  /// one iOS punishes, the process that held the UUID is gone before push 2
+  /// arrives, and an in-memory slot would make arm (a) silently degenerate into
+  /// #4178's already-answered `endonly` — the stale case wearing the live case's
+  /// name. Persisting it means a mode=endlive with no stored UUID is a
+  /// detectable harness state (`NO STORED UUID`) rather than a wrong result.
+  private static let liveUuidKey = "spike.liveCallUuid"
+
+  private var liveUuid: UUID? {
+    get {
+      guard let s = UserDefaults.standard.string(forKey: Self.liveUuidKey)
+      else { return nil }
+      return UUID(uuidString: s)
+    }
+    set {
+      UserDefaults.standard.set(newValue?.uuidString, forKey: Self.liveUuidKey)
+    }
+  }
+
+  func start() {
+    let config = CXProviderConfiguration()
+    config.supportsVideo = true
+    config.maximumCallsPerCallGroup = 1
+    config.supportedHandleTypes = [.generic]
+    // Explicit, per design 16 v2 §6 — the iOS 26.5 SDK header says the default
+    // is YES, so this is intent made legible rather than defence.
+    config.includesCallsInRecents = true
+
+    let provider = CXProvider(configuration: config)
+    provider.setDelegate(self, queue: nil)
+    self.provider = provider
+
+    let registry = PKPushRegistry(queue: .main)
+    registry.delegate = self
+    registry.desiredPushTypes = [.voIP]
+    self.registry = registry
+
+    log("started; awaiting VoIP token")
+  }
+
+  fileprivate func log(_ message: String) {
+    // All three, deliberately — they fail differently and each has covered
+    // another's blind spot on this experiment. NSLog reaches stderr (what
+    // `devicectl --console` captures, and console attachment is FORBIDDEN by
+    // this run's protocol, so it is the least useful here); os_log with an
+    // explicit `{public}` reaches the unified log unredacted; the container
+    // file needs neither root nor an attached process and is the only one that
+    // survives the termination the experiment is trying to observe.
+    NSLog("[VOIP-SPIKE] %@", message)
+    os_log("[VOIP-SPIKE] %{public}@", log: spikeLog, type: .default, message)
+    VoipSpike.appendToFile(message)
+  }
+
+  /// Append-only and timestamped, in the app's own Documents container.
+  ///
+  /// `log collect --device-udid` needs root; `devicectl … --console` holds a
+  /// usage assertion that keeps the app running-active-visible, which is what
+  /// VOIDED the 2026-09-09 run — must-report governs waking a SUSPENDED app.
+  /// A file here is readable afterwards with `devicectl device copy from`,
+  /// needs no password, and holds no assertion. A process iOS killed leaves its
+  /// lines behind; it cannot leave a callback.
+  static func appendToFile(_ message: String) {
+    let df = ISO8601DateFormatter()
+    let line = "\(df.string(from: Date())) pid=\(ProcessInfo.processInfo.processIdentifier) \(message)\n"
+    guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+    else { return }
+    let url = dir.appendingPathComponent("spike.log")
+    if let handle = try? FileHandle(forWritingTo: url) {
+      handle.seekToEndOfFile()
+      handle.write(Data(line.utf8))
+      try? handle.close()
+    } else {
+      try? Data(line.utf8).write(to: url)
+    }
+  }
+}
+
+extension VoipSpike: PKPushRegistryDelegate {
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didUpdate credentials: PKPushCredentials,
+    for type: PKPushType
+  ) {
+    let token = credentials.token.map { String(format: "%02x", $0) }.joined()
+    log("VOIP TOKEN \(token)")
+  }
+
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didInvalidatePushTokenFor type: PKPushType
+  ) {
+    log("token invalidated")
+  }
+
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didReceiveIncomingPushWith payload: PKPushPayload,
+    for type: PKPushType,
+    completion: @escaping () -> Void
+  ) {
+    seen += 1
+    let dict = payload.dictionaryPayload
+    let mode = (dict["mode"] as? String) ?? "report"
+    let tag = (dict["tag"] as? String) ?? "-"
+    log("push #\(seen) mode=\(mode) tag=\(tag)")
+
+    guard let provider = provider else {
+      log("NO PROVIDER — aborting, this is a harness fault not a finding")
+      completion()
+      return
+    }
+
+    switch mode {
+    case "endlive":
+      // ARM (a). End the ring `report` started, which CallKit should still be
+      // showing. Deliberately no reportNewIncomingCall on this path — that is
+      // the whole question.
+      guard let live = liveUuid else {
+        // NOT a result. Without a stored UUID this is #4178's `endonly` arm,
+        // already answered, and reporting it as arm (a) would be the stale case
+        // wearing the live case's name.
+        log("push #\(seen) endlive: NO STORED UUID — harness fault, arm VOID")
+        completion()
+        return
+      }
+      provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
+      log("push #\(seen) endlive: reportCall(endedAt:) for LIVE \(live)")
+      completion()
+
+    case "reportend":
+      // ARM (b). Report, then immediately end the same UUID. The floor.
+      let uuid = UUID()
+      let update = CXCallUpdate()
+      update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
+      update.hasVideo = true
+      provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+        guard let self else { return completion() }
+        if let error = error {
+          self.log("push #\(self.seen) reportend: report FAILED \(error.localizedDescription)")
+          return completion()
+        }
+        // Immediately, and INSIDE the report's completion — ending before the
+        // report has landed races "unknown UUID" against SpringBoard, which
+        // would measure the race rather than the rule.
+        self.provider?.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+        self.log("push #\(self.seen) reportend: reported then ended \(uuid)")
+        completion()
+      }
+
+    case "silent":
+      // NEGATIVE CONTROL. The undisputed violation. If this is not punished the
+      // instrument is blind and NOTHING else here proves anything.
+      log("push #\(seen) silent: reporting NOTHING")
+      completion()
+
+    default:
+      // POSITIVE CONTROL, and arm (a)'s setup. Must ring.
+      let uuid = UUID()
+      let update = CXCallUpdate()
+      update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
+      update.hasVideo = true
+      // Stored BEFORE the report rather than in its completion: if iOS kills
+      // the process during the report, arm (a)'s next push must still find the
+      // UUID of the ring that is on screen.
+      liveUuid = uuid
+      provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+        guard let self else { return completion() }
+        if let error = error {
+          self.log("push #\(self.seen) report FAILED \(error.localizedDescription)")
+        } else {
+          self.log("push #\(self.seen) report OK \(uuid)")
+        }
+        completion()
+      }
+    }
+  }
+}
+
+extension VoipSpike: CXProviderDelegate {
+  func providerDidReset(_ provider: CXProvider) {
+    log("provider reset")
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+    log("answered")
+    action.fulfill()
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+    log("ended by user")
+    action.fulfill()
   }
 }

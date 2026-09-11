@@ -60,6 +60,12 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<!-- SPIKE ONLY (spike/voip-must-report-endlive). `voip` is what makes iOS
+		     deliver PushKit VoIP pushes to this build at all. It belongs in the
+		     real CallKit increment (claude-tasks#4229) and is here early so the
+		     must-report arms can run; `audio` came from c2cc32c, the call
+		     teardown fix, and is unrelated. -->
+		<string>voip</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
