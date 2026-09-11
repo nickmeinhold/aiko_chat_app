@@ -209,10 +209,19 @@ this ADR concludes.
 2. **It gates the WAKE, not the INVITE.** A connected recipient still receives the invite over
    WSS. It stops the *cold-start ring* — the actual harm — and must be described that way, or
    it will be read as *"this person cannot call you"* and under-deliver.
-3. **Agents are excluded by default**, cutting against §4's Model B requirement: an agent
-   Principal that has never posted cannot ring. Dreamfinder would have to message Nick first.
-   **The proxy and the primitive diverge here**, which is the clearest evidence it is not a
-   drop-in.
+3. ~~Agents are excluded by default~~ — **WITHDRAWN 2026-09-11, and the withdrawal costs
+   this section an argument.** The island tab reported agents would be excluded; their own
+   cage-match inverted it. The predicate filters the **RECIPIENT**, not the sender: Nick
+   messages Dreamfinder, so Dreamfinder may ring Nick, and the agent need never post at all.
+   The behaviour is correct and the weakness recorded here never existed.
+
+   Kept struck rather than deleted because of what it does to §10's conclusion. Three
+   weaknesses were offered for why the conduct gate PRECEDES rather than SUBSTITUTES for the
+   edge; one is now gone and one (gates-the-wake-not-the-invite) is a scoping note rather
+   than a deficiency. **Withdrawability is now carrying that argument almost alone** — which
+   is precisely the property the island tab named as the one to attack hardest at this
+   document's temper. If it does not survive, the honest conclusion is that the shipped gate
+   substitutes and this edge is wanted for reasons other than the ring.
 
 ### An island constraint any design here must respect
 
@@ -227,6 +236,18 @@ not.
 It closes the **stranger** case cleanly and does nothing about someone you *have* accepted
 ringing you at 3am. That is `#3343` (island-side per-conversation mute) — smaller, different,
 and composes rather than competes.
+
+### Deployment state — merged is not deployed
+
+**Island `b7dafac` is MERGED and deliberately NOT DEPLOYED** (Nick: *"let it ride"*). Both
+live boxes serve v0.11.0, which does **not** carry the gate, so **both islands still wake for
+a stranger today**. Nothing rings only because the client CallKit half is unbuilt.
+
+So #4216's ruling is a **deploy gate, not a merge gate**: the ring goes live only when the
+client half ships AND the island it meets is serving the gate. The cheap check is `/health`
+reporting a `ref` **later than v0.11.0** — it reads the box, not the repo, which is the only
+reading that counts. Testing ring behaviour against a live island today tests the PRE-gate
+island: right about the box, wrong about `main`.
 
 ### Build note
 
