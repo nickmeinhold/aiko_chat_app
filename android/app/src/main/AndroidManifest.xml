@@ -17,6 +17,24 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <!-- The incoming-call ring (#3615, design 12 Decision 8). THIS LINE IS NOT
+         THE GRANT, and on the devices that matter it is not even close.
+
+         Below API 34 it is an ordinary permission and declaring it is enough.
+         From API 34 it became a SPECIAL ACCESS permission, auto-granted only to
+         apps Google has approved as calling or alarm apps — so on a modern
+         handset this declaration buys the right to ASK, and nothing else.
+
+         IT IS STILL A PRECONDITION FOR EVERYTHING DOWNSTREAM, which is the only
+         reason it lands ahead of the approval. The Play Console declaration that
+         seeks the grant does not appear until a bundle declaring this permission
+         has been uploaded — so the form cannot be filled before this line exists,
+         and #3615's "Nick opens the Console" was blocked on a one-line code
+         change nobody had made. See IncomingCallNotifier.canRingFullScreen for
+         the runtime half: the grant can be ABSENT with everything here correct,
+         and the failure is silent — the notification posts as a heads-up banner
+         and simply never takes over the screen. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <application
