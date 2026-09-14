@@ -11,6 +11,7 @@ import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
 import '../data/apns_token_source.dart';
+import '../data/voip_token_source.dart';
 import '../data/fcm_token_source.dart';
 import '../data/pending_unregister_store.dart';
 import '../domain/push_token_source.dart';
@@ -47,6 +48,32 @@ final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
   return switch (defaultTargetPlatform) {
     TargetPlatform.android => FcmTokenSource(),
     TargetPlatform.iOS => ApnsTokenSource(
+      telemetry: ref.watch(pushTelemetryProvider),
+    ),
+    _ => null,
+  };
+});
+
+/// The PushKit VoIP token source — iOS only, and NULL EVERYWHERE ELSE.
+///
+/// A SECOND source alongside [pushTokenSourceProvider], not a replacement. Both
+/// are live at once on an iPhone: one token draws banners, the other rings the
+/// handset, and the island stores them as two rows distinguished by
+/// `token_kind`.
+///
+/// **Android's equivalent is not a second token.** FCM issues ONE token and the
+/// ring is a high-priority message plus a full-screen intent (design 12
+/// Decision 8), so there is deliberately nothing to return there — a second
+/// Android source would register the same token twice under two kinds.
+///
+/// `kIsWeb` first, for the reason [pushTokenSourceProvider] spells out: on web
+/// `defaultTargetPlatform` reports the browser's HOST OS, so Safari on an iPhone
+/// answers `TargetPlatform.iOS` and this would construct a PushKit source inside
+/// a renderer that has never heard of PushKit.
+final voipTokenSourceProvider = Provider<PushTokenSource?>((ref) {
+  if (kIsWeb) return null;
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.iOS => VoipTokenSource(
       telemetry: ref.watch(pushTelemetryProvider),
     ),
     _ => null,
@@ -101,6 +128,34 @@ final deviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
   return registrar;
 });
 
+/// The registrar for the VoIP token. **A SECOND INSTANCE, not a second mode.**
+///
+/// [DeviceRegistrar] already threads `source.kind` through every operation it
+/// performs — the debt store is keyed on it, the register call carries it, and
+/// the drain reads it back. So two kinds is two registrars, and the lifecycle
+/// logic that is genuinely hard to get right (drain-before-start, the
+/// re-check between them, debt on unpair, disposal on island switch) is reused
+/// rather than re-implemented with a kind parameter threaded through it.
+///
+/// The alternative — one registrar holding two sources — would have to fan every
+/// one of those steps out by hand and would make a partial failure across kinds
+/// a state nothing models. Two instances make it two independent stories, which
+/// is what it actually is: a device can legitimately hold a VoIP token and no
+/// alert token, and vice versa.
+final voipDeviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
+  final source = ref.watch(voipTokenSourceProvider);
+  if (source == null) return null;
+  final registrar = DeviceRegistrar(
+    source: source,
+    api: ref.watch(restApiProvider),
+    pending: ref.watch(pendingUnregisterStoreProvider),
+    islandBaseUrl: ref.watch(configProvider).httpBaseUrl,
+    telemetry: ref.watch(pushTelemetryProvider),
+  );
+  ref.onDispose(registrar.dispose);
+  return registrar;
+});
+
 /// Starts the push pairing when a session begins.
 ///
 /// ONLY THE START HALF LIVES HERE, and the asymmetry is deliberate rather than
@@ -135,6 +190,14 @@ final pushPairingProvider = Provider<void>((ref) {
   // refute this: with no widget scheduler running, the disposal it would catch
   // never fires. The pin is cheap; the proof was not available.
   ref.watch(deviceRegistrarProvider);
+  // PINNED FOR THE SAME REASON, and it is not decoration: read-only access would
+  // let `start()` animate one registrar and a later read construct a silent twin
+  // whose memo never held a token, so the DELETE on unpair never fires and the
+  // island keeps a routable VoIP row. On the alert path that residual is a
+  // banner for the previous owner; on THIS path it is a stranger's handset
+  // ringing full-screen for them (design 12 Decision 2a, the worst state in the
+  // system).
+  ref.watch(voipDeviceRegistrarProvider);
 
   ref.listen<AsyncValue<AppUser?>>(authControllerProvider, (previous, next) {
     final wasSignedIn = previous?.value != null;
@@ -147,31 +210,45 @@ final pushPairingProvider = Provider<void>((ref) {
       // own failures for the same reason — a device that cannot register is a
       // device that will not be woken, which must not also be a device that
       // cannot sign in.
-      final registrar = ref.read(deviceRegistrarProvider);
-      if (registrar != null) {
-        unawaited(() async {
-          try {
-            // DRAIN BEFORE START, and the sequencing is the entire safety
-            // argument for paying an old session's debt under a new session's
-            // credential — see DeviceRegistrar's class doc. Reversed, the debt's
-            // token has just been re-registered to the current user, so the
-            // DELETE would match and destroy the live pairing, not the dead one.
-            await registrar.drainPending();
-            // RE-CHECK THE SESSION between the two (cage-match round 4, Carnot).
-            // The drain is a network round trip, and a logout landing inside it
-            // used to let the continuation run anyway — prompting for
-            // notification permission on a session that no longer exists, then
-            // registering a token for it.
-            if (ref.read(authControllerProvider).value == null) return;
-            await registrar.start();
-          } catch (e) {
-            // TERMINAL catch on an unawaited chain. `_register` rethrows
-            // `Unauthorized` by design (the auth controller owns that
-            // transition), and with nobody awaiting this it would otherwise
-            // surface as an unhandled zone error rather than a log line.
-            ref.read(pushTelemetryProvider).pairingFailed(e);
-          }
-        }());
+      // BOTH KINDS, independently. A failure to register one must not prevent
+      // the other: "reachable for calls, unreachable for messages" is a normal
+      // permanent state (a user who declined notifications), and the mirror is
+      // just as real on a build whose PushKit channel is missing.
+      //
+      // THE TWO CHAINS RUN CONCURRENTLY — each is `unawaited` — and that is safe
+      // for a stated reason rather than by luck: `PendingUnregisterStore` is
+      // keyed by (island, KIND), so the two drains touch disjoint key sets and
+      // cannot race each other's debts. If that keying ever collapses back to
+      // island-only, this becomes a real interleaving bug with no test on it.
+      for (final registrar in [
+        ref.read(deviceRegistrarProvider),
+        ref.read(voipDeviceRegistrarProvider),
+      ]) {
+        if (registrar != null) {
+          unawaited(() async {
+            try {
+              // DRAIN BEFORE START, and the sequencing is the entire safety
+              // argument for paying an old session's debt under a new session's
+              // credential — see DeviceRegistrar's class doc. Reversed, the debt's
+              // token has just been re-registered to the current user, so the
+              // DELETE would match and destroy the live pairing, not the dead one.
+              await registrar.drainPending();
+              // RE-CHECK THE SESSION between the two (cage-match round 4, Carnot).
+              // The drain is a network round trip, and a logout landing inside it
+              // used to let the continuation run anyway — prompting for
+              // notification permission on a session that no longer exists, then
+              // registering a token for it.
+              if (ref.read(authControllerProvider).value == null) return;
+              await registrar.start();
+            } catch (e) {
+              // TERMINAL catch on an unawaited chain. `_register` rethrows
+              // `Unauthorized` by design (the auth controller owns that
+              // transition), and with nobody awaiting this it would otherwise
+              // surface as an unhandled zone error rather than a log line.
+              ref.read(pushTelemetryProvider).pairingFailed(e);
+            }
+          }());
+        }
       }
     }
   });

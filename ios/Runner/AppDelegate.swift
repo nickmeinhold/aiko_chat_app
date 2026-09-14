@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import CallKit
 import PushKit
 import UserNotifications
 
@@ -250,6 +251,263 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
   }
 }
 
+/// The CallKit ring — the thing that makes an incoming call take over a locked
+/// handset instead of arriving as silence (Nick, 2026-09-09: *"ringing like a
+/// telephone is non-negotiable"*).
+///
+/// **THIS OBJECT IS WHAT MAKES ARMING VoIP SAFE.** `PushKitTokenChannel.start`
+/// takes one as a parameter, so a registry armed with nothing to report to is
+/// unconstructable rather than merely unwise (#3609, design 16 v2 §1).
+///
+/// ## The obligation, and why every path below reports
+///
+/// Since iOS 13 every VoIP push must be reported to CallKit **before the
+/// delivery handler returns**. Failing terminates the app, and repeated failures
+/// make the system stop delivering VoIP pushes to this app **on this device** —
+/// a per-device denial APNs never reports, because it keeps answering `200`.
+///
+/// Measured on a handset 2026-09-12 (claude-tasks#4278), which is what lets the
+/// end path below be a decision rather than a guess:
+///
+/// - **Enforcement is a CONSECUTIVE-violation counter that any successful report
+///   RESETS.** Four consecutive unreported pushes terminated; five interleaved
+///   with reports never did. The earlier "three unreported pushes" was a
+///   tolerance window read as a rate — it is a **run length**.
+/// - **`reportNewIncomingCall` then immediately `reportCall(endedAt:)` COUNTS as
+///   reported.** Seven consecutive, no termination.
+/// - **`reportCall(with:endedAt:)` against a LIVE ring RETRACTS it** — but
+///   whether that alone *counts as reported* is **UNMEASURED**, because the arm
+///   ran interleaved and an interleaved shape provably cannot punish anything.
+final class CallKitRinger: NSObject {
+  static let shared = CallKitRinger()
+
+  private let provider: CXProvider
+
+  /// Channel id → the call currently ringing for it, and when we reported it.
+  ///
+  /// **DEVICE-LOCAL, because the wire carries no call id.** The island's payload
+  /// is `{"aps": …, "c": <channel>, "k": <kind>}` — there is nothing to key an
+  /// end wake on but the channel, so the mapping has to live here (option (b),
+  /// agreed with the island tab: correct under both push-type paths and it adds
+  /// nothing to the wire).
+  ///
+  /// **IN UserDefaults, NOT IN MEMORY, and that is the whole point.** A VoIP
+  /// push RELAUNCHES a terminated app, so the process that reported the invite
+  /// is routinely not the process that receives the hangup. An in-memory map
+  /// would be empty exactly when the end wake arrives on a cold start, which is
+  /// the case this mechanism exists for.
+  private static let liveCallsKey = "callkit.liveCalls"
+
+  /// How long a mapping may be trusted.
+  ///
+  /// **The island owns the ring ceiling** (Nick, 2026-09-09, reversing design
+  /// 12's Decision 1c) and **that lease is not on the wire** — claude-tasks#4233,
+  /// the third clock. So this cannot be derived, only bounded: past this, assume
+  /// the ring is gone and take the safe path below. Deliberately LONGER than any
+  /// plausible lease, because the cost of over-trusting is one extra buzz and
+  /// the cost of under-trusting is a ring that never stops.
+  private static let liveCallTrustWindow: TimeInterval = 120
+
+  private override init() {
+    let config = CXProviderConfiguration()
+    config.supportsVideo = true
+    config.maximumCallsPerCallGroup = 1
+    config.supportedHandleTypes = [.generic]
+    // Explicit rather than defaulted. The iOS 26.5 SDK header says this defaults
+    // to YES; stating it makes the intent legible and means a future SDK default
+    // flip cannot silently change whether calls land in Recents. The product
+    // question of WHETHER they should is design 16 v2 §6a and is unfilled.
+    config.includesCallsInRecents = true
+    provider = CXProvider(configuration: config)
+    super.init()
+    provider.setDelegate(self, queue: nil)
+  }
+
+  // MARK: The total function on `k`
+
+  /// Handle one VoIP delivery. **Every path reports before calling `completion`.**
+  ///
+  /// **PERMISSIVE DECODE, AND IT IS A CROSS-REPO OBLIGATION** (design 16 v2 §7c).
+  /// Read the keys we know, ignore the rest, never fail closed on an unexpected
+  /// one. The island's ability to add fields later without a payload version bump
+  /// rests entirely on this property of code that lives only here — nothing goes
+  /// red if a later reader "tidies" it into a strict decoder, and it surfaces a
+  /// year later as *"why can't we add a field?"*.
+  func handle(payload: [AnyHashable: Any], completion: @escaping () -> Void) {
+    let channel = payload["c"] as? String
+    let kind = payload["k"] as? String
+
+    switch kind {
+    case "call_invite":
+      reportInvite(channel: channel, completion: completion)
+    case "call_end":
+      reportEnd(channel: channel, completion: completion)
+    default:
+      // UNKNOWN OR MISSING — report, then immediately end. NEVER sustain.
+      //
+      // This is the load-bearing row of §7c's table: a third WakeKind added
+      // island-side can never become a spurious ring on an older build. It
+      // degrades into the momentary cell, which is a malformed-input failure
+      // mode rather than a destination a design routes callers into.
+      reportAndEndImmediately(reason: .failed, completion: completion)
+    }
+  }
+
+  private func reportInvite(channel: String?, completion: @escaping () -> Void) {
+    let uuid = UUID()
+    let update = CXCallUpdate()
+    // Tier 3 of design 12 Decision 6's three tiers: the placeholder. It names the
+    // PRODUCT, not a person (Nick, 2026-08-30) — a wrong name on a locked screen
+    // is worse than no name. Tiers 1 and 2 (the App Group name cache, and
+    // reportCall(with:updated:) once Dart is up) are not built yet.
+    update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
+    update.hasVideo = true
+
+    // Recorded BEFORE the report, not in its completion. If iOS terminates this
+    // process during the report, the end wake that follows must still find the
+    // UUID of the ring that is on screen — and the end wake is routinely handled
+    // by a different process than the invite.
+    if let channel { rememberLiveCall(uuid, for: channel) }
+
+    provider.reportNewIncomingCall(with: uuid, update: update) { error in
+      if error != nil, let channel { self.forgetLiveCall(for: channel) }
+      completion()
+    }
+  }
+
+  /// A hangup arrived. **Two paths, and the branch is chosen so that the arm
+  /// with an UNMEASURED must-report status is only ever taken when the counter
+  /// has provably just been reset.**
+  ///
+  /// - **A ring we believe is live** → `reportCall(endedAt:)` alone. Measured to
+  ///   retract the ring, and **silent** — no buzz on a normal hangup. Its
+  ///   must-report status is unmeasured, and that is acceptable here and ONLY
+  ///   here: a live mapping exists only because an invite wake reported
+  ///   successfully moments ago, and a successful report resets the counter. One
+  ///   violation on a reset counter cannot reach a threshold of four.
+  ///
+  /// - **No live ring — a LONE END** (invite throttled, expired, or the device
+  ///   was off) → the measured-safe `reportNewIncomingCall` + immediate end.
+  ///   Costs a momentary buzz on a call that was never announced, and buys the
+  ///   guarantee where it is actually needed.
+  ///
+  /// **THE LONE END IS THE DANGEROUS SHAPE AND THIS IS WHY THE BRANCH EXISTS.**
+  /// The island tab named it within the hour of the measurement landing: four
+  /// consecutive lone ends, each "optimised" into a bare `endedAt` against
+  /// nothing, is four consecutive violations with no good report between — the
+  /// one production path to per-device denial. And the island MANUFACTURES that
+  /// shape under load, because the per-recipient wake budget throttles invites
+  /// while ends still go out (claude-tasks#4233/#4265). So the safe arm is bound
+  /// to exactly the input that produces it, rather than to a preference.
+  private func reportEnd(channel: String?, completion: @escaping () -> Void) {
+    guard let channel, let live = liveCall(for: channel) else {
+      reportAndEndImmediately(reason: .remoteEnded, completion: completion)
+      return
+    }
+    provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
+    forgetLiveCall(for: channel)
+    completion()
+  }
+
+  private func reportAndEndImmediately(
+    reason: CXCallEndedReason, completion: @escaping () -> Void
+  ) {
+    let uuid = UUID()
+    let update = CXCallUpdate()
+    update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
+    provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+      guard error == nil else { return completion() }
+      // INSIDE the report's completion, deliberately. Ending before the report
+      // has landed races "unknown UUID" against SpringBoard, and the losing side
+      // of that race is a ring nothing ever stops.
+      self?.provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
+      completion()
+    }
+  }
+
+  // MARK: The device-local channel → UUID map
+
+  private func liveCall(for channel: String) -> UUID? {
+    guard
+      let entry = stored()[channel],
+      let uuid = UUID(uuidString: entry.uuid),
+      Date().timeIntervalSince1970 - entry.at < Self.liveCallTrustWindow
+    else { return nil }
+    return uuid
+  }
+
+  private func rememberLiveCall(_ uuid: UUID, for channel: String) {
+    var map = stored()
+    // LAST WRITER WINS, and the loser is ORPHANED rather than ended. Two
+    // overlapping calls in one channel is a state the wire cannot currently
+    // express — `c` names a channel, not a call — so the second invite's end
+    // wake would end the second call and leave the first ringing to its lease.
+    // Named rather than defended: it resolves properly only when the call id
+    // ships inside the sealed envelope (design 16 v2 §4c), and defending it here
+    // would be a guard on a coupling that the wire should remove.
+    map[channel] = (uuid: uuid.uuidString, at: Date().timeIntervalSince1970)
+    write(map)
+  }
+
+  private func forgetLiveCall(for channel: String) {
+    var map = stored()
+    map.removeValue(forKey: channel)
+    write(map)
+  }
+
+  private func stored() -> [String: (uuid: String, at: TimeInterval)] {
+    let raw = UserDefaults.standard.dictionary(forKey: Self.liveCallsKey) ?? [:]
+    var out: [String: (uuid: String, at: TimeInterval)] = [:]
+    for (channel, value) in raw {
+      guard
+        let entry = value as? [String: Any],
+        let uuid = entry["uuid"] as? String,
+        let at = entry["at"] as? TimeInterval
+      else { continue }  // Permissive here too: a malformed entry is not a live call.
+      out[channel] = (uuid: uuid, at: at)
+    }
+    return out
+  }
+
+  private func write(_ map: [String: (uuid: String, at: TimeInterval)]) {
+    var raw: [String: Any] = [:]
+    for (channel, entry) in map {
+      raw[channel] = ["uuid": entry.uuid, "at": entry.at]
+    }
+    UserDefaults.standard.set(raw, forKey: Self.liveCallsKey)
+  }
+}
+
+extension CallKitRinger: CXProviderDelegate {
+  func providerDidReset(_ provider: CXProvider) {
+    // The system tore down every call we had. The map now describes nothing, and
+    // a stale entry here would make the next end wake take the silent arm
+    // against a ring that no longer exists — i.e. the unmeasured path on a
+    // counter we cannot vouch for.
+    UserDefaults.standard.removeObject(forKey: Self.liveCallsKey)
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+    // ANSWERING IS NOT WIRED TO THE CALL YET. Fulfilling without joining a room
+    // is deliberate for this increment: the ring is the piece being shipped, and
+    // failing the action instead would present to the user as a call that cannot
+    // be answered at all. Joining is the next increment (claude-tasks#4229).
+    action.fulfill()
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+    // Says the call ENDED. It does NOT say who ended it — user, system timeout,
+    // or our own reportCall. An earlier spike logged this as "ended by user" and
+    // that label, inherited verbatim, produced a confident wrong reading that
+    // survived a night of self-corroboration (claude-tasks#4278). Record what
+    // happened; leave why to whoever has the timestamps.
+    for (channel, entry) in stored() where entry.uuid == action.callUUID.uuidString {
+      forgetLiveCall(for: channel)
+    }
+    action.fulfill()
+  }
+}
+
 /// The PushKit VoIP token, handed to Dart so the island can ring this handset
 /// like a telephone (Nick, 2026-09-09: "ringing like a telephone is
 /// non-negotiable").
@@ -284,6 +542,11 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
   private var registry: PKPushRegistry?
   private var sink: FlutterEventSink?
 
+  /// Set by [start] in the same statement that arms the registry, so it is
+  /// non-nil whenever a push can arrive. Not optional-by-design — optional
+  /// only because it cannot be an `init` parameter on a `shared` singleton.
+  private var ringer: CallKitRinger?
+
   /// The last token handed to Dart, so a re-registration reporting the SAME
   /// value is not published as a rotation — the same reason [ApnsTokenChannel]
   /// keeps one.
@@ -312,26 +575,33 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
     ).setStreamHandler(self)
   }
 
-  // THERE IS DELIBERATELY NO `start()` IN THIS BUILD, and its absence is the
-  // safety property — not an omission to be tidied up by the next reader.
-  //
-  // Constructing a PKPushRegistry and assigning `desiredPushTypes` is the ONLY
-  // thing that arms VoIP delivery. Armed without a CXProvider to report to, the
-  // first VoIP push terminates the app, and repeated terminations make iOS stop
-  // delivering VoIP pushes to this app on this device — a per-device denial that
-  // no reinstall undoes quickly.
-  //
-  // An earlier revision kept `start()` here, unused, and rested the safety on
-  // the fact that nothing called it. Kelvin, round 1: "the only thing preventing
-  // this is the prayer that start() is never called — that's not engineering."
-  // Correct, and a negative proof about the whole program is exactly the shape
-  // that a later one-line edit breaks silently. So the method is GONE: `registry`
-  // is never non-nil, the delegate callbacks below are unreachable by
-  // construction rather than by convention, and there is nothing to call.
-  //
-  // It comes back with the CXProvider, in the same increment, taking the
-  // provider as a parameter — so an armed registry without something to report
-  // to becomes unconstructable rather than merely unwise (#3609).
+  /// Arm VoIP delivery, **taking the thing that will answer for it**.
+  ///
+  /// Constructing a `PKPushRegistry` and assigning `desiredPushTypes` is the ONLY
+  /// thing that makes iOS deliver VoIP pushes to this app. Armed with nothing to
+  /// report to, the first push terminates the process, and repeated failures make
+  /// the system stop delivering VoIP pushes to this app **on this device** — a
+  /// denial APNs never reports, because it keeps answering `200`.
+  ///
+  /// **THE PARAMETER IS THE SAFETY PROPERTY.** An earlier revision had a bare
+  /// `start()` sitting unused, resting on the fact that nothing called it.
+  /// Kelvin, cage-match round 1: *"the only thing preventing this is the prayer
+  /// that start() is never called — that's not engineering."* Correct, so the
+  /// method was deleted outright rather than left guarded by convention, and it
+  /// comes back only now, in the same increment as [CallKitRinger], shaped so the
+  /// bad state cannot be written down: there is no way to arm the registry
+  /// without handing over the object that discharges the obligation.
+  ///
+  /// Idempotent, because a VoIP push can itself relaunch the app and run
+  /// `didFinishLaunchingWithOptions` again.
+  func start(reportingTo ringer: CallKitRinger) {
+    guard registry == nil else { return }
+    self.ringer = ringer
+    let registry = PKPushRegistry(queue: .main)
+    registry.delegate = self
+    registry.desiredPushTypes = [.voIP]
+    self.registry = registry
+  }
 
   private func currentToken(_ result: @escaping FlutterResult) {
     if let token = lastReported { return result(token) }
@@ -411,8 +681,18 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
     for type: PKPushType,
     completion: @escaping () -> Void
   ) {
-    NSLog("[pushkit] VoIP push received with no CXProvider wired — see #3609")
-    completion()
+    guard type == .voIP else { return completion() }
+    guard let ringer else {
+      // UNREACHABLE BY CONSTRUCTION: `start(reportingTo:)` is the only thing that
+      // arms this registry and it sets `ringer` in the same call. Kept, and
+      // deliberately NOT a `fatalError`: if the invariant ever broke, crashing
+      // here produces the same termination iOS would impose anyway while also
+      // burning it as our own crash, and a deliberate crash on a user's handset
+      // is a worse answer than a line the next build can find.
+      NSLog("[pushkit] armed with no ringer — see #3609")
+      return completion()
+    }
+    ringer.handle(payload: payload.dictionaryPayload, completion: completion)
   }
 
   private func drainWaiters(with token: String?) {
@@ -446,6 +726,12 @@ extension PushKitTokenChannel: FlutterStreamHandler {
     // delivered to nobody. `didReceive` fires after the delegate is set, and on
     // a tap-launch iOS calls it once the app finishes launching.
     UNUserNotificationCenter.current().delegate = self
+    // ARM VoIP AT LAUNCH, not when a call screen opens. A token that only exists
+    // once the user has opened the call UI is a token the island cannot ring —
+    // and the whole point is reaching a handset whose owner is not looking at it.
+    // Safe to do this early because the registry cannot be armed without the
+    // ringer that discharges the must-report obligation.
+    PushKitTokenChannel.shared.start(reportingTo: CallKitRinger.shared)
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
