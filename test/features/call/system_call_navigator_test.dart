@@ -371,6 +371,34 @@ void main() {
     ], reason: 'the clock started when the answer did, not when the retry did');
   });
 
+  testWidgets('a SECOND held answer gets its own deadline', (tester) async {
+    // Carnot's two-transition path (cage-match round 2). With the deadline
+    // keyed to nothing, answer A arms the timer, answer B is refused one
+    // because a timer already exists, then A's timer fires against a channel it
+    // no longer matches and clears itself — leaving B held forever with no
+    // deadline. The unbounded hold restored by the guard that bounds it.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump(const Duration(seconds: 20));
+
+    // A second wake, 20s later: the first answer is displaced.
+    bridge.emit(SystemCallActionKind.answered, 'dm:second:call');
+    await tester.pump(const Duration(seconds: 11));
+    // A's original deadline has now passed. It must not have taken B's with it.
+    expect(
+      bridge.ended,
+      isEmpty,
+      reason: "B is still inside ITS own window — A's clock is not B's",
+    );
+
+    await tester.pump(const Duration(seconds: 20));
+    expect(bridge.ended, [
+      'dm:second:call',
+    ], reason: 'and B must have a deadline of its own that actually fires');
+  });
+
   testWidgets('answering a second call while one is live ENDS it, silently', (
     tester,
   ) async {

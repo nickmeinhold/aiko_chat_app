@@ -128,6 +128,17 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// How long a held answer may wait for its invitation to be admitted.
   Timer? _joinDeadline;
 
+  /// The channel [_joinDeadline] belongs to.
+  ///
+  /// The timer alone is not enough, and the two-transition path that proves it
+  /// is Carnot's (cage-match PR #201 round 2): with a bare `??=`, answer A arms
+  /// the timer, answer B replaces `_answered` and is refused a timer because one
+  /// already exists, then A's timer fires, sees the held channel is no longer
+  /// A, returns — and leaves B held forever with no deadline at all. The
+  /// unbounded hold this exists to bound, restored through the back door by the
+  /// very guard that was added to bound it.
+  String? _deadlineFor;
+
   @override
   void initState() {
     super.initState();
@@ -146,14 +157,27 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     super.dispose();
   }
 
-  /// Start (once) the clock on a held answer.
+  /// Start the clock on a held answer — once PER CHANNEL.
   ///
-  /// `??=`, not a fresh timer: every failed attempt re-enters here — the auth
-  /// listener and the ring listener both retry — and re-arming would push the
-  /// deadline out forever, which is the unbounded hold wearing a timer.
+  /// Two failure modes sit on either side of this and both are real:
+  ///
+  ///  * Re-arm on every call and the deadline never fires. `_tryJoin` is
+  ///    re-entered on every auth AND ring transition, so unrelated traffic
+  ///    pushes it out forever — an unbounded hold wearing a timer's coat.
+  ///  * Arm only when no timer exists (a bare `??=`) and a SECOND answer
+  ///    inherits the first one's timer, which then fires against a channel it
+  ///    no longer matches and clears itself, leaving the second answer held
+  ///    with no deadline at all.
+  ///
+  /// So the timer is keyed to the channel it belongs to: same channel, leave it
+  /// running; different channel, the old one is void and this one starts now.
   void _armJoinDeadline(String channelId) {
-    _joinDeadline ??= Timer(kInAppRingDuration, () {
+    if (_deadlineFor == channelId && _joinDeadline != null) return;
+    _joinDeadline?.cancel();
+    _deadlineFor = channelId;
+    _joinDeadline = Timer(kInAppRingDuration, () {
       _joinDeadline = null;
+      _deadlineFor = null;
       if (_answered != channelId) return;
       // No admitted invitation inside the window the invitation itself would
       // have been ringing for. Nothing was sent, or `admitRing` refused it, or
@@ -250,6 +274,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     _answered = null;
     _joinDeadline?.cancel();
     _joinDeadline = null;
+    _deadlineFor = null;
 
     if (isInLiveCall) {
       // Two calls at once is a state neither CallKit (`maximumCallsPerCallGroup
@@ -279,6 +304,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     _answered = null;
     _joinDeadline?.cancel();
     _joinDeadline = null;
+    _deadlineFor = null;
     unawaited(
       ref.read(systemCallBridgeProvider)?.end(channelId) ?? Future.value(),
     );
