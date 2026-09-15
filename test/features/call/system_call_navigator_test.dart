@@ -44,11 +44,15 @@ void main() {
   late _TestAuth auth;
   late GoRouter router;
 
+  late _FakeRing ring;
+
   Widget harness({
     _Session session = _Session.live,
     bool callingEnabled = true,
+    String? admitted = channel,
   }) {
     bridge = _FakeBridge();
+    ring = _FakeRing(admitted);
     auth = _TestAuth(session, me);
     router = GoRouter(
       routes: [
@@ -76,7 +80,7 @@ void main() {
         // placement constraint that killed the ring banner's primary button
         // until a test pressed it (cage-match #139).
         routerProvider.overrideWithValue(router),
-        incomingRingProvider.overrideWith(_FakeRing.new),
+        incomingRingProvider.overrideWith(() => ring),
       ],
       child: MaterialApp.router(
         routerConfig: router,
@@ -158,7 +162,7 @@ void main() {
     // room with the camera live, reported by nothing. Island ids are
     // `dm:<id>:<id>` today, so this is the fragility, not a live bug.
     const encoded = 'dm:a b:é';
-    await tester.pumpWidget(harness());
+    await tester.pumpWidget(harness(admitted: encoded));
     await tester.pumpAndSettle();
 
     bridge.emit(SystemCallActionKind.answered, encoded);
@@ -264,6 +268,109 @@ void main() {
     expect(find.text('CALL $channel'), findsOneWidget);
   });
 
+  // ---- The join gate (Nick's ruling, 2026-09-15; three families blocked) ----
+  //
+  // The VoIP wake carries no signature, so the ring fires before proof. These
+  // pin that the MEDIA does not: a join happens only once `admitRing` has
+  // admitted an invitation for the same channel.
+
+  testWidgets('an answer with NO admitted invitation does not join', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('CALL $channel'),
+      findsNothing,
+      reason: 'an unsigned wake must not be able to put a camera in a room',
+    );
+    expect(
+      bridge.ended,
+      isEmpty,
+      reason: 'and it must HOLD, not hang up — the invitation may still arrive',
+    );
+  });
+
+  testWidgets('the admitted invitation releases the held answer', (
+    tester,
+  ) async {
+    // The cold-start order: wake → answer → session → websocket → invitation →
+    // admitRing → join. The invitation is the LAST of those, always.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsNothing);
+
+    ring.admit(channel);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsOneWidget);
+  });
+
+  testWidgets('an invitation for ANOTHER channel does not release it', (
+    tester,
+  ) async {
+    // The negative control, and the one that matters: without the channel
+    // comparison, ANY admitted ring would unlock ANY answered wake — the gate
+    // would read as present and admit the thing it exists to refuse.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+
+    ring.admit('dm:someone:else');
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsNothing);
+    expect(find.text('CALL dm:someone:else'), findsNothing);
+  });
+
+  testWidgets('no invitation within the ring window → the call is ENDED', (
+    tester,
+  ) async {
+    // The deadline is DERIVED: an answer is joinable for exactly as long as the
+    // invitation would still have been ringing. Past it there is nothing to
+    // join, and a connected call that never connects is the phantom this
+    // feature keeps having to kill.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump(kInAppRingDuration - const Duration(seconds: 1));
+    expect(bridge.ended, isEmpty, reason: 'still inside the window');
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(bridge.ended, [channel]);
+    expect(find.text('CALL $channel'), findsNothing);
+  });
+
+  testWidgets('the deadline runs from the FIRST attempt, not the last retry', (
+    tester,
+  ) async {
+    // `_tryJoin` is re-entered on every auth AND ring transition, so a deadline
+    // re-armed per attempt is an unbounded hold wearing a timer's coat — traffic
+    // on either provider would push it out forever and the call would never be
+    // cleaned up. Found by mutation rather than by review: replacing `??=` with
+    // an unconditional re-arm left every other test in this file green.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+
+    // Halfway through the window, unrelated ring traffic re-enters `_tryJoin`.
+    await tester.pump(const Duration(seconds: 15));
+    ring.admit('dm:someone:else');
+    await tester.pump(const Duration(seconds: 1));
+    expect(bridge.ended, isEmpty, reason: 'still inside the original window');
+
+    // Past the ORIGINAL deadline. A re-armed timer would still be waiting.
+    await tester.pump(const Duration(seconds: 15));
+    expect(bridge.ended, [
+      channel,
+    ], reason: 'the clock started when the answer did, not when the retry did');
+  });
+
   testWidgets('answering a second call while one is live ENDS it, silently', (
     tester,
   ) async {
@@ -277,6 +384,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('CALL $channel'), findsOneWidget);
 
+    // The second caller's invitation IS admitted — otherwise this would be
+    // refused by the join gate instead of by the one-call-at-a-time rule, and
+    // the test would pass for the wrong reason.
+    ring.admit('dm:ccc:ddd');
     bridge.emit(SystemCallActionKind.answered, 'dm:ccc:ddd');
     await tester.pumpAndSettle();
 
@@ -375,14 +486,22 @@ class _TestAuth extends AuthController {
       state = AsyncError('island unreachable', StackTrace.empty);
 }
 
-/// Ringing from the start, so "answering silences it" has something to silence.
+/// The ADMITTED invitation, which is now a precondition of joining.
+///
+/// `incomingRingProvider` publishes only what `admitRing` accepted, so this
+/// fake stands in for the app's single trust decision — the nine start-gate
+/// refusals with `unverifiedOrigin` at the head. A test that never publishes
+/// here is a test in which nothing was ever verified, which is exactly the
+/// state the join gate exists to refuse.
 class _FakeRing extends RingController {
-  @override
-  CallInvite? build() => CallInvite(
-    inviteId: 'inv-1',
-    islandMsgId: 'srv-1',
-    channelId: 'dm:aaa:bbb',
-    from: MessageSender(
+  _FakeRing([this._initialChannel]);
+  final String? _initialChannel;
+
+  static CallInvite inviteFor(String channelId) => CallInvite(
+    inviteId: 'inv-$channelId',
+    islandMsgId: 'srv-$channelId',
+    channelId: channelId,
+    from: const MessageSender(
       userId: 'robin-key',
       kind: SenderKind.human,
       label: 'Robin',
@@ -391,5 +510,13 @@ class _FakeRing extends RingController {
   );
 
   @override
+  CallInvite? build() =>
+      _initialChannel == null ? null : inviteFor(_initialChannel);
+
+  @override
   void stopRinging() => state = null;
+
+  /// `admitRing` accepted an invitation for [channelId] — the websocket
+  /// delivered it and the signature checked out.
+  void admit(String channelId) => state = inviteFor(channelId);
 }

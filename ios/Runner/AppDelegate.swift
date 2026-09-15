@@ -338,8 +338,22 @@ final class CallKitRinger: NSObject {
     let kind = payload["k"] as? String
 
     switch kind {
-    case "call_invite":
+    case "call_invite" where channel?.isEmpty == false:
       reportInvite(channel: channel, completion: completion)
+    case "call_invite":
+      // AN INVITE WITH NO CHANNEL CANNOT BE ANSWERED, so it must not sustain —
+      // the same rule the `default` arm below states, applied to the arm that
+      // was quietly exempt from it (Tesla, cage-match PR #201).
+      //
+      // Both shapes were broken and they broke differently. A MISSING `c` rang
+      // with no mapping, so answering hit the `guard` and failed: a doorbell
+      // that cannot open, ringing until the user kills it. An EMPTY `c` was
+      // worse — `if let` accepts `""`, so it mapped, and answering FULFILLED
+      // while Dart's decoder (correctly) drops an empty channel: a CONNECTED
+      // call with nobody on the other end of the wire. On an unsigned payload
+      // that is a repeatable lock-screen weapon, and it cost one `where`.
+      NSLog("[callkit] call_invite with no usable `c`; reporting and ending")
+      reportAndEndImmediately(reason: .failed, completion: completion)
     case "call_end":
       reportEnd(channel: channel, completion: completion)
     default:
@@ -466,11 +480,29 @@ final class CallKitRinger: NSObject {
     return nil
   }
 
+  /// The call this channel is ringing for, or has been ANSWERED for.
+  ///
+  /// **THE TRUST WINDOW BOUNDS A RING, AND AN ANSWERED CALL IS NOT A RING.**
+  /// `liveCallTrustWindow` is a bound on how long to believe in a ring whose
+  /// lease is not on the wire. Applied to an ANSWERED call it measures the wrong
+  /// lifetime entirely: a three-minute conversation is ordinary, and until this
+  /// carried `answered` the map went silent at T+120s underneath a live call —
+  /// so Dart's leave path found no UUID, `endSystemCall` became a no-op, and the
+  /// OS kept a CONNECTED call that Dart believed it had buried. The phantom the
+  /// whole Dart→Swift direction exists to prevent, on every call over two
+  /// minutes. (Tesla, cage-match PR #201 — the best finding of the panel.)
+  ///
+  /// So the window is scoped to the state it was reasoned about: an UNANSWERED
+  /// entry is trusted for 120s, an ANSWERED one until something ends it. This is
+  /// not a longer window; it is the same window applied only to the thing it
+  /// describes.
   private func liveCall(for channel: String) -> UUID? {
     guard
       let entry = stored()[channel],
-      let uuid = UUID(uuidString: entry.uuid),
-      Date().timeIntervalSince1970 - entry.at < Self.liveCallTrustWindow
+      let uuid = UUID(uuidString: entry.uuid)
+    else { return nil }
+    if entry.answered { return uuid }
+    guard Date().timeIntervalSince1970 - entry.at < Self.liveCallTrustWindow
     else { return nil }
     return uuid
   }
@@ -484,7 +516,22 @@ final class CallKitRinger: NSObject {
     // Named rather than defended: it resolves properly only when the call id
     // ships inside the sealed envelope (design 16 v2 §4c), and defending it here
     // would be a guard on a coupling that the wire should remove.
-    map[channel] = (uuid: uuid.uuidString, at: Date().timeIntervalSince1970)
+    map[channel] = (
+      uuid: uuid.uuidString, at: Date().timeIntervalSince1970, answered: false
+    )
+    write(map)
+  }
+
+  /// This channel's call has been ANSWERED, so its mapping stops aging out.
+  ///
+  /// Written from the `CXAnswerCallAction` handler, and deliberately BEFORE the
+  /// action is fulfilled — an entry that expires mid-call is the defect this
+  /// flag exists to remove, so it must not depend on anything downstream of the
+  /// answer succeeding.
+  private func markAnswered(channel: String) {
+    var map = stored()
+    guard let entry = map[channel] else { return }
+    map[channel] = (uuid: entry.uuid, at: entry.at, answered: true)
     write(map)
   }
 
@@ -494,24 +541,29 @@ final class CallKitRinger: NSObject {
     write(map)
   }
 
-  private func stored() -> [String: (uuid: String, at: TimeInterval)] {
+  private func stored() -> [String: (uuid: String, at: TimeInterval, answered: Bool)] {
     let raw = UserDefaults.standard.dictionary(forKey: Self.liveCallsKey) ?? [:]
-    var out: [String: (uuid: String, at: TimeInterval)] = [:]
+    var out: [String: (uuid: String, at: TimeInterval, answered: Bool)] = [:]
     for (channel, value) in raw {
       guard
         let entry = value as? [String: Any],
         let uuid = entry["uuid"] as? String,
         let at = entry["at"] as? TimeInterval
       else { continue }  // Permissive here too: a malformed entry is not a live call.
-      out[channel] = (uuid: uuid, at: at)
+      // `answered` DEFAULTS FALSE, which is what an entry written by the
+      // previous build has. Defaulting it true would resurrect every stale
+      // mapping on that device as an un-aging one.
+      out[channel] = (
+        uuid: uuid, at: at, answered: entry["answered"] as? Bool ?? false
+      )
     }
     return out
   }
 
-  private func write(_ map: [String: (uuid: String, at: TimeInterval)]) {
+  private func write(_ map: [String: (uuid: String, at: TimeInterval, answered: Bool)]) {
     var raw: [String: Any] = [:]
     for (channel, entry) in map {
-      raw[channel] = ["uuid": entry.uuid, "at": entry.at]
+      raw[channel] = ["uuid": entry.uuid, "at": entry.at, "answered": entry.answered]
     }
     UserDefaults.standard.set(raw, forKey: Self.liveCallsKey)
   }
@@ -651,6 +703,9 @@ extension CallKitRinger: CXProviderDelegate {
       action.fail()
       return
     }
+    // BEFORE fulfilling: from here the entry describes a CALL, not a ring, and
+    // must stop aging out from under the teardown path.
+    markAnswered(channel: channel)
     SystemCallChannel.shared.emit(action: .answered, channel: channel)
     action.fulfill()
   }

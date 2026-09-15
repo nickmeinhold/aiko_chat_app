@@ -8,6 +8,7 @@ import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
 import '../application/ring_controller.dart';
 import '../application/system_call_providers.dart';
+import '../domain/call_invite.dart';
 import '../domain/system_call_action.dart';
 import 'call_screen.dart' show isInLiveCall, pushCallOn;
 
@@ -24,7 +25,39 @@ import 'call_screen.dart' show isInLiveCall, pushCallOn;
 /// relaunches a terminated app, so the mount point must be alive before the
 /// first real screen is.
 ///
-/// ## THIS IS A SECOND ADMISSION PATH, and it honours none of the nine gates
+/// ## THE JOIN IS GATED ON A VERIFIED INVITATION (Nick, 2026-09-15)
+///
+/// **The ring fires before proof; the MEDIA never does.** Three reviewer
+/// families independently blocked PR #201 on the same property, and Tesla put
+/// the decisive argument in one line: this tree already refuses to connect for
+/// no mapping, a resolved-empty session and a live call, so *"refusing would
+/// un-answer a ring we already committed to"* is a frame, not a constraint.
+///
+/// The VoIP payload is `{"c","k"}` and carries no signature, so a wake can be
+/// fabricated by anyone able to send one — which is the island, and only the
+/// island. Before the answer joined a room, that bought an unwanted ring. With
+/// a join wired to it, it buys a CAMERA IN A ROOM: the island gains the power
+/// to *initiate* a capture, where before it could only observe calls the user
+/// chose to have. That escalation is what this gate removes.
+///
+/// So an answer joins only once [admitRing] has ADMITTED an invitation for the
+/// same channel — the app's single trust decision, whose head refusal is
+/// `unverifiedOrigin`, the signature check. No second gate is built here; this
+/// waits for the existing one. The invitation arrives over the websocket, so on
+/// a cold start it lands after the session does, and both waits are one wait.
+///
+/// **The deadline is DERIVED, not invented:** an answer is joinable for as long
+/// as the invitation would still be ringing ([kInAppRingDuration]). Past that
+/// there is no call left to join, and the system call is ended rather than left
+/// showing a connection that will never arrive.
+///
+/// **The cost is real and was accepted rather than hidden:** answering can now
+/// FAIL — a websocket that does not connect in time, or an invitation
+/// `admitRing` refuses (muted, blocked, consent withheld), ends the call
+/// instead of joining it. A refusal is the gate working. A slow network is the
+/// price, and it is the price of the ring not being proof.
+///
+/// ## It is still a second admission PATH — what it is no longer is UNGATED
 ///
 /// `NotificationTapChannel` argues, in writing, that a tapped call notification
 /// must open the CONVERSATION and never navigate straight into a call — because
@@ -92,6 +125,9 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// The channel of an answered call we have not joined yet. See the class doc.
   String? _answered;
 
+  /// How long a held answer may wait for its invitation to be admitted.
+  Timer? _joinDeadline;
+
   @override
   void initState() {
     super.initState();
@@ -106,7 +142,26 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   @override
   void dispose() {
     _sub?.cancel();
+    _joinDeadline?.cancel();
     super.dispose();
+  }
+
+  /// Start (once) the clock on a held answer.
+  ///
+  /// `??=`, not a fresh timer: every failed attempt re-enters here — the auth
+  /// listener and the ring listener both retry — and re-arming would push the
+  /// deadline out forever, which is the unbounded hold wearing a timer.
+  void _armJoinDeadline(String channelId) {
+    _joinDeadline ??= Timer(kInAppRingDuration, () {
+      _joinDeadline = null;
+      if (_answered != channelId) return;
+      // No admitted invitation inside the window the invitation itself would
+      // have been ringing for. Nothing was sent, or `admitRing` refused it, or
+      // the websocket never came back — all three are "there is no call to
+      // join", and the honest render is the system call ending rather than a
+      // connected call that never connects.
+      _abandonHeldAnswer();
+    });
   }
 
   void _onAction(SystemCallAction action) {
@@ -118,7 +173,11 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
         // Drop a held answer for the same call: the user answered and then hung
         // up before the session was ready, and joining now would open a call
         // they have already left.
-        if (_answered == action.channelId) _answered = null;
+        if (_answered == action.channelId) {
+          _answered = null;
+          _joinDeadline?.cancel();
+          _joinDeadline = null;
+        }
         _leaveIfOpen(action.channelId);
     }
   }
@@ -177,7 +236,20 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       // the moment the network comes back.
       return;
     }
+    // THE VERIFIED INVITATION, or nothing. `incomingRingProvider` publishes only
+    // what `admitRing` admitted, so reading it here REUSES the nine start-gate
+    // refusals rather than re-deciding them — `unverifiedOrigin`, the signature
+    // check, at the head of them.
+    final admitted = ref.read(incomingRingProvider);
+    if (admitted?.channelId != channelId) {
+      // Not yet, or never. Hold, and let the deadline decide which — the
+      // invitation is a websocket message and this is routinely a cold start.
+      _armJoinDeadline(channelId);
+      return;
+    }
     _answered = null;
+    _joinDeadline?.cancel();
+    _joinDeadline = null;
 
     if (isInLiveCall) {
       // Two calls at once is a state neither CallKit (`maximumCallsPerCallGroup
@@ -205,6 +277,8 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     final channelId = _answered;
     if (channelId == null) return;
     _answered = null;
+    _joinDeadline?.cancel();
+    _joinDeadline = null;
     unawaited(
       ref.read(systemCallBridgeProvider)?.end(channelId) ?? Future.value(),
     );
@@ -222,6 +296,11 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       authControllerProvider,
       (_, _) => _tryJoin(),
     );
+    // The ADMITTED invitation is the other release condition, and on a cold
+    // start it is the later of the two: the session restores, the websocket
+    // connects, the invitation arrives, `admitRing` runs, and only then is
+    // there anything to join.
+    ref.listen<CallInvite?>(incomingRingProvider, (_, _) => _tryJoin());
     return widget.child;
   }
 }
