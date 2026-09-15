@@ -7,6 +7,7 @@ import 'app/providers.dart';
 import 'app/router.dart';
 import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
+import 'features/call/presentation/system_call_navigator.dart';
 import 'features/notifications/presentation/notification_tap_navigator.dart';
 import 'features/notifications/data/fcm_token_source.dart';
 import 'features/notifications/application/push_providers.dart';
@@ -72,7 +73,14 @@ class AikoChatApp extends ConsumerWidget {
         // OUTSIDE the ring overlay: a tapped notification must be honoured even
         // when nothing is ringing — the ring is long over by the time a human
         // picks the phone up (measured: 17.55s from invite to tap).
-        child: RingOverlay(child: child ?? const SizedBox.shrink()),
+        //
+        // The system-call navigator sits OUTSIDE the ring overlay too, and for a
+        // stronger version of the same reason: an answer from the lock screen
+        // arrives when this app has no ring of its own at all — the process was
+        // dead and CallKit did the ringing (claude-tasks#4420).
+        child: SystemCallNavigator(
+          child: RingOverlay(child: child ?? const SizedBox.shrink()),
+        ),
       ),
     );
   }

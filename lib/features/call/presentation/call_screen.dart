@@ -8,7 +8,9 @@ import 'package:livekit_client/livekit_client.dart';
 import '../../../app/providers.dart';
 import '../../../app/theme/maritime_theme.dart';
 import '../application/call_end_announcer.dart';
+import '../application/system_call_providers.dart';
 import '../data/call_session.dart';
+import '../data/system_call_bridge.dart';
 import '../domain/call_connection_state.dart';
 import 'media_confidentiality_chip.dart';
 
@@ -110,6 +112,9 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   /// rebuilds, and it resolves the live repository itself at send time.
   late final CallEndAnnouncer _endAnnouncer;
 
+  /// The system call UI, when this platform has one. See [dispose].
+  SystemCallBridge? _systemCall;
+
   @override
   void initState() {
     super.initState();
@@ -118,6 +123,11 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       channelId: widget.channelId,
     );
     _endAnnouncer = ref.read(callEndAnnouncerProvider);
+    // Captured here for the same reason as the announcer: `dispose` must not
+    // touch `ref`. Null on every platform without a system call UI, and null in
+    // a build with calling gated off — both of which make the teardown below a
+    // no-op rather than a special case.
+    _systemCall = ref.read(systemCallBridgeProvider);
     // This route owns the module-level liveness flag for its whole lifetime:
     // cleared on mount, set when the call ends, cleared again on dispose so a
     // later call never inherits a stale `ended`.
@@ -148,6 +158,17 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     if (inviteId != null) {
       _endAnnouncer.announce(channelId: widget.channelId, inviteId: inviteId);
     }
+    // TELL THE OS THE CALL IS OVER — unconditionally, from the one place every
+    // exit already lands in (claude-tasks#4420).
+    //
+    // Unconditional is what makes it correct rather than what makes it lazy:
+    // the native side ends a system call for this channel only if one exists,
+    // so an outgoing call, an in-app answer, or a call on a platform with no
+    // CallKit all resolve to nothing happening. The alternative — tracking here
+    // whether THIS call came from a ring — is a second copy of a fact the
+    // native side already holds, and the failure of getting it wrong is a
+    // phantom connected call in the system UI that outlives the app.
+    unawaited(_systemCall?.end(widget.channelId) ?? Future<void>.value());
     super.dispose();
   }
 

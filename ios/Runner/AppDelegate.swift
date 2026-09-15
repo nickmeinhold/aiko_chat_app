@@ -425,7 +425,46 @@ final class CallKitRinger: NSObject {
     }
   }
 
+  // MARK: What Dart can ask of the system call
+
+  /// Dart is done with this channel's call — it left the room, the join failed,
+  /// or it answered the same call in-app. End the system call so the OS is not
+  /// left showing a connected call with nothing behind it.
+  ///
+  /// **A NO-OP BY CONSTRUCTION when there is no system call**, which is what
+  /// makes it safe to call unconditionally from Dart's one teardown path. An
+  /// outgoing call, or a call placed while the app was foreground and never
+  /// pushed, has no entry in the map and nothing happens here.
+  ///
+  /// `reportCall(endedAt:)` rather than a `CXEndCallAction` transaction through
+  /// `CXCallController`, and the reason is the echo. A requested end round-trips
+  /// through our own `CXEndCallAction` delegate, which would emit `ended` back to
+  /// the Dart half that just asked for this — a loop to break rather than a
+  /// sequence to follow. The cost is the reason enum: `.remoteEnded` is the
+  /// closest member and it is not literally true (nobody remote ended it). There
+  /// is no "this app's own UI ended it" case; the Recents entry is the one
+  /// place a reader could notice.
+  func endSystemCall(channel: String) {
+    guard let live = liveCall(for: channel) else { return }
+    provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
+    forgetLiveCall(for: channel)
+  }
+
   // MARK: The device-local channel → UUID map
+
+  /// The channel a live call UUID belongs to — the map read BACKWARDS.
+  ///
+  /// The forward direction answers the hangup path ("is this channel ringing?");
+  /// this direction answers the answer path ("what is the user answering?"),
+  /// because a `CXAnswerCallAction` carries a UUID and nothing else. The map is
+  /// at most one entry deep in practice (`maximumCallsPerCallGroup = 1`), so the
+  /// scan is not worth a second index.
+  private func channel(for uuid: UUID) -> String? {
+    for (channel, entry) in stored() where entry.uuid == uuid.uuidString {
+      return channel
+    }
+    return nil
+  }
 
   private func liveCall(for channel: String) -> UUID? {
     guard
@@ -478,20 +517,141 @@ final class CallKitRinger: NSObject {
   }
 }
 
+/// What the SYSTEM CALL UI did, handed to Dart — and the one thing Dart can ask
+/// of it back (claude-tasks#4420).
+///
+/// **THE RING WITHOUT THIS IS A DOORBELL ON AN EMPTY HOUSE.** `CallKitRinger`
+/// makes a locked handset ring; every part of actually *being on a call* — the
+/// island's room token, the LiveKit connection, the camera — lives in Dart. This
+/// is the seam between them, and it is deliberately two-way:
+///
+/// - **Swift → Dart** (`/call/actions`): the user answered, or the user hung up
+///   in the system UI. On a locked handset the system UI is the ONLY way out of
+///   a call, so the `ended` direction is not a nicety — without it the room
+///   stays joined after the user presses the red button.
+/// - **Dart → Swift** (`/call/control`): Dart's call is over, so end the system
+///   call. Without this, a join that fails leaves the OS showing a CONNECTED
+///   call with no media behind it, and that phantom outlives the app.
+///
+/// **A LIST, NOT A SLOT, and this is where it differs from
+/// `NotificationTapChannel`.** That one holds the newest tap because a tap is a
+/// DESTINATION and only the newest is correct. These are TRANSITIONS: answer
+/// then end is a call that was taken and hung up, and keeping only the newest
+/// would be indistinguishable from a hangup for a call that was never answered.
+/// Replayed in order, they leave Dart in the state the user actually produced.
+///
+/// **THE COLD-START CASE IS THE NORMAL ONE.** A VoIP push relaunches a
+/// terminated app; the user can answer before the Flutter engine finishes
+/// booting, let alone before Dart restores a session. So an action with nobody
+/// listening is HELD, exactly like a tap, and drained when Dart subscribes.
+final class SystemCallChannel: NSObject, FlutterStreamHandler {
+  static let shared = SystemCallChannel()
+
+  /// The transitions Dart is told about. **A CLOSED SET, not free text** — Dart
+  /// parses these back into a sealed type, so a new member is a compile-time
+  /// event on one side and a `default:` on the other.
+  enum Action: String {
+    case answered
+    case ended
+  }
+
+  private var sink: FlutterEventSink?
+
+  /// Actions that arrived with nobody listening yet. See the cold-start note.
+  private var pending: [[String: String]] = []
+
+  func register(with registrar: FlutterPluginRegistrar) {
+    FlutterEventChannel(
+      name: "cc.imagineering.aikoChatApp/call/actions",
+      binaryMessenger: registrar.messenger()
+    ).setStreamHandler(self)
+
+    FlutterMethodChannel(
+      name: "cc.imagineering.aikoChatApp/call/control",
+      binaryMessenger: registrar.messenger()
+    ).setMethodCallHandler { call, result in
+      switch call.method {
+      case "endSystemCall":
+        guard
+          let args = call.arguments as? [String: Any],
+          let channel = args["channel"] as? String, !channel.isEmpty
+        else {
+          // Dart asked to end SOMETHING and did not say what. Ending the wrong
+          // call is worse than ending none, and answering `nil` lets the Dart
+          // side's own error path say so.
+          return result(
+            FlutterError(
+              code: "no-channel",
+              message: "endSystemCall requires a non-empty `channel`",
+              details: nil))
+        }
+        CallKitRinger.shared.endSystemCall(channel: channel)
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  func emit(action: Action, channel: String) {
+    let event = ["action": action.rawValue, "channel": channel]
+    if let sink = sink {
+      sink(event)
+    } else {
+      pending.append(event)
+    }
+  }
+
+  func onListen(
+    withArguments _: Any?, eventSink events: @escaping FlutterEventSink
+  ) -> FlutterError? {
+    sink = events
+    let held = pending
+    pending = []
+    held.forEach { events($0) }
+    return nil
+  }
+
+  func onCancel(withArguments _: Any?) -> FlutterError? {
+    sink = nil
+    return nil
+  }
+}
+
 extension CallKitRinger: CXProviderDelegate {
   func providerDidReset(_ provider: CXProvider) {
     // The system tore down every call we had. The map now describes nothing, and
     // a stale entry here would make the next end wake take the silent arm
     // against a ring that no longer exists — i.e. the unmeasured path on a
     // counter we cannot vouch for.
+    //
+    // TELL DART BEFORE FORGETTING, for every channel the map still names. A
+    // reset is the one end that arrives with no action and no UUID to match, so
+    // a live call screen would otherwise stay mounted over a room the OS has
+    // already torn the audio out from under.
+    for (channel, _) in stored() {
+      SystemCallChannel.shared.emit(action: .ended, channel: channel)
+    }
     UserDefaults.standard.removeObject(forKey: Self.liveCallsKey)
   }
 
   func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-    // ANSWERING IS NOT WIRED TO THE CALL YET. Fulfilling without joining a room
-    // is deliberate for this increment: the ring is the piece being shipped, and
-    // failing the action instead would present to the user as a call that cannot
-    // be answered at all. Joining is the next increment (claude-tasks#4229).
+    // THE ANSWER IS A HANDOFF, NOT A CONNECTION. Everything that actually makes
+    // a call — the island token, the room, the camera — lives in Dart, so all
+    // this can do is name the channel and let the Dart half join it. See
+    // `SystemCallChannel` for why the answer survives Dart not existing yet.
+    guard let channel = channel(for: action.callUUID) else {
+      // No mapping, so nothing to join: there is no other carrier of the
+      // channel id, and the room IS the channel. `fail()` rather than
+      // `fulfill()` — fulfilling would present a connected call that can never
+      // carry media, and a call that visibly fails is the honest render of a
+      // call we cannot place. Only reachable if the map was cleared between the
+      // report and the answer (`providerDidReset`, or a reinstall).
+      NSLog("[callkit] answered a call with no channel mapping; failing the action")
+      action.fail()
+      return
+    }
+    SystemCallChannel.shared.emit(action: .answered, channel: channel)
     action.fulfill()
   }
 
@@ -501,7 +661,13 @@ extension CallKitRinger: CXProviderDelegate {
     // that label, inherited verbatim, produced a confident wrong reading that
     // survived a night of self-corroboration (claude-tasks#4278). Record what
     // happened; leave why to whoever has the timestamps.
+    //
+    // WHOEVER ended it, Dart has to hear about it: this is the hangup button on
+    // the lock screen and in the system call UI, and it is the ONLY way out of
+    // a call answered from a locked handset. Emitted before the mapping is
+    // forgotten, because the channel is what identifies the call to Dart.
     for (channel, entry) in stored() where entry.uuid == action.callUUID.uuidString {
+      SystemCallChannel.shared.emit(action: .ended, channel: channel)
       forgetLiveCall(for: channel)
     }
     action.fulfill()
@@ -749,6 +915,11 @@ extension PushKitTokenChannel: FlutterStreamHandler {
       forPlugin: "PushKitTokenChannel")
     {
       PushKitTokenChannel.shared.register(with: registrar)
+    }
+    if let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "SystemCallChannel")
+    {
+      SystemCallChannel.shared.register(with: registrar)
     }
   }
 
