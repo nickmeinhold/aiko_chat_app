@@ -44,9 +44,12 @@ void main() {
   late _TestAuth auth;
   late GoRouter router;
 
-  Widget harness({bool signedIn = true, bool callingEnabled = true}) {
+  Widget harness({
+    _Session session = _Session.live,
+    bool callingEnabled = true,
+  }) {
     bridge = _FakeBridge();
-    auth = _TestAuth(signedIn ? me : null);
+    auth = _TestAuth(session, me);
     router = GoRouter(
       routes: [
         GoRoute(
@@ -106,7 +109,7 @@ void main() {
     // The cold-start case, and the normal one rather than the edge: a VoIP push
     // relaunches a terminated app, the user swipes immediately, and the session
     // restore is still a round trip away.
-    await tester.pumpWidget(harness(signedIn: false));
+    await tester.pumpWidget(harness(session: _Session.restoring));
     await tester.pumpAndSettle();
 
     bridge.emit(SystemCallActionKind.answered, channel);
@@ -166,7 +169,7 @@ void main() {
     // arrive in order because the native side HOLDS them in a list rather than
     // keeping only the newest. Joining here would open a call the user has
     // already left.
-    await tester.pumpWidget(harness(signedIn: false));
+    await tester.pumpWidget(harness(session: _Session.restoring));
     await tester.pumpAndSettle();
 
     bridge.emit(SystemCallActionKind.answered, channel);
@@ -176,6 +179,61 @@ void main() {
     auth.signIn(me);
     await tester.pumpAndSettle();
     expect(find.text('CALL $channel'), findsNothing);
+  });
+
+  testWidgets('a restore that resolves with NO user ends the held call', (
+    tester,
+  ) async {
+    // The hold ends on a CONDITION, not a clock. `AuthController.build()` awaits
+    // the restore, so `AsyncData(null)` is a definite "nobody is signed in" —
+    // this call can never be joined, and leaving it held would show the user a
+    // connected call with nothing behind it until they hung it up themselves.
+    await tester.pumpWidget(harness(session: _Session.restoring));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+    expect(bridge.ended, isEmpty, reason: 'the restore has not answered yet');
+
+    auth.restoreFoundNobody();
+    await tester.pumpAndSettle();
+    expect(bridge.ended, [channel]);
+  });
+
+  testWidgets('answered while ALREADY signed out → ended, with no transition', (
+    tester,
+  ) async {
+    // The hole the test above exposed when it first ran. A stale push to a
+    // signed-out app answers into a session that resolved to nobody BEFORE the
+    // answer arrived — so no auth transition ever fires, and a decision made
+    // only in the auth listener would hold that call forever.
+    await tester.pumpWidget(harness(session: _Session.nobody));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsNothing);
+    expect(bridge.ended, [channel]);
+  });
+
+  testWidgets('a FAILED restore keeps holding — unknown is not nobody', (
+    tester,
+  ) async {
+    // The negative control for the test above, and the distinction that makes
+    // the condition honest: a round trip that errored has not answered the
+    // question. Ending here would hang up a call the user could still take once
+    // the network came back.
+    await tester.pumpWidget(harness(session: _Session.restoring));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    auth.restoreFailed();
+    await tester.pumpAndSettle();
+    expect(bridge.ended, isEmpty);
+
+    auth.signIn(me);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsOneWidget);
   });
 
   testWidgets('answering a second call while one is live ENDS it, silently', (
@@ -247,14 +305,46 @@ class _FakeBridge implements SystemCallBridge {
   Future<void> end(String channelId) async => ended.add(channelId);
 }
 
+/// The session has THREE states, not two, and the third is the one a cold start
+/// spends its first seconds in. Collapsing "still restoring" into "nobody is
+/// signed in" is what a two-state fake does, and it hides the difference between
+/// holding an answer and hanging up on it — the first version of this file did
+/// exactly that, and the production code inherited the same two-state read.
+enum _Session {
+  /// Restored, there is a user. The ordinary case.
+  live,
+
+  /// The restore is IN FLIGHT. A VoIP push relaunched a terminated app and the
+  /// round trip has not come back — no answer either way yet.
+  restoring,
+
+  /// The restore RESOLVED and found nobody. A definite answer.
+  nobody,
+}
+
 class _TestAuth extends AuthController {
-  _TestAuth(this._user);
+  _TestAuth(this._session, this._user);
+  final _Session _session;
   final AppUser? _user;
 
+  /// Never completed, deliberately: that is what `restoring` MEANS.
+  final _pending = Completer<AppUser?>();
+
   @override
-  Future<AppUser?> build() async => _user;
+  Future<AppUser?> build() => switch (_session) {
+    _Session.live => Future.value(_user),
+    _Session.nobody => Future.value(null),
+    _Session.restoring => _pending.future,
+  };
 
   void signIn(AppUser user) => state = AsyncData(user);
+
+  /// The restore RESOLVED and there is nobody signed in — a definite answer.
+  void restoreFoundNobody() => state = const AsyncData(null);
+
+  /// The restore FAILED — the question is still open, not answered "nobody".
+  void restoreFailed() =>
+      state = AsyncError('island unreachable', StackTrace.empty);
 }
 
 /// Ringing from the start, so "answering silences it" has something to silence.

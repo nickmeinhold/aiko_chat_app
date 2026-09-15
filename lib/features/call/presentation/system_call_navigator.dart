@@ -32,14 +32,19 @@ import 'call_screen.dart' show isInLiveCall, pushCallOn;
 /// island will mint a room token against. The answer reliably arrives first. So
 /// it waits here and is re-attempted on the sign-in edge.
 ///
-/// **A held answer has no deadline, and that is a named compromise rather than
-/// an oversight** (claude-tasks#4428). If the session never restores — expired
-/// credentials, a user who signed out on another device — the OS keeps showing
-/// a connected call that this app will never join. It is recoverable: the system
-/// call UI's red button reaches [SystemCallActionKind.ended] and clears it. A
-/// deadline would self-heal it, and a deadline is a constant this increment has
-/// not earned a value for (the same honesty design 16 v2 applies to
-/// `kPushDeliverySlack`).
+/// **The hold ends on a CONDITION, not a clock** (claude-tasks#4440). A restore
+/// that RESOLVES with no user — expired credentials, a session signed out on
+/// another device — is a definite answer that this call can never be joined, and
+/// the system call is ended there. That is the real event; a timeout would be a
+/// constant standing in for it, and an unearned one (the same honesty design 16
+/// v2 applies to `kPushDeliverySlack`).
+///
+/// What that leaves unbounded is narrower and named: a restore that never
+/// resolves AT ALL — an island that is down, a request that hangs — holds the
+/// answer, and the OS keeps showing a connected call until the user presses the
+/// red button, which reaches [SystemCallActionKind.ended] and clears it.
+/// An `AsyncError` restore is deliberately on the holding side of that line: a
+/// failed round trip is "unknown", not "nobody is signed in".
 class SystemCallNavigator extends ConsumerStatefulWidget {
   const SystemCallNavigator({super.key, required this.child});
 
@@ -116,8 +121,22 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       _answered = null;
       return;
     }
-    // Not signed in YET is the normal cold-start state, not a refusal: hold.
-    if (ref.read(authControllerProvider).value == null) return;
+    // THE THREE ANSWERS THE SESSION CAN GIVE, and they are three, not two. A
+    // test that only flipped signed-out → signed-in found this: with the state
+    // ALREADY resolved-empty when the answer lands (a stale push to a signed-out
+    // app), no transition ever fires, so a decision made only in the auth
+    // listener would hold that answer forever.
+    final session = ref.read(authControllerProvider);
+    if (session.value == null) {
+      // Resolved, and nobody is signed in: `build()` awaits the restore, so
+      // `AsyncData(null)` is a definite answer. This call can never be joined.
+      if (session is AsyncData<AppUser?>) _abandonHeldAnswer();
+      // Loading or error: the question is still open. `AsyncError` is
+      // deliberately on this side — a failed round trip is "unknown", not
+      // "nobody", and hanging up on it would refuse a call the user can take
+      // the moment the network comes back.
+      return;
+    }
     _answered = null;
 
     if (isInLiveCall) {
@@ -140,14 +159,29 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     unawaited(pushCallOn(ref.read(routerProvider), channelId));
   }
 
+  /// There will never be a session to join this call with. End the system call
+  /// rather than leave the OS showing a connected call with nothing behind it.
+  void _abandonHeldAnswer() {
+    final channelId = _answered;
+    if (channelId == null) return;
+    _answered = null;
+    unawaited(
+      ref.read(systemCallBridgeProvider)?.end(channelId) ?? Future.value(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // The sign-in edge is what releases a held answer. Listened rather than
     // watched: this widget wraps the whole app and must not rebuild the router's
     // output on every auth republish.
-    ref.listen<AsyncValue<AppUser?>>(authControllerProvider, (_, next) {
-      if (next.value != null) _tryJoin();
-    });
+    // Every auth transition re-asks the question; `_tryJoin` owns the answer, so
+    // the same decision is reached whether the session resolved before the
+    // answer arrived or after it.
+    ref.listen<AsyncValue<AppUser?>>(
+      authControllerProvider,
+      (_, _) => _tryJoin(),
+    );
     return widget.child;
   }
 }
