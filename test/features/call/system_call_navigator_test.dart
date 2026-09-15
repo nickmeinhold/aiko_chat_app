@@ -383,20 +383,125 @@ void main() {
     bridge.emit(SystemCallActionKind.answered, channel);
     await tester.pump(const Duration(seconds: 20));
 
-    // A second wake, 20s later: the first answer is displaced.
+    // A second wake, 20s later: the first answer is displaced — and RELEASED,
+    // which is the round-3 fix. This assertion used to read `isEmpty` here,
+    // which is the leak written down as an expectation.
     bridge.emit(SystemCallActionKind.answered, 'dm:second:call');
     await tester.pump(const Duration(seconds: 11));
-    // A's original deadline has now passed. It must not have taken B's with it.
+    // A's ORIGINAL deadline has now passed. It must not have taken B's with it.
     expect(
       bridge.ended,
-      isEmpty,
-      reason: "B is still inside ITS own window — A's clock is not B's",
+      [channel],
+      reason:
+          "A was released on displacement, and B is still inside ITS own "
+          "window — A's clock is not B's",
     );
 
     await tester.pump(const Duration(seconds: 20));
     expect(bridge.ended, [
+      channel,
       'dm:second:call',
     ], reason: 'and B must have a deadline of its own that actually fires');
+  });
+
+  testWidgets('a displaced answer is RELEASED, never dropped', (tester) async {
+    // Carnot's round-3 finding, and the third instance of one class: six sites
+    // wrote the held answer and each decided for itself whether to dispose of
+    // the system call. A second answer overwrote the first and its CallKit call
+    // was never ended — left CONNECTED in the OS with nothing behind it,
+    // forever, with the user's only escape being the red button.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+    expect(bridge.ended, isEmpty);
+
+    bridge.emit(SystemCallActionKind.answered, 'dm:second:call');
+    await tester.pumpAndSettle();
+    expect(bridge.ended, [
+      channel,
+    ], reason: 'the displaced call must be ended, not forgotten');
+
+    // And the new one is held properly, with a deadline of its own.
+    await tester.pump(kInAppRingDuration + const Duration(seconds: 1));
+    expect(bridge.ended, [channel, 'dm:second:call']);
+  });
+
+  testWidgets('a session stuck LOADING still ends the call eventually', (
+    tester,
+  ) async {
+    // Kelvin's round-3 finding. The deadline used to be armed only when a join
+    // ATTEMPT reached the invitation gate — and a session stuck in
+    // `AsyncLoading` returns before that, so an answer during an unreachable
+    // backend was held with no deadline at all: "connecting…" forever. Arming
+    // at HOLD time covers every path out by construction.
+    await tester.pumpWidget(harness(session: _Session.restoring));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump(kInAppRingDuration - const Duration(seconds: 1));
+    expect(bridge.ended, isEmpty);
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(bridge.ended, [
+      channel,
+    ], reason: 'a hung restore must not hold a system call open forever');
+  });
+
+  testWidgets('a LATE swipe still joins — the banner is not the proof', (
+    tester,
+  ) async {
+    // Tesla's round-2 finding, and the sharpest of the panel. The in-app ring
+    // window and the CallKit ring are DIFFERENT CLOCKS on purpose:
+    // `RingOverlay` documents that an in-app expiry is not a decision about the
+    // system call, because CallKit answers to the island's ceiling. So the
+    // handset can still be ringing at T+40s with the banner long dead.
+    //
+    // A gate that READ the live ring saw null there and could not tell "not yet"
+    // from "already gone" — it would hold the answer, arm a second full window,
+    // and then END a call the user had answered. Answered a ringing phone and
+    // got hung up on.
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+
+    // The invitation was admitted, then the in-app banner's window elapsed.
+    ring.stopRinging();
+    await tester.pump(kInAppRingDuration + const Duration(seconds: 10));
+    expect(
+      tester.widget<Text>(find.text('home')).data,
+      'home',
+      reason: 'no call yet — the banner is gone and nothing has been answered',
+    );
+
+    // The handset is still ringing (the island owns that ceiling), and NOW the
+    // user swipes.
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('CALL $channel'),
+      findsOneWidget,
+      reason: 'the admission was proven earlier and is remembered, not rented',
+    );
+    expect(bridge.ended, isEmpty);
+  });
+
+  testWidgets('an admission older than the native ring trust is NOT proof', (
+    tester,
+  ) async {
+    // The other side of the latch. Past `kSystemCallRingTrust` the native map
+    // has stopped believing in the ring too, so there is nothing left for an
+    // admission to be proof OF — and a latch that never expired would be a
+    // standing permission to join on an unsigned wake.
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+    ring.stopRinging();
+    await tester.pump(kSystemCallRingTrust + const Duration(seconds: 5));
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsNothing);
   });
 
   testWidgets('answering a second call while one is live ENDS it, silently', (

@@ -129,6 +129,37 @@ void main() {
     );
   });
 
+  test('the ring-trust window is ONE quantity, not two', () {
+    // `kSystemCallRingTrust` (Dart) and `liveCallTrustWindow` (Swift) are two
+    // halves of the same number: how long this device may believe in an
+    // unanswered ring. The native side stops trusting its channel→UUID mapping
+    // past it; the Dart side stops treating an admission as proof a call could
+    // still be ringing.
+    //
+    // Drift either way is silent and opposite. Dart LONGER than Swift vouches
+    // for a call the device has already forgotten — an answer that joins a room
+    // for a ring that is gone. Dart SHORTER hangs up on a handset that is still
+    // ringing, which is the defect this latch was built to fix in the first
+    // place. Nothing fails at either end; the user just gets a wrong call.
+    final swiftValue = RegExp(
+      r'liveCallTrustWindow:\s*TimeInterval\s*=\s*(\d+)',
+    ).firstMatch(swift)?.group(1);
+    expect(
+      swiftValue,
+      isNotNull,
+      reason:
+          'the Swift constant did not parse — renamed or re-typed, and this '
+          'test is now blind',
+    );
+    expect(
+      kSystemCallRingTrust.inSeconds,
+      int.parse(swiftValue!),
+      reason:
+          'the two halves of the ring-trust window disagree; see the constant '
+          'doc in system_call_bridge.dart for which direction breaks what',
+    );
+  });
+
   test('the payload keys are the same two words on both sides', () {
     final src = systemCallChannelSource();
     for (final key in ['action', 'channel']) {

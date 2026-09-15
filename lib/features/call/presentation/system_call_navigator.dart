@@ -8,6 +8,7 @@ import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
 import '../application/ring_controller.dart';
 import '../application/system_call_providers.dart';
+import '../data/system_call_bridge.dart';
 import '../domain/call_invite.dart';
 import '../domain/system_call_action.dart';
 import 'call_screen.dart' show isInLiveCall, pushCallOn;
@@ -125,19 +126,41 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// The channel of an answered call we have not joined yet. See the class doc.
   String? _answered;
 
-  /// How long a held answer may wait for its invitation to be admitted.
-  Timer? _joinDeadline;
-
-  /// The channel [_joinDeadline] belongs to.
+  /// Channels whose invitation [admitRing] ADMITTED, and when.
   ///
-  /// The timer alone is not enough, and the two-transition path that proves it
-  /// is Carnot's (cage-match PR #201 round 2): with a bare `??=`, answer A arms
-  /// the timer, answer B replaces `_answered` and is refused a timer because one
-  /// already exists, then A's timer fires, sees the held channel is no longer
-  /// A, returns — and leaves B held forever with no deadline at all. The
-  /// unbounded hold this exists to bound, restored through the back door by the
-  /// very guard that was added to bound it.
-  String? _deadlineFor;
+  /// **A MEMORY OF ADMISSION, NOT A READING OF THE LIVE RING** — and the
+  /// difference is a call the user answered and got hung up on (Tesla, round 2,
+  /// and it is the sharpest finding of the panel).
+  ///
+  /// `incomingRingProvider` is a DESTINATION: the one invitation ringing right
+  /// now. Its null means two opposite things — *not yet* (cold start, the
+  /// websocket is still in flight) and *already gone* (the in-app banner's
+  /// window elapsed). The gate cannot tell those apart, and the second one is
+  /// not hypothetical: **the in-app ring window and the CallKit ring are two
+  /// different clocks, deliberately.** `RingOverlay` documents that an in-app
+  /// expiry is not a decision about the system call, because CallKit answers to
+  /// the island's ceiling. So the handset can still be ringing at T+40s with the
+  /// banner long dead — and reading the live slot there would hold the answer,
+  /// arm a second full window, and then END a call the user had answered.
+  ///
+  /// Latching the admission fixes that at the root: the proof is kept, not
+  /// rented from a banner timer this code already says is the wrong clock.
+  /// **The entry IS the admission, and its timer IS the lifetime** — there is
+  /// no timestamp to compare against a clock. That is not only tidier: a
+  /// wall-clock comparison is unreachable by `tester.pump`, so the expiry it
+  /// claimed could not be tested at all, and an expiry no test can reach is an
+  /// expiry nobody should believe in.
+  final Map<String, Timer> _admitted = {};
+
+  /// How long the held answer may wait for its invitation to be admitted.
+  ///
+  /// Always belongs to [_answered] when non-null, because both are written only
+  /// by [_hold], [_consume] and [_release]. An earlier version carried a
+  /// separate `_deadlineFor` key naming the channel the timer was for, and that
+  /// key promptly drifted out of step with the timer it described — it was
+  /// never cleared on a hangup (Kelvin, round 3). A field that must be kept in
+  /// step with another field IS the coupling; deleting it is the fix.
+  Timer? _joinDeadline;
 
   @override
   void initState() {
@@ -148,62 +171,127 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // already been drained.
     final bridge = ref.read(systemCallBridgeProvider);
     _sub = bridge?.actions.listen(_onAction);
+    // SEED THE LATCH, because `ref.listen` fires on CHANGES only. An invitation
+    // already ringing when this mounts — a hot restart, or a rebuild landing
+    // mid-ring — would otherwise never be recorded, and the very next answer
+    // would find no proof of an admission that had plainly happened. Caught by
+    // the existing tests the moment the latch replaced the live read.
+    _recordAdmission(ref.read(incomingRingProvider));
   }
 
   @override
   void dispose() {
     _sub?.cancel();
+    for (final timer in _admitted.values) {
+      timer.cancel();
+    }
     _joinDeadline?.cancel();
     super.dispose();
-  }
-
-  /// Start the clock on a held answer — once PER CHANNEL.
-  ///
-  /// Two failure modes sit on either side of this and both are real:
-  ///
-  ///  * Re-arm on every call and the deadline never fires. `_tryJoin` is
-  ///    re-entered on every auth AND ring transition, so unrelated traffic
-  ///    pushes it out forever — an unbounded hold wearing a timer's coat.
-  ///  * Arm only when no timer exists (a bare `??=`) and a SECOND answer
-  ///    inherits the first one's timer, which then fires against a channel it
-  ///    no longer matches and clears itself, leaving the second answer held
-  ///    with no deadline at all.
-  ///
-  /// So the timer is keyed to the channel it belongs to: same channel, leave it
-  /// running; different channel, the old one is void and this one starts now.
-  void _armJoinDeadline(String channelId) {
-    if (_deadlineFor == channelId && _joinDeadline != null) return;
-    _joinDeadline?.cancel();
-    _deadlineFor = channelId;
-    _joinDeadline = Timer(kInAppRingDuration, () {
-      _joinDeadline = null;
-      _deadlineFor = null;
-      if (_answered != channelId) return;
-      // No admitted invitation inside the window the invitation itself would
-      // have been ringing for. Nothing was sent, or `admitRing` refused it, or
-      // the websocket never came back — all three are "there is no call to
-      // join", and the honest render is the system call ending rather than a
-      // connected call that never connects.
-      _abandonHeldAnswer();
-    });
   }
 
   void _onAction(SystemCallAction action) {
     switch (action.kind) {
       case SystemCallActionKind.answered:
-        _answered = action.channelId;
-        _tryJoin();
+        _hold(action.channelId);
       case SystemCallActionKind.ended:
-        // Drop a held answer for the same call: the user answered and then hung
-        // up before the session was ready, and joining now would open a call
-        // they have already left.
-        if (_answered == action.channelId) {
-          _answered = null;
-          _joinDeadline?.cancel();
-          _joinDeadline = null;
-        }
+        // The native side has ALREADY ended this call, so the hold is dropped
+        // without ending it again: the user answered and then hung up before
+        // the session was ready, and joining now would open a call they have
+        // already left.
+        if (_answered == action.channelId) _consume();
         _leaveIfOpen(action.channelId);
     }
+  }
+
+  // ---- ONE HOLD, AND EXACTLY TWO WAYS OUT OF IT ----
+  //
+  // **THIS SHAPE ANSWERS A REPEATED FINDING CLASS, not a bug.** Three
+  // consecutive cage-match rounds each found a different instance of one
+  // defect: SIX sites wrote `_answered`, and every one decided for itself
+  // whether the system call it was dropping should be ended. Three got it
+  // wrong, in three different ways — a displaced answer leaked its call
+  // (Carnot), a session stuck in `AsyncLoading` held with no deadline at all
+  // (Kelvin), and the deadline's ownership key drifted out of step with the
+  // deadline (Kelvin). Patching the third would have been the fourth patch on
+  // one invariant nobody had written down.
+  //
+  // So it is written down and made structural: **this navigator holds at most
+  // one answered call, that hold always carries a deadline, and it ends in
+  // exactly one of two ways.**
+  //
+  //   [_consume] — the answer BECAME a call. Drop it and end nothing: the
+  //                system call IS the live call now.
+  //   [_release] — we will not be joining. End the system call, so the OS is
+  //                never left showing a connection that will not arrive.
+  //
+  // Every exit routes through one of those two. That is what makes a missing
+  // disposal show up as a missing call rather than as nothing at all.
+
+  /// Take an answer, releasing whatever it displaces.
+  ///
+  /// The deadline is armed HERE, at the moment of holding — not at the moment a
+  /// join attempt fails. That placement fixes two findings at once: a session
+  /// stuck in `AsyncLoading` never reached the old arming site and so held
+  /// forever, and arming per-attempt made the clock resettable by unrelated
+  /// provider traffic. Held once, clocked once.
+  void _hold(String channelId) {
+    final displaced = _answered;
+    // CONSERVATION OF OWNERSHIP: a second answer does not silently forget the
+    // first one's system call. Nothing this class stops holding is ever simply
+    // dropped.
+    if (displaced != null && displaced != channelId) _release(displaced);
+    _answered = channelId;
+    _joinDeadline?.cancel();
+    _joinDeadline = Timer(kInAppRingDuration, () {
+      // No admitted invitation inside the window the invitation itself would
+      // have been ringing for. Nothing was sent, or `admitRing` refused it, or
+      // the websocket never came back — all three are "there is no call to
+      // join", and the honest render is the system call ending rather than a
+      // connected call that never connects.
+      if (_answered == channelId) _release(channelId);
+    });
+    _tryJoin();
+  }
+
+  /// Remember that [admitRing] admitted an invitation for this channel.
+  void _recordAdmission(CallInvite? invite) {
+    if (invite != null) {
+      _admitted[invite.channelId]?.cancel();
+      _admitted[invite.channelId] = Timer(
+        kSystemCallRingTrust,
+        () => _admitted.remove(invite.channelId),
+      );
+    }
+    _tryJoin();
+  }
+
+  /// Was an invitation for this channel admitted recently enough to still name
+  /// a call the handset could be ringing for?
+  ///
+  /// The bound is [kSystemCallRingTrust] — the SAME window the native side
+  /// applies to an unanswered ring, pinned to it by
+  /// `system_call_channel_contract_test.dart` rather than by a comment. Past it
+  /// the native map has stopped believing in the ring too, so there is nothing
+  /// left for an admission to be proof of.
+  bool _wasAdmitted(String channelId) => _admitted.containsKey(channelId);
+
+  /// The held answer became a call. Drop the hold; end nothing.
+  void _consume() {
+    _answered = null;
+    _joinDeadline?.cancel();
+    _joinDeadline = null;
+  }
+
+  /// We will not be joining [channelId]. End its system call.
+  ///
+  /// Safe for a channel that is not currently held — that is the displacement
+  /// case — and a structural no-op at the native layer when no system call
+  /// exists for it.
+  void _release(String channelId) {
+    if (_answered == channelId) _consume();
+    unawaited(
+      ref.read(systemCallBridgeProvider)?.end(channelId) ?? Future.value(),
+    );
   }
 
   /// The user ended the call in the SYSTEM UI. On a locked handset that is the
@@ -225,7 +313,15 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // `dm:<id>:<id>` so nothing is live; the miss is what matters, because it is
     // the system-UI hangup failing to leave the room with the camera still on,
     // reported by nothing.
-    if (router.state.pathParameters['channelId'] != channelId) return;
+    // BOTH halves: the route, and the id. `pathParameters['channelId']` is set
+    // on ANY route carrying that parameter, so on its own this is "pop whatever
+    // is on top if it happens to name this channel". `/call/` is a literal
+    // prefix that percent-encoding never touches, so adding it costs nothing
+    // and restores the route identity the old string compare had by accident
+    // (Tesla, round 2: right about encoding, wrong about which route).
+    final state = router.state;
+    if (!state.uri.path.startsWith('/call/')) return;
+    if (state.pathParameters['channelId'] != channelId) return;
     if (router.canPop()) router.pop();
   }
 
@@ -241,7 +337,8 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // nothing can ring — and belt-and-braces on purpose: the two gates protect
     // against different orders of a future edit.
     if (bridge == null) {
-      _answered = null;
+      // No bridge means no system call to end and no route to join into.
+      _consume();
       return;
     }
     // THE THREE ANSWERS THE SESSION CAN GIVE, and they are three, not two. A
@@ -253,28 +350,24 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     if (session.value == null) {
       // Resolved, and nobody is signed in: `build()` awaits the restore, so
       // `AsyncData(null)` is a definite answer. This call can never be joined.
-      if (session is AsyncData<AppUser?>) _abandonHeldAnswer();
+      if (session is AsyncData<AppUser?>) _release(channelId);
       // Loading or error: the question is still open. `AsyncError` is
       // deliberately on this side — a failed round trip is "unknown", not
       // "nobody", and hanging up on it would refuse a call the user can take
       // the moment the network comes back.
       return;
     }
-    // THE VERIFIED INVITATION, or nothing. `incomingRingProvider` publishes only
-    // what `admitRing` admitted, so reading it here REUSES the nine start-gate
-    // refusals rather than re-deciding them — `unverifiedOrigin`, the signature
-    // check, at the head of them.
-    final admitted = ref.read(incomingRingProvider);
-    if (admitted?.channelId != channelId) {
+    // THE VERIFIED INVITATION, or nothing. Only `admitRing` puts anything in
+    // `_admitted`, so this REUSES the nine start-gate refusals rather than
+    // re-deciding them — `unverifiedOrigin`, the signature check, at the head.
+    if (!_wasAdmitted(channelId)) {
       // Not yet, or never. Hold, and let the deadline decide which — the
       // invitation is a websocket message and this is routinely a cold start.
-      _armJoinDeadline(channelId);
+      // The deadline is already running — it was armed when the answer was
+      // held — so this is a plain "not yet", with nothing to arm or re-arm.
       return;
     }
-    _answered = null;
-    _joinDeadline?.cancel();
-    _joinDeadline = null;
-    _deadlineFor = null;
+    _consume();
 
     if (isInLiveCall) {
       // Two calls at once is a state neither CallKit (`maximumCallsPerCallGroup
@@ -282,7 +375,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       // tells the user; here there is nobody to tell — the answer came from the
       // lock screen — so the honest render is the system call ending rather
       // than a connected call that silently goes nowhere.
-      unawaited(bridge.end(channelId));
+      _release(channelId);
       return;
     }
     // The same invitation is very likely ALSO ringing in-app: the island wakes
@@ -294,20 +387,6 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // announce the end of, and this is the callee's side. `CallScreen` documents
     // null as the correct value for every way in but the caller's.
     unawaited(pushCallOn(ref.read(routerProvider), channelId));
-  }
-
-  /// There will never be a session to join this call with. End the system call
-  /// rather than leave the OS showing a connected call with nothing behind it.
-  void _abandonHeldAnswer() {
-    final channelId = _answered;
-    if (channelId == null) return;
-    _answered = null;
-    _joinDeadline?.cancel();
-    _joinDeadline = null;
-    _deadlineFor = null;
-    unawaited(
-      ref.read(systemCallBridgeProvider)?.end(channelId) ?? Future.value(),
-    );
   }
 
   @override
@@ -326,7 +405,10 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // start it is the later of the two: the session restores, the websocket
     // connects, the invitation arrives, `admitRing` runs, and only then is
     // there anything to join.
-    ref.listen<CallInvite?>(incomingRingProvider, (_, _) => _tryJoin());
+    ref.listen<CallInvite?>(
+      incomingRingProvider,
+      (_, next) => _recordAdmission(next),
+    );
     return widget.child;
   }
 }

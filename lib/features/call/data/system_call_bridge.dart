@@ -108,3 +108,15 @@ const kSystemCallActionsChannel = 'cc.imagineering.aikoChatApp/call/actions';
 
 /// The method channel Dart ends a system call on.
 const kSystemCallControlChannel = 'cc.imagineering.aikoChatApp/call/control';
+
+/// How long an admitted invitation remains proof that this handset could still
+/// be ringing for that channel.
+///
+/// **THE SAME NUMBER AS `CallKitRinger.liveCallTrustWindow`, and that is the
+/// whole point.** The native side stops believing in an unanswered ring past
+/// this bound; an app-side proof that outlived it would be vouching for a call
+/// the device itself has forgotten, and one that died sooner would hang up on a
+/// handset that is still ringing. Two halves of one quantity, in two languages
+/// — so it is pinned across the boundary by
+/// `system_call_channel_contract_test.dart` rather than by this comment.
+const Duration kSystemCallRingTrust = Duration(seconds: 120);
