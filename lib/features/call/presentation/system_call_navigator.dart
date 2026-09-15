@@ -24,6 +24,37 @@ import 'call_screen.dart' show isInLiveCall, pushCallOn;
 /// relaunches a terminated app, so the mount point must be alive before the
 /// first real screen is.
 ///
+/// ## THIS IS A SECOND ADMISSION PATH, and it honours none of the nine gates
+///
+/// `NotificationTapChannel` argues, in writing, that a tapped call notification
+/// must open the CONVERSATION and never navigate straight into a call — because
+/// `admitRing` carries nine start-gate refusals (signature verification at the
+/// head of them) and a handler that jumped into the room would be a second
+/// admission path honouring none of them. **This class does exactly what that
+/// comment forbids**, and the reason it is not the same decision is design 16
+/// v2 §4:
+///
+/// > all nine refusals become post-hoc [under CallKit]... an invite with a
+/// > forged or absent signature rings the handset — full-screen, through silent
+/// > mode and DND — before anything verifies it.
+///
+/// A tap is a navigation choice made about a notification that already sat
+/// there quietly. **An answer is a choice the user made about a full-screen ring
+/// that has ALREADY fired**, un-gated, because iOS requires the report before
+/// the delivery handler returns. Refusing to connect at this point does not
+/// un-ring the phone; it renders as a call that cannot be answered, which is
+/// the failure mode the ring increment deliberately avoided.
+///
+/// So the honest statement is not "this path is gated". It is: **the gate that
+/// matters moved, and has not been built.** The recorded decision (2026-09-01,
+/// design 16 v2's open questions) is that Swift verifies Ed25519 against the
+/// device-local consented key set BEFORE reporting to CallKit — proof moving to
+/// the layer that is awake, rather than later or to the island. The payload is
+/// `{"c", "k"}` today and carries no signature, so that verification has
+/// nothing to check yet, and every VoIP ring on this build is unverified at the
+/// moment it fires. That is a property of the RING, not of this class, and it
+/// is the thing to fix rather than a reason to make the answer refuse.
+///
 /// ## Why the answer is HELD rather than acted on
 ///
 /// The gap this spans is not the router's, it is the SESSION's. Answering a
