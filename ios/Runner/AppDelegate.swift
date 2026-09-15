@@ -910,8 +910,19 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
       // here produces the same termination iOS would impose anyway while also
       // burning it as our own crash, and a deliberate crash on a user's handset
       // is a worse answer than a line the next build can find.
+      //
+      // **BUT IT STILL REPORTS**, and that is the part that was missing (Tesla,
+      // cage-match PR #201). This was the one path in the file that returned
+      // from a VoIP delivery without reporting to CallKit — and consecutive
+      // unreported deliveries are exactly what buys per-device VoIP denial, the
+      // worst state in this system and one APNs never tells us about. An
+      // impossible branch that violates the platform contract IF it happens is
+      // not made safe by the argument that it will not happen; `unreachable` is
+      // a claim, and the obligation is a rule. Routing an empty payload through
+      // `handle` lands on its `default` arm — report, then end immediately —
+      // which is the measured-safe discharge and never sustains a ring.
       NSLog("[pushkit] armed with no ringer — see #3609")
-      return completion()
+      return CallKitRinger.shared.handle(payload: [:], completion: completion)
     }
     ringer.handle(payload: payload.dictionaryPayload, completion: completion)
   }
