@@ -146,6 +146,34 @@ void main() {
     expect(find.text('home'), findsOneWidget);
   });
 
+  testWidgets('a hangup lands even for a channel id needing encoding', (
+    tester,
+  ) async {
+    // The regression this pins: `_leaveIfOpen` used to compare a reconstructed
+    // `/call/$id` against `router.state.uri.path`, which is percent-ENCODED.
+    // Measured across five ids — `dm:aaa:bbb` matched, `a b` rendered
+    // `/call/a%20b` and did NOT, `é` rendered `/call/%C3%A9` and did not —
+    // while `pathParameters['channelId']` returns the decoded id every time.
+    // On a miss the red button stops the system call and the app STAYS in the
+    // room with the camera live, reported by nothing. Island ids are
+    // `dm:<id>:<id>` today, so this is the fragility, not a live bug.
+    const encoded = 'dm:a b:é';
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, encoded);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $encoded'), findsOneWidget);
+
+    bridge.emit(SystemCallActionKind.ended, encoded);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('CALL $encoded'),
+      findsNothing,
+      reason: 'the system-UI hangup must leave the room whatever the id spells',
+    );
+  });
+
   testWidgets('an end for a DIFFERENT channel leaves the call alone', (
     tester,
   ) async {

@@ -133,7 +133,16 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// came from).
   void _leaveIfOpen(String channelId) {
     final router = ref.read(routerProvider);
-    if (router.state.uri.path != '/call/$channelId') return;
+    // THE PARSED PARAMETER, NEVER A RECONSTRUCTED PATH STRING. `state.uri.path`
+    // is percent-ENCODED and the id is not, so `'/call/$channelId'` compares two
+    // different encodings and silently fails to match. Measured across five ids:
+    // `dm:aaa:bbb` matches, `a b` renders `/call/a%20b` and does NOT, `é` renders
+    // `/call/%C3%A9` and does not — while `pathParameters['channelId']` returns
+    // the decoded id and matches in every case. Today's island ids are
+    // `dm:<id>:<id>` so nothing is live; the miss is what matters, because it is
+    // the system-UI hangup failing to leave the room with the camera still on,
+    // reported by nothing.
+    if (router.state.pathParameters['channelId'] != channelId) return;
     if (router.canPop()) router.pop();
   }
 
