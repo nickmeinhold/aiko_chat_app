@@ -391,7 +391,14 @@ class CallInvite {
   /// occur. Refusing the null at the door deletes all three.
   final String islandMsgId;
 
-  /// The LiveKit room to join. The room IS the channel id (#2726).
+  /// The channel whose LiveKit room this invitation is for (#2726).
+  ///
+  /// **The room is NOT the bare channel id** — measured against the live island
+  /// 2026-09-16, the SFU room is `<island>:<channelId>` (`enspyr:01KZR8…`).
+  /// Nothing here has to know that: the client joins whatever room the island's
+  /// minted token names, and this id is what the token is minted FOR. Recorded
+  /// because both repos restated "the room IS the channel" for an evening and it
+  /// sent a participant probe hunting an empty room that nobody joins.
   final String channelId;
 
   /// The caller, as carried on the signed message.

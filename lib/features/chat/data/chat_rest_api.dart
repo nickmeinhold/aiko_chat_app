@@ -476,7 +476,9 @@ abstract interface class ChatRestApi {
   Future<List<Channel>> listDms();
 
   /// Mint a LiveKit join token for an A/V call in [channelId] (handoff #2726).
-  /// The room IS the channel; participant identity is server-derived. Throws
+  /// The room is derived from the channel by the ISLAND and named in the minted
+  /// token — `<island>:<channelId>` as of 2026-09-16, not the bare channel id.
+  /// Participant identity is server-derived. Throws
   /// [VideoNotEnabled] on a 503 (deployment has no video), [Unauthorized] on a
   /// terminal auth rejection, [Forbidden]/not-found on a 404 (non-member /
   /// existence-hiding), and [NetworkUnavailable] when the island is unreachable.

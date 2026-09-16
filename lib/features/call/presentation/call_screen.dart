@@ -83,7 +83,8 @@ Future<void> pushCallOn(
 void resetCallLaunchGuard() => _callLaunchInFlight = false;
 
 /// Full-screen A/V call for a channel (handoff #2726). Owns a [CallSession] for
-/// its lifetime; the room is the channel id. Renders the first remote
+/// its lifetime; the room is whatever the island's minted token names (it is
+/// derived from the channel, but is NOT the bare channel id). Renders the first remote
 /// participant full-screen with a mirrored local PiP overlay.
 class CallScreen extends ConsumerStatefulWidget {
   const CallScreen({super.key, required this.channelId, this.inviteId});
