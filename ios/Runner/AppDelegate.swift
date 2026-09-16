@@ -1,7 +1,83 @@
 import Flutter
 import UIKit
+import AVFoundation
+import CallKit
 import PushKit
 import UserNotifications
+import WebRTC
+
+/// The CallKit ↔ WebRTC audio handoff, and the reason a CallKit-answered call
+/// was silent until 2026-09-16.
+///
+/// **NOBODY OWNED THE AUDIO SESSION.** CallKit activates the `AVAudioSession`
+/// itself when a call is answered and announces it via
+/// `provider(_:didActivate:)`; WebRTC, left alone, activates its own on its own
+/// clock (`AudioUtils.ensureAudioSessionWithRecording:`). Neither knew about the
+/// other, so the first complete call this product ever made — rang, answered,
+/// connected — carried no sound.
+///
+/// Neither Dart package exposes the fix: `flutter_webrtc 1.6.0` has no
+/// `useManualAudio`/`audioSessionDidActivate` surface at all (checked in Dart
+/// AND `common/darwin/Classes`), and `livekit_client 2.8.1` configures only the
+/// category. But `WebRTC` is an **exported SPM library product** of the
+/// flutter_webrtc package — its `Package.swift` exports it precisely "so
+/// dependent plugins can import WebRTC without declaring a second copy of the
+/// binary target" — so `RTCAudioSession` is reachable from here directly. The
+/// package's API surface and the platform's are different questions.
+///
+/// ## ARMED PER CALL, NEVER GLOBALLY — this is the whole design
+///
+/// `useManualAudio` is a process-wide switch, and the textbook recipe sets it
+/// once at launch. **That would break a path that works today.** This app has
+/// TWO ways to answer: CallKit, and `ring_overlay.dart`'s in-app `_RingBanner`,
+/// which pushes `/call/...` with CallKit nowhere in it. In manual mode WebRTC
+/// waits for an `audioSessionDidActivate` that only CallKit ever sends — so a
+/// global switch silences the in-app path, which currently carries sound, while
+/// demoing perfectly on the CallKit test that motivated the change.
+///
+/// So manual mode is ENTERED on a CallKit answer and LEFT on that call's end.
+/// The in-app path never sees it and keeps WebRTC's automatic management.
+///
+/// **Every exit must disarm, including the abnormal ones.** Leaving the process
+/// in manual mode with audio disabled is a silent, durable break of the in-app
+/// path that outlives the call that caused it — worse than the bug being fixed,
+/// because it needs no CallKit call to reproduce and nothing reports it.
+enum CallAudioSession {
+  /// Hand WebRTC over to CallKit for this call. Called from the answer action
+  /// BEFORE Dart is told to join, so manual mode is in force before any audio
+  /// track can start — if a track started first it would already have taken the
+  /// session under automatic management.
+  static func arm() {
+    let session = RTCAudioSession.sharedInstance()
+    session.useManualAudio = true
+    // Audio stays OFF until CallKit hands us an activated session. This is the
+    // half that makes the handoff a handoff rather than a race.
+    session.isAudioEnabled = false
+  }
+
+  /// CallKit activated the session — release WebRTC onto it.
+  static func didActivate(_ audioSession: AVAudioSession) {
+    let session = RTCAudioSession.sharedInstance()
+    session.audioSessionDidActivate(audioSession)
+    session.isAudioEnabled = true
+  }
+
+  /// CallKit tore the session down.
+  static func didDeactivate(_ audioSession: AVAudioSession) {
+    let session = RTCAudioSession.sharedInstance()
+    session.audioSessionDidDeactivate(audioSession)
+    session.isAudioEnabled = false
+  }
+
+  /// Return the process to automatic management. Idempotent, and safe to call
+  /// on a path that never armed — which is why it is called from EVERY end,
+  /// rather than only from the ones believed to follow an answer.
+  static func disarm() {
+    let session = RTCAudioSession.sharedInstance()
+    session.isAudioEnabled = false
+    session.useManualAudio = false
+  }
+}
 
 /// The APNs device token, taken from Apple DIRECTLY.
 ///
@@ -250,6 +326,510 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
   }
 }
 
+/// The CallKit ring — the thing that makes an incoming call take over a locked
+/// handset instead of arriving as silence (Nick, 2026-09-09: *"ringing like a
+/// telephone is non-negotiable"*).
+///
+/// **THIS OBJECT IS WHAT MAKES ARMING VoIP SAFE.** `PushKitTokenChannel.start`
+/// takes one as a parameter, so a registry armed with nothing to report to is
+/// unconstructable rather than merely unwise (#3609, design 16 v2 §1).
+///
+/// ## The obligation, and why every path below reports
+///
+/// Since iOS 13 every VoIP push must be reported to CallKit **before the
+/// delivery handler returns**. Failing terminates the app, and repeated failures
+/// make the system stop delivering VoIP pushes to this app **on this device** —
+/// a per-device denial APNs never reports, because it keeps answering `200`.
+///
+/// Measured on a handset 2026-09-12 (claude-tasks#4278), which is what lets the
+/// end path below be a decision rather than a guess:
+///
+/// - **Enforcement is a CONSECUTIVE-violation counter that any successful report
+///   RESETS.** Four consecutive unreported pushes terminated; five interleaved
+///   with reports never did. The earlier "three unreported pushes" was a
+///   tolerance window read as a rate — it is a **run length**.
+/// - **`reportNewIncomingCall` then immediately `reportCall(endedAt:)` COUNTS as
+///   reported.** Seven consecutive, no termination.
+/// - **`reportCall(with:endedAt:)` against a LIVE ring RETRACTS it** — but
+///   whether that alone *counts as reported* is **UNMEASURED**, because the arm
+///   ran interleaved and an interleaved shape provably cannot punish anything.
+final class CallKitRinger: NSObject {
+  static let shared = CallKitRinger()
+
+  private let provider: CXProvider
+
+  /// Channel id → the call currently ringing for it, and when we reported it.
+  ///
+  /// **DEVICE-LOCAL, because the wire carries no call id.** The island's payload
+  /// is `{"aps": …, "c": <channel>, "k": <kind>}` — there is nothing to key an
+  /// end wake on but the channel, so the mapping has to live here (option (b),
+  /// agreed with the island tab: correct under both push-type paths and it adds
+  /// nothing to the wire).
+  ///
+  /// **IN UserDefaults, NOT IN MEMORY, and that is the whole point.** A VoIP
+  /// push RELAUNCHES a terminated app, so the process that reported the invite
+  /// is routinely not the process that receives the hangup. An in-memory map
+  /// would be empty exactly when the end wake arrives on a cold start, which is
+  /// the case this mechanism exists for.
+  private static let liveCallsKey = "callkit.liveCalls"
+
+  /// How long a mapping may be trusted.
+  ///
+  /// **The island owns the ring ceiling** (Nick, 2026-09-09, reversing design
+  /// 12's Decision 1c) and **that lease is not on the wire** — claude-tasks#4233,
+  /// the third clock. So this cannot be derived, only bounded: past this, assume
+  /// the ring is gone and take the safe path below. Deliberately LONGER than any
+  /// plausible lease, because the cost of over-trusting is one extra buzz and
+  /// the cost of under-trusting is a ring that never stops.
+  private static let liveCallTrustWindow: TimeInterval = 120
+
+  private override init() {
+    let config = CXProviderConfiguration()
+    config.supportsVideo = true
+    config.maximumCallsPerCallGroup = 1
+    config.supportedHandleTypes = [.generic]
+    // Explicit rather than defaulted. The iOS 26.5 SDK header says this defaults
+    // to YES; stating it makes the intent legible and means a future SDK default
+    // flip cannot silently change whether calls land in Recents. The product
+    // question of WHETHER they should is design 16 v2 §6a and is unfilled.
+    config.includesCallsInRecents = true
+    provider = CXProvider(configuration: config)
+    super.init()
+    provider.setDelegate(self, queue: nil)
+  }
+
+  // MARK: The total function on `k`
+
+  /// Handle one VoIP delivery. **Every path reports before calling `completion`.**
+  ///
+  /// **PERMISSIVE DECODE, AND IT IS A CROSS-REPO OBLIGATION** (design 16 v2 §7c).
+  /// Read the keys we know, ignore the rest, never fail closed on an unexpected
+  /// one. The island's ability to add fields later without a payload version bump
+  /// rests entirely on this property of code that lives only here — nothing goes
+  /// red if a later reader "tidies" it into a strict decoder, and it surfaces a
+  /// year later as *"why can't we add a field?"*.
+  func handle(payload: [AnyHashable: Any], completion: @escaping () -> Void) {
+    let channel = payload["c"] as? String
+    let kind = payload["k"] as? String
+
+    switch kind {
+    case "call_invite" where channel?.isEmpty == false:
+      reportInvite(channel: channel, completion: completion)
+    case "call_invite":
+      // AN INVITE WITH NO CHANNEL CANNOT BE ANSWERED, so it must not sustain —
+      // the same rule the `default` arm below states, applied to the arm that
+      // was quietly exempt from it (Tesla, cage-match PR #201).
+      //
+      // Both shapes were broken and they broke differently. A MISSING `c` rang
+      // with no mapping, so answering hit the `guard` and failed: a doorbell
+      // that cannot open, ringing until the user kills it. An EMPTY `c` was
+      // worse — `if let` accepts `""`, so it mapped, and answering FULFILLED
+      // while Dart's decoder (correctly) drops an empty channel: a CONNECTED
+      // call with nobody on the other end of the wire. On an unsigned payload
+      // that is a repeatable lock-screen weapon, and it cost one `where`.
+      NSLog("[callkit] call_invite with no usable `c`; reporting and ending")
+      reportAndEndImmediately(reason: .failed, completion: completion)
+    case "call_end":
+      reportEnd(channel: channel, completion: completion)
+    default:
+      // UNKNOWN OR MISSING — report, then immediately end. NEVER sustain.
+      //
+      // This is the load-bearing row of §7c's table: a third WakeKind added
+      // island-side can never become a spurious ring on an older build. It
+      // degrades into the momentary cell, which is a malformed-input failure
+      // mode rather than a destination a design routes callers into.
+      reportAndEndImmediately(reason: .failed, completion: completion)
+    }
+  }
+
+  private func reportInvite(channel: String?, completion: @escaping () -> Void) {
+    let uuid = UUID()
+    let update = CXCallUpdate()
+    // Tier 3 of design 12 Decision 6's three tiers: the placeholder. It names the
+    // PRODUCT, not a person (Nick, 2026-08-30) — a wrong name on a locked screen
+    // is worse than no name. Tiers 1 and 2 (the App Group name cache, and
+    // reportCall(with:updated:) once Dart is up) are not built yet.
+    update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
+    update.hasVideo = true
+
+    // Recorded BEFORE the report, not in its completion. If iOS terminates this
+    // process during the report, the end wake that follows must still find the
+    // UUID of the ring that is on screen — and the end wake is routinely handled
+    // by a different process than the invite.
+    if let channel { rememberLiveCall(uuid, for: channel) }
+
+    provider.reportNewIncomingCall(with: uuid, update: update) { error in
+      if error != nil, let channel { self.forgetLiveCall(for: channel) }
+      completion()
+    }
+  }
+
+  /// A hangup arrived. **Two paths, and the branch is chosen so that the arm
+  /// with an UNMEASURED must-report status is only ever taken when the counter
+  /// has provably just been reset.**
+  ///
+  /// - **A ring we believe is live** → `reportCall(endedAt:)` alone. Measured to
+  ///   retract the ring, and **silent** — no buzz on a normal hangup. Its
+  ///   must-report status is unmeasured, and that is acceptable here and ONLY
+  ///   here: a live mapping exists only because an invite wake reported
+  ///   successfully moments ago, and a successful report resets the counter. One
+  ///   violation on a reset counter cannot reach a threshold of four.
+  ///
+  /// - **No live ring — a LONE END** (invite throttled, expired, or the device
+  ///   was off) → the measured-safe `reportNewIncomingCall` + immediate end.
+  ///   Costs a momentary buzz on a call that was never announced, and buys the
+  ///   guarantee where it is actually needed.
+  ///
+  /// **THE LONE END IS THE DANGEROUS SHAPE AND THIS IS WHY THE BRANCH EXISTS.**
+  /// The island tab named it within the hour of the measurement landing: four
+  /// consecutive lone ends, each "optimised" into a bare `endedAt` against
+  /// nothing, is four consecutive violations with no good report between — the
+  /// one production path to per-device denial. And the island MANUFACTURES that
+  /// shape under load, because the per-recipient wake budget throttles invites
+  /// while ends still go out (claude-tasks#4233/#4265). So the safe arm is bound
+  /// to exactly the input that produces it, rather than to a preference.
+  private func reportEnd(channel: String?, completion: @escaping () -> Void) {
+    guard let channel, let live = liveCall(for: channel) else {
+      reportAndEndImmediately(reason: .remoteEnded, completion: completion)
+      return
+    }
+    provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
+    forgetLiveCall(for: channel)
+    completion()
+  }
+
+  private func reportAndEndImmediately(
+    reason: CXCallEndedReason, completion: @escaping () -> Void
+  ) {
+    let uuid = UUID()
+    let update = CXCallUpdate()
+    update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
+    provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+      guard error == nil else { return completion() }
+      // INSIDE the report's completion, deliberately. Ending before the report
+      // has landed races "unknown UUID" against SpringBoard, and the losing side
+      // of that race is a ring nothing ever stops.
+      self?.provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
+      completion()
+    }
+  }
+
+  // MARK: What Dart can ask of the system call
+
+  /// Dart is done with this channel's call — it left the room, the join failed,
+  /// or it answered the same call in-app. End the system call so the OS is not
+  /// left showing a connected call with nothing behind it.
+  ///
+  /// **A NO-OP BY CONSTRUCTION when there is no system call**, which is what
+  /// makes it safe to call unconditionally from Dart's one teardown path. An
+  /// outgoing call, or a call placed while the app was foreground and never
+  /// pushed, has no entry in the map and nothing happens here.
+  ///
+  /// `reportCall(endedAt:)` rather than a `CXEndCallAction` transaction through
+  /// `CXCallController`, and the reason is the echo. A requested end round-trips
+  /// through our own `CXEndCallAction` delegate, which would emit `ended` back to
+  /// the Dart half that just asked for this — a loop to break rather than a
+  /// sequence to follow. The cost is the reason enum: `.remoteEnded` is the
+  /// closest member and it is not literally true (nobody remote ended it). There
+  /// is no "this app's own UI ended it" case; the Recents entry is the one
+  /// place a reader could notice.
+  func endSystemCall(channel: String) {
+    guard let live = liveCall(for: channel) else { return }
+    provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
+    forgetLiveCall(for: channel)
+  }
+
+  // MARK: The device-local channel → UUID map
+
+  /// The channel a live call UUID belongs to — the map read BACKWARDS.
+  ///
+  /// The forward direction answers the hangup path ("is this channel ringing?");
+  /// this direction answers the answer path ("what is the user answering?"),
+  /// because a `CXAnswerCallAction` carries a UUID and nothing else. The map is
+  /// at most one entry deep in practice (`maximumCallsPerCallGroup = 1`), so the
+  /// scan is not worth a second index.
+  private func channel(for uuid: UUID) -> String? {
+    for (channel, entry) in stored() where entry.uuid == uuid.uuidString {
+      return channel
+    }
+    return nil
+  }
+
+  /// The call this channel is ringing for, or has been ANSWERED for.
+  ///
+  /// **THE TRUST WINDOW BOUNDS A RING, AND AN ANSWERED CALL IS NOT A RING.**
+  /// `liveCallTrustWindow` is a bound on how long to believe in a ring whose
+  /// lease is not on the wire. Applied to an ANSWERED call it measures the wrong
+  /// lifetime entirely: a three-minute conversation is ordinary, and until this
+  /// carried `answered` the map went silent at T+120s underneath a live call —
+  /// so Dart's leave path found no UUID, `endSystemCall` became a no-op, and the
+  /// OS kept a CONNECTED call that Dart believed it had buried. The phantom the
+  /// whole Dart→Swift direction exists to prevent, on every call over two
+  /// minutes. (Tesla, cage-match PR #201 — the best finding of the panel.)
+  ///
+  /// So the window is scoped to the state it was reasoned about: an UNANSWERED
+  /// entry is trusted for 120s, an ANSWERED one until something ends it. This is
+  /// not a longer window; it is the same window applied only to the thing it
+  /// describes.
+  private func liveCall(for channel: String) -> UUID? {
+    guard
+      let entry = stored()[channel],
+      let uuid = UUID(uuidString: entry.uuid)
+    else { return nil }
+    if entry.answered { return uuid }
+    guard Date().timeIntervalSince1970 - entry.at < Self.liveCallTrustWindow
+    else { return nil }
+    return uuid
+  }
+
+  private func rememberLiveCall(_ uuid: UUID, for channel: String) {
+    var map = stored()
+    // LAST WRITER WINS, and the loser is ORPHANED rather than ended. Two
+    // overlapping calls in one channel is a state the wire cannot currently
+    // express — `c` names a channel, not a call — so the second invite's end
+    // wake would end the second call and leave the first ringing to its lease.
+    // Named rather than defended: it resolves properly only when the call id
+    // ships inside the sealed envelope (design 16 v2 §4c), and defending it here
+    // would be a guard on a coupling that the wire should remove.
+    map[channel] = (
+      uuid: uuid.uuidString, at: Date().timeIntervalSince1970, answered: false
+    )
+    write(map)
+  }
+
+  /// This channel's call has been ANSWERED, so its mapping stops aging out.
+  ///
+  /// Written from the `CXAnswerCallAction` handler, and deliberately BEFORE the
+  /// action is fulfilled — an entry that expires mid-call is the defect this
+  /// flag exists to remove, so it must not depend on anything downstream of the
+  /// answer succeeding.
+  private func markAnswered(channel: String) {
+    var map = stored()
+    guard let entry = map[channel] else { return }
+    map[channel] = (uuid: entry.uuid, at: entry.at, answered: true)
+    write(map)
+  }
+
+  private func forgetLiveCall(for channel: String) {
+    var map = stored()
+    map.removeValue(forKey: channel)
+    write(map)
+  }
+
+  private func stored() -> [String: (uuid: String, at: TimeInterval, answered: Bool)] {
+    let raw = UserDefaults.standard.dictionary(forKey: Self.liveCallsKey) ?? [:]
+    var out: [String: (uuid: String, at: TimeInterval, answered: Bool)] = [:]
+    for (channel, value) in raw {
+      guard
+        let entry = value as? [String: Any],
+        let uuid = entry["uuid"] as? String,
+        let at = entry["at"] as? TimeInterval
+      else { continue }  // Permissive here too: a malformed entry is not a live call.
+      // `answered` DEFAULTS FALSE, which is what an entry written by the
+      // previous build has. Defaulting it true would resurrect every stale
+      // mapping on that device as an un-aging one.
+      out[channel] = (
+        uuid: uuid, at: at, answered: entry["answered"] as? Bool ?? false
+      )
+    }
+    return out
+  }
+
+  private func write(_ map: [String: (uuid: String, at: TimeInterval, answered: Bool)]) {
+    var raw: [String: Any] = [:]
+    for (channel, entry) in map {
+      raw[channel] = ["uuid": entry.uuid, "at": entry.at, "answered": entry.answered]
+    }
+    UserDefaults.standard.set(raw, forKey: Self.liveCallsKey)
+  }
+}
+
+/// What the SYSTEM CALL UI did, handed to Dart — and the one thing Dart can ask
+/// of it back (claude-tasks#4420).
+///
+/// **THE RING WITHOUT THIS IS A DOORBELL ON AN EMPTY HOUSE.** `CallKitRinger`
+/// makes a locked handset ring; every part of actually *being on a call* — the
+/// island's room token, the LiveKit connection, the camera — lives in Dart. This
+/// is the seam between them, and it is deliberately two-way:
+///
+/// - **Swift → Dart** (`/call/actions`): the user answered, or the user hung up
+///   in the system UI. On a locked handset the system UI is the ONLY way out of
+///   a call, so the `ended` direction is not a nicety — without it the room
+///   stays joined after the user presses the red button.
+/// - **Dart → Swift** (`/call/control`): Dart's call is over, so end the system
+///   call. Without this, a join that fails leaves the OS showing a CONNECTED
+///   call with no media behind it, and that phantom outlives the app.
+///
+/// **A LIST, NOT A SLOT, and this is where it differs from
+/// `NotificationTapChannel`.** That one holds the newest tap because a tap is a
+/// DESTINATION and only the newest is correct. These are TRANSITIONS: answer
+/// then end is a call that was taken and hung up, and keeping only the newest
+/// would be indistinguishable from a hangup for a call that was never answered.
+/// Replayed in order, they leave Dart in the state the user actually produced.
+///
+/// **THE COLD-START CASE IS THE NORMAL ONE.** A VoIP push relaunches a
+/// terminated app; the user can answer before the Flutter engine finishes
+/// booting, let alone before Dart restores a session. So an action with nobody
+/// listening is HELD, exactly like a tap, and drained when Dart subscribes.
+final class SystemCallChannel: NSObject, FlutterStreamHandler {
+  static let shared = SystemCallChannel()
+
+  /// The transitions Dart is told about. **A CLOSED SET, not free text** — Dart
+  /// parses these back into a sealed type, so a new member is a compile-time
+  /// event on one side and a `default:` on the other.
+  enum Action: String {
+    case answered
+    case ended
+  }
+
+  private var sink: FlutterEventSink?
+
+  /// Actions that arrived with nobody listening yet. See the cold-start note.
+  private var pending: [[String: String]] = []
+
+  func register(with registrar: FlutterPluginRegistrar) {
+    FlutterEventChannel(
+      name: "cc.imagineering.aikoChatApp/call/actions",
+      binaryMessenger: registrar.messenger()
+    ).setStreamHandler(self)
+
+    FlutterMethodChannel(
+      name: "cc.imagineering.aikoChatApp/call/control",
+      binaryMessenger: registrar.messenger()
+    ).setMethodCallHandler { call, result in
+      switch call.method {
+      case "endSystemCall":
+        guard
+          let args = call.arguments as? [String: Any],
+          let channel = args["channel"] as? String, !channel.isEmpty
+        else {
+          // Dart asked to end SOMETHING and did not say what. Ending the wrong
+          // call is worse than ending none, and answering `nil` lets the Dart
+          // side's own error path say so.
+          return result(
+            FlutterError(
+              code: "no-channel",
+              message: "endSystemCall requires a non-empty `channel`",
+              details: nil))
+        }
+        CallKitRinger.shared.endSystemCall(channel: channel)
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  func emit(action: Action, channel: String) {
+    let event = ["action": action.rawValue, "channel": channel]
+    if let sink = sink {
+      sink(event)
+    } else {
+      pending.append(event)
+    }
+  }
+
+  func onListen(
+    withArguments _: Any?, eventSink events: @escaping FlutterEventSink
+  ) -> FlutterError? {
+    sink = events
+    let held = pending
+    pending = []
+    held.forEach { events($0) }
+    return nil
+  }
+
+  func onCancel(withArguments _: Any?) -> FlutterError? {
+    sink = nil
+    return nil
+  }
+}
+
+extension CallKitRinger: CXProviderDelegate {
+  func providerDidReset(_ provider: CXProvider) {
+    // The system tore down every call we had. The map now describes nothing, and
+    // a stale entry here would make the next end wake take the silent arm
+    // against a ring that no longer exists — i.e. the unmeasured path on a
+    // counter we cannot vouch for.
+    //
+    // TELL DART BEFORE FORGETTING, for every channel the map still names. A
+    // reset is the one end that arrives with no action and no UUID to match, so
+    // a live call screen would otherwise stay mounted over a room the OS has
+    // already torn the audio out from under.
+    for (channel, _) in stored() {
+      SystemCallChannel.shared.emit(action: .ended, channel: channel)
+    }
+    UserDefaults.standard.removeObject(forKey: Self.liveCallsKey)
+    // A reset is the end that arrives with no action and no UUID, so it is the
+    // one path that would otherwise strand the process in manual mode with no
+    // `CXEndCallAction` ever coming to release it.
+    CallAudioSession.disarm()
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+    // THE ANSWER IS A HANDOFF, NOT A CONNECTION. Everything that actually makes
+    // a call — the island token, the room, the camera — lives in Dart, so all
+    // this can do is name the channel and let the Dart half join it. See
+    // `SystemCallChannel` for why the answer survives Dart not existing yet.
+    guard let channel = channel(for: action.callUUID) else {
+      // No mapping, so nothing to join: there is no other carrier of the
+      // channel id, and the room IS the channel. `fail()` rather than
+      // `fulfill()` — fulfilling would present a connected call that can never
+      // carry media, and a call that visibly fails is the honest render of a
+      // call we cannot place. Only reachable if the map was cleared between the
+      // report and the answer (`providerDidReset`, or a reinstall).
+      NSLog("[callkit] answered a call with no channel mapping; failing the action")
+      action.fail()
+      return
+    }
+    // BEFORE fulfilling: from here the entry describes a CALL, not a ring, and
+    // must stop aging out from under the teardown path.
+    markAnswered(channel: channel)
+    // BEFORE the emit, not after: the emit is what sends Dart to join the room,
+    // and joining is what creates the audio track. Arming after it would be a
+    // race whose losing side is a track that took the session under automatic
+    // management before manual mode was in force — i.e. exactly today's bug,
+    // reproduced intermittently instead of always. See `CallAudioSession`.
+    CallAudioSession.arm()
+    SystemCallChannel.shared.emit(action: .answered, channel: channel)
+    action.fulfill()
+  }
+
+  func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+    // The handoff this class exists for. Without it CallKit owns an activated
+    // session that WebRTC never learns about, and the call is silent.
+    CallAudioSession.didActivate(audioSession)
+  }
+
+  func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+    CallAudioSession.didDeactivate(audioSession)
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+    // Says the call ENDED. It does NOT say who ended it — user, system timeout,
+    // or our own reportCall. An earlier spike logged this as "ended by user" and
+    // that label, inherited verbatim, produced a confident wrong reading that
+    // survived a night of self-corroboration (claude-tasks#4278). Record what
+    // happened; leave why to whoever has the timestamps.
+    //
+    // WHOEVER ended it, Dart has to hear about it: this is the hangup button on
+    // the lock screen and in the system call UI, and it is the ONLY way out of
+    // a call answered from a locked handset. Emitted before the mapping is
+    // forgotten, because the channel is what identifies the call to Dart.
+    for (channel, entry) in stored() where entry.uuid == action.callUUID.uuidString {
+      SystemCallChannel.shared.emit(action: .ended, channel: channel)
+      forgetLiveCall(for: channel)
+    }
+    // Unconditional, and deliberately OUTSIDE the loop: a hangup whose UUID
+    // matches no stored entry still ends whatever CallKit call was live, and
+    // leaving the process in manual mode would silently break the in-app ring
+    // path from here on — a durable break outliving the call that caused it.
+    // Disarming a call that never armed is a no-op (see `CallAudioSession`).
+    CallAudioSession.disarm()
+    action.fulfill()
+  }
+}
+
 /// The PushKit VoIP token, handed to Dart so the island can ring this handset
 /// like a telephone (Nick, 2026-09-09: "ringing like a telephone is
 /// non-negotiable").
@@ -284,6 +864,11 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
   private var registry: PKPushRegistry?
   private var sink: FlutterEventSink?
 
+  /// Set by [start] in the same statement that arms the registry, so it is
+  /// non-nil whenever a push can arrive. Not optional-by-design — optional
+  /// only because it cannot be an `init` parameter on a `shared` singleton.
+  private var ringer: CallKitRinger?
+
   /// The last token handed to Dart, so a re-registration reporting the SAME
   /// value is not published as a rotation — the same reason [ApnsTokenChannel]
   /// keeps one.
@@ -312,26 +897,33 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
     ).setStreamHandler(self)
   }
 
-  // THERE IS DELIBERATELY NO `start()` IN THIS BUILD, and its absence is the
-  // safety property — not an omission to be tidied up by the next reader.
-  //
-  // Constructing a PKPushRegistry and assigning `desiredPushTypes` is the ONLY
-  // thing that arms VoIP delivery. Armed without a CXProvider to report to, the
-  // first VoIP push terminates the app, and repeated terminations make iOS stop
-  // delivering VoIP pushes to this app on this device — a per-device denial that
-  // no reinstall undoes quickly.
-  //
-  // An earlier revision kept `start()` here, unused, and rested the safety on
-  // the fact that nothing called it. Kelvin, round 1: "the only thing preventing
-  // this is the prayer that start() is never called — that's not engineering."
-  // Correct, and a negative proof about the whole program is exactly the shape
-  // that a later one-line edit breaks silently. So the method is GONE: `registry`
-  // is never non-nil, the delegate callbacks below are unreachable by
-  // construction rather than by convention, and there is nothing to call.
-  //
-  // It comes back with the CXProvider, in the same increment, taking the
-  // provider as a parameter — so an armed registry without something to report
-  // to becomes unconstructable rather than merely unwise (#3609).
+  /// Arm VoIP delivery, **taking the thing that will answer for it**.
+  ///
+  /// Constructing a `PKPushRegistry` and assigning `desiredPushTypes` is the ONLY
+  /// thing that makes iOS deliver VoIP pushes to this app. Armed with nothing to
+  /// report to, the first push terminates the process, and repeated failures make
+  /// the system stop delivering VoIP pushes to this app **on this device** — a
+  /// denial APNs never reports, because it keeps answering `200`.
+  ///
+  /// **THE PARAMETER IS THE SAFETY PROPERTY.** An earlier revision had a bare
+  /// `start()` sitting unused, resting on the fact that nothing called it.
+  /// Kelvin, cage-match round 1: *"the only thing preventing this is the prayer
+  /// that start() is never called — that's not engineering."* Correct, so the
+  /// method was deleted outright rather than left guarded by convention, and it
+  /// comes back only now, in the same increment as [CallKitRinger], shaped so the
+  /// bad state cannot be written down: there is no way to arm the registry
+  /// without handing over the object that discharges the obligation.
+  ///
+  /// Idempotent, because a VoIP push can itself relaunch the app and run
+  /// `didFinishLaunchingWithOptions` again.
+  func start(reportingTo ringer: CallKitRinger) {
+    guard registry == nil else { return }
+    self.ringer = ringer
+    let registry = PKPushRegistry(queue: .main)
+    registry.delegate = self
+    registry.desiredPushTypes = [.voIP]
+    self.registry = registry
+  }
 
   private func currentToken(_ result: @escaping FlutterResult) {
     if let token = lastReported { return result(token) }
@@ -411,8 +1003,29 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
     for type: PKPushType,
     completion: @escaping () -> Void
   ) {
-    NSLog("[pushkit] VoIP push received with no CXProvider wired — see #3609")
-    completion()
+    guard type == .voIP else { return completion() }
+    guard let ringer else {
+      // UNREACHABLE BY CONSTRUCTION: `start(reportingTo:)` is the only thing that
+      // arms this registry and it sets `ringer` in the same call. Kept, and
+      // deliberately NOT a `fatalError`: if the invariant ever broke, crashing
+      // here produces the same termination iOS would impose anyway while also
+      // burning it as our own crash, and a deliberate crash on a user's handset
+      // is a worse answer than a line the next build can find.
+      //
+      // **BUT IT STILL REPORTS**, and that is the part that was missing (Tesla,
+      // cage-match PR #201). This was the one path in the file that returned
+      // from a VoIP delivery without reporting to CallKit — and consecutive
+      // unreported deliveries are exactly what buys per-device VoIP denial, the
+      // worst state in this system and one APNs never tells us about. An
+      // impossible branch that violates the platform contract IF it happens is
+      // not made safe by the argument that it will not happen; `unreachable` is
+      // a claim, and the obligation is a rule. Routing an empty payload through
+      // `handle` lands on its `default` arm — report, then end immediately —
+      // which is the measured-safe discharge and never sustains a ring.
+      NSLog("[pushkit] armed with no ringer — see #3609")
+      return CallKitRinger.shared.handle(payload: [:], completion: completion)
+    }
+    ringer.handle(payload: payload.dictionaryPayload, completion: completion)
   }
 
   private func drainWaiters(with token: String?) {
@@ -446,6 +1059,12 @@ extension PushKitTokenChannel: FlutterStreamHandler {
     // delivered to nobody. `didReceive` fires after the delegate is set, and on
     // a tap-launch iOS calls it once the app finishes launching.
     UNUserNotificationCenter.current().delegate = self
+    // ARM VoIP AT LAUNCH, not when a call screen opens. A token that only exists
+    // once the user has opened the call UI is a token the island cannot ring —
+    // and the whole point is reaching a handset whose owner is not looking at it.
+    // Safe to do this early because the registry cannot be armed without the
+    // ringer that discharges the must-report obligation.
+    PushKitTokenChannel.shared.start(reportingTo: CallKitRinger.shared)
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -463,6 +1082,11 @@ extension PushKitTokenChannel: FlutterStreamHandler {
       forPlugin: "PushKitTokenChannel")
     {
       PushKitTokenChannel.shared.register(with: registrar)
+    }
+    if let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "SystemCallChannel")
+    {
+      SystemCallChannel.shared.register(with: registrar)
     }
   }
 
