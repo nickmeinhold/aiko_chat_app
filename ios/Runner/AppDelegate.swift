@@ -1,8 +1,83 @@
 import Flutter
 import UIKit
+import AVFoundation
 import CallKit
 import PushKit
 import UserNotifications
+import WebRTC
+
+/// The CallKit ↔ WebRTC audio handoff, and the reason a CallKit-answered call
+/// was silent until 2026-09-16.
+///
+/// **NOBODY OWNED THE AUDIO SESSION.** CallKit activates the `AVAudioSession`
+/// itself when a call is answered and announces it via
+/// `provider(_:didActivate:)`; WebRTC, left alone, activates its own on its own
+/// clock (`AudioUtils.ensureAudioSessionWithRecording:`). Neither knew about the
+/// other, so the first complete call this product ever made — rang, answered,
+/// connected — carried no sound.
+///
+/// Neither Dart package exposes the fix: `flutter_webrtc 1.6.0` has no
+/// `useManualAudio`/`audioSessionDidActivate` surface at all (checked in Dart
+/// AND `common/darwin/Classes`), and `livekit_client 2.8.1` configures only the
+/// category. But `WebRTC` is an **exported SPM library product** of the
+/// flutter_webrtc package — its `Package.swift` exports it precisely "so
+/// dependent plugins can import WebRTC without declaring a second copy of the
+/// binary target" — so `RTCAudioSession` is reachable from here directly. The
+/// package's API surface and the platform's are different questions.
+///
+/// ## ARMED PER CALL, NEVER GLOBALLY — this is the whole design
+///
+/// `useManualAudio` is a process-wide switch, and the textbook recipe sets it
+/// once at launch. **That would break a path that works today.** This app has
+/// TWO ways to answer: CallKit, and `ring_overlay.dart`'s in-app `_RingBanner`,
+/// which pushes `/call/...` with CallKit nowhere in it. In manual mode WebRTC
+/// waits for an `audioSessionDidActivate` that only CallKit ever sends — so a
+/// global switch silences the in-app path, which currently carries sound, while
+/// demoing perfectly on the CallKit test that motivated the change.
+///
+/// So manual mode is ENTERED on a CallKit answer and LEFT on that call's end.
+/// The in-app path never sees it and keeps WebRTC's automatic management.
+///
+/// **Every exit must disarm, including the abnormal ones.** Leaving the process
+/// in manual mode with audio disabled is a silent, durable break of the in-app
+/// path that outlives the call that caused it — worse than the bug being fixed,
+/// because it needs no CallKit call to reproduce and nothing reports it.
+enum CallAudioSession {
+  /// Hand WebRTC over to CallKit for this call. Called from the answer action
+  /// BEFORE Dart is told to join, so manual mode is in force before any audio
+  /// track can start — if a track started first it would already have taken the
+  /// session under automatic management.
+  static func arm() {
+    let session = RTCAudioSession.sharedInstance()
+    session.useManualAudio = true
+    // Audio stays OFF until CallKit hands us an activated session. This is the
+    // half that makes the handoff a handoff rather than a race.
+    session.isAudioEnabled = false
+  }
+
+  /// CallKit activated the session — release WebRTC onto it.
+  static func didActivate(_ audioSession: AVAudioSession) {
+    let session = RTCAudioSession.sharedInstance()
+    session.audioSessionDidActivate(audioSession)
+    session.isAudioEnabled = true
+  }
+
+  /// CallKit tore the session down.
+  static func didDeactivate(_ audioSession: AVAudioSession) {
+    let session = RTCAudioSession.sharedInstance()
+    session.audioSessionDidDeactivate(audioSession)
+    session.isAudioEnabled = false
+  }
+
+  /// Return the process to automatic management. Idempotent, and safe to call
+  /// on a path that never armed — which is why it is called from EVERY end,
+  /// rather than only from the ones believed to follow an answer.
+  static func disarm() {
+    let session = RTCAudioSession.sharedInstance()
+    session.isAudioEnabled = false
+    session.useManualAudio = false
+  }
+}
 
 /// The APNs device token, taken from Apple DIRECTLY.
 ///
@@ -685,6 +760,10 @@ extension CallKitRinger: CXProviderDelegate {
       SystemCallChannel.shared.emit(action: .ended, channel: channel)
     }
     UserDefaults.standard.removeObject(forKey: Self.liveCallsKey)
+    // A reset is the end that arrives with no action and no UUID, so it is the
+    // one path that would otherwise strand the process in manual mode with no
+    // `CXEndCallAction` ever coming to release it.
+    CallAudioSession.disarm()
   }
 
   func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
@@ -706,8 +785,24 @@ extension CallKitRinger: CXProviderDelegate {
     // BEFORE fulfilling: from here the entry describes a CALL, not a ring, and
     // must stop aging out from under the teardown path.
     markAnswered(channel: channel)
+    // BEFORE the emit, not after: the emit is what sends Dart to join the room,
+    // and joining is what creates the audio track. Arming after it would be a
+    // race whose losing side is a track that took the session under automatic
+    // management before manual mode was in force — i.e. exactly today's bug,
+    // reproduced intermittently instead of always. See `CallAudioSession`.
+    CallAudioSession.arm()
     SystemCallChannel.shared.emit(action: .answered, channel: channel)
     action.fulfill()
+  }
+
+  func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+    // The handoff this class exists for. Without it CallKit owns an activated
+    // session that WebRTC never learns about, and the call is silent.
+    CallAudioSession.didActivate(audioSession)
+  }
+
+  func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+    CallAudioSession.didDeactivate(audioSession)
   }
 
   func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
@@ -725,6 +820,12 @@ extension CallKitRinger: CXProviderDelegate {
       SystemCallChannel.shared.emit(action: .ended, channel: channel)
       forgetLiveCall(for: channel)
     }
+    // Unconditional, and deliberately OUTSIDE the loop: a hangup whose UUID
+    // matches no stored entry still ends whatever CallKit call was live, and
+    // leaving the process in manual mode would silently break the in-app ring
+    // path from here on — a durable break outliving the call that caused it.
+    // Disarming a call that never armed is a no-op (see `CallAudioSession`).
+    CallAudioSession.disarm()
     action.fulfill()
   }
 }
