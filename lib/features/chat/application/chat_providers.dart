@@ -31,6 +31,29 @@ final currentUserProvider = Provider<AppUser?>(
   (ref) => ref.watch(authControllerProvider).value,
 );
 
+/// Whether auth has produced an ANSWER yet — the discriminator [currentUserProvider]
+/// deliberately throws away.
+///
+/// `AsyncValue<AppUser?>.value` is null in two unrelated states: `AsyncData(null)`
+/// (genuinely logged out) and `AsyncLoading` (session restore still in flight).
+/// [chatRepositoryProvider] correctly refuses to build a sessionless repo, so
+/// during restore it is legitimately in an ERROR state — and both conversation
+/// panes rendered any repo error as *"Could not load conversations"*. The result
+/// was a failure message flashed on every cold start (most visibly right after an
+/// install, reported from a handset by Nick 2026-09-16) for a question that had
+/// simply not been answered yet.
+///
+/// The fix belongs HERE, at the render decision, not in the repo provider. An
+/// earlier attempt made the repo await auth instead — which removed the flash and
+/// broke `chat_screen_test.dart`'s "logout → different user → no cross-session
+/// messages": the synchronous throw is load-bearing for tearing the previous
+/// session's repo down promptly, so deferring it leaked user A's messages into
+/// user B's session. A cosmetic flash traded for a cross-account leak. The error
+/// is real; only its PRESENTATION was wrong.
+final authResolvedProvider = Provider<bool>(
+  (ref) => ref.watch(authControllerProvider).hasValue,
+);
+
 /// `userId → current handle` for a channel's members, from the island roster
 /// (`GET /v1/channels/{id}/members`). Lets a message's sender name render the
 /// sender's handle AS IT IS NOW rather than the send-time label snapshot — the
