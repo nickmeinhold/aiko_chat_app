@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../../../app/providers.dart';
+import '../../../core/logging/log_providers.dart';
 import '../../../app/theme/maritime_theme.dart';
 import '../application/call_end_announcer.dart';
 import '../application/system_call_providers.dart';
@@ -122,6 +123,10 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     _session = CallSession(
       api: ref.read(restApiProvider),
       channelId: widget.channelId,
+      // The media layer swallowed every publish failure until 2026-09-16 — a
+      // call could carry video, silently fail to carry audio, and leave no
+      // trace. This is the wire that makes the failure reportable.
+      log: ref.read(rootLoggerProvider).child('call'),
     );
     _endAnnouncer = ref.read(callEndAnnouncerProvider);
     // Captured here for the same reason as the announcer: `dispose` must not
