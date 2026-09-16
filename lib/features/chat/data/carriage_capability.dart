@@ -2,13 +2,40 @@ import '../domain/gateway_capabilities.dart';
 
 /// Transitional allowlist of hosts KNOWN to carry the sovereign `origin`
 /// envelope, used ONLY while the gateway's `GET /capabilities` endpoint is not
-/// yet deployed (it 404s on prod as of 2026-07-26). It exists so shipping the
-/// capability gate does not regress the live round-trip against the one carriage
-/// island whose `/capabilities` still 404s.
+/// yet deployed (it still 404s on both live islands). It exists so shipping the
+/// capability gate does not regress the live round-trip against a carriage
+/// island whose `/capabilities` 404s.
 ///
 /// Once `/capabilities` is live on every island this list becomes dead code and
 /// should be deleted — the endpoint is then authoritative. See task #1896.
-const kKnownCarriageHosts = {'chat.imagineering.cc'};
+///
+/// ## THIS LIST OMITTED AN ISLAND FOR SEVEN WEEKS AND SILENTLY DISABLED SIGNING
+///
+/// `chat.enspyr.co` was never on it. The gate merged 2026-07-27 (PR #92) and
+/// reached the handsets around 2026-08-10; from that build onward EVERY message
+/// sent to enspyr went unsigned, on every platform, because an unknown host
+/// re-resolves to a `false` seed and `GatewayTransport` withholds the envelope.
+/// Measured 2026-09-16 against the live island: `nick` signed 10/22, and the
+/// boundary is exact — last signed 2026-08-10, nothing since.
+///
+/// **The consequence was not "messages lack a nicety".** `admitRing` refuses an
+/// unsigned invitation as `unverifiedOrigin`, its head refusal — so for seven
+/// weeks NO CALL TO THAT ISLAND COULD BE ANSWERED BY ANYONE, and the only
+/// evidence was a WARNING in the recipient's ring buffer. The August ring
+/// verification passed because the caller was `ring_probe.py`, which has no
+/// capability gate and signs unconditionally.
+///
+/// The island demonstrably carries: 54 of `ringtest`'s 54 messages are stored on
+/// enspyr WITH origin envelopes. The gate was withholding from an island that
+/// accepts, to prevent a `bad_origin` drop that could not happen.
+///
+/// **A hand-curated allowlist of production hosts is the defect, not the entry
+/// that was missing from it.** The real fix is the island serving
+/// `/capabilities` (task #1896), after which this constant is deleted rather
+/// than extended. Until then, adding a host here is a deploy-time promise that
+/// nothing verifies — so if you add an island to this product, add it here in
+/// the same change, and know that forgetting is silent.
+const kKnownCarriageHosts = {'chat.imagineering.cc', 'chat.enspyr.co'};
 
 /// Holds the "does the CURRENT gateway carry `origin`?" decision that the
 /// transport's emit gate reads synchronously on every send.
