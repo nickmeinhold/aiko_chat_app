@@ -48,10 +48,28 @@ class RingTelemetry {
   /// the gate said no. That is worth surfacing distinctly from ordinary chatter even
   /// when the refusal is correct — a blocked caller and a skewed clock are both
   /// "working as designed" and both worth seeing in a report.
-  void ringRefused(String channelId, RingRefusal reason) => _log.warning(
-    'call.ring.refused',
-    fields: {'channel': channelId, 'reason': reason.name},
-  );
+  /// [age] is the invitation's measured age, present only for the refusals
+  /// decided ON age ([RingRefusal.stale], [RingRefusal.clockSkew]) and omitted
+  /// entirely otherwise — an absent field rather than a `null`, because
+  /// `ageMs=null` on a blocked sender would invite a reader to wonder which
+  /// clock failed, and no clock was consulted.
+  ///
+  /// It is the field that makes `reason=stale` actionable. The reason names the
+  /// clause; the age names the fault. `ageMs=12000` is a push wake overrunning
+  /// [kCallInviteFreshness] and argues the window is wrong for that path;
+  /// `ageMs=300000` is a peer clock out by five minutes and argues nothing about
+  /// the window at all; `ageMs=-4000` is our own clock ahead of the caller's.
+  /// Three fixes that share one refusal, and before this field a report could
+  /// not tell a reader which one they were looking at.
+  void ringRefused(String channelId, RingRefusal reason, {Duration? age}) =>
+      _log.warning(
+        'call.ring.refused',
+        fields: {
+          'channel': channelId,
+          'reason': reason.name,
+          if (age != null) 'ageMs': age.inMilliseconds,
+        },
+      );
 
   /// A hangup was refused. Rarer and more suspicious than a refused ring: the
   /// asymmetry is deliberate (an unadmitted end means KEEP RINGING), so a

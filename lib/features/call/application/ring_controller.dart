@@ -245,13 +245,13 @@ class RingController extends Notifier<CallInvite?> {
     );
     final CallInvite invite;
     switch (decision) {
-      case RingRefused(:final reason):
+      case RingRefused(:final reason, :final age):
         // THE LINE THAT DID NOT EXIST. Ten distinct refusals used to leave here
         // as one indistinguishable `null`, which is why learning that a real
         // push-woken ring had been refused for staleness took four hours and a
         // throwaway instrumentation branch (claude-tasks#3588, #3591).
         if (reason.refusedAnAttempt) {
-          _telemetry.ringRefused(m.channelId, reason);
+          _telemetry.ringRefused(m.channelId, reason, age: age);
         }
         return;
       case RingAdmitted(invite: final admitted):

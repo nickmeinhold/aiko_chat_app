@@ -723,8 +723,38 @@ final class RingAdmitted extends RingDecision {
 }
 
 final class RingRefused extends RingDecision {
-  const RingRefused(this.reason);
+  const RingRefused(this.reason, {this.age});
   final RingRefusal reason;
+
+  /// The measured age of the invitation, for the two refusals DECIDED on age —
+  /// [RingRefusal.stale] and [RingRefusal.clockSkew] — and null for every other
+  /// reason, which never computes one.
+  ///
+  /// THE VALUE THE DECIDING BRANCH USED TO THROW AWAY. `ringStarted` logged
+  /// `ageMs` and `ringRefused` did not, so the age was recorded in the branch
+  /// where it is redundant (it was fresh, that is what admitted means) and
+  /// omitted from the branch where it is the entire question. A report then read
+  /// `reason=stale` and could not separate a push wake overrunning a 10s window
+  /// by two seconds from a peer clock five minutes out from an hours-old history
+  /// replay — three different faults with three different fixes, collapsed onto
+  /// one observable. That is the same defect [RingRefusal] itself exists to
+  /// remove, surviving one level further in: the gate could name WHICH clause
+  /// refused, but not BY HOW MUCH.
+  ///
+  /// Carried on the decision rather than recomputed at the call site on purpose.
+  /// A second `DateTime.now()` in the logger would be a second clock reading,
+  /// free to disagree with the one the gate actually judged — the same "two
+  /// independent narrowings" defect [admitRing] and [admitCallEnd] are sliced
+  /// once to avoid.
+  ///
+  /// Optional and defaulted so every `const RingRefused(...)` above stays const;
+  /// `notAnInvite` is constructed once per inbound message and must not start
+  /// allocating to serve a log it never writes. The cost is that
+  /// `RingRefused(senderBlocked, age: ...)` type-checks — the same
+  /// representable-impossible-state trade this file already resolved for the
+  /// gate flags, resolved the same way: ENFORCED BY TEST (`an age-derived
+  /// refusal carries its age, and no other refusal does`), not by type.
+  final Duration? age;
 }
 
 /// The same shape for the hangup gate.
@@ -845,8 +875,10 @@ RingDecision admitRing(
   // Negative age (signed in the future by a skewed clock) is not fresh — it is
   // unreadable, and admitting it would let a bad clock ring forever.
   // `!isNegative` is the guard; `> freshness` alone would admit it.
-  if (age.isNegative) return const RingRefused(RingRefusal.clockSkew);
-  if (age > kCallInviteFreshness) return const RingRefused(RingRefusal.stale);
+  if (age.isNegative) return RingRefused(RingRefusal.clockSkew, age: age);
+  if (age > kCallInviteFreshness) {
+    return RingRefused(RingRefusal.stale, age: age);
+  }
   // The island's id is REFUSED here rather than carried as a null. Unreachable
   // via either production producer (see [CallInvite.islandMsgId]) — so this is
   // the door where an impossible state stops being representable, not a runtime

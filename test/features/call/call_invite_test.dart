@@ -445,6 +445,74 @@ void main() {
         );
       }
     });
+
+    test('an age-derived refusal CARRIES its age, and no other refusal does', () {
+      // ENFORCED BY TEST, because the type deliberately does not enforce it.
+      // `RingRefused.age` is optional so every `const RingRefused(...)` stays
+      // const — `notAnInvite` is built once per inbound message and must not
+      // start allocating — and the cost of that is that
+      // `RingRefused(senderBlocked, age: ...)` type-checks. Same trade the gate
+      // flags made one level up, kept honest the same way: DRIVE the gate and
+      // read what it actually emits, rather than trusting a roster.
+      //
+      // The positive half is the point of the field. `reason=stale` alone
+      // cannot separate a push wake overrunning the window by a few seconds
+      // from a peer clock minutes out from an hours-old history replay — three
+      // faults, three different fixes, one observable. The age is what tells
+      // a report's reader which one they are looking at.
+      RingRefused refuse(
+        Message m, {
+        Set<String> blocked = const {},
+        bool muted = false,
+        bool isDm = true,
+      }) => switch (admitRing(
+        m,
+        meUserId: me,
+        blockedUserIds: blocked,
+        consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
+        conversationMuted: muted,
+        isDm: isDm,
+        now: now,
+      )) {
+        final RingRefused r => r,
+        RingAdmitted() =>
+          fail('fixture was ADMITTED; this case needs a refusal'),
+      };
+
+      // The EXACT duration the gate judged, not a bucket or a boolean: a report
+      // reading ageMs=12000 argues the window is wrong for the push path, and
+      // one reading ageMs=300000 argues nothing about the window at all.
+      const overdue = Duration(seconds: 47);
+      const fromTheFuture = Duration(seconds: -5);
+      final stale = refuse(invite(age: overdue));
+      expect(stale.reason, RingRefusal.stale);
+      expect(stale.age, overdue);
+      final skewed = refuse(invite(age: fromTheFuture));
+      expect(skewed.reason, RingRefusal.clockSkew);
+      expect(skewed.age, fromTheFuture);
+
+      // The negative space, driven rather than rostered. Every other refusal
+      // decided WITHOUT consulting a clock, so an age on one would be a
+      // measurement nobody took — the same invented-reading defect in miniature.
+      for (final r in [
+        refuse(invite(body: 'hello')),
+        refuse(invite(from: me)),
+        refuse(invite(cryptoValid: null)),
+        refuse(invite(cryptoValid: false)),
+        refuse(invite(withOrigin: false)),
+        refuse(invite(hasAccount: false)),
+        refuse(invite(kind: SenderKind.llm)),
+        refuse(invite(), isDm: false),
+        refuse(invite(), blocked: {robin}),
+        refuse(invite(), muted: true),
+      ]) {
+        expect(
+          r.age,
+          isNull,
+          reason: '${r.reason} consulted no clock — an age on it is invented',
+        );
+      }
+    });
   });
 
   group('the pinned sentinel', () {
