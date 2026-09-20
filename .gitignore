@@ -10,6 +10,16 @@
 .history
 .svn/
 .swiftpm/
+
+# Xcode regenerates xcshareddata/swiftpm/Package.resolved as scratch every time it
+# opens a project, and `.swiftpm/` above does NOT match that path — so the files
+# reappear untracked after every Xcode session, waiting to be swept into a `git add`.
+# That is how two stale Firebase/app-check lockfiles landed in d222d03 and tripped the
+# pre-push gate (tool/check_swiftpm_lockfile.dart, RULE 1 — the PR #69 class).
+# Neither Xcode project declares a remote SwiftPM package, so these pin nothing.
+# If a real remote dependency is ever added, RULE 2 (declared ⊆ pinned) fires loudly
+# and the answer is to un-ignore the lockfile, not to weaken the gate.
+**/xcshareddata/swiftpm/Package.resolved
 migrate_working_dir/
 
 # IntelliJ related
