@@ -1,5 +1,6 @@
 import 'package:aiko_chat_app/app/feature_flags.dart';
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
+import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/call/presentation/ring_overlay.dart';
 import 'package:aiko_chat_app/app/router.dart';
@@ -246,5 +247,5 @@ class _FakeRing extends RingController {
   CallInvite? build() => _initial;
 
   @override
-  void stopRinging() => state = null;
+  void stopRinging(RingStopCause cause) => state = null;
 }

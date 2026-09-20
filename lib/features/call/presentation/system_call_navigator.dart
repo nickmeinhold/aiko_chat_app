@@ -11,6 +11,8 @@ import '../application/system_call_providers.dart';
 import '../data/system_call_bridge.dart';
 import '../domain/call_invite.dart';
 import '../domain/system_call_action.dart';
+import '../application/ring_telemetry.dart';
+import '../domain/answer_outcome.dart';
 import 'call_screen.dart' show isInLiveCall, pushCallOn;
 
 /// Turns an answered system call into a joined room (claude-tasks#4420).
@@ -123,6 +125,10 @@ class SystemCallNavigator extends ConsumerStatefulWidget {
 class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   StreamSubscription<SystemCallAction>? _sub;
 
+  /// Read per use rather than cached: this widget outlives provider rebuilds,
+  /// and a captured logger would keep writing to a torn-down sink.
+  RingTelemetry get _telemetry => ref.read(ringTelemetryProvider);
+
   /// The channel of an answered call we have not joined yet. See the class doc.
   String? _answered;
 
@@ -198,7 +204,13 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
         // without ending it again: the user answered and then hung up before
         // the session was ready, and joining now would open a call they have
         // already left.
-        if (_answered == action.channelId) _consume();
+        if (_answered == action.channelId) {
+          _telemetry.answerResolved(
+            action.channelId,
+            AnswerOutcome.endedInSystemUi,
+          );
+          _consume();
+        }
         _leaveIfOpen(action.channelId);
     }
   }
@@ -235,11 +247,15 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// forever, and arming per-attempt made the clock resettable by unrelated
   /// provider traffic. Held once, clocked once.
   void _hold(String channelId) {
+    _telemetry.answerHeld(channelId);
     final displaced = _answered;
     // CONSERVATION OF OWNERSHIP: a second answer does not silently forget the
     // first one's system call. Nothing this class stops holding is ever simply
     // dropped.
-    if (displaced != null && displaced != channelId) _release(displaced);
+    if (displaced != null && displaced != channelId) {
+      _telemetry.answerResolved(displaced, AnswerOutcome.displaced);
+      _release(displaced);
+    }
     _answered = channelId;
     _joinDeadline?.cancel();
     _joinDeadline = Timer(kInAppRingDuration, () {
@@ -248,7 +264,10 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       // the websocket never came back — all three are "there is no call to
       // join", and the honest render is the system call ending rather than a
       // connected call that never connects.
-      if (_answered == channelId) _release(channelId);
+      if (_answered == channelId) {
+        _telemetry.answerResolved(channelId, AnswerOutcome.neverAdmitted);
+        _release(channelId);
+      }
     });
     _tryJoin();
   }
@@ -338,6 +357,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // against different orders of a future edit.
     if (bridge == null) {
       // No bridge means no system call to end and no route to join into.
+      _telemetry.answerResolved(channelId, AnswerOutcome.noBridge);
       _consume();
       return;
     }
@@ -350,7 +370,10 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     if (session.value == null) {
       // Resolved, and nobody is signed in: `build()` awaits the restore, so
       // `AsyncData(null)` is a definite answer. This call can never be joined.
-      if (session is AsyncData<AppUser?>) _release(channelId);
+      if (session is AsyncData<AppUser?>) {
+        _telemetry.answerResolved(channelId, AnswerOutcome.signedOut);
+        _release(channelId);
+      }
       // Loading or error: the question is still open. `AsyncError` is
       // deliberately on this side — a failed round trip is "unknown", not
       // "nobody", and hanging up on it would refuse a call the user can take
@@ -370,6 +393,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     _consume();
 
     if (isInLiveCall) {
+      _telemetry.answerResolved(channelId, AnswerOutcome.alreadyInLiveCall);
       // Two calls at once is a state neither CallKit (`maximumCallsPerCallGroup
       // = 1`) nor this app models. The in-app banner refuses the same way and
       // tells the user; here there is nobody to tell — the answer came from the
@@ -382,10 +406,13 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // the handset and the websocket delivers the invite, so a foregrounded app
     // gets both. Answering one must silence the other, or the banner paints over
     // the call it just opened for the rest of the ring window.
-    ref.read(incomingRingProvider.notifier).stopRinging();
+    ref
+        .read(incomingRingProvider.notifier)
+        .stopRinging(RingStopCause.answeredInSystemUi);
     // `inviteId` is deliberately not passed: it names an invitation OF OURS to
     // announce the end of, and this is the callee's side. `CallScreen` documents
     // null as the correct value for every way in but the caller's.
+    _telemetry.answerResolved(channelId, AnswerOutcome.joined);
     unawaited(pushCallOn(ref.read(routerProvider), channelId));
   }
 

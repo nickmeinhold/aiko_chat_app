@@ -17,6 +17,7 @@ import '../application/ring_controller.dart';
 import '../application/system_call_providers.dart';
 import '../domain/call_invite.dart';
 import 'media_confidentiality_chip.dart';
+import '../domain/answer_outcome.dart';
 import 'call_screen.dart' show isCallRouteOpen, isInLiveCall, pushCallOn;
 
 /// Wraps [child] with the ring banner. A no-op (zero layout cost, no overlay)
@@ -158,7 +159,7 @@ class _RingBanner extends ConsumerWidget {
   }
 
   void _ignore(WidgetRef ref, String channelId) {
-    ref.read(incomingRingProvider.notifier).stopRinging();
+    ref.read(incomingRingProvider.notifier).stopRinging(RingStopCause.declined);
     _endSystemCall(ref, channelId);
   }
 
@@ -188,7 +189,9 @@ class _RingBanner extends ConsumerWidget {
       final router = ref.read(routerProvider);
       if (router.canPop()) router.pop();
       Future<void>.delayed(Duration.zero, () {
-        ref.read(incomingRingProvider.notifier).stopRinging();
+        ref
+            .read(incomingRingProvider.notifier)
+            .stopRinging(RingStopCause.answeredOverSpentCall);
         _endSystemCall(ref, invite.channelId);
         pushCallOn(router, invite.channelId);
       });
@@ -197,7 +200,9 @@ class _RingBanner extends ConsumerWidget {
     // Ring stopped FIRST, synchronously, before navigating: pushCall awaits
     // until the call route pops, so clearing afterwards would leave the banner
     // painted over the live call for its whole duration.
-    ref.read(incomingRingProvider.notifier).stopRinging();
+    ref
+        .read(incomingRingProvider.notifier)
+        .stopRinging(RingStopCause.answeredInApp);
     _endSystemCall(ref, invite.channelId);
     // Router from the PROVIDER, not from context: this widget lives above the
     // Router in `MaterialApp.router`'s builder, so `context.push` would throw

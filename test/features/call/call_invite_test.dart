@@ -475,8 +475,9 @@ void main() {
         now: now,
       )) {
         final RingRefused r => r,
-        RingAdmitted() =>
-          fail('fixture was ADMITTED; this case needs a refusal'),
+        RingAdmitted() => fail(
+          'fixture was ADMITTED; this case needs a refusal',
+        ),
       };
 
       // The EXACT duration the gate judged, not a bucket or a boolean: a report

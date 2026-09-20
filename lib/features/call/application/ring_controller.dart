@@ -15,6 +15,7 @@ import '../../chat/application/mute_controller.dart';
 import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../moderation/application/moderation_controller.dart';
+import '../domain/answer_outcome.dart';
 import '../domain/call_invite.dart';
 import 'ring_telemetry.dart';
 import 'ring_allowlist_provider.dart';
@@ -111,7 +112,7 @@ class RingController extends Notifier<CallInvite?> {
       _settle(live);
       return null;
     }
-    _expiry ??= Timer(left, stopRinging);
+    _expiry ??= Timer(left, () => stopRinging(RingStopCause.windowElapsed));
     return live;
   }
 
@@ -222,7 +223,9 @@ class RingController extends Notifier<CallInvite?> {
       case CallEndAdmitted(:final end):
         (_ended[end.targetIslandMsgId] ??= []).add((end: end, at: now));
         final live = _live;
-        if (live != null && endsInvite(end, live)) stopRinging();
+        if (live != null && endsInvite(end, live)) {
+          stopRinging(RingStopCause.callerHungUp);
+        }
         return;
       case CallEndRefused(:final reason):
         // A refused END falls THROUGH to the ring gate — it is not a rejection
@@ -340,7 +343,18 @@ class RingController extends Notifier<CallInvite?> {
       ref.read(mutedUserIdsProvider).contains(m.sender.userId);
 
   /// Stop ringing — answered, ignored, or expired. Idempotent.
-  void stopRinging() {
+  ///
+  /// [cause] is REQUIRED, and that is the point. This method had five callers
+  /// and wrote nothing, so an admitted hangup silencing the ring and a ring
+  /// that simply vanished produced identical evidence — which is how a call
+  /// that rang, was admitted, and died 1.4 seconds later left exactly one log
+  /// line behind it (2026-09-20). A default value would let the next caller
+  /// re-create that silence by omission.
+  void stopRinging(RingStopCause cause) {
+    // Logged BEFORE the state is torn down, so the channel is still nameable.
+    // A stop with nothing live is a real and ordinary case (idempotent), and
+    // the null channel says exactly that rather than inventing an id.
+    _telemetry.ringStopped(_live?.channelId, cause);
     _expiry?.cancel();
     _expiry = null;
     final done = _live;

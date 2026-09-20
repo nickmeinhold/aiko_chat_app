@@ -42,13 +42,8 @@ void main() {
     /// the decode path under test is the shipped one.
     Stream<SystemCallAction> decoded(List<Object?> events) {
       const name = kSystemCallActionsChannel;
-      TestDefaultBinaryMessengerBinding
-          .instance
-          .defaultBinaryMessenger
-          .setMockStreamHandler(
-            const EventChannel(name),
-            _FakeStream(events),
-          );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockStreamHandler(const EventChannel(name), _FakeStream(events));
       return AppleSystemCallBridge(
         platformOverride: TargetPlatform.iOS,
       ).actions;

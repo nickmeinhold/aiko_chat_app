@@ -18,6 +18,7 @@ import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/features/call/application/system_call_providers.dart';
 import 'package:aiko_chat_app/features/call/data/system_call_bridge.dart';
+import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/call/domain/system_call_action.dart';
 import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
@@ -466,7 +467,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // The invitation was admitted, then the in-app banner's window elapsed.
-    ring.stopRinging();
+    ring.stopRinging(RingStopCause.windowElapsed);
     await tester.pump(kInAppRingDuration + const Duration(seconds: 10));
     expect(
       tester.widget<Text>(find.text('home')).data,
@@ -496,7 +497,7 @@ void main() {
     // standing permission to join on an unsigned wake.
     await tester.pumpWidget(harness());
     await tester.pumpAndSettle();
-    ring.stopRinging();
+    ring.stopRinging(RingStopCause.windowElapsed);
     await tester.pump(kSystemCallRingTrust + const Duration(seconds: 5));
 
     bridge.emit(SystemCallActionKind.answered, channel);
@@ -647,7 +648,7 @@ class _FakeRing extends RingController {
       _initialChannel == null ? null : inviteFor(_initialChannel);
 
   @override
-  void stopRinging() => state = null;
+  void stopRinging(RingStopCause cause) => state = null;
 
   /// `admitRing` accepted an invitation for [channelId] — the websocket
   /// delivered it and the signature checked out.

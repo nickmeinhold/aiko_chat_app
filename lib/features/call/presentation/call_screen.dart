@@ -10,6 +10,7 @@ import '../../../core/logging/log_providers.dart';
 import '../../../app/theme/maritime_theme.dart';
 import '../application/call_end_announcer.dart';
 import '../application/system_call_providers.dart';
+import '../application/ring_telemetry.dart';
 import '../data/call_session.dart';
 import '../data/system_call_bridge.dart';
 import '../domain/call_connection_state.dart';
@@ -116,6 +117,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
   /// The system call UI, when this platform has one. See [dispose].
   SystemCallBridge? _systemCall;
+  late final RingTelemetry _telemetry;
 
   @override
   void initState() {
@@ -134,6 +136,10 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // a build with calling gated off — both of which make the teardown below a
     // no-op rather than a special case.
     _systemCall = ref.read(systemCallBridgeProvider);
+    // Captured for the same reason as the bridge: `dispose` must not touch
+    // `ref`, and the disposal is exactly the event worth recording.
+    _telemetry = ref.read(ringTelemetryProvider);
+    _telemetry.callScreenOpened(widget.channelId);
     // This route owns the module-level liveness flag for its whole lifetime:
     // cleared on mount, set when the call ends, cleared again on dispose so a
     // later call never inherits a stale `ended`.
@@ -148,6 +154,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
   @override
   void dispose() {
+    _telemetry.callScreenDisposed(widget.channelId);
     _session.state.removeListener(_trackLiveness);
     _mountedCallEnded = false;
     // Fire-and-forget: leave() tears down the room + disposes the session's

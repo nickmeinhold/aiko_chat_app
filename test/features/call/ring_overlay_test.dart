@@ -2,6 +2,7 @@ import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/features/call/application/system_call_providers.dart';
 import 'package:aiko_chat_app/features/call/data/system_call_bridge.dart';
 import 'package:aiko_chat_app/features/call/domain/system_call_action.dart';
+import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/call/domain/media_confidentiality.dart';
 import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
@@ -299,7 +300,7 @@ class _FakeRing extends RingController {
   CallInvite? build() => _initial;
 
   @override
-  void stopRinging() => state = null;
+  void stopRinging(RingStopCause cause) => state = null;
 
   /// Re-publish a ring, so a test can reach the "already in a call" branch —
   /// which is only reachable with a live call AND a live ring at once.
