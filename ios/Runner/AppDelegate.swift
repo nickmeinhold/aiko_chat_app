@@ -443,6 +443,41 @@ final class CallKitRinger: NSObject {
   }
 
   private func reportInvite(channel: String?, completion: @escaping () -> Void) {
+    // A DUPLICATE DELIVERY OF A RING ALREADY ON SCREEN, and it is the whole
+    // bug of 2026-09-20. This handset carries two VoIP tokens on the island —
+    // a live one and a stale one left by an earlier install — so one call
+    // fanned out as two pushes, and the device reported two incoming calls in
+    // the same millisecond:
+    //
+    //     12:42:09.664  Received reportNewIncomingCallWithUUID …
+    //     12:42:09.664  Received reportNewIncomingCallWithUUID …
+    //
+    // `maximumCallsPerCallGroup = 1`, so the second report FAILED — and its
+    // error handler called `forgetLiveCall(for: channel)`, deleting the
+    // mapping that belonged to the FIRST call, which was ringing perfectly
+    // well. Answering then hit the `guard` in the answer handler, `fail()`ed,
+    // and the user got "Call Failed" and no app. Every symptom of the day.
+    //
+    // NOT the tradeoff `rememberLiveCall` names. That one is two DIFFERENT
+    // calls sharing a channel, which the wire genuinely cannot express and
+    // which is deliberately left undefended until the call id ships inside the
+    // envelope. This is ONE call arriving twice, which the wire expresses
+    // exactly — same channel, same invitation — and which the island cannot
+    // deduplicate for us, because two tokens are two devices from where it
+    // stands.
+    //
+    // REPORTED AND ENDED rather than dropped, because must-report is not
+    // optional: every VoIP push owes CallKit a call. `reportAndEndImmediately`
+    // mints its own throwaway UUID and never touches the map, so the live ring
+    // keeps its mapping and stays answerable. It is the measured-safe shape
+    // (see `reportEnd`), and the good report that just landed has reset the
+    // consecutive-violation counter — one duplicate on a reset counter cannot
+    // reach a threshold of four. The cost is a momentary buzz on the duplicate.
+    if let channel, liveCall(for: channel) != nil {
+      NSLog("[callkit] duplicate invite for a ring already live on %@", channel)
+      reportAndEndImmediately(reason: .remoteEnded, completion: completion)
+      return
+    }
     let uuid = UUID()
     let update = CXCallUpdate()
     // Tier 3 of design 12 Decision 6's three tiers: the placeholder. It names the
@@ -459,7 +494,14 @@ final class CallKitRinger: NSObject {
     if let channel { rememberLiveCall(uuid, for: channel) }
 
     provider.reportNewIncomingCall(with: uuid, update: update) { error in
-      if error != nil, let channel { self.forgetLiveCall(for: channel) }
+      // SCOPED TO THE UUID WE JUST STORED, not to the channel. Forgetting by
+      // channel alone let a FAILED report evict a DIFFERENT, live call's
+      // mapping — a cleanup that tidied away somebody else's call. Belt and
+      // braces with the duplicate guard above: that stops the second report
+      // happening, this stops any failed report reaching past its own call.
+      if error != nil, let channel {
+        self.forgetLiveCall(for: channel, onlyIf: uuid)
+      }
       completion()
     }
   }
@@ -610,8 +652,16 @@ final class CallKitRinger: NSObject {
     write(map)
   }
 
-  private func forgetLiveCall(for channel: String) {
+  /// Drop [channel]'s mapping — unconditionally, or only when it still names
+  /// [onlyIf].
+  ///
+  /// The guarded form exists because a failed `reportNewIncomingCall` used to
+  /// clear this map by channel, which on a duplicate push deleted the entry of
+  /// the call that was ringing successfully. A cleanup is only entitled to
+  /// remove what it put there.
+  private func forgetLiveCall(for channel: String, onlyIf uuid: UUID? = nil) {
     var map = stored()
+    if let uuid, map[channel]?.uuid != uuid.uuidString { return }
     map.removeValue(forKey: channel)
     write(map)
   }
