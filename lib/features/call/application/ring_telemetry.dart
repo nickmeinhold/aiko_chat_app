@@ -72,6 +72,23 @@ class RingTelemetry {
         },
       );
 
+  /// An action arrived from the NATIVE call UI — answered, ended, anything.
+  ///
+  /// The only Dart-side witness to what CallKit did. `reportNewIncomingCall`,
+  /// the answer and the end all happen natively, and on a background wake the
+  /// Dart isolate can be frozen moments later — so this stream, written into a
+  /// buffer that survives suspension, is how the native half's decisions reach
+  /// a report at all.
+  ///
+  /// [kind] is a string rather than the enum because this facade sits below the
+  /// platform channel's vocabulary and must not gain a compile-time dependency
+  /// on it; the caller passes `kind.name`, which is the same value the channel
+  /// puts on the wire.
+  void systemCallAction(String channelId, String kind) => _log.info(
+    'call.system.action',
+    fields: {'channel': channelId, 'kind': kind},
+  );
+
   /// The ring STOPPED, and why.
   ///
   /// The stop gate's success path, which had no name until 2026-09-20. An

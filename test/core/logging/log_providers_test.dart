@@ -167,6 +167,22 @@ void main() {
       );
     });
 
+    test('EVERY native call action is recorded, answered or not', () {
+      // The `ended` arm of `_onAction` records itself only when it ends an
+      // answer we were holding — so a call the system killed before anyone
+      // answered passed through in total silence, which is every failing run
+      // on 2026-09-20. The unconditional line is what makes "who ended it"
+      // answerable from a report instead of from a root-only device log.
+      expect(
+        lineFor((t) => t.systemCallAction('dm:a:b', 'ended')),
+        allOf(contains('call.system.action'), contains('kind=ended')),
+      );
+      expect(
+        lineFor((t) => t.systemCallAction('dm:a:b', 'answered')),
+        contains('kind=answered'),
+      );
+    });
+
     test('every AnswerOutcome renders a distinct, non-empty name', () {
       // Driven, not rostered: a value added later with no case here still gets
       // asserted, and a duplicate name (two branches that read identically in a

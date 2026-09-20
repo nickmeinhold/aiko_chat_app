@@ -196,6 +196,19 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   }
 
   void _onAction(SystemCallAction action) {
+    // EVERY action, unconditionally, BEFORE the switch — and the "unconditional"
+    // is the whole point. The `ended` arm below records itself only when it
+    // ends an answer WE were holding, so a call the system ended before anyone
+    // answered it (which is every failing run so far: 2026-09-20, the handset
+    // rang, the call died ~5s later, and Dart's record of who killed it was
+    // empty) passed through here in silence. The native side is the only party
+    // that sees that end, and this stream is the only place it becomes
+    // evidence.
+    //
+    // Cheap by construction: a handset receives a handful of these per call,
+    // not per frame, so this cannot crowd the ring buffer it shares with the
+    // events it exists to explain.
+    _telemetry.systemCallAction(action.channelId, action.kind.name);
     switch (action.kind) {
       case SystemCallActionKind.answered:
         _hold(action.channelId);
