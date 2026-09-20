@@ -453,6 +453,21 @@ class _MessageListState extends ConsumerState<MessageList> {
     final messagesAsync = ref.watch(messagesProvider(widget.channelId));
     final myUserId = ref.watch(currentUserProvider)?.userId;
 
+    // THE THIRD RENDER OF THE SAME COLLAPSED STATE, and the one the fix for the
+    // other two never reached. `messagesProvider` awaits `chatRepositoryProvider`,
+    // so during session restore it inherits the sessionless refusal and this pane
+    // said "Could not load messages" — the same cold-start lie the conversation
+    // panes were taught not to tell, one screen over, wearing a different noun.
+    // It was missed because the report named a string rather than a state, and
+    // the fix was scoped to the string.
+    if (messagesAsync.hasError &&
+        !showsAsFailure(
+          messagesAsync,
+          authResolved: ref.watch(authResolvedProvider),
+        )) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return messagesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Could not load messages.\n$e')),

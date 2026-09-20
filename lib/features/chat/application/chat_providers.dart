@@ -54,6 +54,31 @@ final authResolvedProvider = Provider<bool>(
   (ref) => ref.watch(authControllerProvider).hasValue,
 );
 
+/// Whether [v] is a failure the user should be TOLD about, as opposed to a
+/// question still being answered.
+///
+/// TWO states have to be subtracted, and the first fix subtracted only one.
+///
+///  1. **Auth has not answered.** See [authResolvedProvider] — during session
+///     restore the repo's refusal is a precondition, not a failure.
+///  2. **The provider is REBUILDING after that refusal.** This is the one
+///     `142ed25` missed, and it is why the flash survived the fix that was
+///     supposed to remove it. `AsyncValue.hasError` is `_error != null`
+///     (`riverpod-3.4.2/lib/src/core/async_value.dart:125`), NOT
+///     `this is AsyncError` — so a rebuild emits
+///     `AsyncError(isLoading: true, error: <the old error>)`, which reports
+///     `hasError == true` while it is busy succeeding. Measured, not inferred:
+///     see `repo_waits_for_auth_restore_test.dart`, which pins the vendor
+///     behaviour this predicate depends on.
+///
+/// So the old guard moved the flash rather than removing it — from the restore
+/// window into the repo-build window, which is the same instant to a user and a
+/// different instant to a test that only ever asked about restore. A stale
+/// error carried forward for redraw convenience is not a new failure, and
+/// `hasError` alone cannot tell the difference.
+bool showsAsFailure(AsyncValue<Object?> v, {required bool authResolved}) =>
+    authResolved && v.hasError && !v.isLoading;
+
 /// `userId → current handle` for a channel's members, from the island roster
 /// (`GET /v1/channels/{id}/members`). Lets a message's sender name render the
 /// sender's handle AS IT IS NOW rather than the send-time label snapshot — the

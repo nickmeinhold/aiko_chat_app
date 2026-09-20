@@ -105,4 +105,87 @@ void main() {
     await container.read(authControllerProvider.future);
     expect(container.read(authResolvedProvider), isTrue);
   });
+
+  /// THE FLASH SURVIVED THE FIX, and these tests are why it could.
+  ///
+  /// The originals above pin [authResolvedProvider] and nothing else — half of
+  /// a two-term conjunction. The panes rendered
+  /// `repoAsync.hasError && authResolved`, and the second term was never asked
+  /// a question, so a defect living entirely in the FIRST term stayed green.
+  /// Nick, from the handset, 2026-09-20: *"still comes up before the
+  /// conversation loads"*.
+  group('a REBUILDING provider still reports the error it is busy clearing', () {
+    test('VENDOR PIN: a rebuild after a failure is AsyncError(isLoading: true)', () async {
+      // Measured against locked riverpod 3.4.2, not assumed. `hasError` is
+      // `_error != null` (`lib/src/core/async_value.dart:125`), NOT
+      // `this is AsyncError` — so the previous error rides along through the
+      // rebuild for redraw convenience and keeps answering yes.
+      //
+      // Pinned as a test because `showsAsFailure` is built on it: if a future
+      // riverpod drops the carried error, this goes red and says so, instead of
+      // the predicate quietly becoming stricter than it needs to be.
+      var failing = true;
+      final probe = FutureProvider<int>((ref) async {
+        if (failing) throw StateError('no session');
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return 1;
+      });
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.listen(probe, (_, __) {});
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+
+      expect(c.read(probe).hasError, isTrue);
+      expect(c.read(probe).isLoading, isFalse, reason: 'settled failure');
+
+      failing = false;
+      c.invalidate(probe);
+      final rebuilding = c.read(probe);
+      expect(
+        rebuilding.hasError,
+        isTrue,
+        reason: 'the OLD error is carried through the rebuild',
+      );
+      expect(rebuilding.isLoading, isTrue, reason: 'and it is busy succeeding');
+    });
+
+    test('a rebuilding repo is NOT a failure, even once auth has answered', () {
+      // The exact cold-start instant the user sees: auth ANSWERED (so the old
+      // guard opens), the repo is rebuilding with the sessionless error still
+      // attached (so `hasError` is still true) — and the pane painted that as
+      // "Could not load conversations" for the length of the repo build.
+      final stale = AsyncError<int>(StateError('no session'), StackTrace.empty);
+      final rebuilding = const AsyncLoading<int>().copyWithPrevious(stale);
+
+      expect(rebuilding.hasError, isTrue, reason: 'precondition');
+      expect(
+        showsAsFailure(rebuilding, authResolved: true),
+        isFalse,
+        reason: 'still working is not yet failing',
+      );
+    });
+
+    test('a SETTLED error with auth answered IS shown — the must-fail arm', () {
+      // Without this the predicate could be "never true" and would suppress
+      // every real failure forever: a silent bug traded for a noisy one, which
+      // is strictly the worse trade and exactly what the first fix guarded
+      // against one term over.
+      final settled =
+          AsyncError<int>(StateError('gateway down'), StackTrace.empty);
+      expect(showsAsFailure(settled, authResolved: true), isTrue);
+    });
+
+    test('auth still restoring suppresses it regardless — the original bug', () {
+      final settled = AsyncError<int>(StateError('no session'), StackTrace.empty);
+      expect(showsAsFailure(settled, authResolved: false), isFalse);
+    });
+
+    test('success is never a failure', () {
+      expect(showsAsFailure(const AsyncData<int>(1), authResolved: true), isFalse);
+      expect(
+        showsAsFailure(const AsyncLoading<int>(), authResolved: true),
+        isFalse,
+      );
+    });
+  });
 }

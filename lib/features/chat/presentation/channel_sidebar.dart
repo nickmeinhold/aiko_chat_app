@@ -415,7 +415,7 @@ class ChatSidebar extends ConsumerWidget {
                     // Only a failure once auth has ANSWERED — during session
                     // restore the repo's refusal is a precondition, not an
                     // error. See [authResolvedProvider].
-                    : (repoAsync.hasError && ref.watch(authResolvedProvider))
+                    : showsAsFailure(repoAsync, authResolved: ref.watch(authResolvedProvider))
                     ? Padding(
                         padding: const EdgeInsets.all(16),
                         child: Text(
