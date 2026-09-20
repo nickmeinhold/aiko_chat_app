@@ -662,6 +662,32 @@ final class CallKitRinger: NSObject {
     if let channel { rememberLiveCall(uuid, for: channel) }
 
     provider.reportNewIncomingCall(with: uuid, update: update) { error in
+      // BOTH OUTCOMES SPEAK. A successful report wrote NOTHING here until now, and
+      // that silence cost the measurement it was needed for.
+      //
+      // MEASURED 2026-09-20 19:03. Two invites on DIFFERENT channels, five seconds
+      // apart, to find out whether iOS would accept a second concurrent incoming
+      // call. It does — the handset drew the first full screen and the second as a
+      // banner over the top, which is CallKit's call-waiting presentation and a
+      // real capability nobody here knew we had. The log for that minute is EMPTY.
+      // Both reports succeeded, neither said so, and the only instrument in the
+      // room was Nick looking at the screen.
+      //
+      // Worse than losing it: the same silence was about to be read as the OPPOSITE
+      // result. A report that succeeds and a report that is refused both write
+      // nothing on this path, so "no markers" was equally good evidence for "the
+      // second call was swallowed" — which is what it was nearly concluded to mean.
+      // A lost call and a perfect one looked identical, which is exactly what
+      // `e6d1018` set out to end and this call site never received.
+      if let error {
+        os_log(
+          "[callkit] invite report REFUSED for %{public}@: %{public}@", log: aikoCallLog,
+          type: .error, channel ?? "<no channel>", error.localizedDescription)
+      } else {
+        os_log(
+          "[callkit] invite reported for %{public}@ as %{public}@", log: aikoCallLog,
+          type: .info, channel ?? "<no channel>", uuid.uuidString)
+      }
       // SCOPED TO THE UUID WE JUST STORED, not to the channel. Forgetting by
       // channel alone let a FAILED report evict a DIFFERENT, live call's
       // mapping — a cleanup that tidied away somebody else's call. Belt and
