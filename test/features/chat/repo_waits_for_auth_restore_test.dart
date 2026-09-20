@@ -61,9 +61,7 @@ class _FixedAuthController extends AuthController {
 }
 
 ProviderContainer _container(AuthController Function() auth) =>
-    ProviderContainer(
-      overrides: [authControllerProvider.overrideWith(auth)],
-    );
+    ProviderContainer(overrides: [authControllerProvider.overrideWith(auth)]);
 
 void main() {
   test('restore in flight is NOT "resolved" — so a repo error stays a spinner, '
@@ -83,20 +81,23 @@ void main() {
     expect(container.read(authResolvedProvider), isTrue);
   });
 
-  test('logged out IS resolved — a genuine answer, and a real error may show', () async {
-    // The must-fail arm. Without it the predicate could be "never true", which
-    // would suppress every real error forever — a silent-failure bug traded for
-    // a noisy one. `AsyncData(null)` is an ANSWER: the user is logged out.
-    final container = _container(() => _FixedAuthController(null));
-    addTearDown(container.dispose);
+  test(
+    'logged out IS resolved — a genuine answer, and a real error may show',
+    () async {
+      // The must-fail arm. Without it the predicate could be "never true", which
+      // would suppress every real error forever — a silent-failure bug traded for
+      // a noisy one. `AsyncData(null)` is an ANSWER: the user is logged out.
+      final container = _container(() => _FixedAuthController(null));
+      addTearDown(container.dispose);
 
-    await container.read(authControllerProvider.future);
-    expect(
-      container.read(authResolvedProvider),
-      isTrue,
-      reason: 'AsyncData(null) is a real answer, distinct from AsyncLoading',
-    );
-  });
+      await container.read(authControllerProvider.future);
+      expect(
+        container.read(authResolvedProvider),
+        isTrue,
+        reason: 'AsyncData(null) is a real answer, distinct from AsyncLoading',
+      );
+    },
+  );
 
   test('signed in is resolved', () async {
     final container = _container(() => _FixedAuthController(_me));
@@ -115,39 +116,46 @@ void main() {
   /// Nick, from the handset, 2026-09-20: *"still comes up before the
   /// conversation loads"*.
   group('a REBUILDING provider still reports the error it is busy clearing', () {
-    test('VENDOR PIN: a rebuild after a failure is AsyncError(isLoading: true)', () async {
-      // Measured against locked riverpod 3.4.2, not assumed. `hasError` is
-      // `_error != null` (`lib/src/core/async_value.dart:125`), NOT
-      // `this is AsyncError` — so the previous error rides along through the
-      // rebuild for redraw convenience and keeps answering yes.
-      //
-      // Pinned as a test because `showsAsFailure` is built on it: if a future
-      // riverpod drops the carried error, this goes red and says so, instead of
-      // the predicate quietly becoming stricter than it needs to be.
-      var failing = true;
-      final probe = FutureProvider<int>((ref) async {
-        if (failing) throw StateError('no session');
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        return 1;
-      });
-      final c = ProviderContainer();
-      addTearDown(c.dispose);
-      c.listen(probe, (_, __) {});
-      await Future<void>.delayed(const Duration(milliseconds: 5));
+    test(
+      'VENDOR PIN: a rebuild after a failure is AsyncError(isLoading: true)',
+      () async {
+        // Measured against locked riverpod 3.4.2, not assumed. `hasError` is
+        // `_error != null` (`lib/src/core/async_value.dart:125`), NOT
+        // `this is AsyncError` — so the previous error rides along through the
+        // rebuild for redraw convenience and keeps answering yes.
+        //
+        // Pinned as a test because `showsAsFailure` is built on it: if a future
+        // riverpod drops the carried error, this goes red and says so, instead of
+        // the predicate quietly becoming stricter than it needs to be.
+        var failing = true;
+        final probe = FutureProvider<int>((ref) async {
+          if (failing) throw StateError('no session');
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          return 1;
+        });
+        final c = ProviderContainer();
+        addTearDown(c.dispose);
+        c.listen(probe, (_, __) {});
+        await Future<void>.delayed(const Duration(milliseconds: 5));
 
-      expect(c.read(probe).hasError, isTrue);
-      expect(c.read(probe).isLoading, isFalse, reason: 'settled failure');
+        expect(c.read(probe).hasError, isTrue);
+        expect(c.read(probe).isLoading, isFalse, reason: 'settled failure');
 
-      failing = false;
-      c.invalidate(probe);
-      final rebuilding = c.read(probe);
-      expect(
-        rebuilding.hasError,
-        isTrue,
-        reason: 'the OLD error is carried through the rebuild',
-      );
-      expect(rebuilding.isLoading, isTrue, reason: 'and it is busy succeeding');
-    });
+        failing = false;
+        c.invalidate(probe);
+        final rebuilding = c.read(probe);
+        expect(
+          rebuilding.hasError,
+          isTrue,
+          reason: 'the OLD error is carried through the rebuild',
+        );
+        expect(
+          rebuilding.isLoading,
+          isTrue,
+          reason: 'and it is busy succeeding',
+        );
+      },
+    );
 
     test('a rebuilding repo is NOT a failure, even once auth has answered', () {
       // The exact cold-start instant the user sees: auth ANSWERED (so the old
@@ -170,18 +178,29 @@ void main() {
       // every real failure forever: a silent bug traded for a noisy one, which
       // is strictly the worse trade and exactly what the first fix guarded
       // against one term over.
-      final settled =
-          AsyncError<int>(StateError('gateway down'), StackTrace.empty);
+      final settled = AsyncError<int>(
+        StateError('gateway down'),
+        StackTrace.empty,
+      );
       expect(showsAsFailure(settled, authResolved: true), isTrue);
     });
 
-    test('auth still restoring suppresses it regardless — the original bug', () {
-      final settled = AsyncError<int>(StateError('no session'), StackTrace.empty);
-      expect(showsAsFailure(settled, authResolved: false), isFalse);
-    });
+    test(
+      'auth still restoring suppresses it regardless — the original bug',
+      () {
+        final settled = AsyncError<int>(
+          StateError('no session'),
+          StackTrace.empty,
+        );
+        expect(showsAsFailure(settled, authResolved: false), isFalse);
+      },
+    );
 
     test('success is never a failure', () {
-      expect(showsAsFailure(const AsyncData<int>(1), authResolved: true), isFalse);
+      expect(
+        showsAsFailure(const AsyncData<int>(1), authResolved: true),
+        isFalse,
+      );
       expect(
         showsAsFailure(const AsyncLoading<int>(), authResolved: true),
         isFalse,

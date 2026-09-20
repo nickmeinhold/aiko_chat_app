@@ -781,57 +781,61 @@ void main() {
     expect(container.read(mutedUserIdsProvider), isNot(contains('u2')));
   });
 
-  testWidgets('the disclosure fires when BOTH causes are muted, not just peer-only', (
-    tester,
-  ) async {
-    // Gating the confession on "peer AND NOT conversation" left the both-muted
-    // case saying "unmute this conversation" while also restoring that account
-    // everywhere — the silent global act the disclosure exists to prevent, hiding
-    // one flag away (cage-match #135 round 5, Tesla).
-    setNarrow(tester);
+  testWidgets(
+    'the disclosure fires when BOTH causes are muted, not just peer-only',
+    (tester) async {
+      // Gating the confession on "peer AND NOT conversation" left the both-muted
+      // case saying "unmute this conversation" while also restoring that account
+      // everywhere — the silent global act the disclosure exists to prevent, hiding
+      // one flag away (cage-match #135 round 5, Tesla).
+      setNarrow(tester);
 
-    const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
-    final rest = FakeRestApi(channels: twoChannels);
-    rest.dms = [dm];
-    rest.membersByChannel['dm1'] = const [
-      ChannelMember(
-        userId: 'u1',
-        role: 'member',
-        canPost: true,
-        handle: 'me',
-        displayName: 'Me',
-      ),
-      ChannelMember(
-        userId: 'u2',
-        role: 'member',
-        canPost: true,
-        handle: 'alice',
-        displayName: 'Alice',
-      ),
-    ];
-    final container = makeContainer(rest: rest, transport: FakeChatTransport());
-    addTearDown(container.dispose);
+      const dm = Channel(id: 'dm1', name: '', kind: ChannelKind.dm);
+      final rest = FakeRestApi(channels: twoChannels);
+      rest.dms = [dm];
+      rest.membersByChannel['dm1'] = const [
+        ChannelMember(
+          userId: 'u1',
+          role: 'member',
+          canPost: true,
+          handle: 'me',
+          displayName: 'Me',
+        ),
+        ChannelMember(
+          userId: 'u2',
+          role: 'member',
+          canPost: true,
+          handle: 'alice',
+          displayName: 'Alice',
+        ),
+      ];
+      final container = makeContainer(
+        rest: rest,
+        transport: FakeChatTransport(),
+      );
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
-    container.read(selectedChannelIdProvider.notifier).select('dm1');
-    container.read(mutesProvider.notifier)
-      ..setUserMuted('u2', muted: true, expectUserId: null)
-      ..setConversationMuted('dm1', muted: true, expectUserId: null);
-    await settle(tester);
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
+      container.read(selectedChannelIdProvider.notifier).select('dm1');
+      container.read(mutesProvider.notifier)
+        ..setUserMuted('u2', muted: true, expectUserId: null)
+        ..setConversationMuted('dm1', muted: true, expectUserId: null);
+      await settle(tester);
 
-    // The dedicated button is gone; details is the control now. The DISCLOSURE
-    // is what this test defends, and it lives as the switch subtitle.
-    await openConversationDetails(tester, 'alice');
+      // The dedicated button is gone; details is the control now. The DISCLOSURE
+      // is what this test defends, and it lives as the switch subtitle.
+      await openConversationDetails(tester, 'alice');
 
-    expect(
-      find.textContaining('This person is muted everywhere'),
-      findsOneWidget,
-      reason: 'both causes muted must still disclose the account-wide effect',
-    );
-    expect(container.read(mutedUserIdsProvider), contains('u2'));
-  });
+      expect(
+        find.textContaining('This person is muted everywhere'),
+        findsOneWidget,
+        reason: 'both causes muted must still disclose the account-wide effect',
+      );
+      expect(container.read(mutedUserIdsProvider), contains('u2'));
+    },
+  );
 
   testWidgets('a redundant set still persists, so an undo cannot be overwritten '
       'by a write it raced', (tester) async {

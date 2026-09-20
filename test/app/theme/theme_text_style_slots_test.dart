@@ -124,9 +124,9 @@ void main() {
       tester,
       Builder(
         builder: (context) => TextButton(
-          onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('blocked')),
-          ),
+          onPressed: () => ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('blocked'))),
           child: const Text('go'),
         ),
       ),
@@ -150,7 +150,8 @@ void main() {
     expect(
       _paintedFamily(tester, 'mine'),
       _bodyFamily,
-      reason: 'the chip label resolved a different face from the rest of the app',
+      reason:
+          'the chip label resolved a different face from the rest of the app',
     );
   });
 

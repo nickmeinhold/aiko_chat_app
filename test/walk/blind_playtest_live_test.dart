@@ -64,82 +64,79 @@ void main() {
     await loadRealFonts();
   });
 
-  testWidgets(
-    'a newcomer can find how to silence a channel',
-    (tester) async {
-      hideDebugChrome();
-      final container = (await pumpWalkableApp(tester, walkPhone)).container;
+  testWidgets('a newcomer can find how to silence a channel', (tester) async {
+    hideDebugChrome();
+    final container = (await pumpWalkableApp(tester, walkPhone)).container;
 
-      final run = await playtest(
-        tester,
-        goal:
-            'silence the conversation called "general" so it stops notifying '
-            'you',
-        agent: claudeEyes(
-          tester: tester,
-          scratchDir: '$_trails/silence-general',
-        ),
-        // Ground truth is read from the store, never from the agent's opinion
-        // of its own success. A run where the two disagree is the interesting
-        // one, and it can only be spotted if they are separate readings.
-        reached: () async => container
-            .read(mutesProvider.notifier)
-            .isMuted(MuteTarget.channel, 'c1'),
-        maxPresses: 6,
-      );
+    final run = await playtest(
+      tester,
+      goal:
+          'silence the conversation called "general" so it stops notifying '
+          'you',
+      agent: claudeEyes(tester: tester, scratchDir: '$_trails/silence-general'),
+      // Ground truth is read from the store, never from the agent's opinion
+      // of its own success. A run where the two disagree is the interesting
+      // one, and it can only be spotted if they are separate readings.
+      reached: () async => container
+          .read(mutesProvider.notifier)
+          .isMuted(MuteTarget.channel, 'c1'),
+      maxPresses: 6,
+    );
 
-      run.writeFrames('$_trails/silence-general/frames');
-      // ignore: avoid_print
-      print('\n$run\n${run.moves.map((m) => '  $m').join('\n')}\n'
-          'trail: $_trails/silence-general\n');
+    run.writeFrames('$_trails/silence-general/frames');
+    // ignore: avoid_print
+    print(
+      '\n$run\n${run.moves.map((m) => '  $m').join('\n')}\n'
+      'trail: $_trails/silence-general\n',
+    );
 
-      // The only assertion: the instrument ran. Reachability and press count are
-      // MEASUREMENTS printed above, not gates — see the header. A model that
-      // hunts for six presses is telling us something about the app; a suite
-      // that goes red for it is telling us nothing, and trains us to stop
-      // reading it.
-      expect(
-        run.moves,
-        isNotEmpty,
-        reason:
-            'the agent produced no moves at all — that is the instrument '
-            'failing, which is the one thing this file does gate on',
-      );
-    },
-  );
+    // The only assertion: the instrument ran. Reachability and press count are
+    // MEASUREMENTS printed above, not gates — see the header. A model that
+    // hunts for six presses is telling us something about the app; a suite
+    // that goes red for it is telling us nothing, and trains us to stop
+    // reading it.
+    expect(
+      run.moves,
+      isNotEmpty,
+      reason:
+          'the agent produced no moves at all — that is the instrument '
+          'failing, which is the one thing this file does gate on',
+    );
+  });
 
-  testWidgets(
-    'what the app bar actually says to someone reading it',
-    (tester) async {
-      // The COMPOSITION class, which needs no interaction at all: show it the
-      // bar and ask what it reads. There is no assertion to write here — the
-      // finding is the gap between this sentence and what the bar is supposed
-      // to mean, and judging that gap is a human's job. So this test asserts
-      // only that the instrument produced a reading, and PRINTS the reading.
-      hideDebugChrome();
-      await pumpWalkableApp(tester, walkPhone);
+  testWidgets('what the app bar actually says to someone reading it', (
+    tester,
+  ) async {
+    // The COMPOSITION class, which needs no interaction at all: show it the
+    // bar and ask what it reads. There is no assertion to write here — the
+    // finding is the gap between this sentence and what the bar is supposed
+    // to mean, and judging that gap is a human's job. So this test asserts
+    // only that the instrument produced a reading, and PRINTS the reading.
+    hideDebugChrome();
+    await pumpWalkableApp(tester, walkPhone);
 
-      final run = await playtest(
-        tester,
-        goal:
-            'describe, in one sentence, what the bar across the top of this '
-            'screen is telling you about this conversation',
-        agent: claudeEyes(tester: tester, scratchDir: '$_trails/read-the-bar'),
-        reached: () async => false,
-        maxPresses: 1,
-      );
+    final run = await playtest(
+      tester,
+      goal:
+          'describe, in one sentence, what the bar across the top of this '
+          'screen is telling you about this conversation',
+      agent: claudeEyes(tester: tester, scratchDir: '$_trails/read-the-bar'),
+      reached: () async => false,
+      maxPresses: 1,
+    );
 
-      run.writeFrames('$_trails/read-the-bar/frames');
-      final reading = run.moves.whereType<Reading>().firstOrNull;
-      // ignore: avoid_print
-      print('\nTHE BAR READS AS: ${reading?.saw ?? '(no reading — $run)'}\n'
-          'trail: $_trails/read-the-bar\n');
+    run.writeFrames('$_trails/read-the-bar/frames');
+    final reading = run.moves.whereType<Reading>().firstOrNull;
+    // ignore: avoid_print
+    print(
+      '\nTHE BAR READS AS: ${reading?.saw ?? '(no reading — $run)'}\n'
+      'trail: $_trails/read-the-bar\n',
+    );
 
-      expect(
-        reading,
-        isNotNull,
-        reason: 'the agent acted instead of describing — no reading to compare',
-      );
-    },
-  );
+    expect(
+      reading,
+      isNotNull,
+      reason: 'the agent acted instead of describing — no reading to compare',
+    );
+  });
 }

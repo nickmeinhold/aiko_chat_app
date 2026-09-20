@@ -62,9 +62,6 @@ void main() {
     // style's metrics instead of the ones the chrome deliberately specifies.
     final theme = buildTheme(kThemePresets.first.light, font: chosen);
     expect(theme.appBarTheme.titleTextStyle?.fontSize, 20);
-    expect(
-      theme.appBarTheme.titleTextStyle?.fontWeight?.value,
-      600,
-    );
+    expect(theme.appBarTheme.titleTextStyle?.fontWeight?.value, 600);
   });
 }

@@ -125,7 +125,10 @@ class ChatMessagePane extends ConsumerWidget {
               // then it is the precondition not yet being satisfiable, and
               // showing it flashed "Could not load conversations" on every cold
               // start. See [authResolvedProvider].
-              : showsAsFailure(repoAsync, authResolved: ref.watch(authResolvedProvider))
+              : showsAsFailure(
+                  repoAsync,
+                  authResolved: ref.watch(authResolvedProvider),
+                )
               ? Center(
                   child: Text(
                     'Could not load conversations.\n${repoAsync.error}',

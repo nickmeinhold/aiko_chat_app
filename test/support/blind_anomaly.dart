@@ -158,18 +158,14 @@ perfectly fine.
 
 $anomalyGrammar''';
 
-    final result = await Process.run(
-      claudeBin,
-      [
-        '-p',
-        prompt,
-        '--allowedTools',
-        'Read',
-        '--output-format',
-        'text',
-      ],
-      workingDirectory: dir.path,
-    ).timeout(timeout);
+    final result = await Process.run(claudeBin, [
+      '-p',
+      prompt,
+      '--allowedTools',
+      'Read',
+      '--output-format',
+      'text',
+    ], workingDirectory: dir.path).timeout(timeout);
 
     if (result.exitCode != 0) {
       throw StateError('claude exited ${result.exitCode}: ${result.stderr}');

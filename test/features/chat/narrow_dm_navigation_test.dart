@@ -97,30 +97,29 @@ void main() {
     await openChatDrawer(tester);
   }
 
-  testWidgets(
-    'ENTRY: the DM is listed in the narrow drawer, under a header',
-    (tester) async {
-      setNarrow(tester);
-      final container = makeContainer(
-        rest: restWithDm(),
-        transport: FakeChatTransport(),
-      );
-      addTearDown(container.dispose);
+  testWidgets('ENTRY: the DM is listed in the narrow drawer, under a header', (
+    tester,
+  ) async {
+    setNarrow(tester);
+    final container = makeContainer(
+      rest: restWithDm(),
+      transport: FakeChatTransport(),
+    );
+    addTearDown(container.dispose);
 
-      await pumpApp(tester, container);
-      await signIn(tester);
-      await tester.pumpAndSettle();
+    await pumpApp(tester, container);
+    await signIn(tester);
+    await tester.pumpAndSettle();
 
-      await openConversationDrawer(tester);
+    await openConversationDrawer(tester);
 
-      // Both channels, the section boundary, and the DM titled by its peer's
-      // CURRENT handle (a DM has no server name — identity=key, ADR-0004).
-      expect(find.text('general'), findsWidgets);
-      expect(find.text('random'), findsWidgets);
-      expect(find.text('Direct messages'), findsOneWidget);
-      expect(find.text('alice'), findsWidgets);
-    },
-  );
+    // Both channels, the section boundary, and the DM titled by its peer's
+    // CURRENT handle (a DM has no server name — identity=key, ADR-0004).
+    expect(find.text('general'), findsWidgets);
+    expect(find.text('random'), findsWidgets);
+    expect(find.text('Direct messages'), findsOneWidget);
+    expect(find.text('alice'), findsWidgets);
+  });
 
   testWidgets('ENTRY: picking the DM selects it and it STAYS selected', (
     tester,
@@ -190,9 +189,7 @@ void main() {
       await openConversationDrawer(tester);
       expect(
         find.byKey(
-          Key(
-            c.id == 'dm1' ? 'sidebar-dm-${c.id}' : 'sidebar-channel-${c.id}',
-          ),
+          Key(c.id == 'dm1' ? 'sidebar-dm-${c.id}' : 'sidebar-channel-${c.id}'),
         ),
         findsOneWidget,
         reason: 'active=${c.id}',
@@ -519,64 +516,69 @@ void main() {
     expect(find.byKey(const Key('sidebar-channel-dm1')), findsNothing);
   });
 
-  testWidgets('a conversation vanishing while the drawer is open does not assert', (
-    tester,
-  ) async {
-    setNarrow(tester);
-    final rest = restWithDm();
-    final container = makeContainer(rest: rest, transport: FakeChatTransport());
-    addTearDown(container.dispose);
+  testWidgets(
+    'a conversation vanishing while the drawer is open does not assert',
+    (tester) async {
+      setNarrow(tester);
+      final rest = restWithDm();
+      final container = makeContainer(
+        rest: rest,
+        transport: FakeChatTransport(),
+      );
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
 
-    container.read(selectedChannelIdProvider.notifier).select('dm1');
-    await tester.pumpAndSettle();
-    await openConversationDrawer(tester);
+      container.read(selectedChannelIdProvider.notifier).select('dm1');
+      await tester.pumpAndSettle();
+      await openConversationDrawer(tester);
 
-    // The DM disappears from under the user's thumb. The drawer is live, not a
-    // retained overlay snapshot, so the row should vanish and the pick should
-    // self-heal rather than preserving a ghost selection.
-    rest.dms = const [];
-    container.invalidate(dmsProvider);
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 50)),
-    );
-    await tester.pumpAndSettle();
+      // The DM disappears from under the user's thumb. The drawer is live, not a
+      // retained overlay snapshot, so the row should vanish and the pick should
+      // self-heal rather than preserving a ghost selection.
+      rest.dms = const [];
+      container.invalidate(dmsProvider);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pumpAndSettle();
 
-    expect(tester.takeException(), isNull);
-    // The pick self-heals to a real conversation rather than dangling.
-    expect(container.read(selectedChannelIdProvider), isNot('dm1'));
+      expect(tester.takeException(), isNull);
+      // The pick self-heals to a real conversation rather than dangling.
+      expect(container.read(selectedChannelIdProvider), isNot('dm1'));
 
-    expect(find.text('alice'), findsNothing);
-    expect(find.byKey(const Key('sidebar-dm-dm1')), findsNothing);
-    expect(tester.takeException(), isNull);
-  });
+      expect(find.text('alice'), findsNothing);
+      expect(find.byKey(const Key('sidebar-dm-dm1')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
-  testWidgets('the drawer button opens the conversation list and is full-size', (
-    tester,
-  ) async {
-    setNarrow(tester);
-    final container = makeContainer(
-      rest: restWithDm(),
-      transport: FakeChatTransport(),
-    );
-    addTearDown(container.dispose);
+  testWidgets(
+    'the drawer button opens the conversation list and is full-size',
+    (tester) async {
+      setNarrow(tester);
+      final container = makeContainer(
+        rest: restWithDm(),
+        transport: FakeChatTransport(),
+      );
+      addTearDown(container.dispose);
 
-    await pumpApp(tester, container);
-    await signIn(tester);
-    await tester.pumpAndSettle();
+      await pumpApp(tester, container);
+      await signIn(tester);
+      await tester.pumpAndSettle();
 
-    final button = find.byType(DrawerButton);
-    await tester.tap(button);
-    await tester.pumpAndSettle();
-    expect(
-      find.text('alice'),
-      findsWidgets,
-      reason: 'tapping the drawer button must open the conversation list',
-    );
-  });
+      final button = find.byType(DrawerButton);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(
+        find.text('alice'),
+        findsWidgets,
+        reason: 'tapping the drawer button must open the conversation list',
+      );
+    },
+  );
 
   testWidgets('closed drawer rows are NOT in the tree', (tester) async {
     setNarrow(tester);
@@ -736,10 +738,7 @@ void main() {
     await openConversationDrawer(tester);
     final badge = find.byKey(const Key('sidebar-unread-dm1'));
     expect(badge, findsOneWidget);
-    expect(
-      tester.widget<UnreadBadge>(badge).count,
-      greaterThan(0),
-    );
+    expect(tester.widget<UnreadBadge>(badge).count, greaterThan(0));
   });
 
   testWidgets('tapping a badged DM row opens that conversation', (

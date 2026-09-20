@@ -187,8 +187,9 @@ final class PlaytestRun {
   void writeFrames(String dir) {
     Directory(dir).createSync(recursive: true);
     for (var i = 0; i < frames.length; i++) {
-      File('$dir/${i.toString().padLeft(2, '0')}.png')
-          .writeAsBytesSync(frames[i]);
+      File(
+        '$dir/${i.toString().padLeft(2, '0')}.png',
+      ).writeAsBytesSync(frames[i]);
     }
     File('$dir/moves.txt').writeAsStringSync(
       [

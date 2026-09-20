@@ -32,7 +32,9 @@ double _inkRatio(PaintedFrame frame, Rect rect, Color background) {
 }
 
 void main() {
-  testWidgets('real fonts render letterforms, not filled boxes', (tester) async {
+  testWidgets('real fonts render letterforms, not filled boxes', (
+    tester,
+  ) async {
     await loadRealFonts();
 
     const background = Color(0xFFFFFFFF);
@@ -70,6 +72,10 @@ void main() {
           'ink ratio $ink — the harness is drawing filled boxes, so every '
           'render in this suite is blind to type',
     );
-    expect(ink, greaterThan(0.05), reason: 'ink ratio $ink — nothing drew at all');
+    expect(
+      ink,
+      greaterThan(0.05),
+      reason: 'ink ratio $ink — nothing drew at all',
+    );
   });
 }

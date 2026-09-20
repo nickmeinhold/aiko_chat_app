@@ -221,7 +221,8 @@ Future<void> openChatDrawer(WidgetTester tester) async {
   expect(
     button,
     findsOneWidget,
-    reason: 'narrow chat navigation should live behind the app-bar drawer button',
+    reason:
+        'narrow chat navigation should live behind the app-bar drawer button',
   );
   await tester.tap(button);
   await tester.pumpAndSettle();

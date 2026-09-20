@@ -52,7 +52,8 @@ void main() {
     expect(
       find.byKey(const Key('appbar-mute-conversation')),
       findsNothing,
-      reason: 'mute is in conversation details now; the strip got its seat back',
+      reason:
+          'mute is in conversation details now; the strip got its seat back',
     );
     expect(find.byType(DropdownButton<String>), findsNothing);
   });

@@ -21,6 +21,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/logging/boot_telemetry.dart';
+
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
@@ -136,7 +138,12 @@ class AuthController extends AsyncNotifier<AppUser?> {
     final sub = events.stream.listen((_) => _becomeUnauthenticated());
     ref.onDispose(sub.cancel);
 
-    return _restoreSession();
+    // THE GATE EVERY NETWORK CALL WAITS BEHIND, so its duration is the first
+    // question a slow wake asks. Logged on the way out rather than inside
+    // `_restoreSession`, which has five exits.
+    final restored = await _restoreSession();
+    ref.read(bootTelemetryProvider).authResolved(signedIn: restored != null);
+    return restored;
   }
 
   /// Cold-start session restore — offline-first.
