@@ -84,10 +84,11 @@ class RingTelemetry {
   /// platform channel's vocabulary and must not gain a compile-time dependency
   /// on it; the caller passes `kind.name`, which is the same value the channel
   /// puts on the wire.
-  void systemCallAction(String channelId, String kind) => _log.info(
-    'call.system.action',
-    fields: {'channel': channelId, 'kind': kind},
-  );
+  void systemCallAction(String channelId, String kind, {String? origin}) =>
+      _log.info(
+        'call.system.action',
+        fields: {'channel': channelId, 'kind': kind, 'origin': ?origin},
+      );
 
   /// The ring STOPPED, and why.
   ///

@@ -43,20 +43,46 @@ enum SystemCallActionKind {
 /// (island design 14 would add one and is undecided), the SFU room IS the
 /// channel, and so the channel is what a join and a teardown are both keyed on.
 class SystemCallAction {
-  const SystemCallAction({required this.kind, required this.channelId});
+  const SystemCallAction({
+    required this.kind,
+    required this.channelId,
+    this.origin,
+  });
 
   final SystemCallActionKind kind;
   final String channelId;
 
+  /// WHICH native event produced this — diagnostic only, never branched on.
+  ///
+  /// `ended` covers two events that mean opposite things and were
+  /// indistinguishable here until 2026-09-20:
+  ///
+  ///  - `endAction` — a `CXEndCallAction`: somebody or something ENDED the
+  ///    call. The lock-screen red button, or a hangup we reported.
+  ///  - `providerReset` — `providerDidReset`: the system tore our provider
+  ///    down and every call with it. Nobody ended anything; the OS stopped
+  ///    believing in our calls.
+  ///
+  /// Both used to arrive as a bare `ended`, so a handset that rang, was never
+  /// answered, and lost its call 2.1s later produced a report that could not
+  /// say whether a person had hung up or iOS had reclaimed us. Deliberately a
+  /// free-form string and deliberately not part of [kind]: the ACTIONS are a
+  /// closed vocabulary the app branches on, and this is provenance for a
+  /// reader. Null from any producer that does not say (every older build, and
+  /// every test that does not care).
+  final String? origin;
+
   @override
-  String toString() => 'SystemCallAction(${kind.name}, $channelId)';
+  String toString() =>
+      'SystemCallAction(${kind.name}, $channelId${origin == null ? '' : ', $origin'})';
 
   @override
   bool operator ==(Object other) =>
       other is SystemCallAction &&
       other.kind == kind &&
-      other.channelId == channelId;
+      other.channelId == channelId &&
+      other.origin == origin;
 
   @override
-  int get hashCode => Object.hash(kind, channelId);
+  int get hashCode => Object.hash(kind, channelId, origin);
 }

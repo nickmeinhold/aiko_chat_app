@@ -720,8 +720,16 @@ final class SystemCallChannel: NSObject, FlutterStreamHandler {
     }
   }
 
-  func emit(action: Action, channel: String) {
-    let event = ["action": action.rawValue, "channel": channel]
+  /// [origin] names WHICH native event produced this, for the report only —
+  /// Dart branches on `action`, never on this. `ended` covers a
+  /// `CXEndCallAction` (somebody ended the call) and `providerDidReset` (the
+  /// system tore our provider down and every call with it), which mean opposite
+  /// things and were the same byte on this channel until 2026-09-20: a handset
+  /// rang, was never answered, and lost its call 2.1 seconds later, and no
+  /// report could say which of the two had happened.
+  func emit(action: Action, channel: String, origin: String = "") {
+    var event = ["action": action.rawValue, "channel": channel]
+    if !origin.isEmpty { event["origin"] = origin }
     if let sink = sink {
       sink(event)
     } else {
@@ -757,8 +765,10 @@ extension CallKitRinger: CXProviderDelegate {
     // a live call screen would otherwise stay mounted over a room the OS has
     // already torn the audio out from under.
     for (channel, _) in stored() {
-      SystemCallChannel.shared.emit(action: .ended, channel: channel)
+      SystemCallChannel.shared.emit(
+        action: .ended, channel: channel, origin: "providerReset")
     }
+    NSLog("[callkit] providerDidReset — the system tore down every call we had")
     UserDefaults.standard.removeObject(forKey: Self.liveCallsKey)
     // A reset is the end that arrives with no action and no UUID, so it is the
     // one path that would otherwise strand the process in manual mode with no
@@ -791,7 +801,9 @@ extension CallKitRinger: CXProviderDelegate {
     // management before manual mode was in force — i.e. exactly today's bug,
     // reproduced intermittently instead of always. See `CallAudioSession`.
     CallAudioSession.arm()
-    SystemCallChannel.shared.emit(action: .answered, channel: channel)
+    SystemCallChannel.shared.emit(
+      action: .answered, channel: channel, origin: "answerAction")
+    NSLog("[callkit] CXAnswerCallAction fulfilled for channel %@", channel)
     action.fulfill()
   }
 
@@ -817,9 +829,11 @@ extension CallKitRinger: CXProviderDelegate {
     // a call answered from a locked handset. Emitted before the mapping is
     // forgotten, because the channel is what identifies the call to Dart.
     for (channel, entry) in stored() where entry.uuid == action.callUUID.uuidString {
-      SystemCallChannel.shared.emit(action: .ended, channel: channel)
+      SystemCallChannel.shared.emit(
+        action: .ended, channel: channel, origin: "endAction")
       forgetLiveCall(for: channel)
     }
+    NSLog("[callkit] CXEndCallAction performed for %@", action.callUUID.uuidString)
     // Unconditional, and deliberately OUTSIDE the loop: a hangup whose UUID
     // matches no stored entry still ends whatever CallKit call was live, and
     // leaving the process in manual mode would silently break the in-app ring

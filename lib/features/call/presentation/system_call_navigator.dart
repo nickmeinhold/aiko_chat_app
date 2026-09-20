@@ -208,7 +208,11 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // Cheap by construction: a handset receives a handful of these per call,
     // not per frame, so this cannot crowd the ring buffer it shares with the
     // events it exists to explain.
-    _telemetry.systemCallAction(action.channelId, action.kind.name);
+    _telemetry.systemCallAction(
+      action.channelId,
+      action.kind.name,
+      origin: action.origin,
+    );
     switch (action.kind) {
       case SystemCallActionKind.answered:
         _hold(action.channelId);

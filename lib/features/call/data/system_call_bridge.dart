@@ -76,7 +76,12 @@ class AppleSystemCallBridge implements SystemCallBridge {
     final kind = SystemCallActionKind.parse(event['action'] as String?);
     final channelId = event['channel'];
     if (kind == null || channelId is! String || channelId.isEmpty) return null;
-    return SystemCallAction(kind: kind, channelId: channelId);
+    final origin = event['origin'];
+    return SystemCallAction(
+      kind: kind,
+      channelId: channelId,
+      origin: origin is String && origin.isNotEmpty ? origin : null,
+    );
   }
 
   @override

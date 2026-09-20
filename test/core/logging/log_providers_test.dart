@@ -183,6 +183,36 @@ void main() {
       );
     });
 
+    test('`ended` carries WHICH native event ended it', () {
+      // A `CXEndCallAction` (somebody ended the call) and `providerDidReset`
+      // (the system tore our provider down and every call with it) mean
+      // opposite things and were the same byte on this channel. On 2026-09-20 a
+      // handset rang, was never answered, and lost its call 2.1s later — and no
+      // report could say which of the two had happened.
+      expect(
+        lineFor(
+          (t) => t.systemCallAction('dm:a:b', 'ended', origin: 'providerReset'),
+        ),
+        allOf(contains('kind=ended'), contains('origin=providerReset')),
+      );
+      expect(
+        lineFor(
+          (t) => t.systemCallAction('dm:a:b', 'ended', origin: 'endAction'),
+        ),
+        contains('origin=endAction'),
+      );
+    });
+
+    test('an origin-less action omits the field rather than saying null', () {
+      // Every build before today produces exactly this, and `origin=null`
+      // would invite a reader to think the native side had answered the
+      // question and said "neither".
+      expect(
+        lineFor((t) => t.systemCallAction('dm:a:b', 'ended')),
+        isNot(contains('origin')),
+      );
+    });
+
     test('every AnswerOutcome renders a distinct, non-empty name', () {
       // Driven, not rostered: a value added later with no case here still gets
       // asserted, and a duplicate name (two branches that read identically in a
