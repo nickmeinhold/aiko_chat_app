@@ -44,6 +44,22 @@ import WebRTC
 /// path that outlives the call that caused it — worse than the bug being fixed,
 /// because it needs no CallKit call to reproduce and nothing reports it.
 enum CallAudioSession {
+  /// The process-wide WebRTC configuration as it was BEFORE the first `arm()`.
+  ///
+  /// `setWebRTC` is a GLOBAL mutation — it changes what WebRTC re-applies every
+  /// time it later takes the session, for the life of the process — and nothing
+  /// used to put it back. So the doc above ("the in-app path never sees it") was
+  /// true of manual mode and false of the configuration: after one CallKit
+  /// answer, every in-app call inherited playAndRecord/videoChat/allowBluetooth
+  /// whether or not CallKit was involved. Audio routing that differs before and
+  /// after the first CallKit call, within one launch, is the most expensive bug
+  /// shape there is — two identical runs behaving differently.
+  ///
+  /// Captured on the FIRST arm only. A later arm would capture the config the
+  /// previous arm installed, which restores nothing.
+  /// (Carnot + Maxwell, cage-match PR #201 round 1.)
+  private static var configBeforeArm: RTCAudioSessionConfiguration?
+
   /// Hand WebRTC over to CallKit for this call. Called from the answer action
   /// BEFORE Dart is told to join, so manual mode is in force before any audio
   /// track can start — if a track started first it would already have taken the
@@ -84,6 +100,10 @@ enum CallAudioSession {
     // the first is what WebRTC re-applies whenever it later takes the session,
     // so setting only the live session would be undone the moment the ADM
     // reconfigured. Both, or the fix has a lifetime of one route change.
+    // Capture BEFORE mutating, once, so `disarm()` has something to restore.
+    if configBeforeArm == nil {
+      configBeforeArm = RTCAudioSessionConfiguration.webRTC()
+    }
     let config = RTCAudioSessionConfiguration.webRTC()
     config.category = AVAudioSession.Category.playAndRecord.rawValue
     // `.videoChat`, not `.voiceChat`: every call this app places is a video
@@ -136,7 +156,14 @@ enum CallAudioSession {
     let session = RTCAudioSession.sharedInstance()
     session.isAudioEnabled = false
     session.useManualAudio = false
-    os_log("[audio] disarm — back to automatic management", log: aikoCallLog, type: .info)
+    // THE GLOBAL HALF. Restoring `useManualAudio` alone left the process-wide
+    // WebRTC configuration permanently as CallKit shaped it, which is the half
+    // of "back to automatic management" that was never implemented.
+    if let previous = configBeforeArm {
+      RTCAudioSessionConfiguration.setWebRTC(previous)
+      configBeforeArm = nil
+    }
+    os_log("[audio] disarm — back to automatic management, WebRTC config restored", log: aikoCallLog, type: .info)
   }
 }
 
@@ -549,7 +576,22 @@ final class CallKitRinger: NSObject {
     // (see `reportEnd`), and the good report that just landed has reset the
     // consecutive-violation counter — one duplicate on a reset counter cannot
     // reach a threshold of four. The cost is a momentary buzz on the duplicate.
-    if let channel, liveCall(for: channel) != nil {
+    // `liveRing`, NOT `liveCall`. An ANSWERED entry never ages out — deliberately,
+    // so a long call's mapping survives — but only CallKit or Dart clear it, and
+    // all of those need a LIVE PROCESS. Force-quit mid-call, or any termination
+    // that does not route through CallKit, and the answered entry outlives its
+    // call in UserDefaults forever. Asked `liveCall`, this guard then classified
+    // every future genuine invite on that channel as a duplicate and ended it
+    // immediately: the handset could never be rung on that channel again, by
+    // anyone, short of a reinstall.
+    //
+    // The state the map was missing a name for is "answered, and the owner of
+    // that answer is gone". The guard does not need to name it: a duplicate push
+    // is a second delivery of a ring that is ON SCREEN, which is an UNANSWERED
+    // entry inside the trust window. An invite arriving against an answered entry
+    // is a NEW call, and `rememberLiveCall` (last-writer-wins) is already the
+    // right thing to happen to the corpse. (Maxwell, cage-match PR #201 round 1.)
+    if let channel, liveRing(for: channel) != nil {
       os_log("[callkit] duplicate invite for a ring already live on %{public}@", log: aikoCallLog, type: .info, channel)
       reportAndEndImmediately(reason: .remoteEnded, completion: completion)
       return
@@ -612,7 +654,17 @@ final class CallKitRinger: NSObject {
       return
     }
     provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
-    forgetLiveCall(for: channel)
+    forgetLiveCall(for: channel, onlyIf: live)
+    // MUST DISARM, and this path is why `disarm()` had only two call sites.
+    // `reportCall(endedAt:)` deliberately does NOT round-trip through our
+    // `CXEndCallAction` delegate (see `endSystemCall` — the echo loop), so the
+    // delegate's `disarm()` never runs for a remote hangup. The class doc states
+    // the rule three lines above the enum — "every exit must disarm... worse than
+    // the bug being fixed, because it needs no CallKit call to reproduce and
+    // nothing reports it" — and this exit did not. The echo fix and the disarm
+    // rule were each right alone and never checked against each other.
+    // (Tesla, cage-match PR #201 round 1 — the finding of the panel.)
+    CallAudioSession.disarm()
     completion()
   }
 
@@ -623,7 +675,32 @@ final class CallKitRinger: NSObject {
     let update = CXCallUpdate()
     update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
     provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
-      guard error == nil else { return completion() }
+      guard error == nil else {
+        // THE FAILURE THIS PATH EXISTS TO PREVENT, AND IT WAS SILENT.
+        //
+        // This function's whole justification is must-report: every VoIP push
+        // owes CallKit a call. But the duplicate arm of `reportInvite` calls it
+        // EXACTLY when a call is already live on screen, and
+        // `maximumCallsPerCallGroup = 1` — so this report meets the same limit
+        // that made the second report fail on 2026-09-20 and started the bug.
+        //
+        // Both of the documented claims are therefore in question and only one
+        // can be true: either the report lands (must-report satisfied, and the
+        // "momentary buzz" is real and is what Nick is seeing), or it fails
+        // (no buzz, and must-report is NOT satisfied on a path that says it is).
+        // Nothing in this code could previously tell you which, which is the
+        // exact silent-failure class the whole of 2026-09-20 was spent deleting.
+        //
+        // `.error` so it survives a level filter, and the reason is interpolated
+        // `%{public}@` because the unified log redacts arguments by default.
+        // This does not FIX must-report — it makes the question answerable, which
+        // is the precondition for measuring the flash at all.
+        // (Carnot + Maxwell, cage-match PR #201 round 1.)
+        os_log(
+          "[callkit] reportAndEndImmediately — report REFUSED, must-report NOT satisfied: %{public}@",
+          log: aikoCallLog, type: .error, error!.localizedDescription)
+        return completion()
+      }
       // INSIDE the report's completion, deliberately. Ending before the report
       // has landed races "unknown UUID" against SpringBoard, and the losing side
       // of that race is a ring nothing ever stops.
@@ -654,7 +731,21 @@ final class CallKitRinger: NSObject {
   func endSystemCall(channel: String) {
     guard let live = liveCall(for: channel) else { return }
     provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
-    forgetLiveCall(for: channel)
+    // SCOPED, like every other cleanup: `live` is the UUID this path just read,
+    // and `rememberLiveCall` is last-writer-wins, so an invite landing between
+    // the read and the forget would otherwise have its mapping deleted by a
+    // teardown that did not create it. The rule `onlyIf:` exists for, applied at
+    // the site that already holds the UUID. (Maxwell, cage-match PR #201.)
+    forgetLiveCall(for: channel, onlyIf: live)
+    // THE ORDINARY HANGUP, and it never disarmed. This is Dart's one teardown
+    // path — the user left the room, the join failed, they answered in-app — and
+    // it ends the call with `reportCall(endedAt:)` precisely so it does NOT echo
+    // back through `CXEndCallAction`. Which is also the only place `disarm()` ran.
+    // So after any CallKit-answered call ended this way the process stayed in
+    // manual mode with audio disabled, and every later in-app call was silent
+    // with nothing to report it — until the app restarted.
+    // (Tesla, cage-match PR #201 round 1.)
+    CallAudioSession.disarm()
   }
 
   // MARK: The device-local channel → UUID map
@@ -696,6 +787,25 @@ final class CallKitRinger: NSObject {
     else { return nil }
     if entry.answered { return uuid }
     guard Date().timeIntervalSince1970 - entry.at < Self.liveCallTrustWindow
+    else { return nil }
+    return uuid
+  }
+
+  /// The RING currently on screen for this channel — unanswered, and still
+  /// inside the trust window.
+  ///
+  /// The narrow sibling of `liveCall`, and the distinction is the whole point:
+  /// `liveCall` answers "is there a call to tear down?" and must therefore
+  /// include answered calls of any length. This answers "is a ring already on
+  /// screen?", which is the only question duplicate-suppression is entitled to
+  /// ask. Conflating them let a stranded answered entry — one whose process died
+  /// outside CallKit — silently suppress every future ring on its channel.
+  private func liveRing(for channel: String) -> UUID? {
+    guard
+      let entry = stored()[channel],
+      !entry.answered,
+      Date().timeIntervalSince1970 - entry.at < Self.liveCallTrustWindow,
+      let uuid = UUID(uuidString: entry.uuid)
     else { return nil }
     return uuid
   }
