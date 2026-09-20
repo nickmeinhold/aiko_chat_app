@@ -57,8 +57,17 @@ enum CallAudioSession {
   ///
   /// Captured on the FIRST arm only. A later arm would capture the config the
   /// previous arm installed, which restores nothing.
-  /// (Carnot + Maxwell, cage-match PR #201 round 1.)
-  private static var configBeforeArm: RTCAudioSessionConfiguration?
+  ///
+  /// **FIELDS, NOT THE OBJECT, AND THAT IS DELIBERATE.** `webRTCConfiguration` is
+  /// declared `+ (instancetype)` and the header does not say whether it hands back
+  /// a copy or the shared global; the implementation is not in the binary
+  /// framework, so it cannot be verified from this checkout. Holding the returned
+  /// OBJECT would make this restore correct under one reading and a silent no-op
+  /// under the other — we would be mutating the very instance we saved. Copying
+  /// the three values we overwrite is correct under both, and costs three lines.
+  /// (Carnot + Maxwell, cage-match PR #201 round 1; semantics unverifiable, so
+  /// the dependency is removed rather than assumed.)
+  private static var configBeforeArm: (category: String, mode: String, options: AVAudioSession.CategoryOptions)?
 
   /// Hand WebRTC over to CallKit for this call. Called from the answer action
   /// BEFORE Dart is told to join, so manual mode is in force before any audio
@@ -102,7 +111,8 @@ enum CallAudioSession {
     // reconfigured. Both, or the fix has a lifetime of one route change.
     // Capture BEFORE mutating, once, so `disarm()` has something to restore.
     if configBeforeArm == nil {
-      configBeforeArm = RTCAudioSessionConfiguration.webRTC()
+      let prior = RTCAudioSessionConfiguration.webRTC()
+      configBeforeArm = (prior.category, prior.mode, prior.categoryOptions)
     }
     let config = RTCAudioSessionConfiguration.webRTC()
     config.category = AVAudioSession.Category.playAndRecord.rawValue
@@ -160,7 +170,11 @@ enum CallAudioSession {
     // WebRTC configuration permanently as CallKit shaped it, which is the half
     // of "back to automatic management" that was never implemented.
     if let previous = configBeforeArm {
-      RTCAudioSessionConfiguration.setWebRTC(previous)
+      let restored = RTCAudioSessionConfiguration.webRTC()
+      restored.category = previous.category
+      restored.mode = previous.mode
+      restored.categoryOptions = previous.options
+      RTCAudioSessionConfiguration.setWebRTC(restored)
       configBeforeArm = nil
     }
     os_log("[audio] disarm — back to automatic management, WebRTC config restored", log: aikoCallLog, type: .info)
@@ -486,6 +500,26 @@ final class CallKitRinger: NSObject {
   /// the cost of under-trusting is a ring that never stops.
   private static let liveCallTrustWindow: TimeInterval = 120
 
+  /// How long an ANSWERED call's mapping may be trusted.
+  ///
+  /// **AN ANSWERED ENTRY IS CLEARED ONLY BY A LIVE PROCESS**, and that is the gap.
+  /// `CXEndCallAction`, `providerDidReset` and Dart's `endSystemCall` all need this
+  /// app to be running. Force-quit mid-call — or any termination that does not
+  /// route through CallKit — and the entry outlives its call in UserDefaults with
+  /// nothing left that could ever remove it. Unbounded, it then reads as a live
+  /// call forever: the duplicate guard ends every future genuine invite on that
+  /// channel and the handset cannot be rung there again, by anyone, short of a
+  /// reinstall. (Maxwell, cage-match PR #201 round 1.)
+  ///
+  /// **BOTH DIRECTIONS FAIL, SO THIS PICKS WHICH FAILURE.** Too short and a real
+  /// call's mapping expires underneath it — the phantom the `answered` flag was
+  /// added to remove. Too long and a stranded entry blocks calls for that long.
+  /// Eight hours is past any call a person actually has and bounds the stranded
+  /// case to a day rather than to forever. It is a bound, not a measurement, and
+  /// it is deliberately NOT derived from anything — the call's real lease is not
+  /// on the wire (claude-tasks#4233, the third clock), same as the ring's.
+  private static let answeredCallTrustWindow: TimeInterval = 8 * 60 * 60
+
   private override init() {
     let config = CXProviderConfiguration()
     config.supportsVideo = true
@@ -576,22 +610,31 @@ final class CallKitRinger: NSObject {
     // (see `reportEnd`), and the good report that just landed has reset the
     // consecutive-violation counter — one duplicate on a reset counter cannot
     // reach a threshold of four. The cost is a momentary buzz on the duplicate.
-    // `liveRing`, NOT `liveCall`. An ANSWERED entry never ages out — deliberately,
-    // so a long call's mapping survives — but only CallKit or Dart clear it, and
-    // all of those need a LIVE PROCESS. Force-quit mid-call, or any termination
-    // that does not route through CallKit, and the answered entry outlives its
-    // call in UserDefaults forever. Asked `liveCall`, this guard then classified
-    // every future genuine invite on that channel as a duplicate and ended it
-    // immediately: the handset could never be rung on that channel again, by
-    // anyone, short of a reinstall.
+    // ANY live entry, ringing OR answered — the guard is `liveCall` and it has to
+    // stay `liveCall`. `maximumCallsPerCallGroup = 1`, so while an entry is live
+    // there is no second call to mint under any circumstances, and the only
+    // question is whether we notice before or after CallKit refuses.
     //
-    // The state the map was missing a name for is "answered, and the owner of
-    // that answer is gone". The guard does not need to name it: a duplicate push
-    // is a second delivery of a ring that is ON SCREEN, which is an UNANSWERED
-    // entry inside the trust window. An invite arriving against an answered entry
-    // is a NEW call, and `rememberLiveCall` (last-writer-wins) is already the
-    // right thing to happen to the corpse. (Maxwell, cage-match PR #201 round 1.)
-    if let channel, liveRing(for: channel) != nil {
+    // ROUND 2 CORRECTION, AND IT WAS MY OWN ROUND-1 FIX. Round 1 narrowed this to
+    // a ring-only query (`liveRing`) to stop a stranded answered entry from
+    // blackholing a channel. That fixed the symptom at the wrong joint and opened
+    // a worse hole, because a LATE duplicate (the stale token's push, delayed)
+    // can land AFTER the answer:
+    //
+    //   entry = {uuidA, answered: true}      a real call, in progress
+    //   liveRing → nil                       an answered entry is not a ring
+    //   rememberLiveCall(uuidB)              OVERWRITES the live call's mapping
+    //   reportNewIncomingCall(uuidB) fails   maximumCallsPerCallGroup = 1
+    //   forgetLiveCall(onlyIf: uuidB)        matches what remember just wrote —
+    //                                        DELETES the live call's entry
+    //
+    // and the call in progress is then unhangupable: `endSystemCall` finds no
+    // UUID, so the system call is never ended and `disarm()` never runs. That is
+    // precisely the defect `7878a61` exists to fix, reintroduced by its own repair.
+    //
+    // The real defect was never the QUERY, it was the LIFETIME — see
+    // `answeredCallTrustWindow`. Bound the entry; leave the guard alone.
+    if let channel, liveCall(for: channel) != nil {
       os_log("[callkit] duplicate invite for a ring already live on %{public}@", log: aikoCallLog, type: .info, channel)
       reportAndEndImmediately(reason: .remoteEnded, completion: completion)
       return
@@ -785,28 +828,13 @@ final class CallKitRinger: NSObject {
       let entry = stored()[channel],
       let uuid = UUID(uuidString: entry.uuid)
     else { return nil }
-    if entry.answered { return uuid }
-    guard Date().timeIntervalSince1970 - entry.at < Self.liveCallTrustWindow
-    else { return nil }
-    return uuid
-  }
-
-  /// The RING currently on screen for this channel — unanswered, and still
-  /// inside the trust window.
-  ///
-  /// The narrow sibling of `liveCall`, and the distinction is the whole point:
-  /// `liveCall` answers "is there a call to tear down?" and must therefore
-  /// include answered calls of any length. This answers "is a ring already on
-  /// screen?", which is the only question duplicate-suppression is entitled to
-  /// ask. Conflating them let a stranded answered entry — one whose process died
-  /// outside CallKit — silently suppress every future ring on its channel.
-  private func liveRing(for channel: String) -> UUID? {
-    guard
-      let entry = stored()[channel],
-      !entry.answered,
-      Date().timeIntervalSince1970 - entry.at < Self.liveCallTrustWindow,
-      let uuid = UUID(uuidString: entry.uuid)
-    else { return nil }
+    let age = Date().timeIntervalSince1970 - entry.at
+    // Two windows, because they bound two different things: a RING's lease, and a
+    // CALL's. Applying the ring's 120s to an answered call was the phantom bug;
+    // applying NO window to it was the blackhole bug. Each state gets the bound
+    // that describes it.
+    let window = entry.answered ? Self.answeredCallTrustWindow : Self.liveCallTrustWindow
+    guard age < window else { return nil }
     return uuid
   }
 
@@ -1067,7 +1095,15 @@ extension CallKitRinger: CXProviderDelegate {
     for (channel, entry) in stored() where entry.uuid == action.callUUID.uuidString {
       SystemCallChannel.shared.emit(
         action: .ended, channel: channel, origin: "endAction")
-      forgetLiveCall(for: channel)
+      // SCOPED, and the `where` above is NOT a substitute for it. That clause
+      // matches against a SNAPSHOT from `stored()`; `forgetLiveCall` then takes
+      // its OWN read and deletes by channel, so an invite landing between the two
+      // reads is deleted by a teardown that matched the entry it replaced. Round 1
+      // of this cage-match looked at this site and waved it through on exactly
+      // that reasoning — "it already matched on entry.uuid" — which confuses
+      // matching a snapshot with deleting under the match.
+      // (Kelvin, cage-match PR #201 round 2 — the site Maxwell dismissed.)
+      forgetLiveCall(for: channel, onlyIf: action.callUUID)
     }
     os_log("[callkit] CXEndCallAction performed for %{public}@", log: aikoCallLog, type: .info, action.callUUID.uuidString)
     // Unconditional, and deliberately OUTSIDE the loop: a hangup whose UUID
