@@ -12,6 +12,9 @@ void main() {
       expect(SenderKind.fromWire('llm'), SenderKind.llm);
       expect(SenderKind.fromWire('robot'), SenderKind.robot);
       expect(SenderKind.fromWire('actor'), SenderKind.actor);
+      // The island's vocabulary for this field is FIVE values; this one used to
+      // fall through to the default arm (claude-tasks#4661).
+      expect(SenderKind.fromWire('agent'), SenderKind.agent);
     });
     test('unknown/null -> actor (forward-compat, never throws)', () {
       expect(SenderKind.fromWire('hologram'), SenderKind.actor);

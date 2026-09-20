@@ -774,7 +774,7 @@ class _SenderBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.smart_toy, size: 10, color: scheme.onSecondaryContainer),
+          Icon(_icon(kind), size: 10, color: scheme.onSecondaryContainer),
           const SizedBox(width: 3),
           Text(
             _label(kind),
@@ -794,9 +794,40 @@ class _SenderBadge extends StatelessWidget {
         return 'AI';
       case SenderKind.robot:
         return 'Robot';
+      // NOT 'Bot'. ADR-0005 makes an agent a first-class Principal that can hold
+      // standing of its own, and rejects the alternative because it "fails
+      // robots-first-class permanently". "Bot" here is the GENERIC-UNKNOWN bucket
+      // — the label a value lands on when this client has never heard of it — so
+      // spending it on a kind we have decided about would state the opposite of
+      // the decision. 'Agent' is also the island's own word for the wire value,
+      // which keeps one name for this thing across the schema, the wire and here.
+      case SenderKind.agent:
+        return 'Agent';
       case SenderKind.human:
       case SenderKind.actor:
         return 'Bot';
+    }
+  }
+
+  /// The icon, per kind — because the badge said `smart_toy` for everything.
+  ///
+  /// A toy robot on a first-class Principal is the lesser standing ADR-0005
+  /// rejects, drawn rather than written. `hub` is the honest picture of what an
+  /// agent IS in that ADR: its own node in the Principal graph, reachable and
+  /// accountable in its own right, rather than a gadget someone else operates.
+  /// ONLY `agent` moves. A first pass also gave llm `auto_awesome`, which broke
+  /// the llm badge test — correctly, because that was scope creep: nobody asked,
+  /// no finding supports it, and it is an aesthetic preference wearing a fix's
+  /// clothing. Every other kind keeps the icon it had.
+  static IconData _icon(SenderKind kind) {
+    switch (kind) {
+      case SenderKind.agent:
+        return Icons.hub;
+      case SenderKind.llm:
+      case SenderKind.robot:
+      case SenderKind.human:
+      case SenderKind.actor:
+        return Icons.smart_toy;
     }
   }
 }

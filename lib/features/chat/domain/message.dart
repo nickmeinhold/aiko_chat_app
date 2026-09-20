@@ -12,10 +12,28 @@ import 'origin_envelope.dart';
 ///
 /// Forward-compat: an unknown wire value decodes to [actor] rather than throwing,
 /// so a future gateway kind never crashes an older client (it degrades to the
-/// generic external-actor rendering).
+/// generic external-actor rendering). That tolerance is deliberate and STAYS —
+/// the island relies on it to rule out a fail-closed read path, and a 500 on
+/// history would be strictly worse than a client that degrades by design.
+///
+/// **BUT TOLERANCE IS NOT A PLACE TO PARK A DECIDED VALUE.** `agent` was reaching
+/// the `default:` arm and rendering as "Bot" — the generic-unknown bucket — while
+/// ADR-0005 says an agent is a first-class Principal that can hold standing of its
+/// own. That ADR rejects Model A precisely because it "fails robots-first-class
+/// permanently: a robot could never earn standing of its own", and showing one the
+/// unknown-participant badge is that lesser standing arriving through the render.
+/// Half of the decode was already right — `isExternalActor` kept an agent out of
+/// the human badge, which is what island #3096 existed to fix — but "not a human"
+/// and "an unrecognised thing on the bus" are different claims.
+///
+/// Found by the island tab grounding its own change against this repo's record
+/// (claude-tasks#4661). LATENT, not live: `users.kind` is live on both islands,
+/// nothing mints an agent account yet, and both production DBs read `human` +
+/// `actor` only. The trigger is island PR#136 merging.
 enum SenderKind {
   human,
   actor,
+  agent,
   llm,
   robot;
 
@@ -27,6 +45,8 @@ enum SenderKind {
         return SenderKind.llm;
       case 'robot':
         return SenderKind.robot;
+      case 'agent':
+        return SenderKind.agent;
       case 'actor':
       default:
         return SenderKind.actor; // unknown / null -> generic external actor
@@ -35,8 +55,13 @@ enum SenderKind {
 
   String get wire => name;
 
-  /// True for non-human participants (LLM, robot, generic actor) — the app
+  /// True for non-human participants (agent, LLM, robot, generic actor) — the app
   /// renders these with a participant badge.
+  ///
+  /// Agent stays in: it is the half of the old decode that was already correct.
+  /// An agent is not a human and must never wear a human's label — that is what
+  /// island #3096 fixed and it survives unchanged here. What changes is only
+  /// WHICH badge it wears, not whether it wears one.
   bool get isExternalActor => this != SenderKind.human;
 }
 
