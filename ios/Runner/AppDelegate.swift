@@ -1321,6 +1321,18 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
   ) {
     guard type == .voIP else { return }
     let token = PushKitTokenChannel.hex(credentials.token)
+    // THE ONE VALUE YOU NEED TO RING THIS HANDSET, AND IT WAS INVISIBLE. The
+    // token is handed to Dart and registered island-side, and nowhere on the
+    // device could you read it — so `tool/voip_push.py`, an instrument built
+    // precisely to put a chosen payload on a chosen handset, had no way to learn
+    // the handset. Measuring the call path required a value the call path never
+    // said out loud.
+    //
+    // It is an opaque, device-scoped id, not user-authored content, so it sits
+    // inside the same rule the channel ULIDs and call UUIDs here do. It is not a
+    // secret on its own: ringing this device also needs the APNs signing key,
+    // which is the thing actually kept out of the log.
+    os_log("[pushkit] voip token %{public}@", log: aikoCallLog, type: .info, token)
     let isRotation = lastReported != nil && lastReported != token
     lastReported = token
     drainWaiters(with: token)
@@ -1342,10 +1354,14 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
   /// on this device (Apple, PKPushRegistryDelegate; per-device denial of
   /// delivery, not a revoked entitlement).
   ///
-  /// UNREACHABLE IN THIS BUILD, structurally: nothing constructs a
-  /// PKPushRegistry (there is no `start()`), so no registry can ever hold this
-  /// object as its delegate and iOS has no VoIP delivery to make. The log line
-  /// exists to be loud if that ever stops being true.
+  /// REACHABLE, AND THIS COMMENT USED TO SAY THE OPPOSITE. It read "unreachable
+  /// in this build, structurally: nothing constructs a PKPushRegistry (there is
+  /// no `start()`)" — while `start(reportingTo:)` sits 40 lines above and
+  /// `application(_:didFinishLaunchingWithOptions:)` calls it unconditionally at
+  /// every launch. The note was true when written and nothing retired it, so the
+  /// file asserted its own most load-bearing path was dead code. A reader
+  /// trusting it would conclude a real VoIP delivery could not happen here — on
+  /// the exact handset that rang, answered and carried audio on 2026-09-20.
   ///
   /// It is deliberately NOT a `fatalError`. If the invariant above were somehow
   /// broken, crashing here produces the same app termination iOS would impose
