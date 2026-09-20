@@ -73,7 +73,11 @@ enum CallAudioSession {
   /// BEFORE Dart is told to join, so manual mode is in force before any audio
   /// track can start — if a track started first it would already have taken the
   /// session under automatic management.
-  static func arm() {
+  /// Returns whether the session is actually usable. **A `false` here means the
+  /// answer cannot carry media**, and the caller must not present it as connected
+  /// — see the answer handler.
+  @discardableResult
+  static func arm() -> Bool {
     let session = RTCAudioSession.sharedInstance()
     session.useManualAudio = true
     // Audio stays OFF until CallKit hands us an activated session. This is the
@@ -125,9 +129,11 @@ enum CallAudioSession {
     config.categoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
     RTCAudioSessionConfiguration.setWebRTC(config)
 
+    var configured = false
     session.lockForConfiguration()
     do {
       try session.setConfiguration(config)
+      configured = true
       os_log(
         "[audio] arm — manual audio ON, session configured (playAndRecord/videoChat), audio DISABLED until didActivate",
         log: aikoCallLog, type: .info)
@@ -141,6 +147,7 @@ enum CallAudioSession {
         type: .error, error.localizedDescription)
     }
     session.unlockForConfiguration()
+    return configured
   }
 
   /// CallKit activated the session — release WebRTC onto it.
@@ -707,7 +714,10 @@ final class CallKitRinger: NSObject {
     // nothing reports it" — and this exit did not. The echo fix and the disarm
     // rule were each right alone and never checked against each other.
     // (Tesla, cage-match PR #201 round 1 — the finding of the panel.)
-    CallAudioSession.disarm()
+    //
+    // CONDITIONAL, because this caller is channel-scoped and `disarm()` is not.
+    // See `disarmIfNoCallRemains` (round 3).
+    disarmIfNoCallRemains()
     completion()
   }
 
@@ -788,7 +798,10 @@ final class CallKitRinger: NSObject {
     // manual mode with audio disabled, and every later in-app call was silent
     // with nothing to report it — until the app restarted.
     // (Tesla, cage-match PR #201 round 1.)
-    CallAudioSession.disarm()
+    //
+    // CONDITIONAL, because this caller is channel-scoped and `disarm()` is not.
+    // See `disarmIfNoCallRemains` (round 3).
+    disarmIfNoCallRemains()
   }
 
   // MARK: The device-local channel → UUID map
@@ -836,6 +849,37 @@ final class CallKitRinger: NSObject {
     let window = entry.answered ? Self.answeredCallTrustWindow : Self.liveCallTrustWindow
     guard age < window else { return nil }
     return uuid
+  }
+
+  /// Return the process to automatic audio management, but ONLY once no call is
+  /// left to need it.
+  ///
+  /// **`disarm()` IS PROCESS-WIDE AND THESE CALLERS ARE CHANNEL-SCOPED**, which is
+  /// the mismatch. `reportEnd` and `endSystemCall` are driven by a channel id, and
+  /// the map can hold more channels than CallKit holds calls — `map[channel]` is
+  /// written per channel and `maximumCallsPerCallGroup = 1` constrains CallKit, not
+  /// this dictionary. So a stale entry for channel B, plus a `call_end` push for B
+  /// arriving during a real armed call on channel A, would have ended B's mapping
+  /// and then torn the audio session out from under A: `useManualAudio = false` and
+  /// `isAudioEnabled = false` mid-conversation, on a call nobody ended.
+  ///
+  /// Round 1 added those two `disarm()` calls to fix Tesla's finding — every exit
+  /// must disarm — and applied the rule at the new sites without checking that the
+  /// SITE's scope matched the RULE's scope. The rule is about the last exit, not
+  /// about every exit.
+  ///
+  /// `CXEndCallAction` and `providerDidReset` stay UNCONDITIONAL and should: the
+  /// first is CallKit-driven under a one-call limit, and the second is the system
+  /// telling us every call is gone. (Maxwell, cage-match PR #201 round 3, against
+  /// his own round-1 fix.)
+  private func disarmIfNoCallRemains() {
+    guard stored().isEmpty else {
+      os_log(
+        "[audio] disarm withheld — %d call mapping(s) still live", log: aikoCallLog,
+        type: .info, stored().count)
+      return
+    }
+    CallAudioSession.disarm()
   }
 
   private func rememberLiveCall(_ uuid: UUID, for channel: String) {
@@ -1064,7 +1108,31 @@ extension CallKitRinger: CXProviderDelegate {
     // race whose losing side is a track that took the session under automatic
     // management before manual mode was in force — i.e. exactly today's bug,
     // reproduced intermittently instead of always. See `CallAudioSession`.
-    CallAudioSession.arm()
+    // THE STATE "ARMED, AUDIO DISABLED, CONFIGURATION FAILED" HAD NO NAME AND NO
+    // EXIT. `arm()` logged the failure and returned, the emit went out, and the
+    // action was fulfilled anyway — so CallKit had nothing to activate,
+    // `didActivate` never arrived, `isAudioEnabled` stayed false, and the user got
+    // a CONNECTED, SILENT call. That is precisely the defect `0657cae` exists to
+    // remove, reachable through its own error path.
+    // (Carnot, cage-match PR #201 round 3.)
+    guard CallAudioSession.arm() else {
+      os_log(
+        "[callkit] audio session could not be configured; failing the answer rather than presenting a silent call",
+        log: aikoCallLog, type: .error)
+      // Back to automatic management before leaving — otherwise this failure
+      // strands the process in manual mode, which is the durable break the class
+      // doc calls worse than the bug being fixed.
+      CallAudioSession.disarm()
+      // `fail()`, not `fulfill()`, on the file's own stated rule for the mapping
+      // case: "fulfilling would present a connected call that can never carry
+      // media, and a call that visibly fails is the honest render of a call we
+      // cannot place." The rejected alternative was to disarm and fulfil anyway,
+      // letting WebRTC manage the session automatically — plausible, but it trades
+      // a loud failure for a possibly-silent call, which is the exact trade this
+      // whole day was spent reversing.
+      action.fail()
+      return
+    }
     SystemCallChannel.shared.emit(
       action: .answered, channel: channel, origin: "answerAction")
     os_log("[callkit] CXAnswerCallAction fulfilled for channel %{public}@", log: aikoCallLog, type: .info, channel)
