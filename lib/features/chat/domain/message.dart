@@ -30,6 +30,25 @@ import 'origin_envelope.dart';
 /// (claude-tasks#4661). LATENT, not live: `users.kind` is live on both islands,
 /// nothing mints an agent account yet, and both production DBs read `human` +
 /// `actor` only. The trigger is island PR#136 merging.
+/// **`llm` AND `robot` ARE DEAD BY CONSTRUCTION, NOT MERELY UNOBSERVED** — and
+/// that is a stronger claim than the row counts, so it is recorded here rather
+/// than left to a reader to rediscover. The island's `_kind_for` produces them
+/// only for a channel whose `kind` is `llm`/`robot`, and all three writers of
+/// `channels.kind` are hardcoded elsewhere (`DM`, `"standard"`, and a defaulted
+/// param whose only caller omits it). Unreachable except by direct SQL.
+///
+/// **NOT DELETED, DELIBERATELY.** "There is no writer" is equally consistent with
+/// *decided against* and *never built*, and no record distinguishes them — the
+/// island tab looked and said so rather than guessing. claude-tasks#3144 carries
+/// a three-way fork (pin the set to `human | agent | actor`; pin all five anyway;
+/// or treat the missing writer as its own bug), and the third outcome would make
+/// these live again. Removing them on the strength of a silence would be the same
+/// mistake in the opposite direction from the one above, where a decided value sat
+/// in the unknown bucket.
+///
+/// What was actually wrong here was that the code gave no sign either way. Two
+/// render paths that cannot currently execute looked exactly like the two that
+/// can. Marking them costs nothing and is reversible; deleting them is neither.
 enum SenderKind {
   human,
   actor,

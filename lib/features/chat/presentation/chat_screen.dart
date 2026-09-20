@@ -790,6 +790,13 @@ class _SenderBadge extends StatelessWidget {
 
   static String _label(SenderKind kind) {
     switch (kind) {
+      // UNREACHABLE TODAY. Neither island can emit `llm` or `robot`: the only
+      // producer keys off a channel kind that has no writer (island
+      // claude-tasks#3144). Kept rather than deleted because the fork on that
+      // issue has an outcome — "the missing writer is its own bug" — that makes
+      // them live again. See `SenderKind` for the full reasoning; the point of
+      // this marker is that the two dead arms used to be indistinguishable from
+      // the live ones.
       case SenderKind.llm:
         return 'AI';
       case SenderKind.robot:
