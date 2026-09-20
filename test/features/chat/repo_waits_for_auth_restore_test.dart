@@ -163,6 +163,14 @@ void main() {
       // attached (so `hasError` is still true) — and the pane painted that as
       // "Could not load conversations" for the length of the repo build.
       final stale = AsyncError<int>(StateError('no session'), StackTrace.empty);
+      // `copyWithPrevious` is Riverpod-
+      // internal, and it is the only constructor for the state this test exists to
+      // pin: LOADING while still carrying a previous error. That state is precisely
+      // what `hasError` misreports (it is `_error != null`, not `this is AsyncError`),
+      // and it is the instant the user saw the cold-start flash. Reaching for the
+      // public API here would build a DIFFERENT value and the test would pass without
+      // ever visiting the failing case.
+      // ignore: invalid_use_of_internal_member
       final rebuilding = const AsyncLoading<int>().copyWithPrevious(stale);
 
       expect(rebuilding.hasError, isTrue, reason: 'precondition');

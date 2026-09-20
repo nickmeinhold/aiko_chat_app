@@ -385,6 +385,16 @@ class LiveKitCallService {
         'microphone.publish.failed',
         fields: {
           'reason': describeError(e),
+          // `AudioProcessingException` is marked
+          // experimental by LiveKit, and we depend on it deliberately: its `reason`
+          // enum is the only thing that separates `applyFailed` (the mic never
+          // started — yesterday's silent call) from `rejectedPlatformUnavailable`
+          // (no device). Those argue for opposite fixes, and without the enum the
+          // report says only "AudioProcessingException", which is what cost a day.
+          // The dependency is SAFE TO TAKE because it cannot rot quietly: if LiveKit
+          // removes or renames the member the analyzer escalates to a compile error,
+          // so the failure mode is a red build, never a wrong diagnosis.
+          // ignore: experimental_member_use
           'cause': ?(e is AudioProcessingException ? e.reason.name : null),
         },
       );
