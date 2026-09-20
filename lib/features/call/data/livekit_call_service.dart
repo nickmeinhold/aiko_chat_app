@@ -361,9 +361,32 @@ class LiveKitCallService {
       // `severe`, not `warning`: the user cannot be heard and nothing else in
       // the app will say so.
       if (!_disposed) micEnabled.value = false;
+      // THE TYPE IS NOT THE DIAGNOSIS HERE, and 2026-09-20 is why. The first
+      // call that ever connected reported
+      // `microphone.publish.failed reason=AudioProcessingException` — which
+      // correctly excluded the audio-session rewrite (the fault is upstream of
+      // the session) and then stopped, one level short of actionable.
+      //
+      // `AudioProcessingException` carries a TYPED reason from a closed LiveKit
+      // vocabulary — `rejectedPlatformUnavailable`, `applyFailed`,
+      // `rejectedInvalidCombination`, `rejectedRemoteTrack`, `unknown` — and
+      // they argue for different fixes. `describeError` deliberately renders
+      // the class name only, because `toString()` on an arbitrary error can
+      // stringify a request body; that rule is right and stays. This is the
+      // same exception it already makes for `Unauthorized(statusCode)` and
+      // `AuthCeremonyFailed(message)`: a closed enum from a library is a
+      // diagnosis, not user data.
+      //
+      // Read it with the audio-session NSLogs (`[audio] …`): the likely story
+      // is the ADM being asked to start while `arm()` still has audio disabled
+      // and CallKit's `didActivate` has not landed — but "likely" is what the
+      // `cause` field exists to replace.
       _log?.severe(
         'microphone.publish.failed',
-        fields: {'reason': describeError(e)},
+        fields: {
+          'reason': describeError(e),
+          'cause': ?(e is AudioProcessingException ? e.reason.name : null),
+        },
       );
     }
   }

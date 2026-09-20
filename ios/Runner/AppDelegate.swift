@@ -53,6 +53,12 @@ enum CallAudioSession {
     // Audio stays OFF until CallKit hands us an activated session. This is the
     // half that makes the handoff a handoff rather than a race.
     session.isAudioEnabled = false
+    // THE HANDOFF IS A SEQUENCE AND NOTHING RECORDED IT. On 2026-09-20 the
+    // first call that ever connected published video and failed to publish
+    // audio with `AudioProcessingException` — and whether CallKit had activated
+    // the session before LiveKit tried to start the recorder was unknowable
+    // after the fact. Four NSLogs make the order readable in a device log.
+    NSLog("[audio] arm — manual audio ON, audio DISABLED until didActivate")
   }
 
   /// CallKit activated the session — release WebRTC onto it.
@@ -60,6 +66,7 @@ enum CallAudioSession {
     let session = RTCAudioSession.sharedInstance()
     session.audioSessionDidActivate(audioSession)
     session.isAudioEnabled = true
+    NSLog("[audio] didActivate — audio ENABLED, WebRTC released onto the session")
   }
 
   /// CallKit tore the session down.
@@ -67,6 +74,7 @@ enum CallAudioSession {
     let session = RTCAudioSession.sharedInstance()
     session.audioSessionDidDeactivate(audioSession)
     session.isAudioEnabled = false
+    NSLog("[audio] didDeactivate — audio disabled")
   }
 
   /// Return the process to automatic management. Idempotent, and safe to call
@@ -76,6 +84,7 @@ enum CallAudioSession {
     let session = RTCAudioSession.sharedInstance()
     session.isAudioEnabled = false
     session.useManualAudio = false
+    NSLog("[audio] disarm — back to automatic management")
   }
 }
 
