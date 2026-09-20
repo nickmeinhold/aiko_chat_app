@@ -24,6 +24,7 @@ mkdir -p "$OUT/dev.logarchive"
 tar xf "$OUT/dev.tar" -C "$OUT/dev.logarchive"
 
 /usr/bin/log show --archive "$OUT/dev.logarchive" --style compact \
+  --info --debug \
   --predicate 'subsystem == "cc.imagineering.aikoChatApp"'
 
 echo "archive kept at $OUT/dev.logarchive" >&2

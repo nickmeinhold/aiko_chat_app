@@ -54,12 +54,63 @@ enum CallAudioSession {
     // Audio stays OFF until CallKit hands us an activated session. This is the
     // half that makes the handoff a handoff rather than a race.
     session.isAudioEnabled = false
-    // THE HANDOFF IS A SEQUENCE AND NOTHING RECORDED IT. On 2026-09-20 the
-    // first call that ever connected published video and failed to publish
-    // audio with `AudioProcessingException` — and whether CallKit had activated
-    // the session before LiveKit tried to start the recorder was unknowable
-    // after the fact. Four NSLogs make the order readable in a device log.
-    os_log("[audio] arm — manual audio ON, audio DISABLED until didActivate", log: aikoCallLog, type: .info)
+
+    // THE HALF THAT WAS MISSING, and it is why no call has ever carried sound.
+    //
+    // MEASURED 2026-09-20, from the device log, on the first call that ever
+    // connected:
+    //
+    //     13:19:17.692  [audio] arm — manual audio ON, audio DISABLED …
+    //     13:19:17.692  [callkit] CXAnswerCallAction fulfilled for channel …
+    //     (no didActivate, ever)
+    //
+    // and in the same call, from the app's own report:
+    //
+    //     microphone.publish.failed reason=AudioProcessingException cause=applyFailed
+    //
+    // `applyFailed` is `adm.initAndStartRecording()` returning non-zero
+    // (`LiveKitPlugin.handleStartLocalRecording`). With `isAudioEnabled` still
+    // false there is nothing for the recorder to start — and it stays false
+    // because `didActivate` never arrives.
+    //
+    // CallKit activates the app's audio session after the answer action is
+    // fulfilled, but only once there IS a session configured to activate.
+    // `arm()` declared the handoff and never described the session, so there
+    // was nothing on the other end of it. Configuring here, BEFORE `fulfill()`
+    // (`arm` is called from the answer handler ahead of both the Dart emit and
+    // the fulfill), is the documented order.
+    //
+    // `RTCAudioSessionConfiguration.setWebRTC` as well as `setConfiguration`:
+    // the first is what WebRTC re-applies whenever it later takes the session,
+    // so setting only the live session would be undone the moment the ADM
+    // reconfigured. Both, or the fix has a lifetime of one route change.
+    let config = RTCAudioSessionConfiguration.webRTC()
+    config.category = AVAudioSession.Category.playAndRecord.rawValue
+    // `.videoChat`, not `.voiceChat`: every call this app places is a video
+    // call (`update.hasVideo = true`), and videoChat defaults the route to the
+    // speaker, which is the only sensible output for a phone you are looking
+    // at. voiceChat would route to the earpiece and be indistinguishable, from
+    // the user's side, from the silence we are fixing.
+    config.mode = AVAudioSession.Mode.videoChat.rawValue
+    config.categoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+    RTCAudioSessionConfiguration.setWebRTC(config)
+
+    session.lockForConfiguration()
+    do {
+      try session.setConfiguration(config)
+      os_log(
+        "[audio] arm — manual audio ON, session configured (playAndRecord/videoChat), audio DISABLED until didActivate",
+        log: aikoCallLog, type: .info)
+    } catch {
+      // LOUD, and `.error` so it survives a level filter. A configuration that
+      // fails here produces exactly the symptom this comment describes — a
+      // ringing, answered, silent call — and the whole point of the day is
+      // that such a failure must never again be inferred from an absence.
+      os_log(
+        "[audio] arm — setConfiguration FAILED: %{public}@", log: aikoCallLog,
+        type: .error, error.localizedDescription)
+    }
+    session.unlockForConfiguration()
   }
 
   /// CallKit activated the session — release WebRTC onto it.
