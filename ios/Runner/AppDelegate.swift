@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import os
 import AVFoundation
 import CallKit
 import PushKit
@@ -58,7 +59,7 @@ enum CallAudioSession {
     // audio with `AudioProcessingException` — and whether CallKit had activated
     // the session before LiveKit tried to start the recorder was unknowable
     // after the fact. Four NSLogs make the order readable in a device log.
-    NSLog("[audio] arm — manual audio ON, audio DISABLED until didActivate")
+    os_log("[audio] arm — manual audio ON, audio DISABLED until didActivate", log: aikoCallLog, type: .info)
   }
 
   /// CallKit activated the session — release WebRTC onto it.
@@ -66,7 +67,7 @@ enum CallAudioSession {
     let session = RTCAudioSession.sharedInstance()
     session.audioSessionDidActivate(audioSession)
     session.isAudioEnabled = true
-    NSLog("[audio] didActivate — audio ENABLED, WebRTC released onto the session")
+    os_log("[audio] didActivate — audio ENABLED, WebRTC released onto the session", log: aikoCallLog, type: .info)
   }
 
   /// CallKit tore the session down.
@@ -74,7 +75,7 @@ enum CallAudioSession {
     let session = RTCAudioSession.sharedInstance()
     session.audioSessionDidDeactivate(audioSession)
     session.isAudioEnabled = false
-    NSLog("[audio] didDeactivate — audio disabled")
+    os_log("[audio] didDeactivate — audio disabled", log: aikoCallLog, type: .info)
   }
 
   /// Return the process to automatic management. Idempotent, and safe to call
@@ -84,9 +85,24 @@ enum CallAudioSession {
     let session = RTCAudioSession.sharedInstance()
     session.isAudioEnabled = false
     session.useManualAudio = false
-    NSLog("[audio] disarm — back to automatic management")
+    os_log("[audio] disarm — back to automatic management", log: aikoCallLog, type: .info)
   }
 }
+
+/// The app's own marker log, readable from a device log archive.
+///
+/// NOT `NSLog`. The unified log redacts an NSLog message BODY by default, so
+/// every marker this file writes came back as `(Foundation) <private>` — present,
+/// timestamped, and unreadable, which is the purest form of the failure this
+/// whole subsystem spent 2026-09-20 removing. A named subsystem plus static
+/// format strings is public by construction, and makes one predicate
+/// (`subsystem == "cc.imagineering.aikoChatApp"`) pull every marker out.
+///
+/// Any INTERPOLATED value needs `%{public}@` explicitly — the default for
+/// arguments is still private. Only opaque ids go through here (a channel ULID,
+/// a call UUID); nothing user-authored, by the same rule `RingTelemetry` keeps
+/// on the Dart side.
+let aikoCallLog = OSLog(subsystem: "cc.imagineering.aikoChatApp", category: "call")
 
 /// The APNs device token, taken from Apple DIRECTLY.
 ///
@@ -308,7 +324,7 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
       // Not a call notification, or a payload shape we do not understand. Say so
       // rather than routing somewhere arbitrary — a wrong destination is worse
       // than none, and this line is the only evidence a reader would ever get.
-      NSLog("[tap] notification tapped with no usable `c` key; not routing")
+      os_log("[tap] notification tapped with no usable `c` key; not routing", log: aikoCallLog, type: .error)
       return
     }
     if let sink = sink {
@@ -436,7 +452,7 @@ final class CallKitRinger: NSObject {
       // while Dart's decoder (correctly) drops an empty channel: a CONNECTED
       // call with nobody on the other end of the wire. On an unsigned payload
       // that is a repeatable lock-screen weapon, and it cost one `where`.
-      NSLog("[callkit] call_invite with no usable `c`; reporting and ending")
+      os_log("[callkit] call_invite with no usable `c`; reporting and ending", log: aikoCallLog, type: .error)
       reportAndEndImmediately(reason: .failed, completion: completion)
     case "call_end":
       reportEnd(channel: channel, completion: completion)
@@ -483,7 +499,7 @@ final class CallKitRinger: NSObject {
     // consecutive-violation counter — one duplicate on a reset counter cannot
     // reach a threshold of four. The cost is a momentary buzz on the duplicate.
     if let channel, liveCall(for: channel) != nil {
-      NSLog("[callkit] duplicate invite for a ring already live on %@", channel)
+      os_log("[callkit] duplicate invite for a ring already live on %{public}@", log: aikoCallLog, type: .info, channel)
       reportAndEndImmediately(reason: .remoteEnded, completion: completion)
       return
     }
@@ -827,7 +843,7 @@ extension CallKitRinger: CXProviderDelegate {
       SystemCallChannel.shared.emit(
         action: .ended, channel: channel, origin: "providerReset")
     }
-    NSLog("[callkit] providerDidReset — the system tore down every call we had")
+    os_log("[callkit] providerDidReset — the system tore down every call we had", log: aikoCallLog, type: .info)
     UserDefaults.standard.removeObject(forKey: Self.liveCallsKey)
     // A reset is the end that arrives with no action and no UUID, so it is the
     // one path that would otherwise strand the process in manual mode with no
@@ -847,7 +863,7 @@ extension CallKitRinger: CXProviderDelegate {
       // carry media, and a call that visibly fails is the honest render of a
       // call we cannot place. Only reachable if the map was cleared between the
       // report and the answer (`providerDidReset`, or a reinstall).
-      NSLog("[callkit] answered a call with no channel mapping; failing the action")
+      os_log("[callkit] answered a call with no channel mapping; failing the action", log: aikoCallLog, type: .error)
       action.fail()
       return
     }
@@ -862,7 +878,7 @@ extension CallKitRinger: CXProviderDelegate {
     CallAudioSession.arm()
     SystemCallChannel.shared.emit(
       action: .answered, channel: channel, origin: "answerAction")
-    NSLog("[callkit] CXAnswerCallAction fulfilled for channel %@", channel)
+    os_log("[callkit] CXAnswerCallAction fulfilled for channel %{public}@", log: aikoCallLog, type: .info, channel)
     action.fulfill()
   }
 
@@ -892,7 +908,7 @@ extension CallKitRinger: CXProviderDelegate {
         action: .ended, channel: channel, origin: "endAction")
       forgetLiveCall(for: channel)
     }
-    NSLog("[callkit] CXEndCallAction performed for %@", action.callUUID.uuidString)
+    os_log("[callkit] CXEndCallAction performed for %{public}@", log: aikoCallLog, type: .info, action.callUUID.uuidString)
     // Unconditional, and deliberately OUTSIDE the loop: a hangup whose UUID
     // matches no stored entry still ends whatever CallKit call was live, and
     // leaving the process in manual mode would silently break the in-app ring
@@ -1095,7 +1111,7 @@ final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
       // a claim, and the obligation is a rule. Routing an empty payload through
       // `handle` lands on its `default` arm — report, then end immediately —
       // which is the measured-safe discharge and never sustains a ring.
-      NSLog("[pushkit] armed with no ringer — see #3609")
+      os_log("[pushkit] armed with no ringer — see #3609", log: aikoCallLog, type: .error)
       return CallKitRinger.shared.handle(payload: [:], completion: completion)
     }
     ringer.handle(payload: payload.dictionaryPayload, completion: completion)
