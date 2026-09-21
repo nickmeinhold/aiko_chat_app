@@ -10,9 +10,28 @@ import 'origin_envelope.dart';
 
 /// Who sent a message. Mirrors the wire `sender.kind`.
 ///
-/// Forward-compat: an unknown wire value decodes to [actor] rather than throwing,
+/// **`unknown`, NOT `actor` — the old name asserted the OPPOSITE of what it meant.**
+/// In `aiko_services` an `Actor` is a precise thing: a registered bus participant with
+/// a protocol, a priority mailbox, leases, a lifecycle and a discovery class — the most
+/// strongly IDENTIFIED participant there is. The island was using that word for a sender
+/// it could NOT identify, so anyone who knows the framework read it as a stronger
+/// identity claim than `human` rather than the absence of one.
+///
+/// It survived because it looked right: @@armbot genuinely IS an aiko Actor and produced
+/// 76% of the rows carrying the value. The other 18 rows were messages a PERSON typed
+/// that came back from the bus with no username — and for those, the word asserted a
+/// registered bus service had spoken (island claude-tasks#4665).
+///
+/// The island is renaming `actor` → `unknown` with a DB CHECK and a migration that
+/// rewrites the 78 existing rows. `fromWire` accepts BOTH spellings so this client is
+/// correct before AND after that ships — which is what lets the island deploy first, the
+/// only safe order (deploying here first would mean waiting for a value no island sends).
+/// Landed on their LEAD TIME rather than after the fact: the `agent` gap earlier today
+/// was the same shape caught late, and the whole point of the heads-up was not to repeat it.
+///
+/// Forward-compat: an unknown wire value decodes to [unknown] rather than throwing,
 /// so a future gateway kind never crashes an older client (it degrades to the
-/// generic external-actor rendering). That tolerance is deliberate and STAYS —
+/// generic unidentified-sender rendering). That tolerance is deliberate and STAYS —
 /// the island relies on it to rule out a fail-closed read path, and a 500 on
 /// history would be strictly worse than a client that degrades by design.
 ///
@@ -51,7 +70,7 @@ import 'origin_envelope.dart';
 /// can. Marking them costs nothing and is reversible; deleting them is neither.
 enum SenderKind {
   human,
-  actor,
+  unknown,
   agent,
   llm,
   robot;
@@ -66,15 +85,20 @@ enum SenderKind {
         return SenderKind.robot;
       case 'agent':
         return SenderKind.agent;
+      // BOTH spellings, deliberately. `unknown` is the island's new name; `actor` is
+      // what 78 already-written rows carry until migration 0027 rewrites them, and what
+      // an un-migrated island still emits. Accepting only the new one would mis-read
+      // real history; accepting only the old one would mis-read the future.
+      case 'unknown':
       case 'actor':
       default:
-        return SenderKind.actor; // unknown / null -> generic external actor
+        return SenderKind.unknown; // unidentified / null -> generic badge
     }
   }
 
   String get wire => name;
 
-  /// True for non-human participants (agent, LLM, robot, generic actor) — the app
+  /// True for non-human participants (agent, LLM, robot, unidentified) — the app
   /// renders these with a participant badge.
   ///
   /// Agent stays in: it is the half of the old decode that was already correct.

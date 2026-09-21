@@ -751,7 +751,7 @@ void main() {
         // prevent. Consent you cannot withdraw is not consent.
         expect(
           admit(
-            invite(kind: SenderKind.actor, key: residentKey, hasAccount: false),
+            invite(kind: SenderKind.unknown, key: residentKey, hasAccount: false),
             allowedKeys: {mk(residentKey)},
           ),
           isNull,

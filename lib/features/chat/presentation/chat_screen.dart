@@ -756,7 +756,7 @@ class MessageTile extends ConsumerWidget {
 /// A small "who/what" chip shown beside a non-human sender's label so an
 /// agent/bot message is visually distinguishable from a person's. Driven by
 /// [SenderKind.isExternalActor]; never shown for [SenderKind.human]. Any
-/// unrecognized island sender_kind decodes to [SenderKind.actor] → "Bot".
+/// unrecognized island sender_kind decodes to [SenderKind.unknown] → "Bot".
 class _SenderBadge extends StatelessWidget {
   const _SenderBadge({required this.kind});
 
@@ -811,7 +811,7 @@ class _SenderBadge extends StatelessWidget {
       case SenderKind.agent:
         return 'Agent';
       case SenderKind.human:
-      case SenderKind.actor:
+      case SenderKind.unknown:
         return 'Bot';
     }
   }
@@ -833,7 +833,7 @@ class _SenderBadge extends StatelessWidget {
       case SenderKind.llm:
       case SenderKind.robot:
       case SenderKind.human:
-      case SenderKind.actor:
+      case SenderKind.unknown:
         return Icons.smart_toy;
     }
   }
