@@ -435,6 +435,7 @@ class GatewayRestApi implements ChatRestApi {
     required String token,
     TokenKind kind = TokenKind.alert,
     ApnsEnvironment? apnsEnvironment,
+    String? installId,
   }) async {
     final response = await _authedCall(
       () => _authed.post<Map<String, dynamic>>(
@@ -454,6 +455,12 @@ class GatewayRestApi implements ChatRestApi {
           'token': token,
           if (kind != TokenKind.alert) 'token_kind': kind.wire,
           if (apnsEnvironment != null) 'apns_environment': apnsEnvironment.wire,
+          // SAME RULE, AND IT BITES HARDER HERE. The island's field is
+          // `Field(min_length=1)`, so an explicit null OR an empty string is a
+          // 422 that fails the entire registration — a handset that never
+          // wakes, traded for a banner nobody wanted. Absent means "the client
+          // did not say", which is what every build before this one said.
+          'install_id': ?installId,
         },
       ),
     );

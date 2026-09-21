@@ -197,6 +197,7 @@ class FakeChatRestApi implements ChatRestApi {
     required String token,
     TokenKind kind = TokenKind.alert,
     ApnsEnvironment? apnsEnvironment,
+    String? installId,
   }) => throw UnimplementedError();
   @override
   Future<void> unregisterDevice(String token, {String? credential}) =>

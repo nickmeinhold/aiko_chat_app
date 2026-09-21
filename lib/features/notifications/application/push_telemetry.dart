@@ -173,6 +173,27 @@ class PushTelemetry {
     error: error,
   );
 
+  /// No handset id to send. INFO, not severe: push works exactly as it did
+  /// before the field existed — what is lost is the island's ability to
+  /// suppress the redundant call banner, which is a blemish and never a missed
+  /// wake. Deliberately NOT [nativeChannelMissing], whose consequence field
+  /// says push is inoperable in this build; using it here would put a cosmetic
+  /// gap beside a build defect at the same severity.
+  void installIdUnavailable(Object error) => _log.info(
+    'push.install_id.unavailable',
+    fields: {'consequence': 'duplicate-call-banner-stands'},
+    error: error,
+  );
+
+  /// The native side answered with something the island's boundary would 422.
+  /// WARNING rather than info, because the value was DROPPED to protect the
+  /// registration and that is a native-side defect somebody must fix — a
+  /// silently discarded answer looks identical to a platform with none.
+  void installIdRejected(String why) => _log.warning(
+    'push.install_id.rejected',
+    fields: {'why': why, 'consequence': 'duplicate-call-banner-stands'},
+  );
+
   void pairingFailed(Object error) =>
       _log.warning('push.pairing.failed', error: error);
 

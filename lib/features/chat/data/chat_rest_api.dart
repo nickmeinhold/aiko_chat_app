@@ -410,11 +410,18 @@ abstract interface class ChatRestApi {
   /// the caller's to swallow: a device that cannot register is a device that
   /// will not be woken, which is a degradation and never a reason to block
   /// sign-in.
+  ///
+  /// [installId] says WHICH HANDSET this token is on, so the island can stop
+  /// drawing a banner over a CallKit ring for the same call. Null is the
+  /// ordinary answer on any platform with no device-bound id to give, and it is
+  /// what every build before this one sent — see [InstallIdSource] for why a
+  /// synthesised value would be worse than none.
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
     TokenKind kind = TokenKind.alert,
     ApnsEnvironment? apnsEnvironment,
+    String? installId,
   });
 
   /// Unregister [token] (`DELETE /v1/devices`), so this island stops routing

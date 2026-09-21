@@ -4,6 +4,7 @@ import os
 import AVFoundation
 import CallKit
 import PushKit
+import Security
 import UserNotifications
 import WebRTC
 
@@ -1445,6 +1446,125 @@ extension PushKitTokenChannel: FlutterStreamHandler {
   }
 }
 
+/// WHICH HANDSET this install is on — a value that must NOT survive onto a
+/// second physical device.
+///
+/// **What it is for.** The island stores one row per push token, and a
+/// dual-registered iPhone is TWO rows (alert from UIKit, voip from PushKit —
+/// independent registries, neither derivable from the other). A call invite
+/// fans out to both, so the handset gets a CallKit ring AND a redundant
+/// "Incoming call" banner. The island's `push_service.plan_deliveries` calls
+/// that a blemish and ships it deliberately, because the alternative — suppress
+/// the alert row when a voip row is present — needs to know the two rows share a
+/// screen, and it refuses to guess.
+///
+/// **Why the obvious implementations are wrong**, and this is the whole reason
+/// this class is not three lines in Dart:
+///
+///  - `UserDefaults` (or a file, or `SharedPreferences`) is swept into iCloud
+///    Backup. Restore onto a new phone and TWO PHYSICAL HANDSETS report one
+///    value. The island then prefers the voip row inside that group and
+///    silences the alert row that is the second handset's ONLY reach — a missed
+///    call, arrived at through the very field minted to prevent one
+///    (island cage-match PR#179, unanimous).
+///  - `identifierForVendor` needs no storage, which is tempting, but its
+///    behaviour across a device-to-device migration is not something this
+///    codebase has measured. An unverified answer is not cheaper than a
+///    documented one when the cost of being wrong is a handset that never rings.
+///
+/// **So: the Keychain, with `...ThisDeviceOnly`.** Apple documents that
+/// accessibility class as excluded from iCloud Backup and from device-to-device
+/// transfer — the exclusion is a stated platform guarantee rather than an
+/// observed behaviour, which is the property actually being bought here.
+///
+/// `AfterFirstUnlock` rather than `WhenUnlocked`, and it is load-bearing: this
+/// is read at session edges, and a push can wake the app while the screen is
+/// locked. A `WhenUnlocked` item is UNREADABLE then — so the read would fail,
+/// the mint would run, and `SecItemAdd` would either duplicate or collide. The
+/// id would become a function of whether the phone happened to be locked.
+///
+/// **Failure is NULL, never a fresh value.** Every error path returns nil, Dart
+/// omits the field, and the island behaves exactly as it does today. A synthetic
+/// fallback id would be worse than nothing: it would assert a handset identity
+/// nothing established, which is the one claim this field may never make.
+final class InstallIdChannel {
+  static let shared = InstallIdChannel()
+
+  private let service = (Bundle.main.bundleIdentifier ?? "cc.imagineering.aikoChatApp")
+    + ".installid"
+  private let account = "install_id"
+
+  /// Serialises read-then-mint. Two sign-in edges overlap (the registrars for
+  /// both token kinds start concurrently — see `pushPairingProvider`), and
+  /// without this both could miss the item and both mint. The duplicate is
+  /// caught below regardless, but a lock makes the common path deterministic
+  /// rather than relying on the recovery.
+  private let lock = NSLock()
+
+  func register(with registrar: FlutterPluginRegistrar) {
+    FlutterMethodChannel(
+      name: "cc.imagineering.aikoChatApp/install",
+      binaryMessenger: registrar.messenger()
+    ).setMethodCallHandler { [weak self] call, result in
+      guard let self else { return result(FlutterMethodNotImplemented) }
+      switch call.method {
+      case "installId": result(self.installId())
+      default: result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  /// The stable per-handset id, minting it on first call. Nil on any failure.
+  func installId() -> String? {
+    lock.lock()
+    defer { lock.unlock() }
+    if let existing = read() { return existing }
+    let minted = UUID().uuidString
+    let status = SecItemAdd(
+      [
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: service,
+        kSecAttrAccount: account,
+        kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        kSecValueData: Data(minted.utf8),
+      ] as CFDictionary,
+      nil)
+    if status == errSecSuccess { return minted }
+    // LOST THE RACE, OR A STALE ITEM SURVIVED. Re-read rather than returning the
+    // value we failed to store: the id we hand Dart must be the one in the
+    // Keychain, or two calls in one process disagree and the island groups a
+    // single handset as two.
+    if status == errSecDuplicateItem { return read() }
+    os_log("install id mint failed: %{public}d", type: .error, status)
+    return nil
+  }
+
+  private func read() -> String? {
+    var out: CFTypeRef?
+    let status = SecItemCopyMatching(
+      [
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: service,
+        kSecAttrAccount: account,
+        kSecReturnData: true,
+        kSecMatchLimit: kSecMatchLimitOne,
+      ] as CFDictionary,
+      &out)
+    guard status == errSecSuccess else {
+      // `errSecItemNotFound` is the ordinary first-run answer and not worth a
+      // line; anything else is a real Keychain failure and is.
+      if status != errSecItemNotFound {
+        os_log("install id read failed: %{public}d", type: .error, status)
+      }
+      return nil
+    }
+    guard let data = out as? Data, let value = String(data: data, encoding: .utf8),
+      !value.isEmpty
+    else { return nil }
+    return value
+  }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   override func application(
@@ -1483,6 +1603,11 @@ extension PushKitTokenChannel: FlutterStreamHandler {
       forPlugin: "SystemCallChannel")
     {
       SystemCallChannel.shared.register(with: registrar)
+    }
+    if let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "InstallIdChannel")
+    {
+      InstallIdChannel.shared.register(with: registrar)
     }
   }
 

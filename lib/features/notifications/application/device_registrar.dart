@@ -6,6 +6,7 @@ import '../../chat/data/chat_rest_api.dart';
 import '../data/pending_unregister_store.dart';
 import 'push_telemetry.dart';
 import '../domain/apns_environment.dart';
+import '../domain/install_id_source.dart';
 import '../domain/push_token_source.dart';
 import '../domain/token_kind.dart';
 
@@ -100,14 +101,28 @@ class DeviceRegistrar {
     /// to a no-op in the shipped app is a failure this project has already had
     /// once (PR #45, Carnot).
     PushTelemetry telemetry = PushTelemetry.noop,
+
+    /// WHICH HANDSET this registrar's token is on, or null where there is no
+    /// device-bound answer — which is what every build before this one sent.
+    ///
+    /// **THE SAME INSTANCE MUST REACH BOTH REGISTRARS.** A device holds an
+    /// alert row and a voip row, and the island groups them by this value to
+    /// stop a call drawing a banner over its own CallKit ring. Two sources
+    /// answering differently would split one handset into two groups — strictly
+    /// worse than sending nothing, because the island would then act on a
+    /// grouping that is wrong rather than on one that is absent. Optional so
+    /// the dozen existing tests that construct a registrar stay untouched.
+    InstallIdSource? installIds,
   }) : _source = source,
        _api = api,
        _pending = pending,
        _islandBaseUrl = islandBaseUrl,
-       _telemetry = telemetry;
+       _telemetry = telemetry,
+       _installIds = installIds;
 
   final PushTokenSource _source;
   final PushTelemetry _telemetry;
+  final InstallIdSource? _installIds;
   final ChatRestApi _api;
   final PendingUnregisterStore _pending;
 
@@ -371,6 +386,12 @@ class DeviceRegistrar {
         token: token,
         kind: _source.kind,
         apnsEnvironment: await _apnsEnvironment(),
+        // NEVER A GATE, like everything else on this path. A source that
+        // cannot answer returns null and the field is omitted; the
+        // registration proceeds exactly as it did before this existed. The
+        // whole feature is a banner nobody wanted, and it must not be able to
+        // cost a wake.
+        installId: await _installIds?.installId(),
       );
     } on DeviceKindRefused catch (e) {
       // DEFINITELY LANDED, WITH THE WRONG SEMANTICS. The island answered, so it

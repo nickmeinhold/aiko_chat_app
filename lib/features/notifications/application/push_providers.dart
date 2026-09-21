@@ -12,9 +12,11 @@ import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
 import '../data/apns_token_source.dart';
+import '../data/keychain_install_id_source.dart';
 import '../data/voip_token_source.dart';
 import '../data/fcm_token_source.dart';
 import '../data/pending_unregister_store.dart';
+import '../domain/install_id_source.dart';
 import '../domain/push_token_source.dart';
 import 'device_registrar.dart';
 
@@ -97,6 +99,38 @@ final voipTokenSourceProvider = Provider<PushTokenSource?>((ref) {
   };
 });
 
+/// WHICH HANDSET this install is on — ONE instance, shared by both registrars.
+///
+/// **THE SHARING IS THE CORRECTNESS PROPERTY, not a performance one.** The
+/// island groups a user's device rows by this value to stop a call invite
+/// drawing an "Incoming call" banner over the CallKit ring it just produced.
+/// The alert row and the voip row must therefore land under the SAME id; two
+/// instances answering independently could split one phone into two groups,
+/// and the island would then act on a grouping that is wrong rather than on one
+/// that is absent — which is worse, because absent is the state it already
+/// handles correctly. A `Provider` is memoised, so both registrars below read
+/// this one object.
+///
+/// **iOS ONLY, AND ANDROID'S NULL IS A DECISION.** Android's default
+/// `allowBackup` sweeps app files into Auto Backup, so a file- or
+/// preferences-backed id there is exactly the cloned value this field may never
+/// be — and Android holds one token kind anyway, so it has no duplicate to
+/// suppress. Returning null is not a gap waiting to be filled; filling it
+/// carelessly is the failure mode (see claude-tasks#4384 and the island's
+/// `plan_deliveries`).
+///
+/// macOS is null for the reason [pushTokenSourceProvider] already gives: it
+/// registers no token at all, so there is nothing to group.
+final installIdSourceProvider = Provider<InstallIdSource?>((ref) {
+  if (kIsWeb) return null;
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.iOS => KeychainInstallIdSource(
+      telemetry: ref.watch(pushTelemetryProvider),
+    ),
+    _ => null,
+  };
+});
+
 /// The push subsystem's telemetry facade.
 ///
 /// Wired to the REAL logger, never [PushTelemetry.noop]. `provider_wiring_test`
@@ -138,6 +172,7 @@ final deviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
     pending: ref.watch(pendingUnregisterStoreProvider),
     islandBaseUrl: ref.watch(configProvider).httpBaseUrl,
     telemetry: ref.watch(pushTelemetryProvider),
+    installIds: ref.watch(installIdSourceProvider),
   );
   // Cancels the refresh subscription and NOTHING else. A rebuild is not a
   // sign-out, so it must not record a debt — see DeviceRegistrar.dispose.
@@ -168,6 +203,7 @@ final voipDeviceRegistrarProvider = Provider<DeviceRegistrar?>((ref) {
     pending: ref.watch(pendingUnregisterStoreProvider),
     islandBaseUrl: ref.watch(configProvider).httpBaseUrl,
     telemetry: ref.watch(pushTelemetryProvider),
+    installIds: ref.watch(installIdSourceProvider),
   );
   ref.onDispose(registrar.dispose);
   return registrar;
