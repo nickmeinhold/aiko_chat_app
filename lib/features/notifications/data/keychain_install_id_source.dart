@@ -76,6 +76,22 @@ class KeychainInstallIdSource implements InstallIdSource {
   /// differ (locked at boot, unlocked later) — but that is two rows converging
   /// on an id rather than splitting, and it is strictly better than two rows
   /// permanently agreeing on nothing.
+  ///
+  /// **NAMED RESIDUAL — this makes the retry POSSIBLE, it does not SCHEDULE
+  /// one.** Nothing inside a process asks again on its own: `DeviceRegistrar`
+  /// skips re-registration once `token == _registered`
+  /// (`device_registrar.dart:359`), so a background VoIP-wake process that
+  /// registered while the Keychain was sealed keeps its null for that
+  /// process's life. What closes it is the next FOREGROUND launch, which
+  /// builds a fresh registrar whose `_registered` is null and so registers
+  /// again — by which time the device has been unlocked. The bound is
+  /// therefore "one short-lived background process", not "forever", and the
+  /// clearing above is what makes even that recoverable; without it the id
+  /// would never arrive no matter how long the process lived. Scheduling a
+  /// re-registration the moment an id becomes available is real machinery and
+  /// is deliberately not built here — but the gap is stated rather than left
+  /// for a reader to discover, because the fix above reads as total and is
+  /// not. Deferred with the shape it would take: **claude-tasks#4696**.
   String? _resolved;
   Future<String?>? _pending;
 
