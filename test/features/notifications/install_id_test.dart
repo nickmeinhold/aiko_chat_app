@@ -87,6 +87,23 @@ void main() {
       expect(api.registeredInstallIds, ['ID-1', 'ID-1']);
     });
 
+    // THE SHAPE PRODUCTION ACTUALLY USES, and the one the sequential test above
+    // cannot reach. `pushPairingProvider` fires both registrar chains
+    // `unawaited` at a sign-in edge — they are in flight together, not one after
+    // the other. Caught by Carnot in cage-match and independently while writing
+    // this file's own review; the code passed the sequential test while
+    // returning null to whichever caller arrived second, so the alert row and
+    // the voip row would never have grouped and the feature would have shipped
+    // doing nothing.
+    test('CONCURRENT callers both receive the id', () async {
+      final source = KeychainInstallIdSource(methods: fixedChannel('ID-1'));
+      final results = await Future.wait([
+        source.installId(),
+        source.installId(),
+      ]);
+      expect(results, ['ID-1', 'ID-1']);
+    });
+
     // The memo is a CORRECTNESS property, not a performance one: a source that
     // could answer differently on a second call reintroduces the split above
     // inside one instance. Pinned by counting native calls, because an identical

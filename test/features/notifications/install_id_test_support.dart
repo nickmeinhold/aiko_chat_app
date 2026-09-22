@@ -19,6 +19,18 @@ import '../../support/fakes.dart';
 /// The count is the instrument, not decoration: a cached and an uncached source
 /// return the same string, so only the number of native calls can tell them
 /// apart — and the caching is a correctness property here, not a speed one.
+///
+/// **IT SUSPENDS, AND THAT IS LOAD-BEARING.** An earlier version returned from
+/// an `async` body with no real await, so it resolved in the calling microtask —
+/// something no platform channel does. That made every test using it blind to
+/// interleaving, and it hid a live defect: the source memoised a VALUE behind an
+/// "asked" flag set before the await, so a second caller arriving mid-flight got
+/// null. Production calls it exactly that way (both registrars, `unawaited`, at
+/// one sign-in edge), so the shipped feature would have silently done nothing
+/// while a green test asserted the opposite.
+///
+/// The fix is the FIXTURE, not that one test: a fake that cannot suspend cannot
+/// fail for any async reason, so it would have hidden the next one too.
 class FixedChannel extends MethodChannel {
   FixedChannel(this.value) : super('test/install');
   final String value;
@@ -27,6 +39,7 @@ class FixedChannel extends MethodChannel {
   @override
   Future<T?> invokeMethod<T>(String method, [dynamic arguments]) async {
     calls++;
+    await Future<void>.delayed(Duration.zero);
     return value as T;
   }
 }

@@ -40,20 +40,37 @@ class KeychainInstallIdSource implements InstallIdSource {
   final MethodChannel _methods;
   final PushTelemetry _telemetry;
 
-  /// The memo, and a flag for "we have asked" — because null is a real answer
-  /// and a nullable field alone cannot tell the two apart.
-  String? _cached;
-  bool _asked = false;
+  /// THE MEMO IS THE FUTURE, NOT THE VALUE, and the difference is a live bug.
+  ///
+  /// An earlier revision cached `String? _cached` behind a `bool _asked` flag
+  /// set BEFORE the platform call was awaited. A second caller arriving during
+  /// that await saw "already asked" and read a `_cached` nothing had written
+  /// yet — so it got null. Production calls it exactly that way: both registrar
+  /// chains are fired `unawaited` at a sign-in edge and are in flight together
+  /// (`pushPairingProvider`, whose own comment says so). The alert row would
+  /// carry the id and the voip row null, the two would never group, and the
+  /// feature would silently do nothing — the outcome it exists to prevent.
+  ///
+  /// Memoising a VALUE is not memoising an OPERATION. Caching the future makes
+  /// concurrent callers await the one in-flight call and receive one answer,
+  /// and it is why this needs no lock: assignment is atomic on the single
+  /// isolate, and `??=` cannot interleave.
+  ///
+  /// A null ANSWER is cached too — the future completing with null is still a
+  /// completed future, so a platform with no id is asked once, not once per
+  /// registration. Only a THROW would leave the slot poisoned, and `_resolve`
+  /// cannot throw: every arm returns.
+  Future<String?>? _pending;
 
   @override
-  Future<String?> installId() async {
-    if (_asked) return _cached;
-    _asked = true;
+  Future<String?> installId() => _pending ??= _resolve();
+
+  Future<String?> _resolve() async {
     try {
-      _cached = _valid(await _methods.invokeMethod<String>('installId'));
+      return _valid(await _methods.invokeMethod<String>('installId'));
     } on PlatformException catch (e) {
       _telemetry.installIdUnavailable(e);
-      _cached = null;
+      return null;
     } on MissingPluginException catch (e) {
       // The native half is not in this build — a desktop target, or a `.swift`
       // outside the Runner target. Degrades dedup and nothing else, so it is
@@ -61,9 +78,8 @@ class KeychainInstallIdSource implements InstallIdSource {
       // binary, and reporting a lost banner-suppression at the same severity
       // would make the signal that matters harder to find.
       _telemetry.installIdUnavailable(e);
-      _cached = null;
+      return null;
     }
-    return _cached;
   }
 
   /// The island's boundary contract, enforced BEFORE the value can reach a
