@@ -46,6 +46,37 @@ class FixedChannel extends MethodChannel {
 
 FixedChannel fixedChannel(String value) => FixedChannel(value);
 
+/// A channel that fails the first N asks and answers after that — the
+/// locked-Keychain shape. Before first unlock the item is unreadable, so the
+/// native side returns nil; after the user unlocks, the same call succeeds.
+class SealedThenOpenChannel extends MethodChannel {
+  SealedThenOpenChannel({required this.sealedFor, required this.value})
+    : super('test/install');
+  final int sealedFor;
+  final String value;
+  int calls = 0;
+
+  @override
+  Future<T?> invokeMethod<T>(String method, [dynamic arguments]) async {
+    calls++;
+    await Future<void>.delayed(Duration.zero);
+    if (calls <= sealedFor) return null;
+    return value as T;
+  }
+}
+
+/// A channel that throws something the source does NOT name — a codec mismatch
+/// rather than a `PlatformException` or `MissingPluginException`.
+class UnnamedThrowChannel extends MethodChannel {
+  UnnamedThrowChannel() : super('test/install');
+
+  @override
+  Future<T?> invokeMethod<T>(String method, [dynamic arguments]) async {
+    await Future<void>.delayed(Duration.zero);
+    throw TypeError();
+  }
+}
+
 /// The native half absent from this build — a desktop target, or a `.swift`
 /// outside the Runner target.
 MethodChannel throwingChannel() => _ThrowingChannel();

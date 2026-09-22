@@ -56,14 +56,41 @@ class KeychainInstallIdSource implements InstallIdSource {
   /// and it is why this needs no lock: assignment is atomic on the single
   /// isolate, and `??=` cannot interleave.
   ///
-  /// A null ANSWER is cached too — the future completing with null is still a
-  /// completed future, so a platform with no id is asked once, not once per
-  /// registration. Only a THROW would leave the slot poisoned, and `_resolve`
-  /// cannot throw: every arm returns.
+  /// **A NULL IS NOT CACHED, AND THAT IS TESLA'S FINDING.** An earlier revision
+  /// memoised the null too, reasoning that "a platform with no answer now will
+  /// not grow one mid-session". That is false in the case that matters most: the
+  /// Keychain is SEALED until the first unlock after boot, so a VoIP wake on a
+  /// just-booted handset reads nil — and `DeviceRegistrar` then sets
+  /// `_registered` on the successful POST and skips re-registration for that
+  /// token (`device_registrar.dart:359`). The phone that most needs grouping,
+  /// the one being rung while locked, would be the one that never acquires it,
+  /// permanently, for the life of the process.
+  ///
+  /// So a SUCCESSFUL answer is cached forever (an id must never change) and a
+  /// null clears the slot, letting the next registration round ask again once
+  /// the device is unlocked.
+  ///
+  /// The in-flight future is still shared either way, which is what keeps
+  /// concurrent callers consistent WITHIN a round: both registrars at one
+  /// sign-in edge see the same answer, null or not. Across rounds they can
+  /// differ (locked at boot, unlocked later) — but that is two rows converging
+  /// on an id rather than splitting, and it is strictly better than two rows
+  /// permanently agreeing on nothing.
+  String? _resolved;
   Future<String?>? _pending;
 
   @override
-  Future<String?> installId() => _pending ??= _resolve();
+  Future<String?> installId() {
+    final done = _resolved;
+    if (done != null) return Future<String?>.value(done);
+    return _pending ??= _resolve().then((value) {
+      _resolved = value;
+      // RETRYABLE. Clearing the slot on null is the whole of the fix above;
+      // leaving it set is what made a locked-at-boot read permanent.
+      if (value == null) _pending = null;
+      return value;
+    });
+  }
 
   Future<String?> _resolve() async {
     try {
@@ -77,6 +104,16 @@ class KeychainInstallIdSource implements InstallIdSource {
       // NOT `nativeChannelMissing`: that one means push is inoperable in this
       // binary, and reporting a lost banner-suppression at the same severity
       // would make the signal that matters harder to find.
+      _telemetry.installIdUnavailable(e);
+      return null;
+    } catch (e) {
+      // THE CATCH-ALL IS LOAD-BEARING, not defensive clutter (Tesla,
+      // cage-match round 1). The two named exceptions are not the whole
+      // surface: a codec mismatch throws a cast error, and this future is
+      // awaited INSIDE `_register`'s try, AFTER the unregister debt is
+      // written. An escape there is classified as a maybe-landed POST that
+      // never left — a debt owed for a row that does not exist, from a field
+      // whose entire contract is that it can never be a gate.
       _telemetry.installIdUnavailable(e);
       return null;
     }

@@ -136,6 +136,55 @@ void main() {
     });
   });
 
+  // A NULL IS NOT AN ANSWER THAT LASTS, and the case that proves it is the one
+  // that matters most: the Keychain is sealed until first unlock after boot, so
+  // a VoIP wake on a just-booted handset reads nil. `DeviceRegistrar` then sets
+  // `_registered` on the successful POST and skips re-registration for that
+  // token, so a cached nil is PERMANENT for the process — the phone being rung
+  // while locked is exactly the one that would never acquire grouping.
+  // (Tesla, cage-match round 1.)
+  group('a null is retried; an id is not', () {
+    test('a sealed Keychain that later opens yields the id', () async {
+      final channel = SealedThenOpenChannel(sealedFor: 1, value: 'ID-1');
+      final source = KeychainInstallIdSource(methods: channel);
+      expect(await source.installId(), isNull, reason: 'sealed at boot');
+      expect(await source.installId(), 'ID-1', reason: 'unlocked later');
+    });
+
+    test('a SUCCESSFUL id is never re-asked', () async {
+      final channel = SealedThenOpenChannel(sealedFor: 0, value: 'ID-1');
+      final source = KeychainInstallIdSource(methods: channel);
+      await source.installId();
+      await source.installId();
+      await source.installId();
+      // An id must never change, so success is cached forever. Counting the
+      // asks is the only thing that separates that from luck.
+      expect(channel.calls, 1);
+    });
+
+    // The retry must not reopen the split the future-memo closed: two callers
+    // in flight together still share ONE answer, null or not.
+    test('concurrent callers share one answer even when it is null', () async {
+      final channel = SealedThenOpenChannel(sealedFor: 1, value: 'ID-1');
+      final source = KeychainInstallIdSource(methods: channel);
+      final results = await Future.wait([
+        source.installId(),
+        source.installId(),
+      ]);
+      expect(results, [null, null]);
+      expect(channel.calls, 1, reason: 'one round, one native call');
+    });
+  });
+
+  // NEVER A GATE, and the two named exceptions are not the whole surface. This
+  // future is awaited INSIDE `_register`'s try, AFTER the unregister debt is
+  // written — so an escape is classified as a maybe-landed POST that never
+  // left, owing a debt for a row that does not exist. (Tesla, round 1.)
+  test('an unnamed throw degrades to null rather than escaping', () async {
+    final source = KeychainInstallIdSource(methods: UnnamedThrowChannel());
+    expect(await source.installId(), isNull);
+  });
+
   // THE ASYMMETRY IS THE ARGUMENT. A dropped id costs a banner nobody wanted; a
   // forwarded bad id costs a 422 and therefore a handset that never wakes. So an
   // unexpected native answer is refused here rather than sent and rejected

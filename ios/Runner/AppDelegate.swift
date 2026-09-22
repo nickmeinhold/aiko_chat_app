@@ -1526,6 +1526,13 @@ final class InstallIdChannel {
         kSecAttrService: service,
         kSecAttrAccount: account,
         kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        // PINNED, not left to the default (Tesla, cage-match round 1). False IS
+        // the documented default, and `...ThisDeviceOnly` already forbids
+        // syncing — but this item's entire value is that it names ONE physical
+        // handset, and an explicit false is the cheap ward against a future
+        // copy-paste that carries the item into iCloud Keychain. Two handsets
+        // under one id is the missed call this field exists to prevent.
+        kSecAttrSynchronizable: false,
         kSecValueData: Data(minted.utf8),
       ] as CFDictionary,
       nil)
@@ -1546,6 +1553,9 @@ final class InstallIdChannel {
         kSecClass: kSecClassGenericPassword,
         kSecAttrService: service,
         kSecAttrAccount: account,
+        // Match the add's attributes: a query that does not pin this can miss
+        // an item that does, and a miss here mints a SECOND id.
+        kSecAttrSynchronizable: false,
         kSecReturnData: true,
         kSecMatchLimit: kSecMatchLimitOne,
       ] as CFDictionary,
