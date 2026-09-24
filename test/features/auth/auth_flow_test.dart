@@ -26,10 +26,11 @@ void main() {
   // The persistence itself is CORRECT — surviving a restart is the feature. This is
   // the harness paying for state that production wants.
   setUp(() async {
-    for (final k in testPrefs
-        .getKeys()
-        .where((k) => k.startsWith('aiko_passkey_seen_'))
-        .toList()) {
+    for (final k
+        in testPrefs
+            .getKeys()
+            .where((k) => k.startsWith('aiko_passkey_seen_'))
+            .toList()) {
       await testPrefs.remove(k);
     }
   });

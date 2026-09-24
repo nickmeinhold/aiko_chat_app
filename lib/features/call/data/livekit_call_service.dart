@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import '../../../core/diagnostics/error_report.dart' show describeError;
+import '../../../core/logging/aiko_logger.dart';
 import '../domain/call_connection_state.dart';
 import '../domain/video_token.dart';
 
@@ -91,6 +93,20 @@ bool peerHasLeft({
 }) => everJoined && !reconnecting && !alreadyAnnounced && remoteCount == 0;
 
 class LiveKitCallService {
+  LiveKitCallService({AikoLogger? log}) : _log = log;
+
+  /// Where a swallowed media failure goes. **This class shipped with none**
+  /// (PR #123, 2026-08-10) and that is how a call could publish video, fail to
+  /// publish audio, and leave no trace anywhere — `catch (_)` set
+  /// `micEnabled.value = false` and said nothing, so the only evidence was a
+  /// mic button that looked like the user had muted themselves.
+  ///
+  /// Nullable because [CallSession] is constructed in a dozen tests that have no
+  /// provider container; the PRODUCTION path must always pass one, which is the
+  /// `_NoopTelemetry` hazard from PR #45 and is pinned by a provider-wiring test
+  /// rather than trusted to memory.
+  final AikoLogger? _log;
+
   Room? _room;
   EventsListener<RoomEvent>? _listener;
 
@@ -322,15 +338,66 @@ class LiveKitCallService {
       await lp.setCameraEnabled(true);
       if (_disposed) return; // left mid-enable → notifiers already disposed.
       cameraEnabled.value = true;
-    } catch (_) {
+    } catch (e) {
+      // Camera denial IS a real fallback — a call without video is still a
+      // call — but "degrades gracefully" is not a reason to degrade silently.
       if (!_disposed) cameraEnabled.value = false; // denied → audio-only.
+      _log?.warning(
+        'camera.publish.failed',
+        fields: {'reason': describeError(e)},
+      );
     }
     try {
       await lp.setMicrophoneEnabled(true);
       if (_disposed) return;
       micEnabled.value = true;
-    } catch (_) {
+    } catch (e) {
+      // NOT the camera's twin, despite looking identical. There is no sentence
+      // to write after "denied → " here: a call with no audio is not a degraded
+      // call, it is a broken one. The two catches being byte-identical in shape
+      // is what let this pass every review since PR #123 — the camera's comment
+      // lent its legitimacy to a case that has none.
+      //
+      // `severe`, not `warning`: the user cannot be heard and nothing else in
+      // the app will say so.
       if (!_disposed) micEnabled.value = false;
+      // THE TYPE IS NOT THE DIAGNOSIS HERE, and 2026-09-20 is why. The first
+      // call that ever connected reported
+      // `microphone.publish.failed reason=AudioProcessingException` — which
+      // correctly excluded the audio-session rewrite (the fault is upstream of
+      // the session) and then stopped, one level short of actionable.
+      //
+      // `AudioProcessingException` carries a TYPED reason from a closed LiveKit
+      // vocabulary — `rejectedPlatformUnavailable`, `applyFailed`,
+      // `rejectedInvalidCombination`, `rejectedRemoteTrack`, `unknown` — and
+      // they argue for different fixes. `describeError` deliberately renders
+      // the class name only, because `toString()` on an arbitrary error can
+      // stringify a request body; that rule is right and stays. This is the
+      // same exception it already makes for `Unauthorized(statusCode)` and
+      // `AuthCeremonyFailed(message)`: a closed enum from a library is a
+      // diagnosis, not user data.
+      //
+      // Read it with the audio-session NSLogs (`[audio] …`): the likely story
+      // is the ADM being asked to start while `arm()` still has audio disabled
+      // and CallKit's `didActivate` has not landed — but "likely" is what the
+      // `cause` field exists to replace.
+      _log?.severe(
+        'microphone.publish.failed',
+        fields: {
+          'reason': describeError(e),
+          // `AudioProcessingException` is marked
+          // experimental by LiveKit, and we depend on it deliberately: its `reason`
+          // enum is the only thing that separates `applyFailed` (the mic never
+          // started — yesterday's silent call) from `rejectedPlatformUnavailable`
+          // (no device). Those argue for opposite fixes, and without the enum the
+          // report says only "AudioProcessingException", which is what cost a day.
+          // The dependency is SAFE TO TAKE because it cannot rot quietly: if LiveKit
+          // removes or renames the member the analyzer escalates to a compile error,
+          // so the failure mode is a red build, never a wrong diagnosis.
+          // ignore: experimental_member_use
+          'cause': ?(e is AudioProcessingException ? e.reason.name : null),
+        },
+      );
     }
   }
 
@@ -344,8 +411,12 @@ class LiveKitCallService {
     try {
       await lp.setCameraEnabled(enabled);
       if (!_disposed) cameraEnabled.value = enabled;
-    } catch (_) {
+    } catch (e) {
       if (!_disposed) cameraEnabled.value = false;
+      _log?.warning(
+        'camera.toggle.failed',
+        fields: {'requested': enabled, 'reason': describeError(e)},
+      );
     }
   }
 
@@ -356,8 +427,12 @@ class LiveKitCallService {
     try {
       await lp.setMicrophoneEnabled(enabled);
       if (!_disposed) micEnabled.value = enabled;
-    } catch (_) {
+    } catch (e) {
       if (!_disposed) micEnabled.value = false;
+      _log?.severe(
+        'microphone.toggle.failed',
+        fields: {'requested': enabled, 'reason': describeError(e)},
+      );
     }
   }
 

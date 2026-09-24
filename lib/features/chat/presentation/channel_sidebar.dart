@@ -412,7 +412,13 @@ class ChatSidebar extends ConsumerWidget {
                               dms: dms,
                               active: active,
                             ))
-                    : repoAsync.hasError
+                    // Only a failure once auth has ANSWERED — during session
+                    // restore the repo's refusal is a precondition, not an
+                    // error. See [authResolvedProvider].
+                    : showsAsFailure(
+                        repoAsync,
+                        authResolved: ref.watch(authResolvedProvider),
+                      )
                     ? Padding(
                         padding: const EdgeInsets.all(16),
                         child: Text(
@@ -569,9 +575,7 @@ class _SidebarDmTile extends ConsumerWidget {
           unread: unread,
           muted: mute.isMuted,
         ),
-        onTap: selected
-            ? null
-            : () => _selectConversation(context, ref, dm.id),
+        onTap: selected ? null : () => _selectConversation(context, ref, dm.id),
       ),
     );
   }

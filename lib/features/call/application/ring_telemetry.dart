@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/logging/aiko_log.dart';
 import '../../../core/logging/log_providers.dart';
 import '../../../core/logging/aiko_logger.dart';
+import '../domain/answer_outcome.dart';
 import '../domain/call_invite.dart';
 
 /// The ring subsystem's typed telemetry facade.
@@ -48,10 +49,96 @@ class RingTelemetry {
   /// the gate said no. That is worth surfacing distinctly from ordinary chatter even
   /// when the refusal is correct — a blocked caller and a skewed clock are both
   /// "working as designed" and both worth seeing in a report.
-  void ringRefused(String channelId, RingRefusal reason) => _log.warning(
-    'call.ring.refused',
-    fields: {'channel': channelId, 'reason': reason.name},
+  /// [age] is the invitation's measured age, present only for the refusals
+  /// decided ON age ([RingRefusal.stale], [RingRefusal.clockSkew]) and omitted
+  /// entirely otherwise — an absent field rather than a `null`, because
+  /// `ageMs=null` on a blocked sender would invite a reader to wonder which
+  /// clock failed, and no clock was consulted.
+  ///
+  /// It is the field that makes `reason=stale` actionable. The reason names the
+  /// clause; the age names the fault. `ageMs=12000` is a push wake overrunning
+  /// [kCallInviteFreshness] and argues the window is wrong for that path;
+  /// `ageMs=300000` is a peer clock out by five minutes and argues nothing about
+  /// the window at all; `ageMs=-4000` is our own clock ahead of the caller's.
+  /// Three fixes that share one refusal, and before this field a report could
+  /// not tell a reader which one they were looking at.
+  void ringRefused(String channelId, RingRefusal reason, {Duration? age}) =>
+      _log.warning(
+        'call.ring.refused',
+        fields: {
+          'channel': channelId,
+          'reason': reason.name,
+          if (age != null) 'ageMs': age.inMilliseconds,
+        },
+      );
+
+  /// An action arrived from the NATIVE call UI — answered, ended, anything.
+  ///
+  /// The only Dart-side witness to what CallKit did. `reportNewIncomingCall`,
+  /// the answer and the end all happen natively, and on a background wake the
+  /// Dart isolate can be frozen moments later — so this stream, written into a
+  /// buffer that survives suspension, is how the native half's decisions reach
+  /// a report at all.
+  ///
+  /// [kind] is a string rather than the enum because this facade sits below the
+  /// platform channel's vocabulary and must not gain a compile-time dependency
+  /// on it; the caller passes `kind.name`, which is the same value the channel
+  /// puts on the wire.
+  void systemCallAction(String channelId, String kind, {String? origin}) =>
+      _log.info(
+        'call.system.action',
+        fields: {'channel': channelId, 'kind': kind, 'origin': ?origin},
+      );
+
+  /// The ring STOPPED, and why.
+  ///
+  /// The stop gate's success path, which had no name until 2026-09-20. An
+  /// admitted hangup silences the ring through `stopRinging()`, which wrote
+  /// nothing — so "the caller hung up" and "the ring evaporated for reasons
+  /// unknown" were the same observation. [RingStopCause.callerHungUp] is the
+  /// line that distinguishes them.
+  void ringStopped(String? channelId, RingStopCause cause) => _log.info(
+    'call.ring.stopped',
+    fields: {'channel': ?channelId, 'cause': cause.name},
   );
+
+  /// An answer was taken and is being held until the session can join it.
+  ///
+  /// Paired with [answerResolved]: a `held` with no `resolved` after it is an
+  /// answer still waiting, and that is a REAL state (a restore that never
+  /// resolves holds indefinitely, by design). Without the pair, that state and
+  /// a crash look identical.
+  void answerHeld(String channelId) =>
+      _log.info('call.answer.held', fields: {'channel': channelId});
+
+  /// What became of a held answer.
+  ///
+  /// INFO for [AnswerOutcome.joined], WARNING for every other value: each of
+  /// the others is a call the user tried to take and did not get. That is the
+  /// same reasoning [ringRefused] uses — a refusal that is working as designed
+  /// is still worth seeing in a report.
+  void answerResolved(String channelId, AnswerOutcome outcome) {
+    final fields = {'channel': channelId, 'outcome': outcome.name};
+    if (outcome == AnswerOutcome.joined) {
+      _log.info('call.answer.resolved', fields: fields);
+    } else {
+      _log.warning('call.answer.resolved', fields: fields);
+    }
+  }
+
+  /// The call screen mounted, and began connecting.
+  ///
+  /// THE DISCRIMINATOR THE ISLAND LOG COULD NOT PROVIDE. A missing room-token
+  /// request proves the join did not finish; it cannot say whether the screen
+  /// was never reached or was reached and torn down first. These two lines
+  /// separate those.
+  void callScreenOpened(String channelId) =>
+      _log.info('call.screen.opened', fields: {'channel': channelId});
+
+  /// The call screen was disposed — every exit lands here, including the one
+  /// that ends the system call unconditionally.
+  void callScreenDisposed(String channelId) =>
+      _log.info('call.screen.disposed', fields: {'channel': channelId});
 
   /// A hangup was refused. Rarer and more suspicious than a refused ring: the
   /// asymmetry is deliberate (an unadmitted end means KEEP RINGING), so a

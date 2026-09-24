@@ -3,6 +3,7 @@ import 'package:aiko_chat_app/core/logging/aiko_log.dart';
 import 'package:aiko_chat_app/core/logging/log_providers.dart';
 import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/call/application/ring_telemetry.dart';
+import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -91,6 +92,140 @@ void main() {
     // The reason is the payload. A record that said only "refused" would
     // reproduce the exact defect this change removed.
     expect(line, contains('reason=stale'));
+  });
+
+  group('the answer path says which branch it took (2026-09-20)', () {
+    // A killed handset woke on a VoIP push, rang, verified the signature and
+    // ADMITTED the invitation in 4.9s — then ended its own system call 1.4s
+    // later and joined nothing, while the caller sat in an empty room. The
+    // app's entire record of that was ONE line, `call.ring.started`: every door
+    // past the admission gate wrote nothing, so a perfect ring and a ring that
+    // died produced byte-identical evidence.
+    //
+    // These assertions pin the FIELD NAMES, not just that something was
+    // logged — the next handset report is read through them, and a renamed
+    // field makes a bundle unreadable exactly when it matters.
+
+    String lineFor(void Function(RingTelemetry t) act) {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      act(c.read(ringTelemetryProvider));
+      return c.read(logBufferProvider).snapshot().single.format();
+    }
+
+    test('a held answer that never gets an admitted invitation names it', () {
+      final line = lineFor(
+        (t) => t.answerResolved('dm:a:b', AnswerOutcome.neverAdmitted),
+      );
+      expect(line, contains('call.answer.resolved'));
+      expect(line, contains('outcome=neverAdmitted'));
+    });
+
+    test('an answer that JOINED is recorded too — the positive control', () {
+      // Without it, silence after `held` means both "the call connected" and
+      // "the logger never ran", which is the defect this whole group exists to
+      // remove rather than relocate.
+      final line = lineFor(
+        (t) => t.answerResolved('dm:a:b', AnswerOutcome.joined),
+      );
+      expect(line, contains('outcome=joined'));
+    });
+
+    test(
+      'the caller hanging up is nameable — the silence that cost the most',
+      () {
+        final line = lineFor(
+          (t) => t.ringStopped('dm:a:b', RingStopCause.callerHungUp),
+        );
+        expect(line, contains('call.ring.stopped'));
+        expect(line, contains('cause=callerHungUp'));
+      },
+    );
+
+    test(
+      'a stop with nothing live omits the channel rather than inventing one',
+      () {
+        final line = lineFor(
+          (t) => t.ringStopped(null, RingStopCause.windowElapsed),
+        );
+        expect(line, contains('cause=windowElapsed'));
+        expect(line, isNot(contains('channel=')));
+      },
+    );
+
+    test('the call screen opening and closing are BOTH recorded', () {
+      // The discriminator the island log could not provide: a missing room
+      // token proves the join did not finish, never whether the screen was
+      // reached at all.
+      expect(
+        lineFor((t) => t.callScreenOpened('dm:a:b')),
+        contains('call.screen.opened'),
+      );
+      expect(
+        lineFor((t) => t.callScreenDisposed('dm:a:b')),
+        contains('call.screen.disposed'),
+      );
+    });
+
+    test('EVERY native call action is recorded, answered or not', () {
+      // The `ended` arm of `_onAction` records itself only when it ends an
+      // answer we were holding — so a call the system killed before anyone
+      // answered passed through in total silence, which is every failing run
+      // on 2026-09-20. The unconditional line is what makes "who ended it"
+      // answerable from a report instead of from a root-only device log.
+      expect(
+        lineFor((t) => t.systemCallAction('dm:a:b', 'ended')),
+        allOf(contains('call.system.action'), contains('kind=ended')),
+      );
+      expect(
+        lineFor((t) => t.systemCallAction('dm:a:b', 'answered')),
+        contains('kind=answered'),
+      );
+    });
+
+    test('`ended` carries WHICH native event ended it', () {
+      // A `CXEndCallAction` (somebody ended the call) and `providerDidReset`
+      // (the system tore our provider down and every call with it) mean
+      // opposite things and were the same byte on this channel. On 2026-09-20 a
+      // handset rang, was never answered, and lost its call 2.1s later — and no
+      // report could say which of the two had happened.
+      expect(
+        lineFor(
+          (t) => t.systemCallAction('dm:a:b', 'ended', origin: 'providerReset'),
+        ),
+        allOf(contains('kind=ended'), contains('origin=providerReset')),
+      );
+      expect(
+        lineFor(
+          (t) => t.systemCallAction('dm:a:b', 'ended', origin: 'endAction'),
+        ),
+        contains('origin=endAction'),
+      );
+    });
+
+    test('an origin-less action omits the field rather than saying null', () {
+      // Every build before today produces exactly this, and `origin=null`
+      // would invite a reader to think the native side had answered the
+      // question and said "neither".
+      expect(
+        lineFor((t) => t.systemCallAction('dm:a:b', 'ended')),
+        isNot(contains('origin')),
+      );
+    });
+
+    test('every AnswerOutcome renders a distinct, non-empty name', () {
+      // Driven, not rostered: a value added later with no case here still gets
+      // asserted, and a duplicate name (two branches that read identically in a
+      // report) fails.
+      final names = {for (final o in AnswerOutcome.values) o.name};
+      expect(names, hasLength(AnswerOutcome.values.length));
+      for (final o in AnswerOutcome.values) {
+        expect(
+          lineFor((t) => t.answerResolved('dm:a:b', o)),
+          contains('outcome=${o.name}'),
+        );
+      }
+    });
   });
 
   group('formatErrorReport carries the log tail', () {

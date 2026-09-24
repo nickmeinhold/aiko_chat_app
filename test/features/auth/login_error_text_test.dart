@@ -118,7 +118,9 @@ void main() {
             onUnauthenticated: () {},
           ),
         ),
-        connectivityServiceProvider.overrideWithValue(FakeConnectivityService()),
+        connectivityServiceProvider.overrideWithValue(
+          FakeConnectivityService(),
+        ),
         reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
         islandReachableProvider.overrideWith((ref) => Stream.value(true)),
       ],
@@ -146,25 +148,29 @@ void main() {
   // there is no passkey, so "Already have a passkey? Sign in" CANNOT succeed — and
   // the screen gave it equal standing with the one that works.
   group('LoginScreen ingress emphasis', () {
-    testWidgets('FRESH DEVICE: Create is the primary action, and Sign in is still '
-        'reachable', (tester) async {
-      await pumpFreshLogin(tester, passkeySeen: false);
+    testWidgets(
+      'FRESH DEVICE: Create is the primary action, and Sign in is still '
+      'reachable',
+      (tester) async {
+        await pumpFreshLogin(tester, passkeySeen: false);
 
-      expect(
-        find.widgetWithText(FilledButton, 'Create a passkey'),
-        findsOneWidget,
-        reason: 'the ingress that CAN work on a fresh device must be primary',
-      );
-      // Demoted, NOT removed. A passkey outlives the app: a reinstall or an
-      // iCloud-Keychain restore leaves a real credential with no local hint, and
-      // hiding sign-in would strand that user. `seen == false` means "no
-      // evidence", never "no passkey".
-      expect(
-        find.widgetWithText(TextButton, 'Already have a passkey? Sign in'),
-        findsOneWidget,
-        reason: 'sign-in must remain reachable for reinstall / keychain restore',
-      );
-    });
+        expect(
+          find.widgetWithText(FilledButton, 'Create a passkey'),
+          findsOneWidget,
+          reason: 'the ingress that CAN work on a fresh device must be primary',
+        );
+        // Demoted, NOT removed. A passkey outlives the app: a reinstall or an
+        // iCloud-Keychain restore leaves a real credential with no local hint, and
+        // hiding sign-in would strand that user. `seen == false` means "no
+        // evidence", never "no passkey".
+        expect(
+          find.widgetWithText(TextButton, 'Already have a passkey? Sign in'),
+          findsOneWidget,
+          reason:
+              'sign-in must remain reachable for reinstall / keychain restore',
+        );
+      },
+    );
 
     testWidgets('RETURNING DEVICE: the emphasis reverses', (tester) async {
       await pumpFreshLogin(tester, passkeySeen: true);
@@ -172,7 +178,8 @@ void main() {
       expect(
         find.widgetWithText(FilledButton, 'Sign in with your passkey'),
         findsOneWidget,
-        reason: 'a device that has completed a ceremony should lead with sign-in',
+        reason:
+            'a device that has completed a ceremony should lead with sign-in',
       );
       expect(
         find.widgetWithText(TextButton, 'Create a new passkey'),
@@ -181,19 +188,21 @@ void main() {
       );
     });
 
-    testWidgets('the hint is keyed PER ISLAND — another island does not inherit it',
-        (tester) async {
-      final c = await pumpFreshLogin(tester, passkeySeen: true);
-      final hint = c.read(passkeyHintStoreProvider);
-      expect(hint.seenFor(c.read(configProvider).httpBaseUrl), isTrue);
-      expect(
-        hint.seenFor('https://chat.enspyr.co'),
-        isFalse,
-        reason:
-            'a passkey is scoped to a relying party; one island must never vouch '
-            'for another',
-      );
-    });
+    testWidgets(
+      'the hint is keyed PER ISLAND — another island does not inherit it',
+      (tester) async {
+        final c = await pumpFreshLogin(tester, passkeySeen: true);
+        final hint = c.read(passkeyHintStoreProvider);
+        expect(hint.seenFor(c.read(configProvider).httpBaseUrl), isTrue);
+        expect(
+          hint.seenFor('https://chat.enspyr.co'),
+          isFalse,
+          reason:
+              'a passkey is scoped to a relying party; one island must never vouch '
+              'for another',
+        );
+      },
+    );
   });
 
   /// Drive an ingress with the ISLAND UNREACHABLE — the offline case — and return
@@ -224,7 +233,9 @@ void main() {
             onUnauthenticated: () {},
           ),
         ),
-        connectivityServiceProvider.overrideWithValue(FakeConnectivityService()),
+        connectivityServiceProvider.overrideWithValue(
+          FakeConnectivityService(),
+        ),
         reachabilityProbeProvider.overrideWithValue(FakeReachabilityProbe()),
         islandReachableProvider.overrideWith((ref) => Stream.value(true)),
       ],
@@ -282,7 +293,10 @@ void main() {
       // The create-path message is deliberately different from sign-in's: making
       // an account needs the network ONCE, and saying so is what stops a user
       // concluding the app is online-only.
-      expect(find.textContaining('needs internet just this once'), findsOneWidget);
+      expect(
+        find.textContaining('needs internet just this once'),
+        findsOneWidget,
+      );
       expect(find.textContaining('domain association'), findsNothing);
     });
 

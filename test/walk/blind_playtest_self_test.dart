@@ -319,7 +319,8 @@ void main() {
       expect(
         await hasRibbonRed(tester),
         isTrue,
-        reason: 'if this is false the detector is blind and the arm below is '
+        reason:
+            'if this is false the detector is blind and the arm below is '
             'green for a reason that has nothing to do with the fix',
       );
     });
@@ -335,7 +336,9 @@ void main() {
       expect(await hasRibbonRed(tester), isFalse);
     });
 
-    testWidgets('called AFTER the pump it does NOT take effect', (tester) async {
+    testWidgets('called AFTER the pump it does NOT take effect', (
+      tester,
+    ) async {
       // Recording the actual trap, so nobody re-introduces it believing the
       // flag is order-independent.
       tester.view.physicalSize = const Size(400, 600);
@@ -349,7 +352,8 @@ void main() {
       expect(
         await hasRibbonRed(tester),
         isTrue,
-        reason: 'the banner is built during the app build; flipping the flag '
+        reason:
+            'the banner is built during the app build; flipping the flag '
             'afterwards reads as applied and changes nothing',
       );
     });
@@ -395,17 +399,23 @@ void main() {
       );
     });
 
-    test('MUST FAIL ARM: an off-grammar reply THROWS, never degrades to Stuck', () {
-      // If this ever returned Stuck, an instrument failure would be published
-      // as a bug report about the app: "a person could not find this" when in
-      // truth the harness could not read its own model. That is the worst
-      // failure available to a tool whose entire output is findings.
-      expect(
-        () => parseMove(["I'm not sure what you're asking for."]),
-        throwsA(isA<FormatException>()),
-      );
-      expect(() => parseMove(const []), throwsA(isA<FormatException>()));
-      expect(() => parseMove(['TAP over there']), throwsA(isA<FormatException>()));
-    });
+    test(
+      'MUST FAIL ARM: an off-grammar reply THROWS, never degrades to Stuck',
+      () {
+        // If this ever returned Stuck, an instrument failure would be published
+        // as a bug report about the app: "a person could not find this" when in
+        // truth the harness could not read its own model. That is the worst
+        // failure available to a tool whose entire output is findings.
+        expect(
+          () => parseMove(["I'm not sure what you're asking for."]),
+          throwsA(isA<FormatException>()),
+        );
+        expect(() => parseMove(const []), throwsA(isA<FormatException>()));
+        expect(
+          () => parseMove(['TAP over there']),
+          throwsA(isA<FormatException>()),
+        );
+      },
+    );
   });
 }

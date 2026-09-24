@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../../core/logging/aiko_logger.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../domain/call_connection_state.dart';
 import '../domain/video_token.dart';
@@ -23,8 +24,12 @@ class CallSession {
     required this.channelId,
     LiveKitCallService? service,
     List<Duration>? reconnectDelays,
+    // Passed STRAIGHT THROUGH to the default service, so the production call
+    // screen's logger reaches the media layer's swallowed failures. Ignored when
+    // an explicit [service] is supplied (that caller owns its own wiring).
+    AikoLogger? log,
   }) : _api = api,
-       service = service ?? LiveKitCallService(),
+       service = service ?? LiveKitCallService(log: log),
        _reconnectDelays = reconnectDelays ?? _defaultReconnectDelays {
     // Subscribed in the CONSTRUCTOR, not in `connect()`, so the arm is live
     // before `Room.connect` returns. `_evaluatePeerPresence` can fire from a

@@ -7,6 +7,7 @@
 /// `ref.onDispose` so its stream subscriptions never leak across sessions.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -30,6 +31,128 @@ final _uuid = Uuid();
 final currentUserProvider = Provider<AppUser?>(
   (ref) => ref.watch(authControllerProvider).value,
 );
+
+/// Whether auth has produced an ANSWER yet — the discriminator [currentUserProvider]
+/// deliberately throws away.
+///
+/// `AsyncValue<AppUser?>.value` is null in two unrelated states: `AsyncData(null)`
+/// (genuinely logged out) and `AsyncLoading` (session restore still in flight).
+/// [chatRepositoryProvider] correctly refuses to build a sessionless repo, so
+/// during restore it is legitimately in an ERROR state — and both conversation
+/// panes rendered any repo error as *"Could not load conversations"*. The result
+/// was a failure message flashed on every cold start (most visibly right after an
+/// install, reported from a handset by Nick 2026-09-16) for a question that had
+/// simply not been answered yet.
+///
+/// The fix belongs HERE, at the render decision, not in the repo provider. An
+/// earlier attempt made the repo await auth instead — which removed the flash and
+/// broke `chat_screen_test.dart`'s "logout → different user → no cross-session
+/// messages": the synchronous throw is load-bearing for tearing the previous
+/// session's repo down promptly, so deferring it leaked user A's messages into
+/// user B's session. A cosmetic flash traded for a cross-account leak. The error
+/// is real; only its PRESENTATION was wrong.
+/// How many times the device has come BACK online — the event both list
+/// providers actually want, rather than the flag they used to read.
+///
+/// ## The defect this replaces
+///
+/// [deviceOnlineProvider] is a `StreamProvider` whose first value comes from an
+/// async `isOnline()`, so every launch emits `AsyncLoading` and then
+/// `AsyncData(true)`. A bare `ref.watch` of it counts that as a change, so
+/// [channelsProvider] and [dmsProvider] each fetched TWICE on every cold start
+/// — the second time to learn the network was still exactly as online as it had
+/// been.
+///
+/// Not a micro-optimisation on the path that matters. A VoIP wake gets roughly
+/// 5-6 seconds of background life and must have a websocket up inside it,
+/// because that is how a call invitation arrives — and the duplicate round does
+/// not merely cost its own round trips, it rebuilds [chatRepositoryProvider],
+/// which is what the socket waits on. Bangkok → this island, RTT ~125ms,
+/// 2026-09-20:
+///
+///     18.288  GET /v1/dm          19.047  GET /v1/dm        ← again
+///     19.044  GET /v1/channels    19.819  GET /v1/channels  ← again
+///     21.042  websocket connects  ← ~1.7s later than it needed to
+///
+/// The call failed. It had been failing this way on a 30ms link too, invisibly,
+/// for as long as the line existed: latency did not cause this, it made an
+/// existing waste expensive enough to lose a deadline by.
+///
+/// ## Why a COUNTER and not the boolean
+///
+/// The obvious fix — watch `.value ?? true` — is wrong in a way the existing
+/// suite caught immediately. Two connectivity emissions landing in the same
+/// turn (`false` then `true`, which is exactly how a recovery arrives) collapse
+/// to `true → true`, no change, no rebuild: the offline fallback becomes sticky
+/// and the user is stranded on a cached list with no socket. The old bare watch
+/// survived that only by accident, because every emission changed the
+/// `AsyncValue`'s identity.
+///
+/// A monotonic counter cannot be coalesced away. However many emissions share a
+/// turn, a recovery among them still moves 0 → 1, and the dependents rebuild.
+/// It also says what the call sites mean: they are not interested in whether
+/// the network is up, only in the moment it came BACK.
+class _OnlineRecoveries extends Notifier<int> {
+  /// The last KNOWN state — null while connectivity is still loading, which is
+  /// the state the old code could not tell apart from a real answer.
+  bool? _last;
+
+  @override
+  int build() {
+    ref.listen(deviceOnlineProvider, fireImmediately: true, (_, next) {
+      final now = next.value;
+      if (now == null) return; // still loading: not a transition, not an event
+      final was = _last;
+      _last = now;
+      // ONLY the upward edge. Going offline is not a recovery, and refetching
+      // on it would fire a request at a network we have just been told is down.
+      if (was == false && now) state = state + 1;
+    });
+    return 0;
+  }
+}
+
+final _onlineRecoveriesProvider = NotifierProvider<_OnlineRecoveries, int>(
+  _OnlineRecoveries.new,
+);
+
+/// TEST-ONLY handle on the recovery counter.
+///
+/// Exposed because the behaviour worth pinning is a REBUILD COUNT, which can
+/// only be observed from outside — and the first attempt at this fix passed a
+/// hand-written assertion while breaking the offline fallback, because nothing
+/// counted. Not for production use: every real caller is in this file.
+@visibleForTesting
+final onlineRecoveriesForTest = _onlineRecoveriesProvider;
+
+final authResolvedProvider = Provider<bool>(
+  (ref) => ref.watch(authControllerProvider).hasValue,
+);
+
+/// Whether [v] is a failure the user should be TOLD about, as opposed to a
+/// question still being answered.
+///
+/// TWO states have to be subtracted, and the first fix subtracted only one.
+///
+///  1. **Auth has not answered.** See [authResolvedProvider] — during session
+///     restore the repo's refusal is a precondition, not a failure.
+///  2. **The provider is REBUILDING after that refusal.** This is the one
+///     `142ed25` missed, and it is why the flash survived the fix that was
+///     supposed to remove it. `AsyncValue.hasError` is `_error != null`
+///     (`riverpod-3.4.2/lib/src/core/async_value.dart:125`), NOT
+///     `this is AsyncError` — so a rebuild emits
+///     `AsyncError(isLoading: true, error: <the old error>)`, which reports
+///     `hasError == true` while it is busy succeeding. Measured, not inferred:
+///     see `repo_waits_for_auth_restore_test.dart`, which pins the vendor
+///     behaviour this predicate depends on.
+///
+/// So the old guard moved the flash rather than removing it — from the restore
+/// window into the repo-build window, which is the same instant to a user and a
+/// different instant to a test that only ever asked about restore. A stale
+/// error carried forward for redraw convenience is not a new failure, and
+/// `hasError` alone cannot tell the difference.
+bool showsAsFailure(AsyncValue<Object?> v, {required bool authResolved}) =>
+    authResolved && v.hasError && !v.isLoading;
 
 /// `userId → current handle` for a channel's members, from the island roster
 /// (`GET /v1/channels/{id}/members`). Lets a message's sender name render the
@@ -80,7 +203,7 @@ final channelsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   // rebuilds this provider on the offline→online transition, which retries
   // listChannels() (Carnot, PR #72). `.distinct()` upstream keeps it to real
   // transitions, not every interface swap.
-  ref.watch(deviceOnlineProvider);
+  ref.watch(_onlineRecoveriesProvider);
   final cache = ref.watch(cacheProvider);
   try {
     // Server list is authoritative: fetch, then refresh the offline cache.
@@ -339,7 +462,7 @@ void seedOpenedDm(WidgetRef ref, Channel dm) {
 final dmsProvider = FutureProvider.autoDispose<List<Channel>>((ref) async {
   final user = ref.watch(authControllerProvider).value;
   if (user == null) return const [];
-  ref.watch(deviceOnlineProvider);
+  ref.watch(_onlineRecoveriesProvider);
   // Take the ticket BEFORE the await — the watermark has to record when this
   // fetch started, not when it finished.
   final seeds = ref.read(_seededDmsProvider.notifier);

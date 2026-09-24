@@ -253,12 +253,21 @@ class FakeRestApi implements ChatRestApi {
   /// failure.
   Object? registerDeviceThrowsAfterLanding;
 
+  /// The handset id each register carried, in call order.
+  ///
+  /// A SEPARATE LIST rather than a field on [registeredDevices], so every
+  /// existing assertion about that record keeps meaning what it meant. Null
+  /// entries are the interesting ones: they are how a platform with no
+  /// device-bound id looks, which is every build before this field existed.
+  final List<String?> registeredInstallIds = [];
+
   @override
   Future<void> registerDevice({
     required DevicePlatform platform,
     required String token,
     TokenKind kind = TokenKind.alert,
     ApnsEnvironment? apnsEnvironment,
+    String? installId,
   }) async {
     // YIELD FIRST, for the same reason unregisterDevice does: an async body runs
     // synchronously to its first await, so with no gate set this fake used to
@@ -278,6 +287,7 @@ class FakeRestApi implements ChatRestApi {
       apnsEnvironment: apnsEnvironment,
     ));
     registeredKinds.add(kind);
+    registeredInstallIds.add(installId);
     deviceCalls.add((op: 'register', token: token));
     liveRows.add(token);
     if (registerDeviceThrowsAfterLanding != null) {

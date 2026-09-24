@@ -70,17 +70,52 @@ void main() {
     expect(find.text('Robot'), findsOneWidget);
   });
 
-  testWidgets('unknown island sender_kind (→ actor) still badges as "Bot"', (
+  testWidgets('agent sender shows an "Agent" badge, NOT the unknown "Bot"', (
     tester,
   ) async {
-    // The island may stamp sender_kind='agent'/'bot'/etc from User.kind;
-    // fromWire degrades any unknown value to actor. It must STILL render a
-    // badge, not blend in as a human message.
-    final sender = MessageSender(
-      kind: SenderKind.fromWire('agent'),
-      label: 'Ag',
+    // ADR-0005: an agent is a first-class Principal that can hold standing of
+    // its own. "Bot" is this badge's GENERIC-UNKNOWN label, so rendering an
+    // agent as "Bot" states the opposite of the decision — the lesser standing
+    // that ADR rejects, arriving through the render.
+    await _pump(
+      tester,
+      MessageSender(kind: SenderKind.fromWire('agent'), label: 'Ag'),
     );
-    await _pump(tester, sender);
+    expect(find.text('Agent'), findsOneWidget);
+    expect(find.text('Bot'), findsNothing);
+    expect(find.byIcon(Icons.hub), findsOneWidget);
+  });
+
+  testWidgets('an agent still wears a badge — it is not a human', (
+    tester,
+  ) async {
+    // The half of the old decode that was ALREADY RIGHT, pinned so the fix above
+    // cannot quietly undo it. This is what island #3096 existed to fix: an agent
+    // must never wear a human's unbadged label. Changing WHICH badge it wears
+    // must not change WHETHER it wears one.
+    expect(SenderKind.agent.isExternalActor, isTrue);
+    await _pump(
+      tester,
+      const MessageSender(kind: SenderKind.agent, label: 'Ag'),
+    );
+    expect(find.byType(Icon), findsWidgets);
+  });
+
+  testWidgets('a genuinely unknown sender_kind still badges as "Bot"', (
+    tester,
+  ) async {
+    // THE CONTRACT THIS TEST ALWAYS MEANT TO PIN, with a witness that actually
+    // satisfies it. It used to prove "unknown degrades to a badge" using
+    // 'agent' — a value the island had been able to emit since migration
+    // 0022_users_kind, and one this repo's own ADR-0005 had decided the meaning
+    // of. The contract was right and the example was not, so the test stayed
+    // green while the value it named was mishandled, and its green is the reason
+    // nobody looked. The tolerance itself is deliberate and stays: the island
+    // relies on it to rule out a fail-closed read path.
+    await _pump(
+      tester,
+      MessageSender(kind: SenderKind.fromWire('hologram'), label: 'Ho'),
+    );
     expect(find.byIcon(Icons.smart_toy), findsOneWidget);
     expect(find.text('Bot'), findsOneWidget);
   });

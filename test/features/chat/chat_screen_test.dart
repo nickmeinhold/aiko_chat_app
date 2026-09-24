@@ -162,10 +162,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(transport.disconnectCalls, greaterThanOrEqualTo(1));
-    expect(
-      find.byKey(const Key('login-screen')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('login-screen')), findsOneWidget);
   });
 
   testWidgets('logout → different user → no cross-session messages', (
@@ -215,10 +212,7 @@ void main() {
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('login-screen')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('login-screen')), findsOneWidget);
 
     rest.user = const AppUser(
       userId: 'u2',

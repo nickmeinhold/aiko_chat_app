@@ -64,10 +64,7 @@ void main() {
   /// to "is this different from what was there before".
   CustomPainter islandPainter(WidgetTester tester) => tester
       .widget<CustomPaint>(
-        find.descendant(
-          of: composerMark(),
-          matching: find.byType(CustomPaint),
-        ),
+        find.descendant(of: composerMark(), matching: find.byType(CustomPaint)),
       )
       .painter!;
 
@@ -317,10 +314,7 @@ void main() {
 
     final target = tester.getRect(composerMark());
     final glyph = tester.getRect(
-      find.descendant(
-        of: composerMark(),
-        matching: find.byType(CustomPaint),
-      ),
+      find.descendant(of: composerMark(), matching: find.byType(CustomPaint)),
     );
     final field = tester.getRect(find.byType(TextField).first);
 

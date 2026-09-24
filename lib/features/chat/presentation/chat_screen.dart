@@ -453,6 +453,21 @@ class _MessageListState extends ConsumerState<MessageList> {
     final messagesAsync = ref.watch(messagesProvider(widget.channelId));
     final myUserId = ref.watch(currentUserProvider)?.userId;
 
+    // THE THIRD RENDER OF THE SAME COLLAPSED STATE, and the one the fix for the
+    // other two never reached. `messagesProvider` awaits `chatRepositoryProvider`,
+    // so during session restore it inherits the sessionless refusal and this pane
+    // said "Could not load messages" — the same cold-start lie the conversation
+    // panes were taught not to tell, one screen over, wearing a different noun.
+    // It was missed because the report named a string rather than a state, and
+    // the fix was scoped to the string.
+    if (messagesAsync.hasError &&
+        !showsAsFailure(
+          messagesAsync,
+          authResolved: ref.watch(authResolvedProvider),
+        )) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return messagesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Could not load messages.\n$e')),
@@ -741,7 +756,7 @@ class MessageTile extends ConsumerWidget {
 /// A small "who/what" chip shown beside a non-human sender's label so an
 /// agent/bot message is visually distinguishable from a person's. Driven by
 /// [SenderKind.isExternalActor]; never shown for [SenderKind.human]. Any
-/// unrecognized island sender_kind decodes to [SenderKind.actor] → "Bot".
+/// unrecognized island sender_kind decodes to [SenderKind.unknown] → "Bot".
 class _SenderBadge extends StatelessWidget {
   const _SenderBadge({required this.kind});
 
@@ -759,7 +774,7 @@ class _SenderBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.smart_toy, size: 10, color: scheme.onSecondaryContainer),
+          Icon(_icon(kind), size: 10, color: scheme.onSecondaryContainer),
           const SizedBox(width: 3),
           Text(
             _label(kind),
@@ -775,13 +790,51 @@ class _SenderBadge extends StatelessWidget {
 
   static String _label(SenderKind kind) {
     switch (kind) {
+      // UNREACHABLE TODAY. Neither island can emit `llm` or `robot`: the only
+      // producer keys off a channel kind that has no writer (island
+      // claude-tasks#3144). Kept rather than deleted because the fork on that
+      // issue has an outcome — "the missing writer is its own bug" — that makes
+      // them live again. See `SenderKind` for the full reasoning; the point of
+      // this marker is that the two dead arms used to be indistinguishable from
+      // the live ones.
       case SenderKind.llm:
         return 'AI';
       case SenderKind.robot:
         return 'Robot';
+      // NOT 'Bot'. ADR-0005 makes an agent a first-class Principal that can hold
+      // standing of its own, and rejects the alternative because it "fails
+      // robots-first-class permanently". "Bot" here is the GENERIC-UNKNOWN bucket
+      // — the label a value lands on when this client has never heard of it — so
+      // spending it on a kind we have decided about would state the opposite of
+      // the decision. 'Agent' is also the island's own word for the wire value,
+      // which keeps one name for this thing across the schema, the wire and here.
+      case SenderKind.agent:
+        return 'Agent';
       case SenderKind.human:
-      case SenderKind.actor:
+      case SenderKind.unknown:
         return 'Bot';
+    }
+  }
+
+  /// The icon, per kind — because the badge said `smart_toy` for everything.
+  ///
+  /// A toy robot on a first-class Principal is the lesser standing ADR-0005
+  /// rejects, drawn rather than written. `hub` is the honest picture of what an
+  /// agent IS in that ADR: its own node in the Principal graph, reachable and
+  /// accountable in its own right, rather than a gadget someone else operates.
+  /// ONLY `agent` moves. A first pass also gave llm `auto_awesome`, which broke
+  /// the llm badge test — correctly, because that was scope creep: nobody asked,
+  /// no finding supports it, and it is an aesthetic preference wearing a fix's
+  /// clothing. Every other kind keeps the icon it had.
+  static IconData _icon(SenderKind kind) {
+    switch (kind) {
+      case SenderKind.agent:
+        return Icons.hub;
+      case SenderKind.llm:
+      case SenderKind.robot:
+      case SenderKind.human:
+      case SenderKind.unknown:
+        return Icons.smart_toy;
     }
   }
 }

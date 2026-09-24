@@ -1,6 +1,7 @@
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/call/application/ring_allowlist_provider.dart';
+import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/call/domain/ring_consent.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
@@ -292,7 +293,9 @@ void main() {
       reason: 'precondition — it rang the first time',
     );
 
-    container.read(incomingRingProvider.notifier).stopRinging(); // Ignore
+    container
+        .read(incomingRingProvider.notifier)
+        .stopRinging(RingStopCause.declined); // Ignore
     expect(container.read(incomingRingProvider), isNull);
 
     // The SAME delivery again, well inside the freshness window.
@@ -378,7 +381,7 @@ void main() {
         isTrue,
         reason: 'if this inverts, the admission gate alone bounds the ring',
       );
-      ctl.stopRinging();
+      ctl.stopRinging(RingStopCause.windowElapsed);
       expect(container.read(incomingRingProvider), isNull);
     },
   );
@@ -391,7 +394,9 @@ void main() {
     await pump();
     expect(container.read(incomingRingProvider), isNotNull);
 
-    container.read(incomingRingProvider.notifier).stopRinging();
+    container
+        .read(incomingRingProvider.notifier)
+        .stopRinging(RingStopCause.declined);
     expect(container.read(incomingRingProvider), isNull);
   });
 

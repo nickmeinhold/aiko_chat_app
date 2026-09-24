@@ -11,17 +11,26 @@ void main() {
       expect(SenderKind.fromWire('human'), SenderKind.human);
       expect(SenderKind.fromWire('llm'), SenderKind.llm);
       expect(SenderKind.fromWire('robot'), SenderKind.robot);
-      expect(SenderKind.fromWire('actor'), SenderKind.actor);
+      // BOTH spellings map to the same member, and this is the contract that lets
+      // the island deploy FIRST. `unknown` is its new name; `actor` is what 78 rows
+      // already carry until migration 0027 rewrites them. A client that accepted only
+      // one would mis-read either all of history or all of the future — and the
+      // migration window is exactly when both are on the wire at once.
+      expect(SenderKind.fromWire('actor'), SenderKind.unknown);
+      expect(SenderKind.fromWire('unknown'), SenderKind.unknown);
+      // The island's vocabulary for this field is FIVE values; this one used to
+      // fall through to the default arm (claude-tasks#4661).
+      expect(SenderKind.fromWire('agent'), SenderKind.agent);
     });
     test('unknown/null -> actor (forward-compat, never throws)', () {
-      expect(SenderKind.fromWire('hologram'), SenderKind.actor);
-      expect(SenderKind.fromWire(null), SenderKind.actor);
+      expect(SenderKind.fromWire('hologram'), SenderKind.unknown);
+      expect(SenderKind.fromWire(null), SenderKind.unknown);
     });
     test('isExternalActor', () {
       expect(SenderKind.human.isExternalActor, false);
       expect(SenderKind.llm.isExternalActor, true);
       expect(SenderKind.robot.isExternalActor, true);
-      expect(SenderKind.actor.isExternalActor, true);
+      expect(SenderKind.unknown.isExternalActor, true);
     });
   });
 
@@ -54,7 +63,11 @@ void main() {
       });
       expect(s.label, isNull);
       expect(s.userId, isNull);
-      expect(s.displayLabel, 'actor'); // falls back to kind
+      // 'unknown', not 'actor' — and this is the one place the rename is USER-VISIBLE.
+      // `displayLabel` falls back to `kind.name`, so a sender with no label renders the
+      // member name raw. The old string asserted a registered aiko bus Actor; the new
+      // one says what is actually true, which is that we could not identify the sender.
+      expect(s.displayLabel, 'unknown'); // falls back to kind
     });
   });
 
@@ -83,7 +96,7 @@ void main() {
         ...view,
         'sender': {'user_id': null, 'kind': 'hologram', 'label': null},
       });
-      expect(m.sender.kind, SenderKind.actor);
+      expect(m.sender.kind, SenderKind.unknown);
       expect(m.sender.label, isNull);
     });
 

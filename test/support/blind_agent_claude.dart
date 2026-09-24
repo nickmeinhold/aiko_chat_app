@@ -85,8 +85,9 @@ BlindAgent claudeEyes({
     }
 
     final dir = Directory(scratchDir)..createSync(recursive: true);
-    final frame = File('${dir.path}/step-${step.toString().padLeft(2, '0')}.png')
-      ..writeAsBytesSync(view.png);
+    final frame = File(
+      '${dir.path}/step-${step.toString().padLeft(2, '0')}.png',
+    )..writeAsBytesSync(view.png);
     step++;
 
     final tried = view.history.isEmpty
@@ -135,9 +136,7 @@ $_grammar''';
     );
 
     if (result == null || result.exitCode != 0) {
-      throw StateError(
-        'claude exited ${result?.exitCode}: ${result?.stderr}',
-      );
+      throw StateError('claude exited ${result?.exitCode}: ${result?.stderr}');
     }
     return parseMove(const LineSplitter().convert(result.stdout as String));
   };

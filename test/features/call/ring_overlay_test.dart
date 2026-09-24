@@ -1,4 +1,8 @@
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
+import 'package:aiko_chat_app/features/call/application/system_call_providers.dart';
+import 'package:aiko_chat_app/features/call/data/system_call_bridge.dart';
+import 'package:aiko_chat_app/features/call/domain/system_call_action.dart';
+import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/call/domain/media_confidentiality.dart';
 import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
@@ -33,7 +37,10 @@ void main() {
     startedAt: DateTime.utc(2026, 8, 15, 13),
   );
 
+  late _FakeSystemCall systemCall;
+
   Widget harness({CallInvite? initial}) {
+    systemCall = _FakeSystemCall();
     final router = GoRouter(
       routes: [
         GoRoute(
@@ -60,6 +67,10 @@ void main() {
         // what makes the test exercise the real lookup path rather than a
         // parallel one.
         routerProvider.overrideWithValue(router),
+        // The CallKit seam. A foregrounded handset gets BOTH banners — the
+        // island cannot know the app is up — so whichever the user presses has
+        // to decide the call for the OTHER one too.
+        systemCallBridgeProvider.overrideWithValue(systemCall),
         // The banner now carries the media disclosure, which would otherwise
         // reach for the real island config. Pinned here so this file keeps
         // testing PLACEMENT; the disclosure's own behaviour, including the
@@ -203,6 +214,82 @@ void main() {
       expect(find.text('Someone'), findsOneWidget);
     },
   );
+
+  // ---- The CallKit half of the in-app buttons (cage-match PR #201) ----
+  //
+  // The island sends the VoIP push on every invite; it cannot know this app is
+  // foregrounded. So a foregrounded handset shows CallKit's incoming-call
+  // banner AND this one, and a button that decides the call must decide it for
+  // both. Without this, Answer leaves the handset ringing over the call you
+  // just took, and Ignore leaves it ringing over a call you believe you
+  // declined.
+
+  testWidgets('Answer also ends the SYSTEM call for that channel', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(initial: invite));
+    await tester.pumpAndSettle();
+    expect(systemCall.ended, isEmpty);
+
+    await tester.tap(find.text('Answer'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL dm:aaa:bbb'), findsOneWidget);
+    expect(systemCall.ended, ['dm:aaa:bbb']);
+  });
+
+  testWidgets('Ignore also ends the SYSTEM call — the loudest of the two', (
+    tester,
+  ) async {
+    // Worse than the Answer case if missed: the banner vanishes, the user
+    // believes they declined, and the handset carries on ringing full-screen.
+    await tester.pumpWidget(harness(initial: invite));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Ignore'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Answer'), findsNothing);
+    expect(systemCall.ended, ['dm:aaa:bbb']);
+  });
+
+  testWidgets('a refused Answer leaves the system call ALONE', (tester) async {
+    // The negative control. Already in a live call → the answer is refused and
+    // the ring is deliberately left ringing, so the user can end the current
+    // call and still take this one from EITHER banner. Ending the system call
+    // here would remove the option this branch exists to preserve.
+    await tester.pumpWidget(harness(initial: invite));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Answer'));
+    await tester.pumpAndSettle();
+    expect(find.text('CALL dm:aaa:bbb'), findsOneWidget);
+    systemCall.ended.clear();
+
+    // A SECOND ring arrives while that call is live — answering cleared the
+    // first banner, so the ring has to be re-published to reach this branch at
+    // all. That is the real sequence: you are in a call, someone else rings.
+    final container = ProviderScope.containerOf(
+      tester.element(find.text('CALL dm:aaa:bbb')),
+    );
+    (container.read(incomingRingProvider.notifier) as _FakeRing).ring(invite);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Answer'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining("already in a call"), findsOneWidget);
+    expect(systemCall.ended, isEmpty);
+  });
+}
+
+/// Records what the app asked the platform call UI to do.
+class _FakeSystemCall implements SystemCallBridge {
+  final List<String> ended = [];
+
+  @override
+  Stream<SystemCallAction> get actions => const Stream.empty();
+
+  @override
+  Future<void> end(String channelId) async => ended.add(channelId);
 }
 
 class _FakeRing extends RingController {
@@ -213,5 +300,9 @@ class _FakeRing extends RingController {
   CallInvite? build() => _initial;
 
   @override
-  void stopRinging() => state = null;
+  void stopRinging(RingStopCause cause) => state = null;
+
+  /// Re-publish a ring, so a test can reach the "already in a call" branch —
+  /// which is only reachable with a live call AND a live ring at once.
+  void ring(CallInvite invite) => state = invite;
 }

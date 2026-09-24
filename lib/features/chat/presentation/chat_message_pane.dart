@@ -121,7 +121,14 @@ class ChatMessagePane extends ConsumerWidget {
                           ),
                         ],
                       ))
-              : repoAsync.hasError
+              // A repo error only MEANS failure once auth has answered; until
+              // then it is the precondition not yet being satisfiable, and
+              // showing it flashed "Could not load conversations" on every cold
+              // start. See [authResolvedProvider].
+              : showsAsFailure(
+                  repoAsync,
+                  authResolved: ref.watch(authResolvedProvider),
+                )
               ? Center(
                   child: Text(
                     'Could not load conversations.\n${repoAsync.error}',

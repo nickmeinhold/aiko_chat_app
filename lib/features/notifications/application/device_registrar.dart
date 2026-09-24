@@ -6,6 +6,7 @@ import '../../chat/data/chat_rest_api.dart';
 import '../data/pending_unregister_store.dart';
 import 'push_telemetry.dart';
 import '../domain/apns_environment.dart';
+import '../domain/install_id_source.dart';
 import '../domain/push_token_source.dart';
 import '../domain/token_kind.dart';
 
@@ -100,14 +101,28 @@ class DeviceRegistrar {
     /// to a no-op in the shipped app is a failure this project has already had
     /// once (PR #45, Carnot).
     PushTelemetry telemetry = PushTelemetry.noop,
+
+    /// WHICH HANDSET this registrar's token is on, or null where there is no
+    /// device-bound answer — which is what every build before this one sent.
+    ///
+    /// **THE SAME INSTANCE MUST REACH BOTH REGISTRARS.** A device holds an
+    /// alert row and a voip row, and the island groups them by this value to
+    /// stop a call drawing a banner over its own CallKit ring. Two sources
+    /// answering differently would split one handset into two groups — strictly
+    /// worse than sending nothing, because the island would then act on a
+    /// grouping that is wrong rather than on one that is absent. Optional so
+    /// the dozen existing tests that construct a registrar stay untouched.
+    InstallIdSource? installIds,
   }) : _source = source,
        _api = api,
        _pending = pending,
        _islandBaseUrl = islandBaseUrl,
-       _telemetry = telemetry;
+       _telemetry = telemetry,
+       _installIds = installIds;
 
   final PushTokenSource _source;
   final PushTelemetry _telemetry;
+  final InstallIdSource? _installIds;
   final ChatRestApi _api;
   final PendingUnregisterStore _pending;
 
@@ -121,6 +136,11 @@ class DeviceRegistrar {
   /// after a rotation. Without it a rotate-then-sign-out would owe a token the
   /// island never had and leave the live one routing.
   String? _registered;
+
+  /// The `install_id` carried by the row [_registered] names, or null when that
+  /// row was written without one. Not a cache of the source — a record of the
+  /// WIRE, which is the only thing [reconcileInstallId] can honestly compare.
+  String? _registeredInstallId;
 
   /// Which pairing attempt is current. Bumped by BOTH [start] and [unpair], and
   /// sampled at the TOP of start rather than after the permission prompt — the
@@ -296,6 +316,47 @@ class DeviceRegistrar {
     if (_registered == token) _restate();
   }
 
+  /// Re-register if this handset has acquired an `install_id` the island's row
+  /// does not carry.
+  ///
+  /// **WHY THIS EXISTS AT ALL.** The Keychain is SEALED until the first unlock
+  /// after boot, so a VoIP wake on a just-booted handset reads nil and registers
+  /// without an id. Nothing then asks again: [_register] returns at the
+  /// skip-if-same guard before it ever reaches the source, and a foreground tap
+  /// is a RESUME, not a rebirth — same process, same registrar, same
+  /// `_registered` (cage-match round 2, Tesla: *"foreground is a resume, not a
+  /// rebirth"*). Without this door the row stays id-less until jetsam or a
+  /// sign-out, which can be days.
+  ///
+  /// **IT ONLY EVER FILLS A GAP.** The guard is `null -> non-null`, never
+  /// `A -> B`: an install id is stable for the life of the install, so a CHANGED
+  /// id is not a fact about this handset, it is a fact about something being
+  /// wrong — a second Keychain item, a rewritten store, a bug. Restating on it
+  /// would quietly propagate that instead of leaving it visible, so a change is
+  /// reported and refused. Losing one (`non-null -> null`) likewise restates
+  /// nothing: the row already carries the better answer.
+  ///
+  /// Best-effort, and never a gate — like everything else on this path. It
+  /// routes through [_restate], so it inherits that door's yield to an
+  /// in-flight register rather than becoming a third writer.
+  Future<void> reconcileInstallId() async {
+    // Nothing proven on the island yet; `start()` owns the first write and will
+    // carry whatever the source has by then.
+    if (_registered == null) return;
+    final current = await _installIds?.installId();
+    if (current == null) return;
+    if (current == _registeredInstallId) return;
+    if (_registeredInstallId != null) {
+      // A CHANGED id, which this method deliberately does not act on. Reported
+      // rather than swallowed: it means two ids exist for one handset, and the
+      // island grouping two rows under different ids is the failure this whole
+      // field was built to prevent.
+      _telemetry.installIdChanged();
+      return;
+    }
+    _restate();
+  }
+
   /// Ask the live door to restate the current pairing.
   ///
   /// NOT A COMPENSATING WRITE: it corrects no specific prior operation and
@@ -365,12 +426,28 @@ class DeviceRegistrar {
     if (!await _pending.remember(_islandBaseUrl, _source.kind, token)) {
       _telemetry.registerObligationUnrecorded(PushTelemetry.ref(token));
     }
+    // RESOLVED ONCE, BEFORE THE POST, and held across the whole attempt —
+    // because the success tail must record WHAT WAS SENT, not what the source
+    // would answer later. Read again down there, a source that acquired an id
+    // in the meantime would make `_registeredInstallId` a lie about the row on
+    // the island, and `reconcileInstallId` would then see no difference and
+    // never restate — the gap it exists to close, reopened by its own bookkeeping.
+    //
+    // Declared OUTSIDE the try for scope, not for ordering: the await still
+    // happens where it did, after the obligation is written and before the POST.
+    final sentInstallId = await _installIds?.installId();
     try {
       await _api.registerDevice(
         platform: _source.platform,
         token: token,
         kind: _source.kind,
         apnsEnvironment: await _apnsEnvironment(),
+        // NEVER A GATE, like everything else on this path. A source that
+        // cannot answer returns null and the field is omitted; the
+        // registration proceeds exactly as it did before this existed. The
+        // whole feature is a banner nobody wanted, and it must not be able to
+        // cost a wake.
+        installId: sentInstallId,
       );
     } on DeviceKindRefused catch (e) {
       // DEFINITELY LANDED, WITH THE WRONG SEMANTICS. The island answered, so it
@@ -416,7 +493,13 @@ class DeviceRegistrar {
       await _settle(token, generation, epoch, confirmed: false);
       return;
     }
-    await _settle(token, generation, epoch, confirmed: true);
+    await _settle(
+      token,
+      generation,
+      epoch,
+      confirmed: true,
+      sentInstallId: sentInstallId,
+    );
   }
 
   /// Which APNs host will accept the token we are about to register, or null to
@@ -451,6 +534,12 @@ class DeviceRegistrar {
     int generation,
     int epoch, {
     required bool confirmed,
+
+    /// The `install_id` this attempt PUT ON THE WIRE — threaded in rather than
+    /// re-read here, so the recorded value describes the island's row and not
+    /// whatever the source happens to answer by the time the tail runs. On an
+    /// unconfirmed settle it is ignored, like `token` is.
+    String? sentInstallId,
   }) async {
     // This issue has reached its far side. Only ever moves forward, so an older
     // straggler settling after a newer one cannot re-open the in-flight window.
@@ -468,6 +557,11 @@ class DeviceRegistrar {
       // unreachable forever.
       if (!confirmed) return;
       _registered = token;
+      // WHAT THE ISLAND'S ROW ACTUALLY CARRIES. Paired with `_registered` and
+      // written in the same breath for the same reason: both describe the row
+      // this registrar has PROVEN exists, and `reconcileInstallId` below is a
+      // comparison against that proof rather than against an intention.
+      _registeredInstallId = sentInstallId;
       // PROVEN to be the pairing we want, so the obligation written at issue is
       // discharged. This is the ONLY place it is discharged on the success path —
       // a stale or ambiguous register leaves it standing, which is what makes a

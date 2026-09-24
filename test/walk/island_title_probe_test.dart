@@ -127,8 +127,10 @@ void main() {
     for (var i = 0; i < islands.length; i++) {
       final r = tester.getRect(find.byWidget(islands[i].widget));
       // ignore: avoid_print
-      print('  [$i] at=(${r.left.toStringAsFixed(1)},${r.top.toStringAsFixed(1)}) '
-          'size=${r.width.toStringAsFixed(1)}x${r.height.toStringAsFixed(1)}');
+      print(
+        '  [$i] at=(${r.left.toStringAsFixed(1)},${r.top.toStringAsFixed(1)}) '
+        'size=${r.width.toStringAsFixed(1)}x${r.height.toStringAsFixed(1)}',
+      );
     }
 
     await report('island', find.text('Island').first);
@@ -136,26 +138,35 @@ void main() {
     // Stop estimating positions off a scaled screenshot. Write the frame.
     // `capturePng` wraps its own `runAsync`; nesting a second one is a
     // reentrancy error, not a slow test.
-    File('/tmp/aiko-playtest/island-probe.png')
-        .writeAsBytesSync(await capturePng(tester));
+    File(
+      '/tmp/aiko-playtest/island-probe.png',
+    ).writeAsBytesSync(await capturePng(tester));
 
     // Ask the render tree what font it actually resolved, instead of guessing
     // a fourth time. Three hypotheses have died here; this reads the answer.
-    for (final rt in find
-        .descendant(of: find.byType(AppBar), matching: find.byType(RichText))
-        .evaluate()) {
+    for (final rt
+        in find
+            .descendant(
+              of: find.byType(AppBar),
+              matching: find.byType(RichText),
+            )
+            .evaluate()) {
       final style = ((rt.widget as RichText).text as TextSpan).style;
       // ignore: avoid_print
-      print('APPBAR RichText: family=${style?.fontFamily} '
-          'fallback=${style?.fontFamilyFallback} size=${style?.fontSize} '
-          'weight=${style?.fontWeight} color=${style?.color}');
+      print(
+        'APPBAR RichText: family=${style?.fontFamily} '
+        'fallback=${style?.fontFamilyFallback} size=${style?.fontSize} '
+        'weight=${style?.fontWeight} color=${style?.color}',
+      );
     }
     for (final rt in find.byType(RichText).evaluate().take(12)) {
       final span = (rt.widget as RichText).text;
       if (span is TextSpan && (span.text ?? '').isNotEmpty) {
         // ignore: avoid_print
-        print('  RichText "${span.text}" family=${span.style?.fontFamily} '
-            'size=${span.style?.fontSize}');
+        print(
+          '  RichText "${span.text}" family=${span.style?.fontFamily} '
+          'size=${span.style?.fontSize}',
+        );
       }
     }
 
@@ -166,10 +177,12 @@ void main() {
       final r = tester.getRect(find.byWidget(el.widget));
       if (r.overlaps(titleRect)) {
         // ignore: avoid_print
-        print('OVERLAPPING DecoratedBox at=(${r.left.toStringAsFixed(1)},'
-            '${r.top.toStringAsFixed(1)}) size=${r.width.toStringAsFixed(1)}x'
-            '${r.height.toStringAsFixed(1)} '
-            'deco=${(el.widget as DecoratedBox).decoration}');
+        print(
+          'OVERLAPPING DecoratedBox at=(${r.left.toStringAsFixed(1)},'
+          '${r.top.toStringAsFixed(1)}) size=${r.width.toStringAsFixed(1)}x'
+          '${r.height.toStringAsFixed(1)} '
+          'deco=${(el.widget as DecoratedBox).decoration}',
+        );
       }
     }
     // Read the verdict off distinctColours, not off ink: one colour is a slab,

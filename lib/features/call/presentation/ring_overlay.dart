@@ -6,14 +6,18 @@
 /// route.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/feature_flags.dart' show callingEnabledProvider;
 import '../../../app/router.dart';
 import '../application/ring_controller.dart';
+import '../application/system_call_providers.dart';
 import '../domain/call_invite.dart';
 import 'media_confidentiality_chip.dart';
+import '../domain/answer_outcome.dart';
 import 'call_screen.dart' show isCallRouteOpen, isInLiveCall, pushCallOn;
 
 /// Wraps [child] with the ring banner. A no-op (zero layout cost, no overlay)
@@ -99,8 +103,7 @@ class _RingBanner extends ConsumerWidget {
                   // word would be the lie, so the honest word does the work instead
                   // of a disclaimer.
                   TextButton(
-                    onPressed: () =>
-                        ref.read(incomingRingProvider.notifier).stopRinging(),
+                    onPressed: () => _ignore(ref, invite.channelId),
                     child: const Text('Ignore'),
                   ),
                   const SizedBox(width: 8),
@@ -132,6 +135,34 @@ class _RingBanner extends ConsumerWidget {
     );
   }
 
+  /// The user is done with this call, so the SYSTEM call is done with it too
+  /// (claude-tasks#4420).
+  ///
+  /// **The island cannot know this app is foregrounded**, so it sends the VoIP
+  /// push on every invite and a foregrounded handset gets BOTH: CallKit's
+  /// incoming-call banner and this one. Whichever the user presses decides the
+  /// call — and without this, pressing THIS one leaves the system call in its
+  /// ringing state. Answer, and the handset keeps ringing over the call you just
+  /// took; Ignore, and it keeps ringing over a call you believe you declined.
+  ///
+  /// A no-op by construction when there is no system call — the native side owns
+  /// the channel→UUID map and finds nothing — so this is safe on every platform
+  /// and on a ring that only ever arrived over the websocket.
+  ///
+  /// **Not called from the ring's EXPIRY.** A timeout is this device's in-app
+  /// window elapsing, not a decision about the call, and the CallKit ring
+  /// answers to a ceiling the island owns (design 16 v2 §3). Only the two
+  /// buttons are decisions.
+  void _endSystemCall(WidgetRef ref, String channelId) {
+    final bridge = ref.read(systemCallBridgeProvider);
+    if (bridge != null) unawaited(bridge.end(channelId));
+  }
+
+  void _ignore(WidgetRef ref, String channelId) {
+    ref.read(incomingRingProvider.notifier).stopRinging(RingStopCause.declined);
+    _endSystemCall(ref, channelId);
+  }
+
   void _answer(BuildContext context, WidgetRef ref) {
     // A call is already open. `pushCallOn` would return silently (its latch is
     // held for the whole duration of the live call, since `router.push`
@@ -158,7 +189,10 @@ class _RingBanner extends ConsumerWidget {
       final router = ref.read(routerProvider);
       if (router.canPop()) router.pop();
       Future<void>.delayed(Duration.zero, () {
-        ref.read(incomingRingProvider.notifier).stopRinging();
+        ref
+            .read(incomingRingProvider.notifier)
+            .stopRinging(RingStopCause.answeredOverSpentCall);
+        _endSystemCall(ref, invite.channelId);
         pushCallOn(router, invite.channelId);
       });
       return;
@@ -166,7 +200,10 @@ class _RingBanner extends ConsumerWidget {
     // Ring stopped FIRST, synchronously, before navigating: pushCall awaits
     // until the call route pops, so clearing afterwards would leave the banner
     // painted over the live call for its whole duration.
-    ref.read(incomingRingProvider.notifier).stopRinging();
+    ref
+        .read(incomingRingProvider.notifier)
+        .stopRinging(RingStopCause.answeredInApp);
+    _endSystemCall(ref, invite.channelId);
     // Router from the PROVIDER, not from context: this widget lives above the
     // Router in `MaterialApp.router`'s builder, so `context.push` would throw
     // `No GoRouter found in context` (cage-match #139 — the feature's primary

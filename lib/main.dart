@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'core/logging/boot_clock.dart';
+import 'features/chat/data/transport/chat_transport.dart' as wire;
+import 'core/logging/boot_telemetry.dart';
 import 'app/font_licences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
 import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
+import 'features/call/presentation/system_call_navigator.dart';
 import 'features/notifications/presentation/notification_tap_navigator.dart';
 import 'features/notifications/data/fcm_token_source.dart';
 import 'features/notifications/application/push_providers.dart';
@@ -15,6 +19,11 @@ import 'features/settings/application/theme_mode_controller.dart';
 import 'features/settings/application/theme_preset_controller.dart';
 
 Future<void> main() async {
+  // FIRST STATEMENT, deliberately. Everything before it is engine boot, AOT
+  // load and plugin registration, and the gap between the island's push and
+  // this instant is the part of a VoIP wake that no log could see — the part
+  // that decides whether an invitation still looks fresh. See [BootTelemetry].
+  appMainEnteredAt = DateTime.now().toUtc();
   // The picker (#4) persists the chosen gateway; SharedPreferences is async to
   // obtain, so load it once here and inject it so `configProvider` can resolve
   // the persisted value synchronously at first build.
@@ -44,6 +53,18 @@ class AikoChatApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.read(bootTelemetryProvider).bootStarted();
+    // The true deadline a push-woken ring is racing: no invitation can arrive
+    // before this fires, and the freshness gate is counting the whole time.
+    // `wire.` prefixed: Flutter's material library exports its own
+    // `ConnectionState`, and the unprefixed name here would silently be that
+    // one — an enum whose `connected` case does not exist, which is the good
+    // version of this collision. The bad version is the one that compiles.
+    ref.listen(connectionStateProvider, (_, next) {
+      if (next.value == wire.ConnectionState.connected) {
+        ref.read(bootTelemetryProvider).socketConnected();
+      }
+    });
     final router = ref.watch(routerProvider);
     // Ask the island who it is, once, and cache the answer. Fire-and-forget —
     // the mark renders from its URL fallback meanwhile.
@@ -72,7 +93,14 @@ class AikoChatApp extends ConsumerWidget {
         // OUTSIDE the ring overlay: a tapped notification must be honoured even
         // when nothing is ringing — the ring is long over by the time a human
         // picks the phone up (measured: 17.55s from invite to tap).
-        child: RingOverlay(child: child ?? const SizedBox.shrink()),
+        //
+        // The system-call navigator sits OUTSIDE the ring overlay too, and for a
+        // stronger version of the same reason: an answer from the lock screen
+        // arrives when this app has no ring of its own at all — the process was
+        // dead and CallKit did the ringing (claude-tasks#4420).
+        child: SystemCallNavigator(
+          child: RingOverlay(child: child ?? const SizedBox.shrink()),
+        ),
       ),
     );
   }
