@@ -8,8 +8,7 @@ import '../domain/gateway_capabilities.dart';
 ///
 /// ## ITS EXIT CONDITION IS ALREADY MET — this should be DELETED, not extended
 ///
-/// The paragraph below used to say `/capabilities` "still 404s on both live
-/// islands". **Measured 2026-09-24, it does not:**
+/// **Measured 2026-09-24:**
 ///
 ///     GET https://chat.enspyr.co/capabilities       -> 200 {"carriage":{"origin":true}}
 ///     GET https://chat.imagineering.cc/capabilities  -> 200 {"carriage":{"origin":true}}
@@ -17,15 +16,58 @@ import '../domain/gateway_capabilities.dart';
 /// Both islands answer explicitly, so on both of them this constant is dead
 /// code on the live path. Its own stated exit condition — "once `/capabilities`
 /// is live on every island this list becomes dead code and should be deleted" —
-/// is satisfied. Deleting it is task #1896 and is a real change rather than a
-/// tidy-up, because of the seed note below.
+/// is satisfied. Deleting it is claude-tasks#4753 and is a real change rather
+/// than a tidy-up, because of the seed note below.
+///
+/// **THE "IT STILL 404s" LINE WAS TRUE WHEN IT WAS WRITTEN.** An earlier
+/// revision of this correction called it false, which over-corrected in the
+/// opposite direction and is worth spelling out because a fixed record gets
+/// trusted harder than a fresh one. Dated by the island tab from its own tag
+/// trees rather than its log (`git ls-tree -r v0.13.1` → no `capabilities.py`;
+/// `v0.14.0` → present):
+///
+///   * `/capabilities` shipped in island `v0.14.0`, tagged **2026-09-16 15:51
+///     +07** and deployed to both islands the same day. Before that the path
+///     404'd everywhere, because the route did not exist.
+///   * PR #202 was opened **2026-09-16 06:16 UTC**, about two and a half hours
+///     BEFORE the endpoint existed. Its claim was accurate at authoring time
+///     and went stale within hours.
+///
+/// So there were genuinely two eras, and both matter when reading anything
+/// written about this file:
+///
+///   | until 2026-09-16 | the allowlist decided, alone — `/capabilities` 404'd |
+///   | 2026-09-16 on    | `/capabilities` decides, authoritatively             |
 ///
 /// ## THE SEVEN-WEEK OUTAGE THIS FILE DESCRIBED DOES NOT REPRODUCE
 ///
 /// PR #202 added `chat.enspyr.co` here and recorded that the omission had left
 /// every message to that island unsigned since 2026-08-10, so that "NO CALL TO
-/// THAT ISLAND COULD BE ANSWERED BY ANYONE" for seven weeks. **Four independent
-/// readings of the live island contradict it, and none supports it:**
+/// THAT ISLAND COULD BE ANSWERED BY ANYONE" for seven weeks.
+///
+/// **THE WINDOW WAS REAL; THE MECHANISM WAS NOT.** A period did exist
+/// (2026-08-10 → 2026-09-16) in which this allowlist alone decided carriage for
+/// enspyr, and enspyr was not on it. That is the half #202 got right and an
+/// earlier revision of this correction wrongly denied. But the app signed to
+/// enspyr **throughout that window anyway**, which is what refutes the causal
+/// story — and it refutes it independently of when the endpoint shipped.
+///
+/// Measured inside the window, user `nick`, every row `origin` NOT NULL:
+///
+///     2026-08-19  aiko:call/1 · 📞 started a call
+///     2026-08-23  aiko:call/1 · 📞 started a call
+///     2026-08-28  aiko:call/1 · 📞 started a call
+///     2026-09-09  hello Robin 😄
+///     2026-09-09  aiko:call/1 · 📞 started a call
+///
+/// `CALL_INVITE_BODY` is sent by nothing but the app. So during the exact period
+/// when this list was the only decider and enspyr was absent from it, app
+/// messages to enspyr carried origin envelopes. Whatever was gating the emit, it
+/// was not this constant — **WHICH IS STILL UNEXPLAINED AND IS THE LIVE QUESTION
+/// HERE.** Do not read this block as "the gate works"; read it as "the gate did
+/// not do what its own docstring says it does, and nobody has found out why."
+///
+/// **Four further readings of the live island, none supporting the claim:**
 ///
 ///  1. **Signed ratio by month on enspyr:** 2026-08 113/189, 2026-09 **57/57**.
 ///     Not "nothing since 2026-08-10" — everything since.
@@ -45,8 +87,8 @@ import '../domain/gateway_capabilities.dart';
 ///     island — was checked and does not hold either: imagineering has no
 ///     `nick` with 22 messages.
 ///
-/// **Confirmed live 2026-09-24**: a call placed from the handset on a build
-/// from this commit's parent produced
+/// **Confirmed live 2026-09-24** (and note this proves less than it appears —
+/// see the caveat below it): a call placed from the handset produced
 /// `2026-09-24 16:28:57 | nick | human | SIGNED=1 | aiko:call/1 · 📞 started a call`
 /// and its matching end, on enspyr. Signing to this island works, and
 /// `admitRing` would accept the invitation rather than refusing it as
