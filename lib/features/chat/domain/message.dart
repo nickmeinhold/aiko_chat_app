@@ -91,6 +91,27 @@ enum SenderKind {
       // real history; accepting only the old one would mis-read the future.
       case 'unknown':
       case 'actor':
+      // THE FOLD IS DELIBERATE TOLERANCE, AND IT IS SILENT. A wire value this
+      // build has never heard of becomes `unknown` and renders as the generic
+      // badge — indistinguishable, from inside, from a sender the island
+      // genuinely could not identify. There is no state in which this client is
+      // ABLE to object, so no test and no exhaustiveness check here can report
+      // the arrival of a new value; the two switches in `chat_screen` are
+      // exhaustive over the ENUM and never see the string.
+      //
+      // Keep the tolerance: a third-party island on an older tag is a real case,
+      // and a client that throws on an unrecognised value is worse than one that
+      // shows a generic badge. But note what it costs — **a fold is not a
+      // decision**. The island's own `sender_kind` is closed by a DB CHECK
+      // generated from its enum, so THEY can see a value we cannot; the
+      // agreement (island tab, 2026-09-24, recorded their side in `a245dc8`) is
+      // that a new member is NAMED to this repo and given its arm HERE before
+      // the island ships it. Their `llm`/`robot` writer migration is the
+      // trigger.
+      //
+      // This is the same class as the `"user"` value their CHECK constraint
+      // caught on a corpus a grep had already declared clean — except a
+      // constraint can come back non-empty and this cannot.
       default:
         return SenderKind.unknown; // unidentified / null -> generic badge
     }
