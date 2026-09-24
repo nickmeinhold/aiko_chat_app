@@ -72,22 +72,38 @@ class KeychainInstallIdSource implements InstallIdSource {
   ///
   /// The in-flight future is still shared either way, which is what keeps
   /// concurrent callers consistent WITHIN a round: both registrars at one
-  /// sign-in edge see the same answer, null or not. Across rounds they can
-  /// differ (locked at boot, unlocked later) — but that is two rows converging
-  /// on an id rather than splitting, and it is strictly better than two rows
-  /// permanently agreeing on nothing.
+  /// sign-in edge see the same answer, null or not.
+  ///
+  /// An earlier revision of this paragraph claimed that across rounds the two
+  /// rows "converge on an id rather than splitting". **That was false** (Tesla,
+  /// cage-match round 2). A row that already POSTed with a null id is never
+  /// rewritten when a later read returns a UUID — nothing re-POSTs it. Null and
+  /// a UUID do not group, and the island correctly refuses to guess, so they do
+  /// not converge: they sit at two potentials and the banner stands.
   ///
   /// **NAMED RESIDUAL — this makes the retry POSSIBLE, it does not SCHEDULE
   /// one.** Nothing inside a process asks again on its own: `DeviceRegistrar`
   /// skips re-registration once `token == _registered`
   /// (`device_registrar.dart:359`), so a background VoIP-wake process that
   /// registered while the Keychain was sealed keeps its null for that
-  /// process's life. What closes it is the next FOREGROUND launch, which
-  /// builds a fresh registrar whose `_registered` is null and so registers
-  /// again — by which time the device has been unlocked. The bound is
-  /// therefore "one short-lived background process", not "forever", and the
-  /// clearing above is what makes even that recoverable; without it the id
-  /// would never arrive no matter how long the process lived. Scheduling a
+  /// process's life.
+  ///
+  /// **THE BOUND IS LONGER THAN THIS COMMENT FIRST CLAIMED.** It said the next
+  /// FOREGROUND launch builds a fresh registrar and recovers. It does not: a
+  /// VoIP wake and the later tap on the icon are the SAME PROCESS. Tapping the
+  /// icon is a resume, not a rebirth; `pushPairingProvider` holds
+  /// `deviceRegistrarProvider` for the life of that process, the only
+  /// re-register trigger is the sign-in EDGE (`push_providers.dart:261`), and
+  /// there is no app-lifecycle observer anywhere under `notifications/` or
+  /// `call/` — verified, not assumed. So the real bound is "until the process
+  /// dies (jetsam) or the user signs out and in again", which can be days.
+  /// (Tesla, cage-match round 2: "foreground is a resume, not a rebirth".)
+  ///
+  /// It still does not hold the gate, and the reason is the FAILURE MODE rather
+  /// than the duration: what persists is the duplicate banner this feature
+  /// exists to remove — the old blemish, not a missed call. The clearing above
+  /// is what makes recovery possible at all; without it the id would never
+  /// arrive however long the process lived. Scheduling a
   /// re-registration the moment an id becomes available is real machinery and
   /// is deliberately not built here — but the gap is stated rather than left
   /// for a reader to discover, because the fix above reads as total and is
@@ -99,13 +115,43 @@ class KeychainInstallIdSource implements InstallIdSource {
   Future<String?> installId() {
     final done = _resolved;
     if (done != null) return Future<String?>.value(done);
-    return _pending ??= _resolve().then((value) {
-      _resolved = value;
-      // RETRYABLE. Clearing the slot on null is the whole of the fix above;
-      // leaving it set is what made a locked-at-boot read permanent.
-      if (value == null) _pending = null;
-      return value;
-    });
+    return _pending ??= _resolve().then(
+      (value) {
+        _resolved = value;
+        // RETRYABLE. Clearing the slot on null is the whole of the fix above;
+        // leaving it set is what made a locked-at-boot read permanent.
+        if (value == null) _pending = null;
+        return value;
+      },
+      // NULL IS RETRYABLE AND AN ERROR WOULD BE WELDED SHUT — the asymmetry is
+      // the arc point (Tesla, cage-match round 2). A memoised FAULTED future
+      // would make every later `await _installIds?.installId()` throw, inside
+      // `_register`'s try and AFTER the unregister debt is written: the false
+      // maybe-landed POST the catch-all exists to prevent.
+      //
+      // **UNREACHABLE TODAY, AND DELIBERATELY UNTESTED.** `_resolve`'s `try`
+      // wraps the `invokeMethod` call and its last arm catches everything —
+      // and a SYNCHRONOUS throw inside an `async` body is caught by that same
+      // try — so `_resolve` cannot complete with an error by construction.
+      // This arm is insurance against a future edit that adds an escape, not a
+      // live path.
+      //
+      // A test was written for it and then DELETED, which is the part worth
+      // reading. It passed, and it passed with this arm removed as well: the
+      // throw it staged was swallowed by `_resolve` and the assertion was
+      // satisfied by the null-retry path instead. A green test measuring the
+      // wrong path is worse than an honestly-labelled untested arm — it is the
+      // same "cannot fail for the reason it claims" defect this file's own
+      // fixture was fixed for, committed one commit later. Only running the
+      // control BOTH ways caught it. If you make `_resolve` capable of
+      // throwing, write the test then; it will be reachable and it will mean
+      // something.
+      onError: (Object e) {
+        _pending = null;
+        _telemetry.installIdUnavailable(e);
+        return null;
+      },
+    );
   }
 
   Future<String?> _resolve() async {
