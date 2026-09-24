@@ -1,40 +1,78 @@
 import '../domain/gateway_capabilities.dart';
 
-/// Transitional allowlist of hosts KNOWN to carry the sovereign `origin`
-/// envelope, used ONLY while the gateway's `GET /capabilities` endpoint is not
-/// yet deployed (it still 404s on both live islands). It exists so shipping the
-/// capability gate does not regress the live round-trip against a carriage
-/// island whose `/capabilities` 404s.
+/// Transitional allowlist of hosts known to carry the sovereign `origin`
+/// envelope. A FALLBACK ONLY: it is consulted when `GET /capabilities` gives no
+/// explicit answer (404, unreachable, thrown, or a malformed 200). An explicit
+/// bool from the endpoint is authoritative and this list is not consulted at
+/// all — see [CarriageCapability] for the full resolution order.
 ///
-/// Once `/capabilities` is live on every island this list becomes dead code and
-/// should be deleted — the endpoint is then authoritative. See task #1896.
+/// ## ITS EXIT CONDITION IS ALREADY MET — this should be DELETED, not extended
 ///
-/// ## THIS LIST OMITTED AN ISLAND FOR SEVEN WEEKS AND SILENTLY DISABLED SIGNING
+/// The paragraph below used to say `/capabilities` "still 404s on both live
+/// islands". **Measured 2026-09-24, it does not:**
 ///
-/// `chat.enspyr.co` was never on it. The gate merged 2026-07-27 (PR #92) and
-/// reached the handsets around 2026-08-10; from that build onward EVERY message
-/// sent to enspyr went unsigned, on every platform, because an unknown host
-/// re-resolves to a `false` seed and `GatewayTransport` withholds the envelope.
-/// Measured 2026-09-16 against the live island: `nick` signed 10/22, and the
-/// boundary is exact — last signed 2026-08-10, nothing since.
+///     GET https://chat.enspyr.co/capabilities       -> 200 {"carriage":{"origin":true}}
+///     GET https://chat.imagineering.cc/capabilities  -> 200 {"carriage":{"origin":true}}
 ///
-/// **The consequence was not "messages lack a nicety".** `admitRing` refuses an
-/// unsigned invitation as `unverifiedOrigin`, its head refusal — so for seven
-/// weeks NO CALL TO THAT ISLAND COULD BE ANSWERED BY ANYONE, and the only
-/// evidence was a WARNING in the recipient's ring buffer. The August ring
-/// verification passed because the caller was `ring_probe.py`, which has no
-/// capability gate and signs unconditionally.
+/// Both islands answer explicitly, so on both of them this constant is dead
+/// code on the live path. Its own stated exit condition — "once `/capabilities`
+/// is live on every island this list becomes dead code and should be deleted" —
+/// is satisfied. Deleting it is task #1896 and is a real change rather than a
+/// tidy-up, because of the seed note below.
 ///
-/// The island demonstrably carries: 54 of `ringtest`'s 54 messages are stored on
-/// enspyr WITH origin envelopes. The gate was withholding from an island that
-/// accepts, to prevent a `bad_origin` drop that could not happen.
+/// ## THE SEVEN-WEEK OUTAGE THIS FILE DESCRIBED DOES NOT REPRODUCE
 ///
-/// **A hand-curated allowlist of production hosts is the defect, not the entry
-/// that was missing from it.** The real fix is the island serving
-/// `/capabilities` (task #1896), after which this constant is deleted rather
-/// than extended. Until then, adding a host here is a deploy-time promise that
-/// nothing verifies — so if you add an island to this product, add it here in
-/// the same change, and know that forgetting is silent.
+/// PR #202 added `chat.enspyr.co` here and recorded that the omission had left
+/// every message to that island unsigned since 2026-08-10, so that "NO CALL TO
+/// THAT ISLAND COULD BE ANSWERED BY ANYONE" for seven weeks. **Four independent
+/// readings of the live island contradict it, and none supports it:**
+///
+///  1. **Signed ratio by month on enspyr:** 2026-08 113/189, 2026-09 **57/57**.
+///     Not "nothing since 2026-08-10" — everything since.
+///  2. **Every unsigned message predates the window and is not the app.** All 76
+///     are 2026-08-03..2026-08-10, `sender_kind=unknown`, label `` or
+///     `@@armbot`. The last unsigned message on this island is 2026-08-10.
+///  3. **App-originated call invites, signed, inside the claimed outage.**
+///     2026-09-20, user `nicka`, `sender_kind=human`, bodies
+///     `aiko:call/1 · 📞 started a call` — the `CALL_INVITE_BODY` the app sends
+///     — all carrying origin. Those are the calls the claim says could not be
+///     answered.
+///  4. **The cited measurement does not reproduce.** #202 recorded `nick` as
+///     "signed 10/22, last signed 2026-08-10". Live: `nick` was **22/22, last
+///     signed 2026-09-09**, and is 24/24 after the 2026-09-24 test call below.
+///     Messages are immutable, so these cannot both describe this island. The
+///     obvious explanation — that the measurement was taken against the other
+///     island — was checked and does not hold either: imagineering has no
+///     `nick` with 22 messages.
+///
+/// **Confirmed live 2026-09-24**: a call placed from the handset on a build
+/// from this commit's parent produced
+/// `2026-09-24 16:28:57 | nick | human | SIGNED=1 | aiko:call/1 · 📞 started a call`
+/// and its matching end, on enspyr. Signing to this island works, and
+/// `admitRing` would accept the invitation rather than refusing it as
+/// `unverifiedOrigin`.
+///
+/// Read that result precisely, because it is easy to over-claim in the other
+/// direction: it shows signing WORKS, not that the entry FIXED it. With
+/// `/capabilities` answering explicitly, the allowlist is bypassed on that path
+/// entirely — the signature came from the endpoint.
+///
+/// **What the enspyr entry is genuinely worth**, and the only reason it is kept
+/// rather than reverted: [CarriageCapability]'s constructor seeds
+/// `_carriesOrigin` from this list BEFORE the first `refresh()` returns. A send
+/// that beats the refresh on a host absent from here goes unsigned. That window
+/// is narrow and real; it is not seven weeks, and it is the thing to reason
+/// about when deleting this constant, because deleting it makes EVERY host seed
+/// `false` until its first refresh lands.
+///
+/// **The one sentence from #202 that was right, and is now more right:** a
+/// hand-curated allowlist of production hosts is the defect, not the entry that
+/// was missing from it. Until this is deleted, adding a host here is a
+/// deploy-time promise nothing verifies, and forgetting is silent.
+///
+/// The correction is recorded rather than the old text deleted, because a claim
+/// this specific gets CITED. It was already load-bearing in a merged commit
+/// message and in two ticket comments.
 const kKnownCarriageHosts = {'chat.imagineering.cc', 'chat.enspyr.co'};
 
 /// Holds the "does the CURRENT gateway carry `origin`?" decision that the
