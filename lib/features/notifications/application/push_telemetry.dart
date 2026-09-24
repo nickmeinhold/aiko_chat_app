@@ -194,6 +194,16 @@ class PushTelemetry {
     fields: {'why': why, 'consequence': 'duplicate-call-banner-stands'},
   );
 
+  /// The handset reported an install id different from the one its island row
+  /// carries. SEVERE: an install id is stable for the life of the install, so a
+  /// CHANGE is not a handset fact — it means two ids exist for one device, and
+  /// two rows under different ids is precisely the split this field was built
+  /// to prevent. Nothing is restated on it; the anomaly is surfaced instead.
+  void installIdChanged() => _log.severe(
+    'push.install_id.changed',
+    fields: {'consequence': 'rows-may-not-group'},
+  );
+
   void pairingFailed(Object error) =>
       _log.warning('push.pairing.failed', error: error);
 

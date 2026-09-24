@@ -5,6 +5,7 @@ import 'push_telemetry.dart';
 
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/feature_flags.dart' show callingEnabledProvider;
@@ -251,6 +252,49 @@ final pushPairingProvider = Provider<void>((ref) {
   // ringing full-screen for them (design 12 Decision 2a, the worst state in the
   // system).
   ref.watch(voipDeviceRegistrarProvider);
+
+  // THE TRIGGER THAT MAKES `reconcileInstallId` MORE THAN A METHOD.
+  //
+  // The Keychain is SEALED until the first unlock after boot, so a VoIP wake on
+  // a just-booted handset registers with no `install_id`. Nothing asks again on
+  // its own: `_register` returns at its skip-if-same guard, and the only other
+  // entry here is the sign-in EDGE below — which a resume does not cross. A
+  // foreground tap is a resume, not a rebirth (cage-match round 2, Tesla), so
+  // without this listener the row stays id-less until jetsam.
+  //
+  // RESUME IS THE RIGHT EDGE, and it is the one that means something: the app
+  // cannot be resumed to the foreground without the device having been
+  // unlocked, which is exactly the condition that makes the item readable. A
+  // timer would poll for a state change it cannot observe; this observes it.
+  //
+  // BOTH REGISTRARS, INDEPENDENTLY — a null-then-id recovery on one must not
+  // wait on the other, and they hold separate `_registeredInstallId` records
+  // because they describe two different island rows.
+  //
+  // Never awaited and never a gate: the reconcile swallows its own failures and
+  // routes through `_restate`, which yields to any register already in flight
+  // rather than becoming a third writer.
+  final lifecycle = AppLifecycleListener(
+    onResume: () {
+      for (final registrar in [
+        ref.read(deviceRegistrarProvider),
+        ref.read(voipDeviceRegistrarProvider),
+      ]) {
+        if (registrar != null) {
+          unawaited(
+            registrar.reconcileInstallId().catchError((Object e) {
+              ref.read(pushTelemetryProvider).pairingFailed(e);
+            }),
+          );
+        }
+      }
+    },
+  );
+  // The listener registers itself with `WidgetsBinding` on construction, so it
+  // MUST be disposed with this provider or an island switch leaves an observer
+  // holding a stale registrar — the same leak `deviceRegistrarProvider`'s own
+  // `onDispose` exists to prevent, one layer up.
+  ref.onDispose(lifecycle.dispose);
 
   ref.listen<AsyncValue<AppUser?>>(authControllerProvider, (previous, next) {
     final wasSignedIn = previous?.value != null;
