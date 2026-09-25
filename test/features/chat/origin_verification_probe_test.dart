@@ -40,7 +40,7 @@ void main() {
     transport = FakeChatTransport();
     rest = FakeChatRestApi();
     spy = SpyTelemetry();
-    signer = await SovereignKeyStore().loadOrCreate();
+    signer = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
     repo = ChatRepository(
       cache: cache,
       transport: transport,
