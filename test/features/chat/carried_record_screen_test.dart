@@ -11,6 +11,7 @@ import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/chat/presentation/carried_record_screen.dart';
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:aiko_chat_app/app/providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -68,6 +69,15 @@ Future<void> _pump(WidgetTester tester, List<Message> messages) async {
   final container = ProviderContainer(
     overrides: [
       currentUserProvider.overrideWithValue(_meUser),
+      // BOUND TO THE SAME ACCOUNT the messages were signed under. Since #4831
+      // the real provider derives its user from `authControllerProvider`, which
+      // this container does not drive — so without this the screen would resolve
+      // a no-session ephemeral key and call my own messages foreign. Overriding
+      // it states the premise the test is actually about: the screen's key is
+      // MY key.
+      sovereignKeyStoreProvider.overrideWithValue(
+        SovereignKeyStore(userId: _me),
+      ),
       myCarriedMessagesProvider.overrideWith((ref) async => messages),
     ],
   );
@@ -92,7 +102,7 @@ void main() {
 
   setUp(() async {
     installSecureStorageMock();
-    key = await SovereignKeyStore().loadOrCreate();
+    key = await SovereignKeyStore(userId: _me).loadOrCreate();
   });
 
   testWidgets(

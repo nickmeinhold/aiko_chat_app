@@ -105,7 +105,7 @@ void main() {
     SenderKind kind = SenderKind.human,
     String channelId = dmId,
   }) async {
-    final key = await SovereignKeyStore().loadOrCreate();
+    final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
     final signedAt = DateTime.now().toUtc().subtract(age);
     final payload = SignedPayload(
       rawPublicKey: key.rawPublicKey,
@@ -586,8 +586,11 @@ void main() {
     // wrong-room consent behave identically to a correct refusal.
     const otherDm = '01M0GS7FDWBVQ31950B1PTV3AA';
 
-    Future<String> myMultikey() async =>
-        encodeMultikey((await SovereignKeyStore().loadOrCreate()).rawPublicKey);
+    Future<String> myMultikey() async => encodeMultikey(
+      (await SovereignKeyStore(
+        userId: 'test-user',
+      ).loadOrCreate()).rawPublicKey,
+    );
 
     Future<void> watch() async {
       await warmDms();
@@ -697,7 +700,7 @@ void main() {
       await warmDms();
       container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
       await pump();
-      final key = await SovereignKeyStore().loadOrCreate();
+      final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
       await container
           .read(ringConsentByChannelProvider.notifier)
           .allow(dmId, encodeMultikey(key.rawPublicKey));
@@ -757,7 +760,7 @@ void main() {
           fireImmediately: true,
         );
         await pump();
-        final key = await SovereignKeyStore().loadOrCreate();
+        final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
         await container
             .read(ringConsentByChannelProvider.notifier)
             .allow(dmId, encodeMultikey(key.rawPublicKey));
