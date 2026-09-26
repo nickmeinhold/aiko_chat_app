@@ -1,5 +1,49 @@
 # 21 — The seed migration: one migrator, not every load
 
+> ## ⛔ DISSOLVED 2026-09-26 — and the thing that dissolved it was a number
+>
+> **This whole design is unnecessary.** It exists to migrate the pre-#4831 unscoped
+> seed while preserving authorship continuity. Nobody priced what was being
+> preserved. The live island does:
+>
+> ```
+> users            42
+> signing_keys     19      <- 23 users have never signed anything
+> distinct pubkey  18
+> messages         46
+> signed msgs      44      <- the entire authorship corpus
+> SHARED PUBKEY (>1 user)  exactly ONE — held by `nicki` and `nick`
+> ```
+>
+> Forty-four signed messages. One shared pubkey, and **both of its accounts belong
+> to the same person.** The ambiguous case that the quarantine state machine, the
+> tombstone-as-lock, the island veto and the offline-first-launch policy all exist
+> to adjudicate is *"which of Nick's two accounts owns this key?"* — answerable by
+> asking him.
+>
+> **So the seed is discarded, not adopted.** Nineteen pubkeys stop matching new
+> signatures, and in exchange **all twenty-three findings** from two cage-match
+> rounds and this four-family temper become *unreachable rather than fixed* — every
+> one of them lived in the adoption path. `SovereignKeyStore` went 374 → 228 lines;
+> the tests went 24 → 15; `_adoptLegacySeed`, `_legacyAlreadyClaimed`,
+> `_serialised`, the `Expando` gate, `_gateTimeout` and `_sweepLegacySeed` are all
+> gone. What survives is: scope per account, delete the old slot, mint if absent.
+>
+> **Why it was missed, which is the transferable part.** The constraint
+> *"adopt-then-scope is the only order that works"* was inherited from the island
+> tab and treated as a law. Its premise is true — `signing_keys` rows and persisted
+> `origin.sender_pubkey` ARE immutable. The inference is not: **immutability makes
+> history unfixable, it does not make history valuable.** And the user count was
+> never in the bundle, so four adversary families struck twenty-three times inside
+> an unpriced frame and none could reach the dissolve — **an adversary can only
+> strike what you show it.** The question that found it was four words from Nick:
+> *"are you sure you're not overcomplicating this?"*
+>
+> Kept, not deleted: the strike below is a real record, and flaw 1 (adopting a
+> shared key forges an author) remains true and is why *retire-and-mint* is now the
+> universal rule rather than the multi-account exception.
+
+
 **Status:** DESIGN, awaiting temper. Supersedes the migration in PR #208 (not the
 scoping — see "What is banked").
 **Ticket:** [#4831](https://github.com/nickmeinhold/claude-tasks/issues/4831).

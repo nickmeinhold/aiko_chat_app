@@ -670,6 +670,21 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((
     );
   }
 
+  // NO OWNERSHIP ASSERT HERE, deliberately — one was added and removed.
+  //
+  // It compared `signingKey.userId` to `user.userId`, and Kelvin and Carnot both
+  // praised it. Tesla read the data flow: both operands are derived from
+  // `authControllerProvider` in the SAME provider build, so they agree by
+  // construction and the throw was unreachable. A check whose success value
+  // equals its disabled value — which is the defect class this repo hunts, added
+  // by the fix for another one and endorsed by two of three reviewers.
+  //
+  // What actually keeps a stale key off a started repo is the `disposed` flag
+  // checked before `repo.start()` below, which is synchronous with the dependency
+  // change. Do not delete that believing a stamp replaced it.
+  // `SovereignKey.userId` stays as a WITNESS — evidence at a boundary that can
+  // see two builds — not as a guard here.
+
   // THE KEY MUST BELONG TO THE ACCOUNT THIS REPO SIGNS FOR — asserted, because
   // it is reachable (#4831 round 1, Kelvin and Tesla independently). The store is
   // rebuilt when the user id changes, but `keyStore` above was captured BEFORE
