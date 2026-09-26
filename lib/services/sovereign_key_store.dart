@@ -179,8 +179,14 @@ class SovereignKeyStore {
     try {
       await _storage.delete(key: _kLegacySeed);
     } catch (_) {
-      // The next load tries again — and unlike the version this replaced, that
-      // promise is true: no memo sits between a caller and this call.
+      // BEST-EFFORT PER STORE INSTANCE, not per call, and the distinction is one
+      // Carnot has now had to make three times. `loadOrCreate` memoises its result
+      // in `_inflight`, so a second call on THIS instance never re-enters
+      // `_loadOrCreate` and never reaches here. A retry happens when the provider
+      // rebuilds and constructs a new store — which is a different sentence from
+      // "the next load tries again", and the version of this comment that said the
+      // shorter thing was simply wrong. Nothing depends on the delete succeeding:
+      // no code path reads this key for its value.
     }
   }
 

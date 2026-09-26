@@ -663,43 +663,36 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((
   final channels = lists[0];
   final dms = lists[1];
   final signingKey = await keyStore.loadOrCreate();
-  if (signingKey.userId != user.userId) {
-    throw StateError(
-      'signing key belongs to ${signingKey.userId ?? "no session"}, '
-      'not ${user.userId} — refusing to build a repo that would misattribute',
-    );
-  }
-
-  // NO OWNERSHIP ASSERT HERE, deliberately — one was added and removed.
+  // NO OWNERSHIP ASSERT HERE, and this comment is the second attempt to make that
+  // true — which is the finding, not a footnote.
   //
-  // It compared `signingKey.userId` to `user.userId`, and Kelvin and Carnot both
-  // praised it. Tesla read the data flow: both operands are derived from
-  // `authControllerProvider` in the SAME provider build, so they agree by
-  // construction and the throw was unreachable. A check whose success value
-  // equals its disabled value — which is the defect class this repo hunts, added
-  // by the fix for another one and endorsed by two of three reviewers.
+  // Round 2 added `if (signingKey.userId != user.userId) throw`. Kelvin and Carnot
+  // both filed it under The Good; Tesla read the data flow and showed it was
+  // unreachable: `user` and `keyStore` are both `ref.watch`-ed BEFORE any await in
+  // this build, so they come from one consistent `authControllerProvider` state and
+  // the stamped id always matches. A check whose success value equals its disabled
+  // value — the exact class this repo hunts, added by the fix for another one.
+  //
+  // Round 3 then found the assert STILL HERE, directly above a comment claiming it
+  // had been removed. Two independent seats reported it as present while the commit
+  // message and the review summary both said it was gone. A correction that does
+  // not land is worse than the defect it targets, because its own documentation
+  // asserts it landed and nobody re-checks a correction.
+  //
+  // THE CONTROL, and its first form was itself wrong. A plain grep for the
+  // comparison matches THIS COMMENT, so it reported two hits where the old head
+  // reported one — a check that fails on its own documentation. The working form
+  // excludes comment lines and is verified both ways:
+  //
+  //   grep -nE '^[[:space:]]*[^/[:space:]].*signingKey\.userId != user\.userId'
+  //     this file          -> no match  (the guard is gone)
+  //     at commit 1b851f3  -> line 666  (proves the pattern can find it)
   //
   // What actually keeps a stale key off a started repo is the `disposed` flag
   // checked before `repo.start()` below, which is synchronous with the dependency
   // change. Do not delete that believing a stamp replaced it.
-  // `SovereignKey.userId` stays as a WITNESS — evidence at a boundary that can
-  // see two builds — not as a guard here.
-
-  // THE KEY MUST BELONG TO THE ACCOUNT THIS REPO SIGNS FOR — asserted, because
-  // it is reachable (#4831 round 1, Kelvin and Tesla independently). The store is
-  // rebuilt when the user id changes, but `keyStore` above was captured BEFORE
-  // these awaits: a sign-out-and-in landing in that window leaves this build
-  // holding the previous account's store, whose `loadOrCreate` returns the
-  // previous account's key. Riverpod disposes this provider on the user change,
-  // but disposal races the async body rather than preempting it, and a repo built
-  // in the meantime would sign `user`'s messages under somebody else's pubkey —
-  // which `origin.sender_pubkey` then publishes to every recipient.
-  //
-  // FAIL CLOSED. Throwing puts this provider in AsyncError and the UI on its
-  // error path; the rebuild for the new user follows immediately and succeeds.
-  // The alternative — building the repo anyway — is the misattribution itself,
-  // and it would be silent. A key with a null owner is the no-session ephemeral
-  // one and is equally wrong here, so it is refused by the same test.
+  // `SovereignKey.userId` stays a WITNESS — evidence at a boundary that can see two
+  // builds — never a guard here.
 
   final repo = ChatRepository(
     cache: cache,
