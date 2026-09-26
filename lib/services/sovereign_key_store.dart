@@ -152,12 +152,15 @@ class SovereignKeyStore {
   /// one of them lived in the adoption path. Then somebody asked whether this was
   /// overcomplicated, and the live island answered:
   ///
-  ///   44 signed messages, 19 author pubkeys, and the unscoped seed shared by
-  ///   exactly ONE pair of accounts — both of them the same person's.
+  ///   217 signed messages across BOTH live islands (173 on enspyr, 44 on
+  ///   imagineering), 30 author pubkeys, and the unscoped seed shared by exactly
+  ///   ONE pair of accounts — both of them the same person's.
   ///
   /// Adoption existed to preserve authorship continuity. The corpus it was
-  /// protecting is 44 messages on a pre-launch app, and the one ambiguous case is
-  /// answerable by asking its owner. So the seed is discarded and every account
+  /// protecting is 217 messages on a pre-launch app, and the one ambiguous case is
+  /// answerable by asking its owner. (The first count said 44 — imagineering only,
+  /// one island of two. The island tab checked the other rather than agreeing; the
+  /// bigger, older corpus has NO sharing, so the dissolve got stronger.) So the seed is discarded and every account
   /// mints its own: nineteen pubkeys stop matching new signatures, and in exchange
   /// twenty-three findings become unreachable rather than fixed.
   ///

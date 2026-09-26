@@ -4,22 +4,37 @@
 >
 > **This whole design is unnecessary.** It exists to migrate the pre-#4831 unscoped
 > seed while preserving authorship continuity. Nobody priced what was being
-> preserved. The live island does:
+> preserved. Both live islands do:
 >
 > ```
-> users            42
-> signing_keys     19      <- 23 users have never signed anything
-> distinct pubkey  18
-> messages         46
-> signed msgs      44      <- the entire authorship corpus
-> SHARED PUBKEY (>1 user)  exactly ONE — held by `nicki` and `nick`
+>                     enspyr    imagineering      both
+>   users                 14              42        56
+>   signing_keys          12              19        31
+>   distinct pubkeys      12              18        30
+>   messages             249              46       295
+>   signed messages      173              44       217   <- the authorship corpus
+>   pubkeys under >1 user  0               1         1   <- `nicki` + `nick`
 > ```
 >
-> Forty-four signed messages. One shared pubkey, and **both of its accounts belong
-> to the same person.** The ambiguous case that the quarantine state machine, the
+> **217 signed messages. One shared pubkey, and both of its accounts belong to the
+> same person.** The ambiguous case that the quarantine state machine, the
 > tombstone-as-lock, the island veto and the offline-first-launch policy all exist
 > to adjudicate is *"which of Nick's two accounts owns this key?"* — answerable by
 > asking him.
+>
+> **CORRECTED 2026-09-26, and the correction is its own finding.** The first version
+> of this banner said *"44 signed messages — the entire authorship corpus"*. That was
+> **imagineering only**, the default island — one of two. The island tab checked the
+> other rather than agreeing, and it holds 173 more signed messages, 4x the number
+> quoted. This repo's own `reference_verify_target_host_before_reading` says to assert
+> which island you are reading *as a prerequisite*, because a wrong-island query
+> returns a plausible zero rather than an obviously wrong one. That lesson is cited
+> in the Instrument note at the foot of this very file, and was violated in the act
+> of writing it.
+>
+> **The conclusion is unchanged and slightly stronger:** the larger, older,
+> unmeasured corpus contains *no* sharing at all, so the defect has fired exactly
+> once across both islands, between two accounts held by one person.
 >
 > **So the seed is discarded, not adopted.** Nineteen pubkeys stop matching new
 > signatures, and in exchange **all twenty-three findings** from two cage-match
