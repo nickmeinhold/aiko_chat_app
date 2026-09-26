@@ -209,4 +209,85 @@ void main() {
       expect(await _pubOf(storeFor('bob')), bob, reason: 'bob is untouched');
     });
   });
+
+  group('single mint is per INSTANCE — the accepted race, pinned', () {
+    // Tesla found this in round 3 and it is DELIBERATELY NOT FIXED. Keying the
+    // single-flight on the slot is the right axis and broke the suite twice (a
+    // static chain wedged 4 tests; an Expando of per-slot memos broke 123) because
+    // production canonicalises `const FlutterSecureStorage()` to one object, so any
+    // process-shared map is shared by every widget test while the mock backing
+    // resets per test. Each fix was worse than the finding.
+    //
+    // These tests exist so the tradeoff is executable rather than prose: if someone
+    // later fixes it properly (by stopping chatRepositoryProvider holding a store
+    // across its awaits), the first test here goes RED and that is the signal to
+    // delete this group, not to restore the behaviour.
+
+    test('one instance mints once, however many callers', () async {
+      final store = storeFor('alice');
+      final keys = await Future.wait([
+        store.loadOrCreate(),
+        store.loadOrCreate(),
+      ]);
+      expect(
+        base64Encode(keys[0].rawPublicKey),
+        base64Encode(keys[1].rawPublicKey),
+        reason: 'the memo does deliver this much',
+      );
+      expect(
+        storage.items.keys.where((k) => k.contains('alice')),
+        hasLength(1),
+      );
+    });
+
+    test('ACCEPTED: two instances racing an EMPTY slot can disagree', () async {
+      final a = SovereignKeyStore(userId: 'alice', storage: storage);
+      final b = SovereignKeyStore(userId: 'alice', storage: storage);
+      final keys = await Future.wait([a.loadOrCreate(), b.loadOrCreate()]);
+      // Not asserted equal — that is the point. Asserted only that each is a real
+      // key and the disk ends up holding exactly one of them, so the failure mode
+      // is a lost seed and never a corrupt slot.
+      expect(keys[0].rawPublicKey, hasLength(32));
+      expect(keys[1].rawPublicKey, hasLength(32));
+      final onDisk = base64Encode(
+        (await (await Ed25519().newKeyPairFromSeed(
+          base64Decode(storage.items['aiko_sov_private_seed_alice']!),
+        )).extractPublicKey()).bytes,
+      );
+      expect(
+        [
+          base64Encode(keys[0].rawPublicKey),
+          base64Encode(keys[1].rawPublicKey),
+        ],
+        contains(onDisk),
+        reason:
+            'the persisted seed is one of the two minted, never a third thing',
+      );
+    });
+
+    test(
+      'a SETTLED slot is read, not re-minted — the race needs an empty slot',
+      () async {
+        // Bounds the accepted cost: it is a first-load-only window, not an
+        // every-load one.
+        final first = await _pubOf(storeFor('alice'));
+        final a = SovereignKeyStore(userId: 'alice', storage: storage);
+        final b = SovereignKeyStore(userId: 'alice', storage: storage);
+        final keys = await Future.wait([a.loadOrCreate(), b.loadOrCreate()]);
+        expect(base64Encode(keys[0].rawPublicKey), first);
+        expect(base64Encode(keys[1].rawPublicKey), first);
+      },
+    );
+
+    test(
+      'a failed load evicts the memo so the same instance can retry',
+      () async {
+        storage.items['aiko_sov_private_seed_alice'] = 'corrupt';
+        final store = storeFor('alice');
+        await expectLater(store.loadOrCreate(), throwsStateError);
+        storage.items.remove('aiko_sov_private_seed_alice');
+        await expectLater(store.loadOrCreate(), completes);
+      },
+    );
+  });
 }

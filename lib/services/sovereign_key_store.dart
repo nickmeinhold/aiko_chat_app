@@ -86,11 +86,45 @@ class SovereignKeyStore {
 
   final FlutterSecureStorage _storage;
 
-  /// Single-flight guard within one instance: the private seed is the identity,
-  /// so two concurrent first-use calls minting two keypairs would ORPHAN one
-  /// (cage-match: Tesla). It collapses concurrent callers of the SAME instance.
-  /// It is not a cross-account gate, and nothing here needs one any more — see
-  /// [_discardLegacySeed].
+  /// SINGLE MINT PER STORE INSTANCE — and that is LESS than it sounds, which is
+  /// the whole reason this doc is long.
+  ///
+  /// It collapses concurrent callers of THIS object, which is what stops one
+  /// `loadOrCreate` from minting twice. It is **not** single-mint-per-account, and
+  /// for three review rounds the comment here claimed it was.
+  ///
+  /// **THE ACCEPTED RACE (Tesla, round 3).** `sovereignKeyStoreProvider` rebuilds a
+  /// new store when the watched `userId` changes, and the old instance is not dead:
+  /// `chatRepositoryProvider` captures it, awaits channels and DMs, and only then
+  /// calls `loadOrCreate`. A sign-out-and-back-in inside that window leaves TWO
+  /// live stores for the SAME account, each with an empty memo. Both read the
+  /// scoped slot, both find null, both mint, both write. Last write owns the disk,
+  /// so the session may sign with the seed that lost — an author the next cold
+  /// start cannot find. Discarding rather than adopting the legacy seed is what
+  /// makes it reachable: every scoped slot now starts empty, so every account's
+  /// first load is a mint.
+  ///
+  /// **Accepted rather than fixed. Owner: #4831. Cost: one possibly-orphaned seed
+  /// for one session, on a sign-out/sign-in landing inside one await window.**
+  ///
+  /// The reason is measured, three times. Keying the single-flight on the SLOT
+  /// instead of the instance is the correct axis and it broke the suite every way
+  /// it was tried, always the same way: production builds every store with
+  /// `const FlutterSecureStorage()`, which Dart canonicalises to ONE object, so any
+  /// process-shared map keyed off it is shared by every widget test in a file while
+  /// the mock's backing resets per test. A round-2 attempt (one `static` future
+  /// chain) wedged 4 tests and would have wedged production identically; a round-3
+  /// attempt (an `Expando` of per-slot memos) broke 123. Each fix was worse than
+  /// the finding it closed.
+  ///
+  /// So the defect being repaired here is the **overclaiming comment**, which is
+  /// what would mislead the next maintainer. The race is named, priced and left.
+  /// The real fix is to stop `chatRepositoryProvider` holding a store across its
+  /// awaits — resolve the key from the same live snapshot that will own the repo —
+  /// and that is a change to the provider graph, not to this class.
+  ///
+  /// Do NOT add a lock here. Three rounds say the lock is the wrong move; the
+  /// coupling is instance-lifetime versus slot-lifetime, and it is owned upstream.
   Future<SovereignKey>? _inflight;
 
   /// The account this store signs for. NULL — or empty, which is the same state —
@@ -107,18 +141,20 @@ class SovereignKeyStore {
   /// the same (device, account) resolves to the same key until [clear].
   Future<SovereignKey> loadOrCreate() => _inflight ??= _guardedLoad();
 
-  /// Caches only a SUCCESSFUL load. A failed first-use (secure-storage I/O error,
-  /// seed corruption) EVICTS the cached future so a later call can retry — else a
-  /// transient fault would permanently mute signing until process death
-  /// (cage-match Tesla R2: don't cache a rejected Future forever).
   Future<SovereignKey> _guardedLoad() async {
     try {
       return await _loadOrCreate();
     } catch (_) {
-      _inflight = null;
+      _evictMemo();
       rethrow;
     }
   }
+
+  /// Drop the memoised load so a later call can retry. Caching a REJECTED future
+  /// would mute signing until process death on one transient keychain error
+  /// (cage-match Tesla R2) — and now that the memo is shared across instances,
+  /// failing to evict would brick the account for every future store too.
+  void _evictMemo() => _inflight = null;
 
   Future<SovereignKey> _loadOrCreate() async {
     final uid = userId;
@@ -228,7 +264,7 @@ class SovereignKeyStore {
   /// whether sign-out should call it is tracked on #4831, and is a question about
   /// ROTATION rather than correlation, which the scoping already takes.
   Future<void> clear() async {
-    _inflight = null;
+    _evictMemo(); // shared across instances now, so this must clear the slot's memo
     final uid = userId;
     if (uid != null && uid.isNotEmpty) {
       await _storage.delete(key: _seedKeyFor(uid));
