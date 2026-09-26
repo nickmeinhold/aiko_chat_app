@@ -52,7 +52,7 @@
 > never in the bundle, so four adversary families struck twenty-three times inside
 > an unpriced frame and none could reach the dissolve — **an adversary can only
 > strike what you show it.** The question that found it was four words from Nick:
-> *"are you sure you're not overcomplicating this?"*
+> *"are you sure you're not overcomplicataing this?"*
 >
 > Kept, not deleted: the strike below is a real record, and flaw 1 (adopting a
 > shared key forges an author) remains true and is why *retire-and-mint* is now the
