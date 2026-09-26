@@ -663,6 +663,28 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((
   final channels = lists[0];
   final dms = lists[1];
   final signingKey = await keyStore.loadOrCreate();
+  if (signingKey.userId != user.userId) {
+    throw StateError(
+      'signing key belongs to ${signingKey.userId ?? "no session"}, '
+      'not ${user.userId} — refusing to build a repo that would misattribute',
+    );
+  }
+
+  // THE KEY MUST BELONG TO THE ACCOUNT THIS REPO SIGNS FOR — asserted, because
+  // it is reachable (#4831 round 1, Kelvin and Tesla independently). The store is
+  // rebuilt when the user id changes, but `keyStore` above was captured BEFORE
+  // these awaits: a sign-out-and-in landing in that window leaves this build
+  // holding the previous account's store, whose `loadOrCreate` returns the
+  // previous account's key. Riverpod disposes this provider on the user change,
+  // but disposal races the async body rather than preempting it, and a repo built
+  // in the meantime would sign `user`'s messages under somebody else's pubkey —
+  // which `origin.sender_pubkey` then publishes to every recipient.
+  //
+  // FAIL CLOSED. Throwing puts this provider in AsyncError and the UI on its
+  // error path; the rebuild for the new user follows immediately and succeeds.
+  // The alternative — building the repo anyway — is the misattribution itself,
+  // and it would be silent. A key with a null owner is the no-session ephemeral
+  // one and is equally wrong here, so it is refused by the same test.
 
   final repo = ChatRepository(
     cache: cache,
