@@ -1227,18 +1227,19 @@ extension CallKitRinger: CXProviderDelegate {
 /// for messages" is a NORMAL, permanent state to model, not an error to log.
 /// The reverse pairing is normal too, on a device that has never run this build.
 ///
-/// **NO TOKEN IS MINTED BY THIS BUILD.** The channels below are registered and
-/// the plumbing is complete, but nothing arms the registry — see the note where
-/// `start()` used to be. So `currentToken` answers nil, no VoIP row is ever
-/// registered island-side, and no VoIP push can be sent to this device.
+/// **THE REGISTRY IS ARMED AT LAUNCH, IN EVERY BUILD** — `didFinishLaunching`
+/// calls `start(reportingTo:)` unconditionally, so iOS mints a VoIP token even
+/// in a calling-off store build. What keeps that build unringable is the DART
+/// side: `voipTokenSourceProvider` is null unless `ENABLE_CALLING`, so the token
+/// is never REGISTERED with the island and no VoIP push is ever addressed here.
+/// Measured 2026-09-30 on a 0.0.5 store install: one `alert` row, no `voip` row,
+/// the island logging `end_wake_needs_voip`.
 ///
-/// An earlier version of this comment asserted the opposite — "registered
-/// unconditionally at launch... a token that only exists once the user opens a
-/// call screen is a token the island cannot ring" — which described the
-/// INTENDED end state as though it were the current one. That argument is sound
-/// and it is not yet implemented; leaving it here read as a design already in
-/// force, which is how the next reader adds the one line that arms VoIP delivery
-/// with nothing to report to.
+/// This comment previously said the opposite ("NO TOKEN IS MINTED BY THIS
+/// BUILD … nothing arms the registry"), written before `start()` was wired into
+/// launch and never updated when it was. A stale "not built" is as misleading
+/// as a premature "built": both make the next reader reason from a gate that is
+/// not where the comment says.
 final class PushKitTokenChannel: NSObject, PKPushRegistryDelegate {
   static let shared = PushKitTokenChannel()
 
