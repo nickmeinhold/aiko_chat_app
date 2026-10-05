@@ -3,6 +3,7 @@ package cc.imagineering.aiko_chat_app
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 
 /**
  * The Android ring's state machine, and the total function on `k`.
@@ -48,6 +49,16 @@ object CallRing {
    */
   const val RING_CEILING_MS = 60_000L
 
+  /**
+   * One line per DECISION, never per payload byte. The first hardware run
+   * (2026-10-05) failed with this file silent: a `call_end` arrived and the
+   * ring did not stop, and the log could not say whether `handle` ran, which
+   * arm it took, or what `ringingChannel` answered. An empty log is equally good
+   * evidence for every hypothesis — the iOS ring paid for that lesson first.
+   * Channel ids only; they are opaque and already in the island's own logs.
+   */
+  private const val TAG = "AikoRing"
+
   private const val PREFS = "aiko_call_ring"
   private const val KEY_CHANNEL = "channel"
   private const val KEY_SINCE = "since"
@@ -76,7 +87,11 @@ object CallRing {
   fun handle(context: Context, data: Map<String, String>) {
     // A calling-off build (every store build until 0.0.6) never rings, even
     // with an island sending call wakes. Same flag as Dart's, same build.
-    if (!BuildConfig.CALLING_ENABLED) return
+    if (!BuildConfig.CALLING_ENABLED) {
+      Log.i(TAG, "handle: calling disabled in this build, k=${data["k"]}")
+      return
+    }
+    Log.i(TAG, "handle: k=${data["k"]} c=${data["c"]}")
     val app = context.applicationContext
     val channel = data["c"]?.takeIf { it.isNotEmpty() }
     when (data["k"]) {
@@ -110,7 +125,11 @@ object CallRing {
     // FCM retry — and on iOS the duplicate was the whole 2026-09-20 bug.
     // Here it is a no-op: re-posting would restart the ringtone mid-ring and
     // re-arm the backstop, extending a ring the caller may already have ended.
-    if (ringingChannel(app) == channel) return
+    if (ringingChannel(app) == channel) {
+      Log.i(TAG, "ring: duplicate for $channel, ignored")
+      return
+    }
+    Log.i(TAG, "ring: $channel")
     val since = System.currentTimeMillis()
     app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
       .putString(KEY_CHANNEL, channel)
@@ -138,7 +157,11 @@ object CallRing {
    */
   fun stop(context: Context, channel: String) {
     val app = context.applicationContext
-    if (!forget(app, channel)) return
+    if (!forget(app, channel)) {
+      Log.i(TAG, "stop: $channel is not the ringing channel (${ringingChannel(app)}), no-op")
+      return
+    }
+    Log.i(TAG, "stop: $channel stopped")
     // Dart may be holding an answer for this channel (answered, then the
     // caller hung up before the join). `ended` is the action that drops it.
     CallChannels.emit(CallChannels.ACTION_ENDED, channel)
@@ -153,7 +176,11 @@ object CallRing {
    * redelivering an old intent) must not reach Dart as a fresh answer.
    */
   fun answer(context: Context, channel: String): Boolean {
-    if (!forget(context.applicationContext, channel)) return false
+    if (!forget(context.applicationContext, channel)) {
+      Log.i(TAG, "answer: $channel is not ringing, refused")
+      return false
+    }
+    Log.i(TAG, "answer: $channel")
     CallChannels.emit(CallChannels.ACTION_ANSWERED, channel)
     return true
   }
@@ -166,7 +193,8 @@ object CallRing {
    * deciding.
    */
   fun endFromDart(context: Context, channel: String) {
-    forget(context.applicationContext, channel)
+    val ended = forget(context.applicationContext, channel)
+    Log.i(TAG, "endFromDart: $channel ended=$ended")
   }
 
   private fun expire(app: Context, channel: String, since: Long) {
