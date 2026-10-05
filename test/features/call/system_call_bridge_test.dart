@@ -37,14 +37,14 @@ void main() {
     });
   });
 
-  group('AppleSystemCallBridge.actions decoding', () {
+  group('NativeSystemCallBridge.actions decoding', () {
     /// Drives the REAL bridge over a fake platform-channel message stream, so
     /// the decode path under test is the shipped one.
     Stream<SystemCallAction> decoded(List<Object?> events) {
       const name = kSystemCallActionsChannel;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockStreamHandler(const EventChannel(name), _FakeStream(events));
-      return AppleSystemCallBridge(
+      return NativeSystemCallBridge(
         platformOverride: TargetPlatform.iOS,
       ).actions;
     }

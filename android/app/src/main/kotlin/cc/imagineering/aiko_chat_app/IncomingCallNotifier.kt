@@ -40,6 +40,14 @@ object IncomingCallNotifier {
   private const val CHANNEL_ID = "aiko_incoming_calls"
   private const val NOTIFICATION_ID = 4201
 
+  // Distinct request codes. Android identifies a PendingIntent by its intent's
+  // action/data/component/categories plus this code — EXTRAS ARE IGNORED — and
+  // FLAG_UPDATE_CURRENT then rewrites the match's extras. The three targets
+  // differ by component today; the codes keep them apart if two ever share one.
+  private const val REQUEST_RING = 0
+  private const val REQUEST_ANSWER = 1
+  private const val REQUEST_DECLINE = 2
+
   /**
    * Whether this device will actually honour a full-screen intent right now.
    *
@@ -81,26 +89,48 @@ object IncomingCallNotifier {
   }
 
   /**
-   * Ring for [callerLabel], routing to [channelId]'s conversation on tap.
+   * Ring for [callerLabel] on [channelId]. Called only by [CallRing], which
+   * owns whether a ring should exist; this only draws it.
    *
-   * The channel id rides in the intent under the SAME one-character key the
+   * The channel id rides every intent under the SAME one-character key the
    * island's push payload uses (`c`), so there is one name for this value across
    * the wire, the iOS delegate and here.
    */
   fun show(context: Context, channelId: String, callerLabel: String) {
     ensureChannel(context)
 
-    val open = Intent(context, MainActivity::class.java).apply {
-      action = Intent.ACTION_VIEW
-      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-      putExtra("c", channelId)
-    }
-    val pending = PendingIntent.getActivity(
+    // The full-screen target is the NATIVE ring screen, never the app — see
+    // IncomingCallActivity for why the Flutter app must not be drawn over the
+    // keyguard. Tapping the banner on an unlocked phone opens the same screen.
+    val ringScreen = PendingIntent.getActivity(
       context,
-      0,
-      open,
+      REQUEST_RING,
+      Intent(context, IncomingCallActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION
+        putExtra(CallRing.EXTRA_CHANNEL, channelId)
+      },
       // IMMUTABLE is required from S and is correct here regardless: nothing
       // outside this process has any business rewriting the target.
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+    // Answer from the shade goes straight to the app. Android asks for the
+    // unlock before launching an activity from a locked-screen notification
+    // action, so this is gated the same way the ring screen's Answer is.
+    val answer = PendingIntent.getActivity(
+      context,
+      REQUEST_ANSWER,
+      Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        putExtra(CallRing.EXTRA_ACTION, CallRing.ACTION_ANSWER)
+        putExtra(CallRing.EXTRA_CHANNEL, channelId)
+      },
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+    val decline = PendingIntent.getBroadcast(
+      context,
+      REQUEST_DECLINE,
+      Intent(context, CallDeclineReceiver::class.java)
+        .putExtra(CallRing.EXTRA_CHANNEL, channelId),
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -114,12 +144,21 @@ object IncomingCallNotifier {
       // `true` = "this is important enough to interrupt". Without it the
       // full-screen intent is advisory and the system may quietly choose a
       // banner even when it could have taken the screen.
-      .setFullScreenIntent(pending, true)
-      .setContentIntent(pending)
-      // Ongoing so it cannot be swiped away mid-ring, and auto-cancelled on tap.
+      .setFullScreenIntent(ringScreen, true)
+      .setContentIntent(ringScreen)
+      .addAction(0, "Decline", decline)
+      .addAction(0, "Answer", answer)
+      // Ongoing so it cannot be swiped away mid-ring. NOT auto-cancel: opening
+      // the ring screen is not a decision, and the ring must keep sounding
+      // until Answer, Decline, the caller's end, or the ceiling.
       .setOngoing(true)
-      .setAutoCancel(true)
+      // The backstop for a lost `call_end` — see CallRing.RING_CEILING_MS.
+      .setTimeoutAfter(CallRing.RING_CEILING_MS)
       .build()
+    // A channel sound plays ONCE. A phone call rings until someone acts, and
+    // INSISTENT is the flag that loops the channel's ringtone until the
+    // notification is cancelled — without it this is a chime, not a ring.
+    notification.flags = notification.flags or Notification.FLAG_INSISTENT
 
     // POST_NOTIFICATIONS may be denied on 13+; NotificationManagerCompat throws
     // SecurityException rather than no-opping, and a denied notification

@@ -178,4 +178,65 @@ void main() {
     expect(dart, contains("event['action']"));
     expect(dart, contains("event['channel']"));
   });
+
+  // ---- ANDROID: the same contract, a third side ----
+  //
+  // `NativeSystemCallBridge` is ONE Dart class for both platforms, so every pin
+  // above has to hold for Kotlin too. A Kotlin-only rename would surface on a
+  // handset as an Answer that does nothing, with iOS still green.
+  group('the Kotlin side', () {
+    const kotlinDir = 'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app';
+    final channels = File('$kotlinDir/CallChannels.kt').readAsStringSync();
+    final ring = File('$kotlinDir/CallRing.kt').readAsStringSync();
+
+    test('positive control — the files read and carry the channel code', () {
+      expect(channels, contains('EventChannel'));
+      expect(ring, contains('fun handle('));
+    });
+
+    test('both channel names exist verbatim', () {
+      expect(channels, contains('"$kSystemCallActionsChannel"'));
+      expect(channels, contains('"$kSystemCallControlChannel"'));
+    });
+
+    test('the method Dart invokes, Kotlin answers', () {
+      final dart = File(
+        'lib/features/call/data/system_call_bridge.dart',
+      ).readAsStringSync();
+      final invoked = RegExp(
+        r"invokeMethod<[^>]*>\(\s*'([A-Za-z0-9_]+)'",
+      ).allMatches(dart).map((m) => m.group(1)!).toSet();
+      final handled = RegExp(
+        r'"([A-Za-z0-9_]+)" ->',
+      ).allMatches(channels).map((m) => m.group(1)!).toSet();
+      expect(invoked, isNotEmpty);
+      expect(invoked.difference(handled), isEmpty);
+    });
+
+    test('every action kind Dart knows is one Kotlin emits, and no other', () {
+      final emitted = RegExp(
+        r'const val ACTION_[A-Z]+ = "([a-z]+)"',
+      ).allMatches(channels).map((m) => m.group(1)!).toSet();
+      expect(emitted, isNotEmpty, reason: 'regex blind');
+      expect(
+        SystemCallActionKind.values.map((k) => k.name).toSet(),
+        emitted,
+      );
+    });
+
+    test('the payload keys are the same two words', () {
+      expect(channels, contains('"action" to'));
+      expect(channels, contains('"channel" to'));
+    });
+
+    test('the wake kinds are the strings the iOS ringer switches on', () {
+      // The island is the authority (`WakeKind` in push_result.py) and is in
+      // another repo; Swift was live-verified against it, so Kotlin is pinned
+      // to Swift. A typo here would make Android silently never ring.
+      for (final kind in ['call_invite', 'call_end']) {
+        expect(swift, contains('case "$kind"'));
+        expect(ring, contains('= "$kind"'));
+      }
+    });
+  });
 }

@@ -37,22 +37,30 @@ abstract class SystemCallBridge {
   Future<void> end(String channelId);
 }
 
-/// Apple's implementation: an `EventChannel` fed by `SystemCallChannel` in
-/// `ios/Runner/AppDelegate.swift`, and a `MethodChannel` back to it.
+/// The native implementation, on BOTH platforms: an `EventChannel` fed by the
+/// platform's call UI, and a `MethodChannel` back to it.
 ///
-/// **Android is deliberately absent rather than stubbed.** Its ring is a
-/// high-priority FCM message plus a full-screen intent (design 12 Decision 8,
-/// claude-tasks#4421) and none of it is built — a class here answering an empty
-/// stream would make "Android cannot answer a call" look like a wire that
-/// happens to be quiet.
-class AppleSystemCallBridge implements SystemCallBridge {
-  AppleSystemCallBridge({
+///  * **iOS** — `SystemCallChannel` in `ios/Runner/AppDelegate.swift`, fed by
+///    CallKit.
+///  * **Android** — `CallChannels` in `android/app/src/main/kotlin/…`, fed by
+///    the FCM ring's notification and lock-screen ring screen
+///    (claude-tasks#4421).
+///
+/// ONE CLASS, NOT TWO, because the two native halves were built to the same
+/// channel names, method names and payload keys — pinned on all three sides by
+/// `system_call_channel_contract_test.dart`. Two Dart classes would be a place
+/// for the platforms to drift that no test watches.
+class NativeSystemCallBridge implements SystemCallBridge {
+  NativeSystemCallBridge({
     TargetPlatform? platformOverride,
     EventChannel? actions,
     MethodChannel? control,
   }) : assert(
-         (platformOverride ?? defaultTargetPlatform) == TargetPlatform.iOS,
-         'AppleSystemCallBridge is iOS-only; CallKit does not exist elsewhere.',
+         const {
+           TargetPlatform.iOS,
+           TargetPlatform.android,
+         }.contains(platformOverride ?? defaultTargetPlatform),
+         'NativeSystemCallBridge has a native half on iOS and Android only.',
        ),
        _actions = actions ?? const EventChannel(kSystemCallActionsChannel),
        _control = control ?? const MethodChannel(kSystemCallControlChannel);
