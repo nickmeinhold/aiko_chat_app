@@ -23,7 +23,21 @@ class MainActivity : FlutterActivity() {
    * the user backs out. Closing the activity closes the app, as it did before
    * the engine was shared.
    */
-  override fun shouldDestroyEngineWithHost(): Boolean = true
+  override fun shouldDestroyEngineWithHost(): Boolean {
+    // ONE ENGINE, TWO LIFETIMES: the activity's, and a live ring's. While a
+    // ring is current this engine is the one that admitted its invitation, and
+    // destroying it with the activity (back on the root route, or a reclaim of
+    // a stopped MainActivity behind the ring screen) lost that admission — the
+    // Answer then found only history, the #3588 trap again. So the activity
+    // hands the engine back to the ring instead, and the ring's own close path
+    // ([AikoEngine.releaseIfHeadless], run by CallRing.stop) stays the single
+    // closer. (Tesla, PR #210 round 1.)
+    if (CallRing.ringingChannel(this) != null) {
+      AikoEngine.detachedDuringRing()
+      return false
+    }
+    return true
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)

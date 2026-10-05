@@ -68,6 +68,15 @@ object AikoEngine {
   }
 
   /**
+   * The activity is going away mid-ring and has NOT destroyed the engine (see
+   * MainActivity.shouldDestroyEngineWithHost). It is headless again, and the
+   * ring that is keeping it alive decides when it closes.
+   */
+  fun detachedDuringRing() {
+    headless = true
+  }
+
+  /**
    * The ring that started a headless engine is over and nobody opened the app.
    * Destroying it ends the websocket it opened — without this, a declined call
    * leaves an invisible app running until Android kills the process.

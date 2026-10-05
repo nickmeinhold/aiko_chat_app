@@ -3,7 +3,9 @@ package cc.imagineering.aiko_chat_app
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import java.util.concurrent.CopyOnWriteArraySet
 
 /**
  * The Android ring's state machine, and the total function on `k`.
@@ -74,11 +76,19 @@ object CallRing {
     fun onRingStopped(channelId: String)
   }
 
-  private val stopListeners = mutableSetOf<StopListener>()
+  // Copy-on-write so [forget] can snapshot from any thread while an activity
+  // registers on main. Registration is SYNCHRONOUS: it used to be posted, so a
+  // stop landing between the ring screen's "is this ringing?" check and its
+  // registration ran first, finished nobody, and left a stale call screen up.
+  // (Tesla, PR #210 round 1.)
+  private val stopListeners = CopyOnWriteArraySet<StopListener>()
 
-  fun addStopListener(l: StopListener) = main.post { stopListeners.add(l) }
+  fun addStopListener(l: StopListener) { stopListeners.add(l) }
 
-  fun removeStopListener(l: StopListener) = main.post { stopListeners.remove(l) }
+  fun removeStopListener(l: StopListener) { stopListeners.remove(l) }
+
+  /** Guards the record: FCM's worker and the main thread both read-modify-write it. */
+  private val lock = Any()
 
   /**
    * One FCM delivery. **Permissive decode** — the cross-repo obligation design
@@ -86,7 +96,13 @@ object CallRing {
    * rest, never fail on an extra one, so the island can add fields without a
    * payload version.
    *
-   * Called on FCM's worker thread; every effect is posted to main.
+   * **SYNCHRONOUS, ON FCM'S WORKER, INSIDE ITS WAKE LOCK.** The service holds a
+   * partial wake lock only until `onMessageReceived` returns, and a clean
+   * return marks the push consumed. Work posted to main and left for later ran
+   * OUTSIDE that lock: a cold `call_end` could be frozen before the ring
+   * stopped, leaving an insistent ringtone to the 60s backstop. So the record,
+   * the notification and the stop all happen before this returns; only what
+   * truly needs the main thread (the engine) is posted. (Tesla, PR #210 r1.)
    */
   fun handle(context: Context, data: Map<String, String>) {
     // A calling-off build (every store build until 0.0.6) never rings, even
@@ -102,8 +118,8 @@ object CallRing {
       // An invite with no usable channel could never be answered — the iOS
       // `where` clause, for the same reason: ringing a doorbell that cannot
       // open is worse than not ringing.
-      KIND_INVITE -> if (channel != null) main.post { ring(app, channel) }
-      KIND_END -> if (channel != null) main.post { stop(app, channel) }
+      KIND_INVITE -> if (channel != null) ring(app, channel)
+      KIND_END -> if (channel != null) stop(app, channel)
       // Unknown or missing `k`: NEVER ring. A third kind added island-side
       // must not become a ring on an older build. Ordinary message wakes, when
       // they exist, also land here, and the plugin's receiver still hands them
@@ -112,16 +128,32 @@ object CallRing {
     }
   }
 
-  /** The channel ringing on this device right now, across process deaths. */
-  fun ringingChannel(context: Context): String? {
-    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+  /**
+   * The channel ringing on this device right now, across process deaths.
+   *
+   * **ONE CLOCK.** The record is dated with `elapsedRealtime` — the same
+   * monotonic clock that times the notification (`setTimeoutAfter`) and the
+   * backstop (`postDelayed`). It used to be wall time, so an NTP step riding
+   * the same Doze wake as the push could expire the RECORD while the ringtone
+   * kept looping — and an expired record refuses Answer, Decline and
+   * `call_end` alike, so nothing could stop it. (Tesla, PR #210 round 1.)
+   *
+   * Expiry by reading also DISMISSES, so a ring this function declares over is
+   * over on screen too, in the same breath.
+   */
+  fun ringingChannel(context: Context): String? = synchronized(lock) {
+    val app = context.applicationContext
+    val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     val channel = prefs.getString(KEY_CHANNEL, null) ?: return null
-    val since = prefs.getLong(KEY_SINCE, 0L)
-    // Past the ceiling the notification has timed itself out, so a record
-    // older than that describes a ring nobody can see. Expired by reading, so
-    // a process that died before its timer fired cannot strand it.
-    if (System.currentTimeMillis() - since > RING_CEILING_MS) return null
-    return channel
+    val age = SystemClock.elapsedRealtime() - prefs.getLong(KEY_SINCE, 0L)
+    // Negative age = a record from before a reboot, which no notification
+    // survived. Either way the ring nobody can see is cleared, not reported.
+    if (age < 0 || age > RING_CEILING_MS) {
+      clearRecord(app)
+      IncomingCallNotifier.dismiss(app)
+      return null
+    }
+    channel
   }
 
   private fun ring(app: Context, channel: String) {
@@ -129,16 +161,23 @@ object CallRing {
     // FCM retry — and on iOS the duplicate was the whole 2026-09-20 bug.
     // Here it is a no-op: re-posting would restart the ringtone mid-ring and
     // re-arm the backstop, extending a ring the caller may already have ended.
-    if (ringingChannel(app) == channel) {
+    val since = synchronized(lock) {
+      if (ringingChannel(app) == channel) null
+      else SystemClock.elapsedRealtime().also { now ->
+        // commit(), not apply(): this process may be killed the moment FCM's
+        // callback returns, and a record that never reached disk makes the
+        // NEXT process misjudge a real redial as a duplicate. (Tesla, r1.)
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+          .putString(KEY_CHANNEL, channel)
+          .putLong(KEY_SINCE, now)
+          .commit()
+      }
+    }
+    if (since == null) {
       Log.i(TAG, "ring: duplicate for $channel, ignored")
       return
     }
     Log.i(TAG, "ring: $channel")
-    val since = System.currentTimeMillis()
-    app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-      .putString(KEY_CHANNEL, channel)
-      .putLong(KEY_SINCE, since)
-      .apply()
     IncomingCallNotifier.show(app, channel, "Aiko Chat")
     // Start Dart NOW, while the phone rings, exactly as a VoIP push starts the
     // Flutter engine on iOS. The signed invitation reaches this device over the
@@ -147,8 +186,8 @@ object CallRing {
     // admitted (held for `kSystemCallRingTrust`). Started from the Answer
     // instead, the invitation would arrive as history, aged past the window,
     // and every call answered from a cold phone would be refused as `stale`:
-    // the #3588 trap.
-    AikoEngine.warm(app)
+    // the #3588 trap. The engine is main-thread only, so this one step posts.
+    main.post { AikoEngine.warm(app) }
     // Keyed on `since` so a stale timer cannot end a NEWER ring of the same
     // channel (call, hang up, call again inside a minute).
     main.postDelayed({ expire(app, channel, since) }, RING_CEILING_MS)
@@ -157,7 +196,7 @@ object CallRing {
   /**
    * The caller hung up, or the user declined. Ends only the ring it names: a
    * `call_end` for any other channel, or arriving after the ring already
-   * stopped, is a no-op — Android owes nobody a report for it.
+   * stopped, is a no-op — Android owes nobody a report for it. Any thread.
    */
   fun stop(context: Context, channel: String) {
     val app = context.applicationContext
@@ -166,19 +205,24 @@ object CallRing {
       return
     }
     Log.i(TAG, "stop: $channel stopped")
-    // An engine this ring started, that the user never opened, has no further
-    // reason to run — and nobody in it to tell: answering is what attaches an
-    // activity, so a still-headless engine cannot be holding an answer.
-    if (AikoEngine.releaseIfHeadless()) return
-    // Otherwise Dart may be holding an answer for this channel (answered, then
-    // the caller hung up before the join). `ended` is the action that drops it.
-    //
-    // ORDER IS THE FIX. Emitting first and destroying second queued `ended` on
-    // the main looper, then tore the engine down before it ran, so it landed in
-    // CallChannels' held buffer and was delivered to the NEXT engine, hours
-    // later. Deciding whether an engine survives BEFORE emitting removes the
-    // case instead of draining it. (Maxwell + Carnot, PR #210 round 1.)
-    CallChannels.emit(CallChannels.ACTION_ENDED, channel)
+    main.post {
+      // An engine this ring started, that the user never opened, has no
+      // further reason to run — and nobody in it to tell: answering is what
+      // attaches an activity, so a still-headless engine cannot be holding an
+      // answer.
+      //
+      // ORDER IS THE FIX. Emitting first and destroying second queued `ended`
+      // on the main looper, then tore the engine down before it ran, so it
+      // landed in CallChannels' held buffer and was delivered to the NEXT
+      // engine, hours later. Deciding whether an engine survives BEFORE
+      // emitting removes the case instead of draining it. (Maxwell + Carnot +
+      // Tesla, PR #210 round 1.)
+      if (!AikoEngine.releaseIfHeadless()) {
+        // Dart may be holding an answer for this channel (answered, then the
+        // caller hung up before the join). `ended` is the action that drops it.
+        CallChannels.emit(CallChannels.ACTION_ENDED, channel)
+      }
+    }
   }
 
   /**
@@ -214,20 +258,28 @@ object CallRing {
   }
 
   private fun expire(app: Context, channel: String, since: Long) {
-    val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    if (prefs.getString(KEY_CHANNEL, null) != channel) return
-    if (prefs.getLong(KEY_SINCE, 0L) != since) return
-    stop(app, channel)
+    val current = synchronized(lock) {
+      val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      prefs.getString(KEY_CHANNEL, null) == channel && prefs.getLong(KEY_SINCE, 0L) == since
+    }
+    if (current) stop(app, channel)
   }
 
-  /** Clears the ring if it is [channel]'s. Returns whether it was. */
+  /** Clears the ring if it is [channel]'s. Returns whether it was. Any thread. */
   private fun forget(app: Context, channel: String): Boolean {
-    if (ringingChannel(app) != channel) return false
-    app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-      .remove(KEY_CHANNEL).remove(KEY_SINCE).apply()
+    val was = synchronized(lock) {
+      (ringingChannel(app) == channel).also { if (it) clearRecord(app) }
+    }
+    if (!was) return false
     IncomingCallNotifier.dismiss(app)
     val listeners = stopListeners.toList()
     main.post { listeners.forEach { it.onRingStopped(channel) } }
     return true
+  }
+
+  /** Only this file's two keys — never `clear()` the file. Caller holds [lock]. */
+  private fun clearRecord(app: Context) {
+    app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+      .remove(KEY_CHANNEL).remove(KEY_SINCE).commit()
   }
 }

@@ -55,7 +55,9 @@ def access_token() -> str:
     ).strip()
 
 
-def send(token: str, data: dict, validate_only: bool = False) -> int:
+def send(token: str, data: dict, validate_only: bool = False,
+         quiet: bool = False):
+    """Returns the exit code; with `quiet`, returns (status, body) instead."""
     if not all(isinstance(v, str) for v in data.values()):
         sys.exit("data values must all be strings — FCM 400s anything else")
     body = {
@@ -78,11 +80,13 @@ def send(token: str, data: dict, validate_only: bool = False) -> int:
     )
     try:
         with urllib.request.urlopen(req) as resp:
-            print(resp.status, resp.read().decode())
-            return 0
+            status, text = resp.status, resp.read().decode()
     except urllib.error.HTTPError as e:
-        print(e.code, e.read().decode())
-        return 1
+        status, text = e.code, e.read().decode()
+    if quiet:
+        return status, text
+    print(status, text)
+    return 0 if status == 200 else 1
 
 
 def main() -> int:
@@ -99,8 +103,16 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.cmd == "probe":
-        send("not-a-real-token", {"c": "probe", "k": "call_invite"}, validate_only=True)
-        return 0  # a 400 naming message.token IS the pass
+        # PASS IS ONE SPECIFIC FAILURE: a 400 that names `message.token`. Google
+        # only gets as far as judging the token once auth, project and envelope
+        # are all accepted. Any other outcome — 401/403 auth, 404 project, a 400
+        # about the envelope — is a FAIL, and this used to exit 0 on all of them.
+        # (Tesla, PR #210 round 1.)
+        code, body = send("not-a-real-token", {"c": "probe", "k": "call_invite"},
+                          validate_only=True, quiet=True)
+        ok = code == 400 and "message.token" in body
+        print("PROBE PASS" if ok else f"PROBE FAIL ({code}): {body[:300]}")
+        return 0 if ok else 1
     if args.cmd == "raw":
         return send(args.token, json.loads(args.data))
     kind = "call_invite" if args.cmd == "invite" else "call_end"
