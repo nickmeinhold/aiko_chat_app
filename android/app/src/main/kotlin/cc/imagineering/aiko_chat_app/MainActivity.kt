@@ -1,7 +1,6 @@
 package cc.imagineering.aiko_chat_app
 
 import android.content.Context
-import android.content.Intent
 import android.os.Bundle
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -29,22 +28,11 @@ class MainActivity : FlutterActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     AikoEngine.attachedToActivity()
-    // Only a FRESH launch carries a fresh answer; a recreated activity is
-    // redelivered its original intent and must not answer twice.
-    if (savedInstanceState == null) route(intent)
   }
 
-  override fun onNewIntent(intent: Intent) {
-    super.onNewIntent(intent)
-    setIntent(intent)
-    route(intent)
-  }
-
-  private fun route(intent: Intent) {
-    if (intent.getStringExtra(CallRing.EXTRA_ACTION) != CallRing.ACTION_ANSWER) return
-    val channel = intent.getStringExtra(CallRing.EXTRA_CHANNEL) ?: return
-    // Consumed: an intent is sticky on the activity, and an answer is an event.
-    intent.removeExtra(CallRing.EXTRA_ACTION)
-    CallRing.answer(this, channel)
-  }
+  // NO call extras are read here, deliberately. This activity is EXPORTED (it
+  // is the launcher), so anything it does on an intent extra, any app on the
+  // device can make it do. Answering lives in IncomingCallActivity, which is
+  // not exported; by the time this opens, the answer is already on its way to
+  // Dart. (Maxwell, PR #210 round 1.)
 }

@@ -33,8 +33,12 @@ object CallRing {
 
   /** Intent extras. `c` is the island's own key for the channel id. */
   const val EXTRA_CHANNEL = "c"
-  const val EXTRA_ACTION = "aiko.call.action"
-  const val ACTION_ANSWER = "answer"
+  /**
+   * Set on the intent that opens [IncomingCallActivity] from the notification's
+   * Answer button. The answer is decided THERE, never on MainActivity — see
+   * [answer] for why.
+   */
+  const val EXTRA_AUTO_ANSWER = "aiko.call.autoAnswer"
 
   /**
    * How long one ring may last on this device, with or without a `call_end`.
@@ -162,16 +166,28 @@ object CallRing {
       return
     }
     Log.i(TAG, "stop: $channel stopped")
-    // Dart may be holding an answer for this channel (answered, then the
-    // caller hung up before the join). `ended` is the action that drops it.
-    CallChannels.emit(CallChannels.ACTION_ENDED, channel)
     // An engine this ring started, that the user never opened, has no further
-    // reason to run.
-    AikoEngine.releaseIfHeadless()
+    // reason to run — and nobody in it to tell: answering is what attaches an
+    // activity, so a still-headless engine cannot be holding an answer.
+    if (AikoEngine.releaseIfHeadless()) return
+    // Otherwise Dart may be holding an answer for this channel (answered, then
+    // the caller hung up before the join). `ended` is the action that drops it.
+    //
+    // ORDER IS THE FIX. Emitting first and destroying second queued `ended` on
+    // the main looper, then tore the engine down before it ran, so it landed in
+    // CallChannels' held buffer and was delivered to the NEXT engine, hours
+    // later. Deciding whether an engine survives BEFORE emitting removes the
+    // case instead of draining it. (Maxwell + Carnot, PR #210 round 1.)
+    CallChannels.emit(CallChannels.ACTION_ENDED, channel)
   }
 
   /**
-   * The user pressed Answer. Returns whether there was a ring to answer — a
+   * The user pressed Answer. Called ONLY from [IncomingCallActivity], which is
+   * not exported: an exported component that answers on an intent extra would
+   * let any app on the device open the camera into a call, given a channel id
+   * — and channel ids are not secrets. (Maxwell, PR #210 round 1.)
+   *
+   * Returns whether there was a ring to answer — a
    * stale intent (an Answer tapped after the ring timed out, a relaunch
    * redelivering an old intent) must not reach Dart as a fresh answer.
    */
@@ -207,7 +223,8 @@ object CallRing {
   /** Clears the ring if it is [channel]'s. Returns whether it was. */
   private fun forget(app: Context, channel: String): Boolean {
     if (ringingChannel(app) != channel) return false
-    app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+    app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+      .remove(KEY_CHANNEL).remove(KEY_SINCE).apply()
     IncomingCallNotifier.dismiss(app)
     val listeners = stopListeners.toList()
     main.post { listeners.forEach { it.onRingStopped(channel) } }

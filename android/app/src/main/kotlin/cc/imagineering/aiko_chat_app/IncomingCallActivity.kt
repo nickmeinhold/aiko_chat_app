@@ -36,6 +36,29 @@ class IncomingCallActivity : Activity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    showOverKeyguard()
+    // Registered for the activity's LIFE, not while visible: a ring ending
+    // while the screen is off must still take this down, or the next unlock
+    // reveals a stale call screen.
+    CallRing.addStopListener(onStopped)
+    setContentView(layout())
+    bind(intent)
+  }
+
+  /**
+   * `singleInstance`: a SECOND ring arrives here, not in a new screen. Without
+   * this the screen kept the FIRST call's channel, so a second caller (two
+   * people ringing at once) got a ring screen whose buttons answered and
+   * declined a call that no longer existed — both silently refused by
+   * [CallRing]. (Maxwell, PR #210 round 1.)
+   */
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    bind(intent)
+  }
+
+  private fun bind(intent: Intent) {
     val c = intent.getStringExtra(CallRing.EXTRA_CHANNEL)
     // A ring that already ended (caller hung up while the screen was waking)
     // gets no screen — a call UI for a call that is gone is the phantom this
@@ -45,12 +68,12 @@ class IncomingCallActivity : Activity() {
       return
     }
     channel = c
-    showOverKeyguard()
-    // Registered for the activity's LIFE, not while visible: a ring ending
-    // while the screen is off must still take this down, or the next unlock
-    // reveals a stale call screen.
-    CallRing.addStopListener(onStopped)
-    setContentView(layout())
+    // The notification's Answer button lands here rather than on MainActivity:
+    // this activity is not exported, so it is the only door that answers.
+    if (intent.getBooleanExtra(CallRing.EXTRA_AUTO_ANSWER, false)) {
+      intent.removeExtra(CallRing.EXTRA_AUTO_ANSWER)
+      answer()
+    }
   }
 
   override fun onDestroy() {
@@ -89,12 +112,15 @@ class IncomingCallActivity : Activity() {
   }
 
   private fun openAnswered(c: String) {
-    startActivity(
-      Intent(this, MainActivity::class.java)
-        .putExtra(CallRing.EXTRA_ACTION, CallRing.ACTION_ANSWER)
-        .putExtra(CallRing.EXTRA_CHANNEL, c)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-    )
+    // Answer HERE, then open the app with no call extras at all. A ring that
+    // ended while the unlock prompt was up is refused by CallRing and opens
+    // nothing — the user unlocked, and lands on their phone, not a dead call.
+    if (CallRing.answer(this, c)) {
+      startActivity(
+        Intent(this, MainActivity::class.java)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+      )
+    }
     finish()
   }
 

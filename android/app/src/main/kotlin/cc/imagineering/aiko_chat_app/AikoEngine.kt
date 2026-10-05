@@ -29,6 +29,12 @@ object AikoEngine {
   fun obtain(context: Context): FlutterEngine {
     val cache = FlutterEngineCache.getInstance()
     cache.get(ID)?.let { return it }
+    // The one-argument constructor REGISTERS THE GENERATED PLUGINS itself
+    // (`automaticallyRegisterPlugins = true` → `GeneratedPluginRegister`), which
+    // is also why FlutterActivity skips registration for a host-provided engine.
+    // Nothing else here needs to; hardware-verified, Firebase and the camera both
+    // ran from a ring-started engine. (A cage-match seat read the absence of an
+    // explicit call as "no plugins" — this line is that answer.)
     val engine = FlutterEngine(context.applicationContext)
     CallChannels.attach(engine, context.applicationContext)
     engine.addEngineLifecycleListener(
@@ -65,9 +71,16 @@ object AikoEngine {
    * The ring that started a headless engine is over and nobody opened the app.
    * Destroying it ends the websocket it opened — without this, a declined call
    * leaves an invisible app running until Android kills the process.
+   *
+   * Returns whether it destroyed one. A destroyed headless engine had nobody to
+   * TELL — no activity ever attached, so Dart could not be holding an answer —
+   * which is what lets [CallRing.stop] skip the `ended` action rather than queue
+   * it for an engine that no longer exists.
    */
-  fun releaseIfHeadless() {
-    if (!headless) return
-    FlutterEngineCache.getInstance().get(ID)?.destroy()
+  fun releaseIfHeadless(): Boolean {
+    if (!headless) return false
+    val engine = FlutterEngineCache.getInstance().get(ID) ?: return false
+    engine.destroy()
+    return true
   }
 }

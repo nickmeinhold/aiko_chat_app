@@ -40,10 +40,12 @@ object IncomingCallNotifier {
   private const val CHANNEL_ID = "aiko_incoming_calls"
   private const val NOTIFICATION_ID = 4201
 
-  // Distinct request codes. Android identifies a PendingIntent by its intent's
-  // action/data/component/categories plus this code — EXTRAS ARE IGNORED — and
-  // FLAG_UPDATE_CURRENT then rewrites the match's extras. The three targets
-  // differ by component today; the codes keep them apart if two ever share one.
+  // Distinct request codes, and LOAD-BEARING. Android identifies a PendingIntent
+  // by its intent's action/data/component/categories plus this code — EXTRAS
+  // ARE IGNORED — and FLAG_UPDATE_CURRENT then rewrites the match's extras.
+  // The ring screen and the Answer button both target IncomingCallActivity and
+  // differ only by EXTRA_AUTO_ANSWER: with one code, Answer would be the ring
+  // screen, and every full-screen launch would auto-answer.
   private const val REQUEST_RING = 0
   private const val REQUEST_ANSWER = 1
   private const val REQUEST_DECLINE = 2
@@ -113,16 +115,18 @@ object IncomingCallNotifier {
       // outside this process has any business rewriting the target.
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
-    // Answer from the shade goes straight to the app. Android asks for the
-    // unlock before launching an activity from a locked-screen notification
-    // action, so this is gated the same way the ring screen's Answer is.
+    // Answer from the shade goes through the RING SCREEN with auto-answer, so
+    // there is exactly one place that answers, it is not exported, and it does
+    // the unlock first. It targets the same component as `ringScreen` and
+    // differs only in an extra — which Android ignores when matching
+    // PendingIntents, so REQUEST_ANSWER is what keeps the two from being one.
     val answer = PendingIntent.getActivity(
       context,
       REQUEST_ANSWER,
-      Intent(context, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-        putExtra(CallRing.EXTRA_ACTION, CallRing.ACTION_ANSWER)
+      Intent(context, IncomingCallActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
         putExtra(CallRing.EXTRA_CHANNEL, channelId)
+        putExtra(CallRing.EXTRA_AUTO_ANSWER, true)
       },
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
