@@ -14,7 +14,10 @@ import android.content.Intent
  */
 class CallDeclineReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
-    val channel = intent.getStringExtra(CallRing.EXTRA_CHANNEL) ?: return
-    CallRing.stop(context, channel)
+    // By INSTANCE: a Decline tapped on a notification that has since been
+    // replaced by another ring declines nothing, rather than the newer call.
+    val instance = intent.getLongExtra(CallRing.EXTRA_INSTANCE, -1L)
+    if (instance < 0) return
+    CallRing.decline(context, instance)
   }
 }

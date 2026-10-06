@@ -185,7 +185,8 @@ void main() {
   // above has to hold for Kotlin too. A Kotlin-only rename would surface on a
   // handset as an Answer that does nothing, with iOS still green.
   group('the Kotlin side', () {
-    const kotlinDir = 'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app';
+    const kotlinDir =
+        'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app';
     final channels = File('$kotlinDir/CallChannels.kt').readAsStringSync();
     final ring = File('$kotlinDir/CallRing.kt').readAsStringSync();
 
@@ -218,15 +219,25 @@ void main() {
         r'const val ACTION_[A-Z]+ = "([a-z]+)"',
       ).allMatches(channels).map((m) => m.group(1)!).toSet();
       expect(emitted, isNotEmpty, reason: 'regex blind');
-      expect(
-        SystemCallActionKind.values.map((k) => k.name).toSet(),
-        emitted,
-      );
+      expect(SystemCallActionKind.values.map((k) => k.name).toSet(), emitted);
     });
 
-    test('the payload keys are the same two words', () {
-      expect(channels, contains('"action" to'));
-      expect(channels, contains('"channel" to'));
+    test('the payload keys are the same words on both sides', () {
+      for (final key in ['action', 'channel', 'call']) {
+        expect(
+          channels,
+          contains('put("$key"'),
+          reason: 'Kotlin must emit `$key` under exactly this key',
+        );
+      }
+      final dart = File(
+        'lib/features/call/data/system_call_bridge.dart',
+      ).readAsStringSync();
+      expect(
+        dart,
+        contains("event['call']"),
+        reason: 'Dart must decode the v2 call id from the key Kotlin emits',
+      );
     });
 
     test('the wake kinds are the strings the iOS ringer switches on', () {

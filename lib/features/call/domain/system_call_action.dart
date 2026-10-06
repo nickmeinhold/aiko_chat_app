@@ -47,6 +47,7 @@ class SystemCallAction {
     required this.kind,
     required this.channelId,
     this.origin,
+    this.callId,
   });
 
   final SystemCallActionKind kind;
@@ -72,6 +73,12 @@ class SystemCallAction {
   /// every test that does not care).
   final String? origin;
 
+  /// The v2 call this action is about (`m` on the wire), or null for a v1 call
+  /// or a native half that does not send it yet. When present, the navigator
+  /// matches it against the admitted invitation's call id, so an action for an
+  /// older call on the same channel cannot consume a newer call's answer.
+  final String? callId;
+
   @override
   String toString() =>
       'SystemCallAction(${kind.name}, $channelId${origin == null ? '' : ', $origin'})';
@@ -81,8 +88,9 @@ class SystemCallAction {
       other is SystemCallAction &&
       other.kind == kind &&
       other.channelId == channelId &&
-      other.origin == origin;
+      other.origin == origin &&
+      other.callId == callId;
 
   @override
-  int get hashCode => Object.hash(kind, channelId, origin);
+  int get hashCode => Object.hash(kind, channelId, origin, callId);
 }

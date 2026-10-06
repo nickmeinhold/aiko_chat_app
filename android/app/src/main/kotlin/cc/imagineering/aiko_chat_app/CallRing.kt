@@ -13,64 +13,68 @@ import java.util.concurrent.CopyOnWriteArraySet
  *
  * The Android counterpart of `CallKitRinger` in `ios/Runner/AppDelegate.swift`,
  * minus the one obligation that shapes almost all of that class: Android has no
- * must-report rule. A push that should not ring is simply not rung — there is no
- * "report, then end immediately" cell, because nothing punishes silence.
+ * must-report rule. A push that should not ring is simply not rung.
  *
- * **THE PUSH IS TRUSTED FOR ONE THING: "ring this channel".** It is unsigned
- * island data. Nothing here joins a room, opens a camera or names a caller. The
- * signed invitation is judged by `admitRing` in Dart, which this file never
- * bypasses — answering hands Dart an `answered` action, and
+ * **THE PUSH IS TRUSTED FOR ONE THING: "ring / end call `m` on channel `c`".**
+ * It is unsigned island data. Nothing here joins a room, opens a camera or
+ * names a caller. The signed invitation is judged by `admitRing` in Dart, which
+ * this file never bypasses — answering hands Dart an `answered` action, and
  * `SystemCallNavigator` joins only an invitation `admitRing` admitted.
  *
- * ## The state machine — WRITTEN DOWN, because it was found one bug at a time
+ * ## Two identities (design 21 v2)
  *
- * Cage-match PR #210 rounds 1-2 found five defects that were all one thing: a
- * transition nobody had tabled (answered-then-hung-up, a ring displaced by
- * another channel, a reboot mid-ring, the backstop at the expiry boundary, a
- * stop racing a listener). #139 recorded the same lesson for the Dart ring.
- * So the whole machine is here, and the code below implements THIS table —
- * a transition missing from it is a bug in the table, not in a branch.
+ * - **`callId` (`m` on the wire)** — WHAT the call is. A ULID the caller minted
+ *   and signed into the invite body (island design 12, Decision 1). Decides
+ *   duplicate-vs-new: the same invite delivered twice carries the same `m`; a
+ *   new call on the same channel carries a new one. Absent for a v1 call, which
+ *   falls back to the channel, as before — the weakness stays confined to v1.
+ * - **`instance`** — WHICH ring a screen, timer or callback belongs to. Minted
+ *   here, per ring (its `elapsedRealtime` start). The ring screen, the stop
+ *   listeners and the keyguard callback all carry it, so a stale one can never
+ *   act on a newer ring — of the same call or any other.
+ *
+ * ## Two slots, because Ringing and Answered are different facts
  *
  * ```
- *  state \ event │ invite(c)       invite(x≠c)        end/decline(c)    answer(c)      dartEnd(c)  deadline
- *  ──────────────┼─────────────────────────────────────────────────────────────────────────────────────────
- *  Idle          │ → Ringing(c)    → Ringing(x)       no-op             refused        no-op       —
- *  Ringing(c)    │ no-op (dup)     displace→Ring(x)   → Idle, ENDED     → Answered(c)  → Idle      → Idle, ENDED
- *  Answered(c)   │ → Ringing(c)    → Ringing(x)       → Idle, tell Dart refused        → Idle      → Idle
+ *  RING slot    {channel, callId?, instance}   lives RING_CEILING_MS
+ *  ANSWER slot  {channel, callId?}             lives ANSWERED_TRUST_MS
+ *
+ *  invite(c,m)  same call as RING or ANSWER → duplicate, dropped
+ *               otherwise → displace RING if live (retire it), RING := (c,m,new)
+ *               — ANSWER is never touched by an invite
+ *  end(c,m)     same call as RING   → RING := ∅, retire, ENDED
+ *               same call as ANSWER → ANSWER := ∅, tell Dart `ended(c,m)`
+ *  answer(i)    RING.instance == i  → ANSWER := (RING.c, RING.m), RING := ∅,
+ *                                     retire, tell Dart `answered(c,m)`
+ *  dartEnd(c)   clears whichever slot names c
+ *  deadline     RING past its ceiling → retire, ENDED (timer by instance, or
+ *               any read); ANSWER past its trust → cleared
  * ```
  *
- * - **Ringing** puts up the notification and ring screen and warms the engine.
- *   Leaving it by ANY edge goes through [retire], which takes them down — the
- *   one exit, so no path can assume another did the cleanup.
- * - **ENDED** = the ring ended without being taken: a headless engine the ring
- *   started is closed; if an engine survives, Dart is told `ended`.
- * - **Answered** exists so a `call_end` AFTER Answer still reaches Dart: the
- *   caller hangs up while the callee is unlocking, and without this state the
- *   answer joined a room the caller had left. (Carnot + Tesla, round 2.)
- * - **displace** retires the old ring (its screen finishes) before the new one
- *   rings, so the screen never stays bound to a caller who was replaced.
- *   (Tesla, round 2.)
- * - **deadline**: Ringing lasts [RING_CEILING_MS]; Answered lasts
- *   [ANSWERED_TRUST_MS]. Past it the state is Idle whoever reads it — the
- *   backstop timer and every read reach the SAME transition, so the timer can
- *   no longer arrive one millisecond after a read has silently expired the
- *   ring and find nothing to do. (Maxwell, round 2.)
+ * "Same call": both carry an `m` and they are equal; or neither does (v1) and
+ * the channels match. A v1 invite after a v1 answer on the same channel is
+ * dropped as a duplicate — v1 cannot say otherwise, and dropping a re-ring of a
+ * call you are already in is the safer of the two wrong answers.
+ *
+ * Every path that ends a ring goes through [retire]; nothing else takes down
+ * the notification, the ring screen or a ring-started engine. One exit, so no
+ * path can assume another did the cleanup — the backstop bug of PR #210 round
+ * 2 was two paths each assuming exactly that.
  *
  * **PERSISTED, AND DATED IN ONE CLOCK OF ONE BOOT.** The process that starts a
- * ring is not the one that ends it (iOS learned this with UserDefaults), so the
- * state lives in SharedPreferences. Its timestamp is `elapsedRealtime` — the
- * clock the notification timeout and the timer use, so an NTP step cannot split
- * them (Tesla, round 1) — stamped with the BOOT COUNT, because elapsedRealtime
- * restarts at boot and a stamp from a short previous boot can otherwise land
- * inside the window and read as live (Tesla, round 2).
+ * ring is not the one that ends it, so both slots live in SharedPreferences,
+ * stamped with `elapsedRealtime` (the clock the notification timeout and the
+ * timer use) and the boot count (because that clock restarts at boot).
  */
 object CallRing {
   /** `WakeKind` values on the island (`push_result.py`). Add, never edit. */
   const val KIND_INVITE = "call_invite"
   const val KIND_END = "call_end"
 
-  /** Intent extras. `c` is the island's own key for the channel id. */
+  /** Intent extras. `c` and `m` are the island's own keys. */
   const val EXTRA_CHANNEL = "c"
+  const val EXTRA_CALL = "m"
+  const val EXTRA_INSTANCE = "aiko.call.instance"
 
   /**
    * Set on the intent that opens [IncomingCallActivity] from the notification's
@@ -86,14 +90,13 @@ object CallRing {
    * it with `call_end` (design 16 v2 §3). This exists because that end can be
    * lost — the invite/end pair is not atomic (#4325) — and an insistent
    * notification with no end would ring until the battery dies. 60s matches
-   * what CallKit was MEASURED to do on iOS (n=1; see
-   * `reference_voip_must_report_measured`), so the two platforms give up at
-   * about the same moment.
+   * what CallKit was MEASURED to do on iOS (n=1), so the two platforms give up
+   * at about the same moment.
    */
   const val RING_CEILING_MS = 60_000L
 
   /**
-   * How long an Answered state can still be ended by the caller's `call_end`.
+   * How long an answered call can still be ended by the caller's `call_end`.
    * Matches Dart's `kSystemCallRingTrust` (120s) — the window in which an
    * answered-but-not-joined call is held — so the two halves forget an answer
    * at the same moment.
@@ -102,40 +105,31 @@ object CallRing {
 
   /**
    * One line per DECISION, never per payload byte. The first hardware run
-   * (2026-10-05) failed with this file silent: a `call_end` arrived and the
-   * ring did not stop, and the log could not say whether `handle` ran, which
-   * arm it took, or what the state was. An empty log is equally good evidence
-   * for every hypothesis. Channel ids only; they are opaque and already in the
+   * (2026-10-05) failed with this file silent, and an empty log is equally good
+   * evidence for every hypothesis. Ids only; they are opaque and already in the
    * island's own logs.
    */
   private const val TAG = "AikoRing"
 
   private const val PREFS = "aiko_call_ring"
-  private const val KEY_PHASE = "phase"
-  private const val KEY_CHANNEL = "channel"
-  private const val KEY_AT = "at"
-  private const val KEY_BOOT = "boot"
 
-  /** The non-Idle states of the table above. Persisted by name. */
-  private enum class Phase { RINGING, ANSWERED }
+  private data class Ring(val channel: String, val callId: String?, val instance: Long)
 
-  private data class State(val phase: Phase, val channel: String, val at: Long)
+  private data class Answered(val channel: String, val callId: String?, val at: Long)
 
   private val main = Handler(Looper.getMainLooper())
 
-  /** Guards the record: FCM's worker and the main thread both read-modify-write it. */
+  /** Guards both slots: FCM's worker and the main thread read-modify-write them. */
   private val lock = Any()
 
-  /** Anything that must vanish when the ring stops — the lock-screen activity. */
+  /** Anything that must vanish when ITS ring stops — the lock-screen activity. */
   fun interface StopListener {
-    fun onRingStopped(channelId: String)
+    fun onRingStopped(instance: Long)
   }
 
   // Copy-on-write so [retire] can snapshot from any thread while an activity
-  // registers on main. Registration is SYNCHRONOUS: it used to be posted, so a
-  // stop landing between the ring screen's "is this ringing?" check and its
-  // registration ran first, finished nobody, and left a stale call screen up.
-  // (Tesla, PR #210 round 1.)
+  // registers on main. Registration is synchronous: it used to be posted, and a
+  // stop landing in that gap finished nobody (PR #210 round 1).
   private val stopListeners = CopyOnWriteArraySet<StopListener>()
 
   fun addStopListener(l: StopListener) { stopListeners.add(l) }
@@ -143,256 +137,284 @@ object CallRing {
   fun removeStopListener(l: StopListener) { stopListeners.remove(l) }
 
   /**
-   * One FCM delivery. **Permissive decode** — the cross-repo obligation design
-   * 16 v2 §7c names for iOS holds here too: read the keys we know, ignore the
-   * rest, never fail on an extra one, so the island can add fields without a
-   * payload version.
+   * One FCM delivery. **Permissive decode**: read the keys we know, ignore the
+   * rest, never fail on an extra one (design 16 v2 §7c). A missing `m` means a
+   * v1 call, and nothing else — the island sends `m` exactly for v2.
    *
    * **SYNCHRONOUS, ON FCM'S WORKER, INSIDE ITS WAKE LOCK.** The service holds a
-   * partial wake lock only until `onMessageReceived` returns, and a clean
-   * return marks the push consumed. The state transition, the notification and
-   * the stop all happen before this returns; only what truly needs the main
-   * thread (the engine, the listeners) is posted. (Tesla, PR #210 round 1.)
+   * partial wake lock only until `onMessageReceived` returns; the transition,
+   * the notification and the stop all happen before this returns, and only the
+   * engine and the listeners are posted to main. (PR #210 round 1.)
    */
   fun handle(context: Context, data: Map<String, String>) {
-    // A calling-off build (every store build until 0.0.6) never rings, even
-    // with an island sending call wakes. Same flag as Dart's, same build.
+    // A calling-off build never rings, even with an island sending call wakes.
     if (!BuildConfig.CALLING_ENABLED) {
       Log.i(TAG, "handle: calling disabled in this build, k=${data["k"]}")
       return
     }
-    Log.i(TAG, "handle: k=${data["k"]} c=${data["c"]}")
     val app = context.applicationContext
     val channel = data["c"]?.takeIf { it.isNotEmpty() }
+    // A present-but-malformed `m` is not "v1": the island only ever copies a
+    // grammar-checked id out of the signed body, so a bad one is a bad payload,
+    // and a bad payload never rings.
+    val rawCall = data["m"]
+    val callId = rawCall?.takeIf { CALL_ID.matches(it) }
+    Log.i(TAG, "handle: k=${data["k"]} c=$channel m=$rawCall")
+    if (rawCall != null && callId == null) return
     when (data["k"]) {
-      // An invite with no usable channel could never be answered — the iOS
-      // `where` clause, for the same reason: ringing a doorbell that cannot
-      // open is worse than not ringing.
-      KIND_INVITE -> if (channel != null) ring(app, channel)
-      KIND_END -> if (channel != null) stop(app, channel)
-      // Unknown or missing `k`: NEVER ring. A third kind added island-side
-      // must not become a ring on an older build. Ordinary message wakes, when
-      // they exist, also land here, and the plugin's receiver still hands them
-      // to Dart — this function only decides whether to RING.
+      KIND_INVITE -> if (channel != null) ring(app, channel, callId)
+      KIND_END -> if (channel != null) end(app, channel, callId)
+      // Unknown or missing `k`: NEVER ring (a kind added island-side must not
+      // become a ring on an older build). Ordinary message wakes land here too;
+      // the plugin's receiver still hands them to Dart.
       else -> Unit
     }
   }
 
-  /** The channel ringing on this device right now — the Ringing row only. */
-  fun ringingChannel(context: Context): String? =
-    current(context.applicationContext)?.takeIf { it.phase == Phase.RINGING }?.channel
+  /**
+   * The SAME grammar as `call_wire.dart` and the island's `parse_call_body`:
+   * canonical uppercase Crockford, leading 0-7 (fits 128 bits).
+   */
+  private val CALL_ID = Regex("[0-7][0-9A-HJKMNP-TV-Z]{25}")
+
+  /** The live ring's instance, if [channel] is ringing — for the ring screen. */
+  fun ringingInstance(context: Context, channel: String): Long? =
+    ringSlot(context.applicationContext)?.takeIf { it.channel == channel }?.instance
+
+  /** Whether any ring is live — MainActivity keeps the engine for it. */
+  fun isRinging(context: Context): Boolean = ringSlot(context.applicationContext) != null
+
+  /** Whether [instance] is the ring that is live right now. */
+  fun isLive(context: Context, instance: Long): Boolean =
+    ringSlot(context.applicationContext)?.instance == instance
 
   // ---- transitions ---------------------------------------------------------
 
-  /** invite(c). */
-  private fun ring(app: Context, channel: String) {
-    var displaced: String? = null
-    val at: Long
+  private fun sameCall(aChannel: String, aCall: String?, bChannel: String, bCall: String?) =
+    if (aCall != null || bCall != null) aCall == bCall else aChannel == bChannel
+
+  /** invite(c, m). */
+  private fun ring(app: Context, channel: String, callId: String?) {
+    var displaced: Ring? = null
+    val ring: Ring
     synchronized(lock) {
-      val was = current(app)
-      // ONE CALL ARRIVING TWICE is normal — two tokens for one handset, or an
-      // FCM retry — and on iOS the duplicate was the whole 2026-09-20 bug.
-      // Re-posting would restart the ringtone mid-ring and re-arm the backstop,
-      // extending a ring the caller may already have ended.
-      if (was?.phase == Phase.RINGING && was.channel == channel) {
-        Log.i(TAG, "ring: duplicate for $channel, ignored")
+      val live = ringSlot(app)
+      val answered = answerSlot(app)
+      if (live != null && sameCall(live.channel, live.callId, channel, callId)) {
+        Log.i(TAG, "ring: duplicate of the live ring (c=$channel m=$callId), ignored")
         return
       }
-      if (was?.phase == Phase.RINGING) displaced = was.channel
-      at = SystemClock.elapsedRealtime()
-      write(app, State(Phase.RINGING, channel, at))
+      if (answered != null && sameCall(answered.channel, answered.callId, channel, callId)) {
+        // The second token, or an FCM retry, arriving after the user already
+        // answered. Re-ringing would sound a call they are in. (PR #210 r3.)
+        Log.i(TAG, "ring: duplicate of the answered call (c=$channel m=$callId), ignored")
+        return
+      }
+      displaced = live
+      ring = Ring(channel, callId, SystemClock.elapsedRealtime())
+      writeRing(app, ring)
     }
     // displace: the old ring is retired BEFORE the new one is drawn, so its
-    // screen finishes rather than staying bound to a replaced caller, and the
-    // new notification's full-screen intent is a fresh launch, not an update.
+    // screen finishes (by instance) rather than staying bound to a replaced
+    // caller, and the new full-screen intent is a fresh launch.
     displaced?.let {
-      Log.i(TAG, "ring: $it displaced by $channel")
+      Log.i(TAG, "ring: ${it.channel}/${it.callId} displaced")
       retire(app, it, ended = false)
     }
-    Log.i(TAG, "ring: $channel")
-    IncomingCallNotifier.show(app, channel, "Aiko Chat")
+    Log.i(TAG, "ring: c=$channel m=$callId instance=${ring.instance}")
+    IncomingCallNotifier.show(app, channel, callId, ring.instance, "Aiko Chat")
     // Start Dart NOW, while the phone rings, exactly as a VoIP push starts the
-    // Flutter engine on iOS. The signed invitation reaches this device over the
-    // websocket and `admitRing` judges it inside its 10s freshness window — so
-    // an Answer pressed twenty seconds later finds an invitation already
-    // admitted (held for `kSystemCallRingTrust`). Started from the Answer
-    // instead, the invitation would arrive as history, aged past the window,
-    // and every call answered from a cold phone would be refused as `stale`:
-    // the #3588 trap. The engine is main-thread only, so this one step posts.
+    // Flutter engine on iOS: the signed invitation is admitted inside its 10s
+    // freshness window while ringing, and held for kSystemCallRingTrust — so a
+    // late Answer finds it admitted (the #3588 trap). Main-thread only.
     main.post { AikoEngine.warm(app) }
-    // The deadline, armed as a TIMER for a process that stays alive. It is not
-    // the only way the deadline fires — every read applies it too — and it
-    // reaches the same transition, keyed on `at` so a timer from an older ring
-    // of this channel cannot end a newer one.
-    main.postDelayed({ deadline(app, channel, at) }, RING_CEILING_MS)
+    main.postDelayed({ deadline(app, ring.instance) }, RING_CEILING_MS)
   }
 
-  /**
-   * end(c) / decline(c): the caller hung up, or the user declined. Any thread.
-   * A channel this device is not ringing or holding an answer for is a no-op —
-   * Android owes nobody a report for it.
-   */
-  fun stop(context: Context, channel: String) {
+  /** end(c, m): the caller hung up. Any thread. */
+  private fun end(app: Context, channel: String, callId: String?) {
+    var ended: Ring? = null
+    var hungUpAfterAnswer: Answered? = null
+    synchronized(lock) {
+      val live = ringSlot(app)
+      if (live != null && sameCall(live.channel, live.callId, channel, callId)) {
+        clearRing(app); ended = live
+      } else {
+        val answered = answerSlot(app)
+        if (answered != null && sameCall(answered.channel, answered.callId, channel, callId)) {
+          clearAnswer(app); hungUpAfterAnswer = answered
+        }
+      }
+    }
+    ended?.let {
+      Log.i(TAG, "end: c=$channel m=$callId stopped while ringing")
+      retire(app, it, ended = true)
+      return
+    }
+    hungUpAfterAnswer?.let {
+      // Answered, then the caller hung up before the join. The ring is already
+      // down; what is left is the answer Dart is holding, and `ended` is what
+      // drops it — so the camera never opens into a room the caller left.
+      Log.i(TAG, "end: c=$channel m=$callId ended after answer")
+      CallChannels.emit(CallChannels.ACTION_ENDED, it.channel, it.callId)
+      return
+    }
+    Log.i(TAG, "end: c=$channel m=$callId names no call on this device, no-op")
+  }
+
+  /** decline(instance): the user declined THIS ring. */
+  fun decline(context: Context, instance: Long) {
     val app = context.applicationContext
-    val was = synchronized(lock) {
-      current(app)?.takeIf { it.channel == channel }?.also { clear(app) }
+    val live = synchronized(lock) {
+      ringSlot(app)?.takeIf { it.instance == instance }?.also { clearRing(app) }
     }
-    when (was?.phase) {
-      Phase.RINGING -> {
-        Log.i(TAG, "stop: $channel stopped while ringing")
-        retire(app, channel, ended = true)
-      }
-      Phase.ANSWERED -> {
-        // Answered, then the caller hung up before the join. The ring is
-        // already down; what is left is the answer Dart is holding, and
-        // `ended` is the action that drops it — so the camera never opens into
-        // a room the caller has left. Answering opened the app, so there is an
-        // engine to tell.
-        Log.i(TAG, "stop: $channel ended after answer")
-        CallChannels.emit(CallChannels.ACTION_ENDED, channel)
-      }
-      null -> Log.i(TAG, "stop: $channel is not this device's ring, no-op")
+    if (live == null) {
+      Log.i(TAG, "decline: instance $instance is not live, no-op")
+      return
     }
+    Log.i(TAG, "decline: c=${live.channel} m=${live.callId}")
+    retire(app, live, ended = true)
   }
 
   /**
-   * answer(c). Called ONLY from [IncomingCallActivity], which is not exported:
-   * an exported component that answers on an intent extra would let any app on
-   * the device open the camera into a call, given a channel id — and channel
-   * ids are not secrets. (Maxwell, PR #210 round 1.)
+   * answer(instance). Called ONLY from [IncomingCallActivity], which is not
+   * exported — an exported component that answers on an intent extra would let
+   * any app on the device open the camera into a call. (PR #210 round 1.)
    *
-   * Returns whether there was a ring to answer — a stale intent (an Answer
-   * tapped after the ring ended) must not reach Dart as a fresh answer.
+   * Keyed by INSTANCE, so an unlock that completes after this ring was displaced
+   * answers nothing rather than the call that replaced it. (PR #210 round 3.)
+   * Returns whether there was a ring to answer.
    */
-  fun answer(context: Context, channel: String): Boolean {
+  fun answer(context: Context, instance: Long): Boolean {
     val app = context.applicationContext
-    val ok = synchronized(lock) {
-      val was = current(app)
-      (was?.phase == Phase.RINGING && was.channel == channel).also {
-        if (it) write(app, State(Phase.ANSWERED, channel, SystemClock.elapsedRealtime()))
+    val live = synchronized(lock) {
+      ringSlot(app)?.takeIf { it.instance == instance }?.also {
+        clearRing(app)
+        writeAnswer(app, Answered(it.channel, it.callId, SystemClock.elapsedRealtime()))
       }
     }
-    if (!ok) {
-      Log.i(TAG, "answer: $channel is not ringing, refused")
+    if (live == null) {
+      Log.i(TAG, "answer: instance $instance is not live, refused")
       return false
     }
-    Log.i(TAG, "answer: $channel")
-    retire(app, channel, ended = false)
-    CallChannels.emit(CallChannels.ACTION_ANSWERED, channel)
+    Log.i(TAG, "answer: c=${live.channel} m=${live.callId}")
+    retire(app, live, ended = false)
+    CallChannels.emit(CallChannels.ACTION_ANSWERED, live.channel, live.callId)
     return true
   }
 
   /**
    * dartEnd(c): Dart's `endSystemCall` — the in-app ring was answered or
-   * ignored, a join failed, a call screen closed. Safe for any channel; that is
-   * the bridge's documented contract, so the call screen's teardown can call it
-   * without knowing how the call began. Tells Dart nothing: Dart is deciding.
+   * ignored, a join failed, a call screen closed. Safe for any channel (the
+   * bridge's documented contract). Tells Dart nothing: Dart is deciding.
    */
   fun endFromDart(context: Context, channel: String) {
     val app = context.applicationContext
-    val was = synchronized(lock) {
-      current(app)?.takeIf { it.channel == channel }?.also { clear(app) }
+    var ring: Ring? = null
+    synchronized(lock) {
+      ringSlot(app)?.takeIf { it.channel == channel }?.let { clearRing(app); ring = it }
+      answerSlot(app)?.takeIf { it.channel == channel }?.let { clearAnswer(app) }
     }
-    Log.i(TAG, "endFromDart: $channel was=${was?.phase}")
-    if (was?.phase == Phase.RINGING) retire(app, channel, ended = false)
+    Log.i(TAG, "endFromDart: $channel ringing=${ring != null}")
+    ring?.let { retire(app, it, ended = false) }
   }
 
-  /** deadline, from the timer: the ring it was armed for, if still current. */
-  private fun deadline(app: Context, channel: String, at: Long) {
-    // Identity, not age. Reading through current() would apply the deadline
-    // itself and retire there — also correct — but matching (channel, at)
-    // directly makes this timer end exactly the ring it was armed for.
-    val expired = synchronized(lock) {
-      val was = read(app)
-      (was?.phase == Phase.RINGING && was.channel == channel && was.at == at)
-        .also { if (it) clear(app) }
+  /** The deadline timer: the ring it was armed for, if still current. */
+  private fun deadline(app: Context, instance: Long) {
+    val live = synchronized(lock) {
+      readRing(app)?.takeIf { it.instance == instance }?.also { clearRing(app) }
     }
-    if (expired) {
-      Log.i(TAG, "deadline: $channel hit ${RING_CEILING_MS}ms")
-      retire(app, channel, ended = true)
+    if (live != null) {
+      Log.i(TAG, "deadline: c=${live.channel} hit ${RING_CEILING_MS}ms")
+      retire(app, live, ended = true)
     }
   }
 
-  // ---- the one exit from Ringing --------------------------------------------
+  // ---- the one exit from a ring ---------------------------------------------
 
   /**
-   * Takes down everything Ringing put up: the notification, the ring screen
-   * (via the stop listeners) and — when the ring [ended] without being taken —
-   * the headless engine it started, or, if an engine survives, tells Dart.
+   * Takes down everything a ring put up: the notification, the ring screen
+   * bound to THIS instance, and — when the ring [ended] without being taken —
+   * the headless engine it started, or, if an engine survives, tells Dart which
+   * call ended. The slot is already cleared by the caller.
    */
-  private fun retire(app: Context, channel: String, ended: Boolean) {
-    IncomingCallNotifier.dismiss(app)
+  private fun retire(app: Context, ring: Ring, ended: Boolean) {
+    IncomingCallNotifier.dismiss(app, ring.instance)
     val listeners = stopListeners.toList()
     main.post {
-      listeners.forEach { it.onRingStopped(channel) }
+      listeners.forEach { it.onRingStopped(ring.instance) }
       if (!ended) return@post
-      // ORDER IS THE FIX. Emitting first and destroying second queued `ended`
-      // on the main looper, then tore the engine down before it ran, so it
-      // landed in CallChannels' held buffer and was delivered to the NEXT
-      // engine, hours later. A still-headless engine cannot be holding an
-      // answer — answering attaches an activity — so when it is destroyed
-      // there is nobody to tell. (Maxwell + Carnot + Tesla, round 1.)
+      // A still-headless engine cannot be holding an answer — answering
+      // attaches an activity — so when it is destroyed there is nobody to tell.
+      // Deciding that BEFORE emitting is what stops an `ended` from outliving
+      // its engine. (PR #210 round 1.)
       if (!AikoEngine.releaseIfHeadless()) {
-        CallChannels.emit(CallChannels.ACTION_ENDED, channel)
+        CallChannels.emit(CallChannels.ACTION_ENDED, ring.channel, ring.callId)
       }
     }
   }
 
   // ---- persistence: the only code that touches the record ------------------
 
-  /**
-   * The live state, with its deadline APPLIED. A Ringing state past its
-   * deadline is retired here, by whoever happens to read it — so a process
-   * that died before its timer fired cannot strand a ring. Takes [lock]
-   * itself (reentrant), so callers already holding it are fine.
-   */
-  private fun current(app: Context): State? {
-    val expired: State
+  /** The live ring, deadline APPLIED: a ring past its ceiling is retired here. */
+  private fun ringSlot(app: Context): Ring? {
+    val expired: Ring
     synchronized(lock) {
-      val s = read(app) ?: return null
-      val age = SystemClock.elapsedRealtime() - s.at
-      val limit = if (s.phase == Phase.RINGING) RING_CEILING_MS else ANSWERED_TRUST_MS
-      if (age in 0..limit) return s
-      clear(app)
-      expired = s
+      val r = readRing(app) ?: return null
+      val age = SystemClock.elapsedRealtime() - r.instance
+      if (age in 0..RING_CEILING_MS) return r
+      clearRing(app)
+      expired = r
     }
-    if (expired.phase == Phase.RINGING) {
-      Log.i(TAG, "deadline: ${expired.channel} expired on read")
-      retire(app, expired.channel, ended = true)
-    }
+    Log.i(TAG, "deadline: c=${expired.channel} expired on read")
+    retire(app, expired, ended = true)
     return null
   }
 
-  /** The raw record, or null if absent, malformed, or from another boot. */
-  private fun read(app: Context): State? {
-    val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    val phase = p.getString(KEY_PHASE, null)
-      ?.let { n -> Phase.entries.firstOrNull { it.name == n } }
-    val channel = p.getString(KEY_CHANNEL, null)
-    if (phase == null || channel == null) return null
-    // A record from ANOTHER BOOT describes a ring no notification survived,
-    // whatever its elapsedRealtime says — that clock restarts at boot.
-    if (p.getInt(KEY_BOOT, -1) != bootCount(app)) return null
-    return State(phase, channel, p.getLong(KEY_AT, 0L))
+  /** The live answer, trust APPLIED. */
+  private fun answerSlot(app: Context): Answered? = synchronized(lock) {
+    val a = readAnswer(app) ?: return null
+    val age = SystemClock.elapsedRealtime() - a.at
+    if (age in 0..ANSWERED_TRUST_MS) a else { clearAnswer(app); null }
+  }
+
+  private fun prefs(app: Context) = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+  private fun readRing(app: Context): Ring? {
+    val p = prefs(app)
+    val channel = p.getString("r_channel", null) ?: return null
+    if (p.getInt("r_boot", -1) != bootCount(app)) return null
+    return Ring(channel, p.getString("r_call", null), p.getLong("r_at", 0L))
+  }
+
+  private fun readAnswer(app: Context): Answered? {
+    val p = prefs(app)
+    val channel = p.getString("a_channel", null) ?: return null
+    if (p.getInt("a_boot", -1) != bootCount(app)) return null
+    return Answered(channel, p.getString("a_call", null), p.getLong("a_at", 0L))
   }
 
   // commit(), not apply(): this process may be killed the moment FCM's
   // callback returns, and a state that never reached disk makes the next
-  // process misjudge a real redial as a duplicate. (Tesla, round 1.)
-  private fun write(app: Context, s: State) {
-    app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-      .putString(KEY_PHASE, s.phase.name)
-      .putString(KEY_CHANNEL, s.channel)
-      .putLong(KEY_AT, s.at)
-      .putInt(KEY_BOOT, bootCount(app))
-      .commit()
+  // process misjudge a real call. (PR #210 round 1.)
+  private fun writeRing(app: Context, r: Ring) {
+    prefs(app).edit()
+      .putString("r_channel", r.channel).putString("r_call", r.callId)
+      .putLong("r_at", r.instance).putInt("r_boot", bootCount(app)).commit()
   }
 
-  /** Only this file's keys — never `clear()` the file. (Kelvin, round 1.) */
-  private fun clear(app: Context) {
-    app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-      .remove(KEY_PHASE).remove(KEY_CHANNEL).remove(KEY_AT).remove(KEY_BOOT)
-      .commit()
+  private fun writeAnswer(app: Context, a: Answered) {
+    prefs(app).edit()
+      .putString("a_channel", a.channel).putString("a_call", a.callId)
+      .putLong("a_at", a.at).putInt("a_boot", bootCount(app)).commit()
+  }
+
+  private fun clearRing(app: Context) {
+    prefs(app).edit().remove("r_channel").remove("r_call").remove("r_at").remove("r_boot").commit()
+  }
+
+  private fun clearAnswer(app: Context) {
+    prefs(app).edit().remove("a_channel").remove("a_call").remove("a_at").remove("a_boot").commit()
   }
 
   /** `Settings.Global.BOOT_COUNT` (API 24+, our minSdk). -2 if unreadable. */

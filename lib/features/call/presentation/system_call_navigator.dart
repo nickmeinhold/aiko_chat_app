@@ -132,6 +132,9 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// The channel of an answered call we have not joined yet. See the class doc.
   String? _answered;
 
+  /// The v2 call id of the held answer, when the native side named one.
+  String? _answeredCallId;
+
   /// Channels whose invitation [admitRing] ADMITTED, and when.
   ///
   /// **A MEMORY OF ADMISSION, NOT A READING OF THE LIVE RING** — and the
@@ -156,7 +159,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// wall-clock comparison is unreachable by `tester.pump`, so the expiry it
   /// claimed could not be tested at all, and an expiry no test can reach is an
   /// expiry nobody should believe in.
-  final Map<String, Timer> _admitted = {};
+  final Map<String, ({String? callId, Timer timer})> _admitted = {};
 
   /// How long the held answer may wait for its invitation to be admitted.
   ///
@@ -188,8 +191,8 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   @override
   void dispose() {
     _sub?.cancel();
-    for (final timer in _admitted.values) {
-      timer.cancel();
+    for (final a in _admitted.values) {
+      a.timer.cancel();
     }
     _joinDeadline?.cancel();
     super.dispose();
@@ -215,13 +218,16 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     );
     switch (action.kind) {
       case SystemCallActionKind.answered:
-        _hold(action.channelId);
+        _hold(action.channelId, callId: action.callId);
       case SystemCallActionKind.ended:
         // The native side has ALREADY ended this call, so the hold is dropped
         // without ending it again: the user answered and then hung up before
         // the session was ready, and joining now would open a call they have
         // already left.
-        if (_answered == action.channelId) {
+        // SAME CALL, not same channel: an `ended` for an older call on this
+        // channel (v2 names it) must not drop the answer to a newer one.
+        if (_answered == action.channelId &&
+            (action.callId == null || action.callId == _answeredCallId)) {
           _telemetry.answerResolved(
             action.channelId,
             AnswerOutcome.endedInSystemUi,
@@ -263,7 +269,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// stuck in `AsyncLoading` never reached the old arming site and so held
   /// forever, and arming per-attempt made the clock resettable by unrelated
   /// provider traffic. Held once, clocked once.
-  void _hold(String channelId) {
+  void _hold(String channelId, {String? callId}) {
     _telemetry.answerHeld(channelId);
     final displaced = _answered;
     // CONSERVATION OF OWNERSHIP: a second answer does not silently forget the
@@ -274,6 +280,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       _release(displaced);
     }
     _answered = channelId;
+    _answeredCallId = callId;
     _joinDeadline?.cancel();
     _joinDeadline = Timer(kInAppRingDuration, () {
       // No admitted invitation inside the window the invitation itself would
@@ -292,10 +299,13 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// Remember that [admitRing] admitted an invitation for this channel.
   void _recordAdmission(CallInvite? invite) {
     if (invite != null) {
-      _admitted[invite.channelId]?.cancel();
-      _admitted[invite.channelId] = Timer(
-        kSystemCallRingTrust,
-        () => _admitted.remove(invite.channelId),
+      _admitted[invite.channelId]?.timer.cancel();
+      _admitted[invite.channelId] = (
+        callId: invite.callId,
+        timer: Timer(
+          kSystemCallRingTrust,
+          () => _admitted.remove(invite.channelId),
+        ),
       );
     }
     _tryJoin();
@@ -309,11 +319,21 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// `system_call_channel_contract_test.dart` rather than by a comment. Past it
   /// the native map has stopped believing in the ring too, so there is nothing
   /// left for an admission to be proof of.
-  bool _wasAdmitted(String channelId) => _admitted.containsKey(channelId);
+  /// Admitted, AND the same call the answer names. For a v2 answer the call id
+  /// must match the admitted invitation's: on one channel, an answer to call A
+  /// must never join a call B that was admitted after it. A v1 answer (no id)
+  /// keeps the channel-only rule — the weakness stays confined to v1.
+  bool _wasAdmitted(String channelId) {
+    final a = _admitted[channelId];
+    if (a == null) return false;
+    final wanted = _answeredCallId;
+    return wanted == null || a.callId == wanted;
+  }
 
   /// The held answer became a call. Drop the hold; end nothing.
   void _consume() {
     _answered = null;
+    _answeredCallId = null;
     _joinDeadline?.cancel();
     _joinDeadline = null;
   }

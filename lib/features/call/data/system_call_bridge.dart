@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../domain/call_wire.dart' show isCallId;
 import '../domain/system_call_action.dart';
 
 /// The two-way seam between the platform's call UI and this app's call
@@ -85,10 +86,14 @@ class NativeSystemCallBridge implements SystemCallBridge {
     final channelId = event['channel'];
     if (kind == null || channelId is! String || channelId.isEmpty) return null;
     final origin = event['origin'];
+    final call = event['call'];
     return SystemCallAction(
       kind: kind,
       channelId: channelId,
       origin: origin is String && origin.isNotEmpty ? origin : null,
+      // Only a canonical id is an id: anything else is treated as absent
+      // (v1), never as a key that could match something by accident.
+      callId: call is String && isCallId(call) ? call : null,
     );
   }
 

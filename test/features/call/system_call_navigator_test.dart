@@ -558,6 +558,50 @@ void main() {
     );
     expect(container.read(systemCallBridgeProvider), isNull);
   });
+
+  // ---- v2: one channel, two calls (design 21 v2) ----------------------------
+  const callA = '01JABCDEFGHJKMNPQRSTVWXYZ0';
+  const callB = '7ZZZZZZZZZZZZZZZZZZZZZZZZZ';
+
+  testWidgets('an ENDED for another call on this channel keeps the answer', (
+    tester,
+  ) async {
+    // The remains of an older call (its ring expired, its `ended` delivered
+    // late) must not drop the answer the user just gave to a newer one. v1
+    // could not tell them apart; v2 names the call.
+    await tester.pumpWidget(harness(session: _Session.restoring));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel, callId: callA);
+    bridge.emit(SystemCallActionKind.ended, channel, callId: callB);
+    await tester.pumpAndSettle();
+    ring.admit(channel, callId: callA);
+    auth.signIn(me);
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL $channel'), findsOneWidget);
+  });
+
+  testWidgets('an answer to call A never joins call B on the same channel', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel, callId: callA);
+    await tester.pumpAndSettle();
+    ring.admit(channel, callId: callB);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('CALL $channel'),
+      findsNothing,
+      reason: 'admitted, but a DIFFERENT call — the answer was not for it',
+    );
+
+    ring.admit(channel, callId: callA);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsOneWidget);
+  });
 }
 
 /// A stand-in for CallKit. The real one is an `EventChannel` fed by
@@ -568,8 +612,10 @@ class _FakeBridge implements SystemCallBridge {
   final _controller = StreamController<SystemCallAction>.broadcast();
   final List<String> ended = [];
 
-  void emit(SystemCallActionKind kind, String channelId) =>
-      _controller.add(SystemCallAction(kind: kind, channelId: channelId));
+  void emit(SystemCallActionKind kind, String channelId, {String? callId}) =>
+      _controller.add(
+        SystemCallAction(kind: kind, channelId: channelId, callId: callId),
+      );
 
   @override
   Stream<SystemCallAction> get actions => _controller.stream;
@@ -631,8 +677,9 @@ class _FakeRing extends RingController {
   _FakeRing([this._initialChannel]);
   final String? _initialChannel;
 
-  static CallInvite inviteFor(String channelId) => CallInvite(
-    inviteId: 'inv-$channelId',
+  static CallInvite inviteFor(String channelId, {String? callId}) => CallInvite(
+    callId: callId,
+    inviteId: 'inv-$channelId-${callId ?? 'v1'}',
     islandMsgId: 'srv-$channelId',
     channelId: channelId,
     from: const MessageSender(
@@ -652,5 +699,6 @@ class _FakeRing extends RingController {
 
   /// `admitRing` accepted an invitation for [channelId] — the websocket
   /// delivered it and the signature checked out.
-  void admit(String channelId) => state = inviteFor(channelId);
+  void admit(String channelId, {String? callId}) =>
+      state = inviteFor(channelId, callId: callId);
 }

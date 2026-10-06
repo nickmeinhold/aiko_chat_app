@@ -28,10 +28,17 @@ import android.widget.TextView
  * window on a cold process, before any Flutter frame could.
  */
 class IncomingCallActivity : Activity() {
-  private var channel: String? = null
+  /**
+   * The ring this screen shows — its INSTANCE, not its channel. A channel can
+   * carry several rings in a minute; an instance is exactly one. Everything
+   * this screen does (finish on stop, Answer, Decline, the unlock callback) is
+   * keyed on it, so nothing here can act on a ring that replaced this one.
+   * (design 21 v2; PR #210 round 3.)
+   */
+  private var instance: Long = -1L
 
   private val onStopped = CallRing.StopListener { stopped ->
-    if (stopped == channel) finish()
+    if (stopped == instance) finish()
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,15 +66,15 @@ class IncomingCallActivity : Activity() {
   }
 
   private fun bind(intent: Intent) {
-    val c = intent.getStringExtra(CallRing.EXTRA_CHANNEL)
+    val i = intent.getLongExtra(CallRing.EXTRA_INSTANCE, -1L)
     // A ring that already ended (caller hung up while the screen was waking)
     // gets no screen — a call UI for a call that is gone is the phantom this
     // whole arc keeps having to remove.
-    if (c == null || CallRing.ringingChannel(this) != c) {
+    if (i < 0 || !CallRing.isLive(this, i)) {
       finish()
       return
     }
-    channel = c
+    instance = i
     // The notification's Answer button lands here rather than on MainActivity:
     // this activity is not exported, so it is the only door that answers.
     if (intent.getBooleanExtra(CallRing.EXTRA_AUTO_ANSWER, false)) {
@@ -95,7 +102,10 @@ class IncomingCallActivity : Activity() {
   }
 
   private fun answer() {
-    val c = channel ?: return
+    // CAPTURED: the unlock prompt may outlive this ring. If another ring
+    // displaces it while the bouncer is up, onNewIntent rebinds [instance] —
+    // and this callback must still mean the ring the user pressed Answer on.
+    val i = instance.takeIf { it >= 0 } ?: return
     val keyguard = getSystemService(KeyguardManager::class.java)
     if (keyguard != null && keyguard.isKeyguardLocked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       // The unlock is the gate between a call screen and the app. Cancelled
@@ -103,29 +113,35 @@ class IncomingCallActivity : Activity() {
       keyguard.requestDismissKeyguard(
         this,
         object : KeyguardManager.KeyguardDismissCallback() {
-          override fun onDismissSucceeded() = openAnswered(c)
+          override fun onDismissSucceeded() = openAnswered(i)
         },
       )
     } else {
-      openAnswered(c)
+      openAnswered(i)
     }
   }
 
-  private fun openAnswered(c: String) {
+  private fun openAnswered(i: Long) {
     // Answer HERE, then open the app with no call extras at all. A ring that
-    // ended while the unlock prompt was up is refused by CallRing and opens
-    // nothing — the user unlocked, and lands on their phone, not a dead call.
-    if (CallRing.answer(this, c)) {
+    // ended or was displaced while the unlock prompt was up is refused by
+    // CallRing and opens nothing.
+    if (CallRing.answer(this, i)) {
       startActivity(
         Intent(this, MainActivity::class.java)
           .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
       )
+      finish()
+      return
     }
-    finish()
+    // Refused. Finish only if this screen still shows THAT ring — if it has
+    // been rebound to the ring that displaced it, the new caller's screen
+    // stays up. (Tesla, PR #210 round 3: the stale callback used to finish the
+    // new caller's screen.)
+    if (instance == i) finish()
   }
 
   private fun decline() {
-    channel?.let { CallRing.stop(this, it) }
+    if (instance >= 0) CallRing.decline(this, instance)
     finish()
   }
 

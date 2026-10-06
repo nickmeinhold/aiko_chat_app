@@ -77,10 +77,19 @@ object CallChannels {
     sink = null
   }
 
-  /** Thread-safe: FCM delivers on a worker thread, and the sink is main-only. */
-  fun emit(action: String, channel: String) {
+  /**
+   * Thread-safe: FCM delivers on a worker thread, and the sink is main-only.
+   * [callId] rides as `call` when the call has one (v2), so Dart can tell an
+   * `ended` for THIS call from the remains of an older one on the same
+   * channel. Absent for v1 — never null, never "".
+   */
+  fun emit(action: String, channel: String, callId: String? = null) {
     main.post {
-      val event = mapOf("action" to action, "channel" to channel)
+      val event = buildMap {
+        put("action", action)
+        put("channel", channel)
+        if (callId != null) put("call", callId)
+      }
       val live = sink
       if (live != null) {
         live.success(event)

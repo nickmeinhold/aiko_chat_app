@@ -98,7 +98,13 @@ object IncomingCallNotifier {
    * island's push payload uses (`c`), so there is one name for this value across
    * the wire, the iOS delegate and here.
    */
-  fun show(context: Context, channelId: String, callerLabel: String) {
+  fun show(
+    context: Context,
+    channelId: String,
+    callId: String?,
+    instance: Long,
+    callerLabel: String,
+  ) {
     ensureChannel(context)
 
     // The full-screen target is the NATIVE ring screen, never the app — see
@@ -109,7 +115,7 @@ object IncomingCallNotifier {
       REQUEST_RING,
       Intent(context, IncomingCallActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION
-        putExtra(CallRing.EXTRA_CHANNEL, channelId)
+        putRing(channelId, callId, instance)
       },
       // IMMUTABLE is required from S and is correct here regardless: nothing
       // outside this process has any business rewriting the target.
@@ -125,7 +131,7 @@ object IncomingCallNotifier {
       REQUEST_ANSWER,
       Intent(context, IncomingCallActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        putExtra(CallRing.EXTRA_CHANNEL, channelId)
+        putRing(channelId, callId, instance)
         putExtra(CallRing.EXTRA_AUTO_ANSWER, true)
       },
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -134,7 +140,7 @@ object IncomingCallNotifier {
       context,
       REQUEST_DECLINE,
       Intent(context, CallDeclineReceiver::class.java)
-        .putExtra(CallRing.EXTRA_CHANNEL, channelId),
+        .apply { putRing(channelId, callId, instance) },
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -175,8 +181,19 @@ object IncomingCallNotifier {
     }
   }
 
-  /** Stop ringing — answered, ignored, retracted, or expired. */
-  fun dismiss(context: Context) {
+  /**
+   * Every intent this ring creates carries all three: the channel, the call's
+   * identity (`m`, absent for v1), and THIS ring's instance — so whatever acts
+   * on the intent later acts on this ring, or on nothing. (design 21 v2)
+   */
+  private fun Intent.putRing(channelId: String, callId: String?, instance: Long) {
+    putExtra(CallRing.EXTRA_CHANNEL, channelId)
+    if (callId != null) putExtra(CallRing.EXTRA_CALL, callId)
+    putExtra(CallRing.EXTRA_INSTANCE, instance)
+  }
+
+  /** Stop ringing — answered, declined, ended, displaced, or expired. */
+  fun dismiss(context: Context, @Suppress("UNUSED_PARAMETER") instance: Long) {
     NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
   }
 }
