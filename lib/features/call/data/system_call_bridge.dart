@@ -35,7 +35,12 @@ abstract class SystemCallBridge {
   /// path ([CallScreen.dispose]) fires for outgoing calls and in-app answers
   /// too, and the native side is a structural no-op when the channel names no
   /// system call. Callers do not have to track which kind of call they are in.
-  Future<void> end(String channelId);
+  ///
+  /// [callId] names WHICH call on the channel: a v2 call by its id, a v1 call
+  /// by null. The native side ends only an exact match, so the teardown of
+  /// call A can never end call B that displaced it on the same channel
+  /// (Carnot + Kelvin, PR #210 v2 round 1).
+  Future<void> end(String channelId, {String? callId});
 }
 
 /// The native implementation, on BOTH platforms: an `EventChannel` fed by the
@@ -87,21 +92,26 @@ class NativeSystemCallBridge implements SystemCallBridge {
     if (kind == null || channelId is! String || channelId.isEmpty) return null;
     final origin = event['origin'];
     final call = event['call'];
+    // ABSENT means v1. PRESENT-BUT-MALFORMED is not "absent" — read as null it
+    // matched every v1 hold and admission in the room, the exact wildcard this
+    // id exists to remove (Tesla, PR #210 v2 round 1). It is dropped instead.
+    if (call != null && (call is! String || !isCallId(call))) return null;
     return SystemCallAction(
       kind: kind,
       channelId: channelId,
       origin: origin is String && origin.isNotEmpty ? origin : null,
       // Only a canonical id is an id: anything else is treated as absent
       // (v1), never as a key that could match something by accident.
-      callId: call is String && isCallId(call) ? call : null,
+      callId: call as String?,
     );
   }
 
   @override
-  Future<void> end(String channelId) async {
+  Future<void> end(String channelId, {String? callId}) async {
     try {
       await _control.invokeMethod<void>('endSystemCall', {
         'channel': channelId,
+        if (callId != null) 'call': callId,
       });
     } on MissingPluginException {
       // An older native half, or a platform that never registered the channel.

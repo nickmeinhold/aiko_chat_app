@@ -389,8 +389,13 @@ bool endsInvite(CallEnd end, CallInvite invite) {
   // a v1 invite: a v1 invite has no id for it to name.
   final callId = end.callId;
   if (callId != null) return callId == invite.callId;
-  // v1 names its call by replying to the invite's island id.
-  return end.targetIslandMsgId == invite.islandMsgId;
+  // v1 names its call by replying to the invite's island id — and ends ONLY a
+  // v1 invite. A v1-shaped end replying to a v2 invite's island id used to
+  // match here while RingController stored it under the island id and looked
+  // the v2 invite up under its call id: one event, two answers depending on
+  // arrival order (Tesla + Kelvin, PR #210 v2 round 1). Versions match
+  // exactly, both directions, so both consumers agree.
+  return invite.callId == null && end.targetIslandMsgId == invite.islandMsgId;
 }
 
 /// An admitted, ringable invitation — the room to join and who is calling.

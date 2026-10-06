@@ -13,7 +13,8 @@ import '../domain/call_invite.dart';
 import '../domain/system_call_action.dart';
 import '../application/ring_telemetry.dart';
 import '../domain/answer_outcome.dart';
-import 'call_screen.dart' show isInLiveCall, pushCallOn;
+import 'call_screen.dart'
+    show CallRouteExtra, callIdOf, isInLiveCall, pushCallOn;
 
 /// Turns an answered system call into a joined room (claude-tasks#4420).
 ///
@@ -159,7 +160,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// wall-clock comparison is unreachable by `tester.pump`, so the expiry it
   /// claimed could not be tested at all, and an expiry no test can reach is an
   /// expiry nobody should believe in.
-  final Map<String, ({String? callId, Timer timer})> _admitted = {};
+  final Map<String, Timer> _admitted = {};
 
   /// How long the held answer may wait for its invitation to be admitted.
   ///
@@ -191,8 +192,8 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   @override
   void dispose() {
     _sub?.cancel();
-    for (final a in _admitted.values) {
-      a.timer.cancel();
+    for (final timer in _admitted.values) {
+      timer.cancel();
     }
     _joinDeadline?.cancel();
     super.dispose();
@@ -224,17 +225,18 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
         // without ending it again: the user answered and then hung up before
         // the session was ready, and joining now would open a call they have
         // already left.
-        // SAME CALL, not same channel: an `ended` for an older call on this
-        // channel (v2 names it) must not drop the answer to a newer one.
-        if (_answered == action.channelId &&
-            (action.callId == null || action.callId == _answeredCallId)) {
+        // SAME CALL, EXACTLY: (channel, call id), where a v1 hold matches only
+        // a v1 action and a v2 hold only its own id. A missing id used to pass
+        // for any call in the room — the wildcard the id exists to remove
+        // (Tesla + Kelvin, PR #210 v2 round 1).
+        if (_holds(action.channelId, action.callId)) {
           _telemetry.answerResolved(
             action.channelId,
             AnswerOutcome.endedInSystemUi,
           );
           _consume();
         }
-        _leaveIfOpen(action.channelId);
+        _leaveIfOpen(action.channelId, action.callId);
     }
   }
 
@@ -270,43 +272,49 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// forever, and arming per-attempt made the clock resettable by unrelated
   /// provider traffic. Held once, clocked once.
   void _hold(String channelId, {String? callId}) {
+    // The SAME answer again (a replayed native action, a re-listen) is not a
+    // new hold: re-arming here restarted the clock on every repeat.
+    if (_holds(channelId, callId)) {
+      _tryJoin();
+      return;
+    }
     _telemetry.answerHeld(channelId);
-    final displaced = _answered;
-    // CONSERVATION OF OWNERSHIP: a second answer does not silently forget the
-    // first one's system call. Nothing this class stops holding is ever simply
-    // dropped.
-    if (displaced != null && displaced != channelId) {
-      _telemetry.answerResolved(displaced, AnswerOutcome.displaced);
-      _release(displaced);
+    final displacedChannel = _answered;
+    final displacedCallId = _answeredCallId;
+    // CONSERVATION OF OWNERSHIP, by call, not by room: a second answer on the
+    // SAME channel for a different call displaces the first just as one in
+    // another room does, and its system call is ended, never dropped.
+    if (displacedChannel != null) {
+      _telemetry.answerResolved(displacedChannel, AnswerOutcome.displaced);
+      _release(displacedChannel, displacedCallId);
     }
     _answered = channelId;
     _answeredCallId = callId;
     _joinDeadline?.cancel();
     _joinDeadline = Timer(kInAppRingDuration, () {
-      // No admitted invitation inside the window the invitation itself would
-      // have been ringing for. Nothing was sent, or `admitRing` refused it, or
-      // the websocket never came back — all three are "there is no call to
-      // join", and the honest render is the system call ending rather than a
-      // connected call that never connects.
-      if (_answered == channelId) {
+      if (_holds(channelId, callId)) {
         _telemetry.answerResolved(channelId, AnswerOutcome.neverAdmitted);
-        _release(channelId);
+        _release(channelId, callId);
       }
     });
     _tryJoin();
   }
 
+  /// Whether the held answer is exactly this call.
+  bool _holds(String channelId, String? callId) =>
+      _answered == channelId && _answeredCallId == callId;
+
+  /// One admission per CALL, not per room: a newer invitation on the channel
+  /// no longer evicts the proof of the call the user already answered.
+  static String _admissionKey(String channelId, String? callId) =>
+      '$channelId\n${callId ?? ''}';
+
   /// Remember that [admitRing] admitted an invitation for this channel.
   void _recordAdmission(CallInvite? invite) {
     if (invite != null) {
-      _admitted[invite.channelId]?.timer.cancel();
-      _admitted[invite.channelId] = (
-        callId: invite.callId,
-        timer: Timer(
-          kSystemCallRingTrust,
-          () => _admitted.remove(invite.channelId),
-        ),
-      );
+      final key = _admissionKey(invite.channelId, invite.callId);
+      _admitted[key]?.cancel();
+      _admitted[key] = Timer(kSystemCallRingTrust, () => _admitted.remove(key));
     }
     _tryJoin();
   }
@@ -319,16 +327,11 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// `system_call_channel_contract_test.dart` rather than by a comment. Past it
   /// the native map has stopped believing in the ring too, so there is nothing
   /// left for an admission to be proof of.
-  /// Admitted, AND the same call the answer names. For a v2 answer the call id
-  /// must match the admitted invitation's: on one channel, an answer to call A
-  /// must never join a call B that was admitted after it. A v1 answer (no id)
-  /// keeps the channel-only rule — the weakness stays confined to v1.
-  bool _wasAdmitted(String channelId) {
-    final a = _admitted[channelId];
-    if (a == null) return false;
-    final wanted = _answeredCallId;
-    return wanted == null || a.callId == wanted;
-  }
+  /// Admitted, as EXACTLY the call the answer names — a v2 answer by its id,
+  /// a v1 answer only by a v1 invitation. A v1 answer used to join a v2 call
+  /// in the same room (Kelvin, PR #210 v2 round 1).
+  bool _wasAdmitted(String channelId) =>
+      _admitted.containsKey(_admissionKey(channelId, _answeredCallId));
 
   /// The held answer became a call. Drop the hold; end nothing.
   void _consume() {
@@ -343,10 +346,11 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// Safe for a channel that is not currently held — that is the displacement
   /// case — and a structural no-op at the native layer when no system call
   /// exists for it.
-  void _release(String channelId) {
-    if (_answered == channelId) _consume();
+  void _release(String channelId, String? callId) {
+    if (_holds(channelId, callId)) _consume();
     unawaited(
-      ref.read(systemCallBridgeProvider)?.end(channelId) ?? Future.value(),
+      ref.read(systemCallBridgeProvider)?.end(channelId, callId: callId) ??
+          Future.value(),
     );
   }
 
@@ -358,7 +362,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// room, announces the end if we were the caller, and tells the native side
   /// the system call is over (a no-op here, since the native side is where this
   /// came from).
-  void _leaveIfOpen(String channelId) {
+  void _leaveIfOpen(String channelId, String? callId) {
     final router = ref.read(routerProvider);
     // THE PARSED PARAMETER, NEVER A RECONSTRUCTED PATH STRING. `state.uri.path`
     // is percent-ENCODED and the id is not, so `'/call/$channelId'` compares two
@@ -378,6 +382,10 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     final state = router.state;
     if (!state.uri.path.startsWith('/call/')) return;
     if (state.pathParameters['channelId'] != channelId) return;
+    // And THE SAME CALL: an `ended` for an older call on this channel must not
+    // pop the room the user is in now.
+    final extra = state.extra;
+    if (callIdOf(extra is CallRouteExtra ? extra : null) != callId) return;
     if (router.canPop()) router.pop();
   }
 
@@ -386,6 +394,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   void _tryJoin() {
     final channelId = _answered;
     if (channelId == null) return;
+    final callId = _answeredCallId;
     final bridge = ref.read(systemCallBridgeProvider);
     // No bridge means calling is gated off in this build, in which case there is
     // no `/call/:id` route to push and no honest way to answer. Unreachable
@@ -409,7 +418,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       // `AsyncData(null)` is a definite answer. This call can never be joined.
       if (session is AsyncData<AppUser?>) {
         _telemetry.answerResolved(channelId, AnswerOutcome.signedOut);
-        _release(channelId);
+        _release(channelId, callId);
       }
       // Loading or error: the question is still open. `AsyncError` is
       // deliberately on this side — a failed round trip is "unknown", not
@@ -436,7 +445,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       // tells the user; here there is nobody to tell — the answer came from the
       // lock screen — so the honest render is the system call ending rather
       // than a connected call that silently goes nowhere.
-      _release(channelId);
+      _release(channelId, callId);
       return;
     }
     // The same invitation is very likely ALSO ringing in-app: the island wakes
@@ -450,7 +459,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // announce the end of, and this is the callee's side. `CallScreen` documents
     // null as the correct value for every way in but the caller's.
     _telemetry.answerResolved(channelId, AnswerOutcome.joined);
-    unawaited(pushCallOn(ref.read(routerProvider), channelId));
+    unawaited(pushCallOn(ref.read(routerProvider), channelId, callId: callId));
   }
 
   @override

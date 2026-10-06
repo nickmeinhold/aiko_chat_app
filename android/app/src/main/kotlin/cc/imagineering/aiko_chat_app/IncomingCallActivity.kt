@@ -4,11 +4,9 @@ import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Intent
 import android.graphics.Color
-import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
-import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -89,17 +87,11 @@ class IncomingCallActivity : Activity() {
   }
 
   private fun showOverKeyguard() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-      setShowWhenLocked(true)
-      setTurnScreenOn(true)
-    } else {
-      @Suppress("DEPRECATION")
-      window.addFlags(
-        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-          WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
-      )
-    }
+    // minSdk 27: no fallback flags.
+    setShowWhenLocked(true)
+    setTurnScreenOn(true)
   }
+
 
   private fun answer() {
     // CAPTURED: the unlock prompt may outlive this ring. If another ring
@@ -107,7 +99,7 @@ class IncomingCallActivity : Activity() {
     // and this callback must still mean the ring the user pressed Answer on.
     val i = instance.takeIf { it >= 0 } ?: return
     val keyguard = getSystemService(KeyguardManager::class.java)
-    if (keyguard != null && keyguard.isKeyguardLocked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    if (keyguard != null && keyguard.isKeyguardLocked) {
       // The unlock is the gate between a call screen and the app. Cancelled
       // or failed, the user stays here, still ringing, still able to try again.
       keyguard.requestDismissKeyguard(

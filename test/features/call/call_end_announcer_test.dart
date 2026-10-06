@@ -466,6 +466,22 @@ void main() {
       },
     );
 
+    test(
+      'a v2 hangup is owed even when the invite send reported failure',
+      () async {
+        // `sendMessage` returns null both for "never left" and "left, then
+        // failed" — and a v2 end needs nothing from the ack, so it is owed
+        // regardless (Tesla, PR #210 v2 round 1).
+        final a = announcer();
+        a.announce(channelId: _channel, inviteId: null, callId: callId);
+        await Future.wait(a.settling);
+        expect(
+          transport.sent.where((m) => m.body == callEndBodyV2(callId)),
+          hasLength(1),
+        );
+      },
+    );
+
     test('a v2 hangup AFTER the ack still attaches reply_to', () async {
       final inviteId = (await repo.sendMessage(
         _channel,

@@ -1412,6 +1412,17 @@ void main() {
       expect(endsInvite(end, v1), isFalse);
     });
 
+    test('a v1 end never ends a v2 invite, even replying to its island id', () {
+      // Versions match exactly in BOTH directions. This matched once, while
+      // RingController stored it under the island id and looked the v2 invite
+      // up under its call id — one event, two outcomes by arrival order
+      // (Tesla + Kelvin, PR #210 v2 round 1).
+      final v2 = admit(invite(body: callInviteBodyV2(idA)))!;
+      final v1End = admitEnd(callEnd())!;
+      expect(v1End.targetIslandMsgId, v2.islandMsgId, reason: 'precondition');
+      expect(endsInvite(v1End, v2), isFalse);
+    });
+
     test('a v1 end still ends a v1 invite by reply_to', () {
       final v1 = admit(invite())!;
       final end = admitEnd(callEnd())!;

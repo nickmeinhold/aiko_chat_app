@@ -61,7 +61,11 @@ object CallChannels {
     MethodChannel(messenger, CONTROL_CHANNEL).setMethodCallHandler { call, result ->
       when (call.method) {
         "endSystemCall" -> {
-          call.argument<String>("channel")?.let { CallRing.endFromDart(app, it) }
+          // `call` absent = v1; present = exactly that v2 call. Exact match
+          // (Carnot + Kelvin, PR #210 v2 round 1).
+          call.argument<String>("channel")?.let {
+            CallRing.endFromDart(app, it, call.argument<String>("call"))
+          }
           result.success(null)
         }
         "canRingFullScreen" -> result.success(IncomingCallNotifier.canRingFullScreen(app))

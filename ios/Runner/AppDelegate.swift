@@ -671,10 +671,12 @@ final class CallKitRinger: NSObject {
           "[callkit] call %{public}@ on %{public}@ displaces %{public}@",
           log: aikoCallLog, type: .info, callId, channel, live.call ?? "v1")
         provider.reportCall(with: live.uuid, endedAt: Date(), reason: .remoteEnded)
-        if live.answered {
-          SystemCallChannel.shared.emit(
-            action: .ended, channel: channel, origin: "displaced", call: live.call)
-        }
+        // ALWAYS, not only when answered: an unanswered A still has the in-app
+        // banner, which is an answer door until something ends it. The id
+        // means the navigator applies it to A and to nothing else (Tesla, PR
+        // #210 v2 round 1).
+        SystemCallChannel.shared.emit(
+          action: .ended, channel: channel, origin: "displaced", call: live.call)
         forgetLiveCall(for: channel, onlyIf: live.uuid)
         disarmIfNoCallRemains()
       } else {
@@ -852,8 +854,12 @@ final class CallKitRinger: NSObject {
   /// closest member and it is not literally true (nobody remote ended it). There
   /// is no "this app's own UI ended it" case; the Recents entry is the one
   /// place a reader could notice.
-  func endSystemCall(channel: String) {
-    guard let live = liveCall(for: channel) else { return }
+  func endSystemCall(channel: String, call: String?) {
+    // EXACT: the live entry on the channel must be the call Dart names (v1 =
+    // no id). A mismatch ends nothing — the call Dart is tearing down is
+    // already gone, and the one on the channel now is somebody else's.
+    guard let entry = liveEntry(for: channel), entry.call == call else { return }
+    let live = entry.uuid
     provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
     // SCOPED, like every other cleanup: `live` is the UUID this path just read,
     // and `rememberLiveCall` is last-writer-wins, so an invite landing between
@@ -893,8 +899,14 @@ final class CallKitRinger: NSObject {
 
   /// The SAME grammar as `call_wire.dart`, Kotlin's `CallRing.CALL_ID` and the
   /// island's `parse_call_body`: 26 uppercase Crockford, leading 0-7.
+  ///
+  /// `\A`…`\z`, NOT `^`…`$`: under ICU `$` also matches before a trailing line
+  /// terminator, so `"<id>\n"` passed validation and then rang under a RANDOM
+  /// UUID with the malformed string stored as its call (Carnot, PR #210 v2
+  /// round 1). The count check is belt and braces on the same rule.
   static func isCallId(_ s: String) -> Bool {
-    s.range(of: "^[0-7][0-9A-HJKMNP-TV-Z]{25}$", options: .regularExpression) != nil
+    s.count == 26
+      && s.range(of: #"\A[0-7][0-9A-HJKMNP-TV-Z]{25}\z"#, options: .regularExpression) != nil
   }
 
   /// The lossless ULID → UUID map: 26 × 5 = 130 bits whose top two are zero
@@ -988,16 +1000,16 @@ final class CallKitRinger: NSObject {
   }
 
   private func rememberLiveCall(_ uuid: UUID, for channel: String, call: String?) {
-    var map = stored()
     // ONE CALL PER CHANNEL, now by construction rather than by orphaning. This
     // comment used to name the last-writer-wins orphan as unresolvable "until
     // the call id ships inside the sealed envelope". It ships now (call/2,
     // design 21 v2): a second v2 call on a channel ENDS the first in
     // reportInvite before this runs, and a v1 second invite is refused there.
-    map[channel] = (
-      uuid: uuid.uuidString, at: Date().timeIntervalSince1970, answered: false, call: call
-    )
-    write(map)
+    mutateMap { map in
+      map[channel] = (
+        uuid: uuid.uuidString, at: Date().timeIntervalSince1970, answered: false, call: call
+      )
+    }
   }
 
   /// This channel's call has been ANSWERED, so its mapping stops aging out.
@@ -1007,9 +1019,28 @@ final class CallKitRinger: NSObject {
   /// flag exists to remove, so it must not depend on anything downstream of the
   /// answer succeeding.
   private func markAnswered(channel: String) {
+    mutateMap { map in
+      guard let entry = map[channel] else { return }
+      map[channel] = (uuid: entry.uuid, at: entry.at, answered: true, call: entry.call)
+    }
+  }
+
+  /// THE MAP HAS ONE OWNER. PushKit writes it on main; CallKit's delegate runs
+  /// on the provider's private queue (`setDelegate(self, queue: nil)`). Every
+  /// read-modify-write used to read a snapshot and write the WHOLE snapshot
+  /// back, so an invite remembered on one queue between another queue's read
+  /// and write was silently erased — `onlyIf:` looked like a compare-and-swap
+  /// and still published every other key from the stale read (Tesla, PR #210 v2
+  /// round 1). Now each mutation is one critical section over one lock.
+  private static let mapLock = NSLock()
+
+  private func mutateMap(
+    _ change: (inout [String: (uuid: String, at: TimeInterval, answered: Bool, call: String?)]) -> Void
+  ) {
+    Self.mapLock.lock()
+    defer { Self.mapLock.unlock() }
     var map = stored()
-    guard let entry = map[channel] else { return }
-    map[channel] = (uuid: entry.uuid, at: entry.at, answered: true, call: entry.call)
+    change(&map)
     write(map)
   }
 
@@ -1021,10 +1052,10 @@ final class CallKitRinger: NSObject {
   /// the call that was ringing successfully. A cleanup is only entitled to
   /// remove what it put there.
   private func forgetLiveCall(for channel: String, onlyIf uuid: UUID? = nil) {
-    var map = stored()
-    if let uuid, map[channel]?.uuid != uuid.uuidString { return }
-    map.removeValue(forKey: channel)
-    write(map)
+    mutateMap { map in
+      if let uuid, map[channel]?.uuid != uuid.uuidString { return }
+      map.removeValue(forKey: channel)
+    }
   }
 
   private func stored() -> [String: (uuid: String, at: TimeInterval, answered: Bool, call: String?)] {
@@ -1136,7 +1167,11 @@ final class SystemCallChannel: NSObject, FlutterStreamHandler {
               message: "endSystemCall requires a non-empty `channel`",
               details: nil))
         }
-        CallKitRinger.shared.endSystemCall(channel: channel)
+        // `call` absent = a v1 call; present = exactly that v2 call. Ending is
+        // by EXACT match, so call A's teardown can never end call B that
+        // displaced it on the same channel (Carnot, PR #210 v2 round 1).
+        let callId = args["call"] as? String
+        CallKitRinger.shared.endSystemCall(channel: channel, call: callId)
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
@@ -1191,12 +1226,22 @@ extension CallKitRinger: CXProviderDelegate {
     // reset is the one end that arrives with no action and no UUID to match, so
     // a live call screen would otherwise stay mounted over a room the OS has
     // already torn the audio out from under.
-    for (channel, _) in stored() {
+    var told: [(String, String)] = []
+    for (channel, entry) in stored() {
+      told.append((channel, entry.uuid))
+      // With its call id: Dart matches by it, and an id-less `ended` now
+      // matches only a v1 hold (Carnot, PR #210 v2 round 1).
       SystemCallChannel.shared.emit(
-        action: .ended, channel: channel, origin: "providerReset")
+        action: .ended, channel: channel, origin: "providerReset", call: entry.call)
     }
     os_log("[callkit] providerDidReset — the system tore down every call we had", log: aikoCallLog, type: .info)
-    UserDefaults.standard.removeObject(forKey: Self.liveCallsKey)
+    // Only the entries that were enumerated and told — not the whole key. An
+    // invite remembered on the PushKit queue after the snapshot above was
+    // erased by the blanket remove, its `ended` never sent (Tesla, PR #210 v2
+    // round 1).
+    for (channel, entry) in told {
+      forgetLiveCall(for: channel, onlyIf: UUID(uuidString: entry))
+    }
     // A reset is the end that arrives with no action and no UUID, so it is the
     // one path that would otherwise strand the process in manual mode with no
     // `CXEndCallAction` ever coming to release it.
@@ -1249,6 +1294,14 @@ extension CallKitRinger: CXProviderDelegate {
       // letting WebRTC manage the session automatically — plausible, but it trades
       // a loud failure for a possibly-silent call, which is the exact trade this
       // whole day was spent reversing.
+      //
+      // AND FORGET IT. `markAnswered` already ran, so the map held an ANSWERED
+      // entry for a call CallKit no longer shows — for the 8-hour answered
+      // window, during which a redelivery of the same id was swallowed as a
+      // duplicate and a different id took the displacement arm and told Dart
+      // "ended" for a call the callee was still being offered (Tesla, PR #210 v2
+      // round 1).
+      forgetLiveCall(for: channel, onlyIf: action.callUUID)
       action.fail()
       return
     }

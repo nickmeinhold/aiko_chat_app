@@ -582,6 +582,50 @@ void main() {
     expect(find.text('CALL $channel'), findsOneWidget);
   });
 
+  testWidgets('a v1 answer never joins a v2 call in the same room', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel); // v1: no id
+    await tester.pumpAndSettle();
+    ring.admit(channel, callId: callA);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('CALL $channel'),
+      findsNothing,
+      reason: 'a missing id is v1, not a wildcard (Kelvin, v2 round 1)',
+    );
+  });
+
+  testWidgets('an id-less ENDED does not drop a v2 hold', (tester) async {
+    await tester.pumpWidget(harness(session: _Session.restoring));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel, callId: callA);
+    bridge.emit(SystemCallActionKind.ended, channel); // v1-shaped
+    await tester.pumpAndSettle();
+    ring.admit(channel, callId: callA);
+    auth.signIn(me);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsOneWidget);
+  });
+
+  testWidgets('a second answer on the SAME room for another call ends the '
+      'first system call, by id', (tester) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel, callId: callA);
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel, callId: callB);
+    await tester.pumpAndSettle();
+    expect(
+      bridge.endedCalls,
+      contains(callA),
+      reason: 'conservation of ownership — A is released, never dropped',
+    );
+    expect(bridge.endedCalls, isNot(contains(callB)));
+  });
+
   testWidgets('an answer to call A never joins call B on the same channel', (
     tester,
   ) async {
@@ -611,6 +655,7 @@ void main() {
 class _FakeBridge implements SystemCallBridge {
   final _controller = StreamController<SystemCallAction>.broadcast();
   final List<String> ended = [];
+  final List<String?> endedCalls = [];
 
   void emit(SystemCallActionKind kind, String channelId, {String? callId}) =>
       _controller.add(
@@ -621,7 +666,10 @@ class _FakeBridge implements SystemCallBridge {
   Stream<SystemCallAction> get actions => _controller.stream;
 
   @override
-  Future<void> end(String channelId) async => ended.add(channelId);
+  Future<void> end(String channelId, {String? callId}) async {
+    ended.add(channelId);
+    endedCalls.add(callId);
+  }
 }
 
 /// The session has THREE states, not two, and the third is the one a cold start

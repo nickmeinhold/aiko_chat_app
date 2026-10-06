@@ -52,13 +52,28 @@ bool get isInLiveCall => _callLaunchInFlight && !_mountedCallEnded;
 /// [inviteId] is the invite's signed clientMsgId (the v1 hangup waits for its
 /// island id to reply to). [callId] is the v2 call identity in the invite's
 /// signed body, which the hangup names directly, without waiting for any ack.
-typedef OutgoingCall = ({String inviteId, String? callId});
+///
+/// [inviteId] is null when the invite's send failed AFTER the frame may have
+/// left (`sendMessage` reports both as null): a v2 hangup is still owed, since
+/// it needs nothing from the ack (Tesla, PR #210 v2 round 1).
+typedef OutgoingCall = ({String? inviteId, String? callId});
+
+/// What a `/call/:channelId` navigation carries beyond the room: the outgoing
+/// call's ids (if we placed it) or the incoming call's id (if we answered it).
+/// Either way the screen knows WHICH call it is, so its teardown ends that
+/// call and no other on the channel.
+typedef CallRouteExtra = ({OutgoingCall? outgoing, String? callId});
 
 Future<void> pushCall(
   BuildContext context,
   String channelId, {
   OutgoingCall? outgoing,
 }) => pushCallOn(GoRouter.of(context), channelId, outgoing: outgoing);
+
+/// The call id a route names — outgoing or incoming. Null for a v1 call or a
+/// deep link (which has no call of ours).
+String? callIdOf(CallRouteExtra? extra) =>
+    extra?.outgoing?.callId ?? extra?.callId;
 
 /// Router-first form of [pushCall], for callers that have a [GoRouter] but no
 /// in-scope context.
@@ -75,11 +90,13 @@ Future<void> pushCallOn(
   GoRouter router,
   String channelId, {
   OutgoingCall? outgoing,
+  String? callId,
 }) async {
   if (_callLaunchInFlight) return;
   _callLaunchInFlight = true;
   try {
-    await router.push('/call/$channelId', extra: outgoing);
+    final CallRouteExtra extra = (outgoing: outgoing, callId: callId);
+    await router.push('/call/$channelId', extra: extra);
   } finally {
     _callLaunchInFlight = false;
   }
@@ -96,7 +113,12 @@ void resetCallLaunchGuard() => _callLaunchInFlight = false;
 /// derived from the channel, but is NOT the bare channel id). Renders the first remote
 /// participant full-screen with a mirrored local PiP overlay.
 class CallScreen extends ConsumerStatefulWidget {
-  const CallScreen({super.key, required this.channelId, this.outgoing});
+  const CallScreen({
+    super.key,
+    required this.channelId,
+    this.outgoing,
+    this.callId,
+  });
 
   final String channelId;
 
@@ -108,6 +130,9 @@ class CallScreen extends ConsumerStatefulWidget {
   /// anyone else names no live invitation and would be refused anyway
   /// ([admitCallEnd]), so sending one would be a signed row saying nothing.
   final OutgoingCall? outgoing;
+
+  /// The incoming call's id, when this screen was opened by answering one.
+  final String? callId;
 
   @override
   ConsumerState<CallScreen> createState() => _CallScreenState();
@@ -192,7 +217,16 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // whether THIS call came from a ring — is a second copy of a fact the
     // native side already holds, and the failure of getting it wrong is a
     // phantom connected call in the system UI that outlives the app.
-    unawaited(_systemCall?.end(widget.channelId) ?? Future<void>.value());
+    unawaited(
+      _systemCall?.end(
+            widget.channelId,
+            callId: callIdOf((
+              outgoing: widget.outgoing,
+              callId: widget.callId,
+            )),
+          ) ??
+          Future<void>.value(),
+    );
     super.dispose();
   }
 

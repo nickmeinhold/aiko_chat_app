@@ -94,8 +94,7 @@
             android:excludeFromRecents="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
-            tools:targetApi="o_mr1" />
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
         <receiver
             android:name=".CallDeclineReceiver"
             android:exported="false" />

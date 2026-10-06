@@ -115,7 +115,7 @@ Future<void> startCall(
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
     final call = await _ring(ref, dm.id);
-    if (call != null) {
+    {
       owedHangup = (channelId: dm.id, call: call);
     }
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
@@ -124,7 +124,7 @@ Future<void> startCall(
     // (the #133 bug class, caught by `use_build_context_synchronously`).
     // This return is the one that used to strand the peer — see the `finally`.
     if (!context.mounted) return;
-    if (call == null) {
+    if (call.inviteId == null) {
       // Honest, not fatal: the room is still opening behind this.
       messenger.showSnackBar(
         SnackBar(
@@ -216,7 +216,14 @@ void resetCallActionGuard() => _callActionInFlight = false;
 /// [kCallEndBody]). Null still means "they may not have been rung" — the caller
 /// reports that and the call proceeds, because the call is the capability and
 /// the ring is only its announcement.
-Future<OutgoingCall?> _ring(WidgetRef ref, String channelId) async {
+///
+/// ALWAYS returns the call: the hangup is owed from the moment the v2 body is
+/// handed to `sendMessage`, because `sendMessage` reports a failure AFTER the
+/// frame may have left as `null`, and a v2 end needs nothing from the ack
+/// (Tesla, PR #210 v2 round 1). [OutgoingCall.inviteId] null = "may not have
+/// rung" for the user; an extra end for a call that never left is the
+/// tradeoff already accepted — a missing end is a thirty-second ring.
+Future<OutgoingCall> _ring(WidgetRef ref, String channelId) async {
   // THE CALL'S IDENTITY IS MINTED HERE, by the caller, and goes INSIDE the
   // signed body (island design 12, Decision 1; app design 21 v2). Every later
   // message about this call — the hangup, the system ring's key on the other
@@ -229,9 +236,11 @@ Future<OutgoingCall?> _ring(WidgetRef ref, String channelId) async {
       channelId,
       callInviteBodyV2(callId),
     );
-    return inviteId == null ? null : (inviteId: inviteId, callId: callId);
+    return (inviteId: inviteId, callId: callId);
   } catch (_) {
-    return null; // reported to the user by the caller; the call proceeds.
+    // Reported to the user by the caller; the call proceeds, and its hangup
+    // is still owed.
+    return (inviteId: null, callId: callId);
   }
 }
 

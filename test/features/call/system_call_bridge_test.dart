@@ -66,6 +66,25 @@ void main() {
       ]);
     });
 
+    test('a canonical `call` rides; a MALFORMED one drops the event', () async {
+      // Read as null, a malformed id matched every v1 hold in the room — the
+      // wildcard the call id exists to remove (Tesla, PR #210 v2 round 1).
+      const id = '01JABCDEFGHJKMNPQRSTVWXYZ0';
+      final out = await decoded([
+        {'action': 'answered', 'channel': 'c', 'call': id},
+        {'action': 'ended', 'channel': 'c', 'call': 'nope'},
+        {'action': 'ended', 'channel': 'c', 'call': '${id}\n'},
+        {'action': 'ended', 'channel': 'c', 'call': 42},
+      ]).toList();
+      expect(out, [
+        const SystemCallAction(
+          kind: SystemCallActionKind.answered,
+          channelId: 'c',
+          callId: id,
+        ),
+      ]);
+    });
+
     test('malformed events are DROPPED, and never guessed at', () async {
       // Each of these is a shape the native side should not produce. Joining a
       // room or ending a call on any of them is worse than ignoring it — there

@@ -103,7 +103,7 @@ class _RingBanner extends ConsumerWidget {
                   // word would be the lie, so the honest word does the work instead
                   // of a disclaimer.
                   TextButton(
-                    onPressed: () => _ignore(ref, invite.channelId),
+                    onPressed: () => _ignore(ref, invite),
                     child: const Text('Ignore'),
                   ),
                   const SizedBox(width: 8),
@@ -153,14 +153,18 @@ class _RingBanner extends ConsumerWidget {
   /// window elapsing, not a decision about the call, and the CallKit ring
   /// answers to a ceiling the island owns (design 16 v2 §3). Only the two
   /// buttons are decisions.
-  void _endSystemCall(WidgetRef ref, String channelId) {
+  void _endSystemCall(WidgetRef ref, CallInvite invite) {
     final bridge = ref.read(systemCallBridgeProvider);
-    if (bridge != null) unawaited(bridge.end(channelId));
+    // THIS call by id, not the channel: the system ring for a newer call on the
+    // same channel must survive this invitation's Ignore/Answer.
+    if (bridge != null) {
+      unawaited(bridge.end(invite.channelId, callId: invite.callId));
+    }
   }
 
-  void _ignore(WidgetRef ref, String channelId) {
+  void _ignore(WidgetRef ref, CallInvite invite) {
     ref.read(incomingRingProvider.notifier).stopRinging(RingStopCause.declined);
-    _endSystemCall(ref, channelId);
+    _endSystemCall(ref, invite);
   }
 
   void _answer(BuildContext context, WidgetRef ref) {
@@ -192,8 +196,8 @@ class _RingBanner extends ConsumerWidget {
         ref
             .read(incomingRingProvider.notifier)
             .stopRinging(RingStopCause.answeredOverSpentCall);
-        _endSystemCall(ref, invite.channelId);
-        pushCallOn(router, invite.channelId);
+        _endSystemCall(ref, invite);
+        pushCallOn(router, invite.channelId, callId: invite.callId);
       });
       return;
     }
@@ -203,11 +207,15 @@ class _RingBanner extends ConsumerWidget {
     ref
         .read(incomingRingProvider.notifier)
         .stopRinging(RingStopCause.answeredInApp);
-    _endSystemCall(ref, invite.channelId);
+    _endSystemCall(ref, invite);
     // Router from the PROVIDER, not from context: this widget lives above the
     // Router in `MaterialApp.router`'s builder, so `context.push` would throw
     // `No GoRouter found in context` (cage-match #139 — the feature's primary
     // button was dead until `ring_overlay_test.dart` pressed it).
-    pushCallOn(ref.read(routerProvider), invite.channelId);
+    pushCallOn(
+      ref.read(routerProvider),
+      invite.channelId,
+      callId: invite.callId,
+    );
   }
 }

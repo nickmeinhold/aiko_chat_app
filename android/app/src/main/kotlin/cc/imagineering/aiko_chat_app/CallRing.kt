@@ -89,11 +89,16 @@ object CallRing {
    * A BACKSTOP, NOT THE CEILING. The island owns the ring's lifetime and ends
    * it with `call_end` (design 16 v2 §3). This exists because that end can be
    * lost — the invite/end pair is not atomic (#4325) — and an insistent
-   * notification with no end would ring until the battery dies. 60s matches
-   * what CallKit was MEASURED to do on iOS (n=1), so the two platforms give up
-   * at about the same moment.
+   * notification with no end would ring until the battery dies.
+   *
+   * **30s = the island's `RING_CEILING_SECONDS`** — the product ceiling (Nick,
+   * 2026-09-09), which the island also uses as the FCM invite TTL. ONE
+   * quantity, owned in two places that each run a timer. It was 60s, copied
+   * from iOS's measured CallKit self-expiry — but on Android this timer is
+   * ours, and 60s rang a lost-end call twice as long as the product allows.
+   * (Island tab, 2026-10-06.) iOS keeps CallKit's own expiry.
    */
-  const val RING_CEILING_MS = 60_000L
+  const val RING_CEILING_MS = 30_000L
 
   /**
    * How long an answered call can still be ended by the caller's `call_end`.
@@ -317,12 +322,17 @@ object CallRing {
    * ignored, a join failed, a call screen closed. Safe for any channel (the
    * bridge's documented contract). Tells Dart nothing: Dart is deciding.
    */
-  fun endFromDart(context: Context, channel: String) {
+  fun endFromDart(context: Context, channel: String, callId: String?) {
     val app = context.applicationContext
     var ring: Ring? = null
+    // EXACT: only the slot holding THIS call (v1 = no id). By channel alone,
+    // ending a v1 in-app ring cleared a v2 answer the user was holding on the
+    // same channel (Kelvin, PR #210 v2 round 1).
     synchronized(lock) {
-      ringSlot(app)?.takeIf { it.channel == channel }?.let { clearRing(app); ring = it }
-      answerSlot(app)?.takeIf { it.channel == channel }?.let { clearAnswer(app) }
+      ringSlot(app)?.takeIf { it.channel == channel && it.callId == callId }
+        ?.let { clearRing(app); ring = it }
+      answerSlot(app)?.takeIf { it.channel == channel && it.callId == callId }
+        ?.let { clearAnswer(app) }
     }
     Log.i(TAG, "endFromDart: $channel ringing=${ring != null}")
     ring?.let { retire(app, it, ended = false) }
@@ -357,7 +367,13 @@ object CallRing {
       // attaches an activity — so when it is destroyed there is nobody to tell.
       // Deciding that BEFORE emitting is what stops an `ended` from outliving
       // its engine. (PR #210 round 1.)
-      if (!AikoEngine.releaseIfHeadless()) {
+      //
+      // ...unless a NEWER ring is live: this exit can run after a racing
+      // ring() has written its slot and warmed the engine for it, and
+      // destroying that engine silenced the new call (Tesla, PR #210 v2
+      // round 1). The engine belongs to whichever ring is live.
+      val newerRingLive = ringSlot(app) != null
+      if (newerRingLive || !AikoEngine.releaseIfHeadless()) {
         CallChannels.emit(CallChannels.ACTION_ENDED, ring.channel, ring.callId)
       }
     }

@@ -284,12 +284,16 @@ void main() {
 /// Records what the app asked the platform call UI to do.
 class _FakeSystemCall implements SystemCallBridge {
   final List<String> ended = [];
+  final List<String?> endedCalls = [];
 
   @override
   Stream<SystemCallAction> get actions => const Stream.empty();
 
   @override
-  Future<void> end(String channelId) async => ended.add(channelId);
+  Future<void> end(String channelId, {String? callId}) async {
+    ended.add(channelId);
+    endedCalls.add(callId);
+  }
 }
 
 class _FakeRing extends RingController {

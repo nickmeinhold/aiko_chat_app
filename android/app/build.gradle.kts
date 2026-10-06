@@ -46,7 +46,14 @@ android {
         applicationId = "cc.imagineering.aiko_chat_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // 27 (Android 8.1), not Flutter's default 24. The incoming-call screen
+        // needs setShowWhenLocked/setTurnScreenOn (27) and
+        // requestDismissKeyguard (26); below that, each was a fallback branch
+        // nobody can test, and one of them answered — camera on — while the
+        // phone was still LOCKED (cage-match PR #210 v2 round 1). Dropping the
+        // OS removes the branches instead of guarding them. Nick, 2026-10-06:
+        // "Below Android 8? come on, we're not handling that case".
+        minSdk = 27
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

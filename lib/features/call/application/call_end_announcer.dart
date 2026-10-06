@@ -92,11 +92,16 @@ class CallEndAnnouncer {
   ///
   /// Returns immediately. Safe to call from `dispose()` — it captures nothing
   /// that is being torn down.
+  /// [inviteId] may be null for a v2 call whose invite send reported failure
+  /// (the frame may still have left); [callId] alone is then enough. With
+  /// neither there is nothing to name, and nothing is owed.
   void announce({
     required String channelId,
-    required String inviteId,
+    required String? inviteId,
     String? callId,
   }) {
+    final claim = callId ?? inviteId;
+    if (claim == null) return;
     // SNAPSHOT WHO WE ARE, not just what we are ending (cage-match round 2,
     // Tesla). This object was built to outlive the screen and therefore outlives
     // the USER: /call/:channelId is not a logged-out zone, so when the session
@@ -106,7 +111,7 @@ class CallEndAnnouncer {
     // wrong — and that is well inside a 30s ack wait. RingController already
     // treats identity as a non-reversible key and clears on swap; this is its
     // sending-side twin and needs the same rule.
-    if (!_claimed.add(inviteId)) return;
+    if (!_claimed.add(claim)) return;
     // NOTHING BELOW MAY THROW, because the caller is `CallScreen.dispose` and a
     // throw there skips `super.dispose()` — a broken widget teardown, from the
     // one path that exists to make teardown safe. `_identity()` reads two
@@ -120,7 +125,7 @@ class CallEndAnnouncer {
       identity = _identity();
     } catch (e) {
       debugPrint('CallEndAnnouncer: could not read identity for $inviteId: $e');
-      _claimed.remove(inviteId);
+      _claimed.remove(callId ?? inviteId);
       return;
     }
     late final Future<void> f;
@@ -157,7 +162,7 @@ class CallEndAnnouncer {
   /// the peer's ring has expired on its own and there is nothing left to still.
   Future<void> _announce(
     String channelId,
-    String inviteId,
+    String? inviteId,
     String? callId,
     (String?, String) identity,
   ) async {
@@ -172,7 +177,7 @@ class CallEndAnnouncer {
             'CallEndAnnouncer: identity changed — abandoning the hangup for '
             '$inviteId.',
           );
-          _claimed.remove(inviteId);
+          _claimed.remove(callId ?? inviteId);
           return;
         }
         if (!DateTime.now().isBefore(deadline)) break;
@@ -209,7 +214,9 @@ class CallEndAnnouncer {
             // no longer waits on an ack that may not have arrived (design 21
             // v2). reply_to is still attached when already known; it costs
             // nothing and the island's own reply check stays satisfied.
-            final islandId = await repo.islandIdFor(inviteId);
+            final islandId = inviteId == null
+                ? null
+                : await repo.islandIdFor(inviteId);
             if (callId != null || islandId != null) {
               // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
               // identity check and then awaited twice; a liveness test does not
@@ -224,7 +231,7 @@ class CallEndAnnouncer {
                   'CallEndAnnouncer: identity changed before signing — '
                   'abandoning the hangup for $inviteId.',
                 );
-                _claimed.remove(inviteId);
+                _claimed.remove(callId ?? inviteId);
                 return;
               }
               final sentId = await repo.sendMessage(
@@ -256,12 +263,12 @@ class CallEndAnnouncer {
         'CallEndAnnouncer: gave up on $inviteId after $_ackWait — the peer ring '
         'has expired on its own, so there is nothing left to stop.',
       );
-      _claimed.remove(inviteId);
+      _claimed.remove(callId ?? inviteId);
     } catch (e) {
       // Only an identity read can reach here now; everything inside the pass is
       // caught above.
       debugPrint('CallEndAnnouncer: could not announce the hangup: $e');
-      _claimed.remove(inviteId);
+      _claimed.remove(callId ?? inviteId);
     }
   }
 
