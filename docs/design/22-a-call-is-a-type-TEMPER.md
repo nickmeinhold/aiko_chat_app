@@ -164,3 +164,133 @@ John McClane: "Now I have a machine gun. Ho-ho-ho."
 - In §1 and open question 2, a route with `call == null` does not join media and does not publish. Joining resolves an admitted `CallRef` first. A deep link that cannot resolve stays a lobby. Hangup of a system call leaves the room for the ref it names, and there is no joined screen with nothing to match.
 - In §5, write the closed list of `armed` insert sites. If outgoing audio is not on it, say so as a fact and keep outgoing off `disarmIfNoCallRemains`. Define the prune window: a row whose UUID is in `armed`, or whose `CallRef` is still inside the answer trust, is not a corpse. Keep the channel-keyed map only as an occupancy index under the one-call-per-channel displacement rule, and say explicitly that this departs from design 21 v2 item 5, with the incarnation-bearing row as the identity `reportEnd` looks up.
 - Close the five open questions in the doc with those rulings so the next cage-match cannot treat them as still open.
+
+
+---
+
+# Re-strike round 2 (dt-1791281130) — against design 22 v2: RECAST 4/4 (narrower; folded as v3)
+
+_Each family lands below as it returns. Arrival order, not a ranking._
+
+---
+
+<!-- landed 17:06:04 (in-process) -->
+## MaxwellMergeSlam's Design Strike (re-strike round 2)
+
+**Verdict:** RECAST
+
+**Summary:** v2 closes round 1's flaws, but v2.3 lets native "end A on answer(B)" act on a fact it cannot see: whether A is still a held answer or already a live call in Dart.
+
+Hans Gruber: "When you steal $600, you can just disappear. When you steal 600 million, they will find you."
+
+**Fatal flaws:**
+- **v2.3: the native answer slot conflates "held for Dart" with "in a call" (unstated assumption).** The slot means *answered, not yet joined*. Dart consumes the hold when it joins, but nothing tells native, so the slot persists for `ANSWERED_TRUST_MS` (120s) after A is already live. Inside that window, `answer(B)` ends A natively: the newest answer wins. Dart's own rule for the same moment is the opposite: `isInLiveCall` refuses B (`alreadyInLiveCall`), and the in-app banner says "You're already in a call". **Two doors, two opposite single-call rules, decided by whether 120s have elapsed.** After 120s, A's slot has expired, so native passes B through and Dart refuses it. Before 120s, native kills a live A. Fold: native must learn the hold was consumed. Dart calls a bridge `consumed(ref)` when it joins, and native clears the slot. Then `answer(B)` over a *held* A ends A (a hold is not a call), and over a joined A defers to Dart's refusal, as today. One rule: **a hold yields; a live call refuses.**
+- **v2.1's iOS `instance` guards nothing named (wasted machinery).** Android needs `instance` because it has deferred artifacts: posted runnables, PendingIntents, a timer, an activity. After a86bf64, iOS runs every handler synchronously on main, and its only deferred artifact is a CallKit action, which already carries the UUID. A UUID is derived from `m`, and a same-`m` redelivery while live is a duplicate by §2. The design should either name the iOS deferred artifact an `instance` protects, or drop it from iOS. Otherwise it's a third identity added to the one platform where the race no longer exists.
+- **v2.5's redirect needs the caller's door named.** The caller pushes `/call` with an extra carrying the ref it minted, which is fine. But `conversation_actions.startCall` mints the ref before the invite send completes, and the `finally` path that announces a hangup after a failed send must keep the ref. The design should say the outgoing ref exists from mint, independent of the ack. v2.0 deletes the ack wait, so this is now true, but it's unstated.
+
+**What holds:**
+- v2.0 v2-only: the premise is measured and confirmed, and it deletes more than it adds.
+- v2.1's channel-out-of-equality with `oneChannelPerCall` as the one seam. Right for #3196.
+- v2.4's sealed `(verb, ref, instance)` and the named supersession of design 21 item 4, with a revisit trigger.
+- v2.6 dropping the prune: correct once disarm stops reading the map.
+- The closure-proof test list: concrete and RED-provable.
+
+**If RECAST, what to fold back:**
+- v2.3: add `consumed(ref)` (Dart → native, on join). Restate the rule as "a hold yields to a newer answer; a live call refuses it", the same at both doors. Add test 8: `answer(B)` within 120s after A was joined does not end A.
+- v2.1: name iOS's deferred artifacts or drop iOS `instance`.
+- v2.5: state that the outgoing `CallRef` exists from mint, before the ack.
+
+---
+
+<!-- landed 17:06:36 rc=0 -->
+## CarnotCodeCarver's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** No real engine matches the Carnot cycle; a reviewer's job is to say how far short we are. v2 closes most round-1 leaks: v1 is no longer dignified as a live call, nullable identity is gone, channel policy moved out of equality, incarnation comes back, and the answered set is deleted. That is real entropy reduction. But the recast now hides two different product/state machines behind one word, “answer,” and the sealed-event model still has an ownership hole at the outgoing/Dart edge. Dijkstra: "Simplicity is prerequisite for reliability." This is fixable, but not sound yet.
+
+**Fatal flaws:**
+- v2.3 changes the single-call product rule without paying the product cost. The earlier design explicitly kept “answering a second call while in one ends the new one” as pinned behavior. v2.3 flips native incoming behavior to “newer answer wins”: answer(B) ends A, replaces the slot, and emits ended(A) before answered(B). That is not a mechanical fold; it is a user-visible policy change. Worse, in-app and native can now disagree: in-app may refuse B while native accepts B and kills A. This is a wrong option-frame, not just an implementation detail. Fold-back: name one product transition table for all entry points. Either second answer is refused everywhere, or switch-call is accepted everywhere with explicit UI/audio semantics and tests.
+- The incarnation model is underspecified for non-ring entry points, especially outgoing/caller screens. v2.1 says instance is minted natively when a ring or answer presentation begins, while v2.5 says the caller’s own screen carries the ref it minted. v2.4 then says Dart ignores events for a `(ref, instance)` it does not hold. What instance does an outgoing Dart-created call hold before native presentation exists? If the answer is “none,” the design has reintroduced a privileged null-like state at the most dangerous boundary. Feynman: "What I cannot create, I do not understand." Fold-back: every joined call has a session/incarnation before media joins, including outgoing, or events to outgoing calls must use a separate, explicit state-read path.
+- `oneChannelPerCall` is named as a door policy but the doors are not closed-list enumerated. The design says channel is stored beside the ref and checked “at the door,” but the surfaces include invite, end, admitRing, reportEnd, Dart route admission, native actions, pending runnables, and snapshots. If any end/action path constructs `CallRef(id)` and skips the channel policy, a same-ULID payload from another channel can match by equality and affect the live call. Moving policy out of `==` is right; failing to enumerate every enforcement point is the new entropy leak.
+- v2.4 still substitutes ordered sealed events for design 21’s state-read model, and the supersession is only partly justified. Sealing `(verb, ref, instance)` fixes wrong-call and stale-incarnation events, but not listener attach/crash boundaries: a commit can occur, the process can die before the posted event reaches Dart, and the next listener only gets whatever snapshot exists. The design mentions snapshot on listen, but does not define its full state shape, version, or precedence against queued sealed events. Hamming: "The purpose of computing is insight, not numbers." The insight is a single native state table plus invalidations; if keeping events, specify the snapshot as authoritative and make event delivery purely advisory.
+- The v1-only-as-history fold mostly dissolves the null class, but the iOS report-and-end buzz remains a known remote-visible side effect until the island stops waking v1. Calling it “old dev builds only” depends on a measured deployment premise, not a protocol invariant. If any island or test environment emits v1 VoIP wakes, users can still see system call UI for a thing the app says is not a call. Fold-back: make “stop waking v1” a prerequisite for iOS v2-only behavior, or explicitly accept and test the buzz as compatibility debt with an owner and removal trigger.
+- The “net negative line count” acceptance criterion is thermodynamic theater unless tied to semantic deletion. A smaller diff can still preserve the wrong state machine; a larger diff can delete a failure class. Use it as a smell, not a gate. The real acceptance criterion is fewer owners of call state, fewer transition interpreters, and tests proving stale artifacts are inert.
+
+**What holds:**
+- v2-only calling is the right dissolution if the measured premise is accepted: v1 renders as signed history and never becomes a live call. That deletes the V1 identity swamp instead of insulating it.
+- `CallRef(id)` with equality by ULID is cleaner than `V2(channel,id)`. Channel is policy, not identity, and one named `oneChannelPerCall` seam is the correct place for future #3196/gathering changes.
+- Restoring incarnation identity is essential and correct. Every timer, intent, activity, keyguard callback, native row, and posted runnable must prove both “same call” and “same local machinery.”
+- Refusals before side effects holds. Parse, duplicate, cross-channel policy, then displacement is the reversible order; side effects before validation were the heat leak.
+- Deleting the answered set is an improvement. The set was a compensating structure for unclear ownership; a single native owner of the answer slot is simpler.
+- Sealing event payloads under the critical section is better than posting a runnable that re-derives what happened later. The runnable may decide whether anyone is listening, but not what transition occurred.
+- The audio lease fold holds: `armed: Set<UUID>` in memory matches the lifetime of CallKit audio better than a persisted UUID map. Dropping pruning is also correct once disarm no longer consults stale rows.
+- `/call` requiring an admitted non-null call is the right fix. A joined room addressable by nothing was a hot mic with a philosophical hat on.
+
+**If RECAST, what to fold back:**
+- Write the single-call transition table explicitly and apply it to native, Dart, Android, and iOS. Decide whether second answer wins or is refused; do not let entry point choose policy.
+- Define `CallSession = (ref, instance, channel, phase)` as the thing Dart/native hold. Mint it before any media join for both incoming and outgoing calls. Then `CallRef` is semantic identity, and `CallSession` is local ownership.
+- Closed-list every `oneChannelPerCall` enforcement site: invite wake, end wake, admitRing/admission, native action, reportEnd/endSystemCall, Dart route construction, snapshot read, and queued runnable execution. Add tests proving same `m` on another channel cannot end, answer, stop, or admit the live call.
+- Make snapshot-on-listen authoritative. Specify the snapshot shape, its version/instance, and how queued sealed events interact with it after crash, listener attach, and engine replacement. If events remain, call them invalidations with payloads, not the source of truth.
+- For v1 iOS wakes, either require the island change before app behavior is considered closed, or add a named compatibility debt: report-and-end may buzz, owner island, removal when v1 wakes stop, tested on hardware.
+- Replace the line-count gate with semantic gates: no nullable call identity in live paths, no joined room without a session, no stale artifact can affect a new instance, same id on another channel is refused before side effects, answer/end order is stable across crash/listen boundaries. Then line count can be an odor, not a law.
+
+---
+
+<!-- landed 17:07:47 rc=0 -->
+## KelvinBitBrawler's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The design achieves a brilliant, simplifying chill by freezing out v1 and clarifying identity, but its break-before-make answer model creates a new cold fault, a path to total connection loss.
+
+**Fatal flaws:**
+- **(Missing failure mode, v2.3)** The `answer(B)`-over-`A` transition is a destructive, non-atomic operation at the user level, guaranteeing data loss. The design celebrates ending call `A` within the same critical section that anoints `B`, calling this a simplification. It is, but at absolute zero cost to the user's connection. "Answering" a call involves fallible operations beyond this critical section: media negotiation, resource allocation. If any of these fail for `B` *after* `A` has been terminated, the user is left with no call at all. The system has failed to a state of total communications blackout, sacrificing connection resilience for state-machine purity. This is an unacceptable thermodynamic loss. `Frank Herbert, Dune: "A beginning is a very delicate time."` This design burns the transport ship before confirming the new planet has a breathable atmosphere.
+
+**What holds:**
+- The v2-only premise (v2.0) is a masterstroke of simplification, correctly using measurement to sublimate an entire class of legacy problems.
+- The `CallRef(id)` and `instance` dual-identity model (v2.1) is the correct phase transition, separating *what* call from *which incarnation*. This fundamentally resolves the oscillations of the prior design.
+- Sealing event payloads (`verb`, `ref`, `instance`) under a lock before posting (v2.4) is a robust pattern that prevents runnables from acting on stale realities.
+- Eliminating the unaddressable, joined "hot mic" state (v2.5) plugs a critical vacuum leak.
+- The in-memory `armed` set (v2.6) correctly matches the audio lease's lifetime to the process that owns it, fixing a fundamental flaw in the previous persistence model.
+
+**If RECAST, what to fold back:**
+- The transition for `answer(B)`-over-`A` in v2.3 must be converted to a **make-before-break** pattern. The system must fully establish and stabilize call `B` before terminating the native resources and system call for `A`. If answering `B` fails at any point, the process must be aborted, leaving call `A` completely untouched. This preserves the user's active connection, which is the system's prime directive. The state machine must serve the connection, not the other way around.
+
+---
+
+<!-- landed 17:11:37 rc=0 -->
+## Tesla, the Arc-Prophet's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** v2 tunes the call to a ULID and tags the local incarnation, then leaves the engine lease, the Dart hold, and the audio lease humming in three different keys, so the first swap, the first decline during an outgoing, and the first VoIP v1 wake are the frequency that shakes the glass at 3am (Tesla: "If you want the secrets of the universe, think in energy, frequency and vibration.").
+
+**Fatal flaws:**
+- **The ninth seat is still empty (v2.1, v2.4, open question 2; folds 1 and 5 incomplete).** Three names are written down: `CallRef` (which call), `instance` (which incarnation), CallKit UUID (which system row). Six places keep them: the wire, the one answer cell, native artifacts, the iOS map, `armed`, Dart's hold. The ninth is the engine lease. Design 21 v2 item 2 gave that lease to the session; v2.1 hangs `(ref, instance)` on timers, intents, the activity, the keyguard callback, and the posted runnable, and leaves `AikoEngine` as a process-global instrument. v2.4 seals `(verb, ref, instance)` so the runnable no longer decides *what happened*, then lets it decide *whether the engine lives* with `releaseIfHeadless` at run time. FCM redelivers at least once. The queued retire of instance 1 runs after instance 2 has `obtain`ed the same engine for a live ring, sees no Dart listener yet (the warm is for `admitRing`, the `call/actions` listener attaches later), and releases instance 2's instrument. Native still shows B; answer talks to a dead engine. Open question 2 is this flaw, named. Naming it did not close it.
+- **Dart is asked to match a chord it is never handed (v2.1, v2.3, v2.4, v2.5).** The snapshot on listen is one cell holding a `CallRef`. The seal is `(verb, ref, instance)`. The ignore rule is "Dart ignores an event for a `(ref, instance)` it does not hold." `CallScreen.call` is a `CallRef`. Those four sentences cannot be implemented together. A cold-start listener that obeys the ignore rule has no instance and drops every event, including the `ended` that arrives because the user already hung up in system UI. A listener that matches on `CallRef` alone reopens design 21's r3: the expired ring's posted `ended` against the new incarnation of the same `m`. The snapshot also has no ringing phase and no channel; `call/actions` is still the pipe; iOS `pending` is no longer named. An `ended` posted before listen has nowhere to sit on Android, so Dart admits from history and leaves the in-app banner up for a call the system already buried. Fold 6 superseded design 21 item 4 with "events plus a snapshot"; the snapshot's contents were never written, so the deaf path is back inside the replacement.
+- **`armed` still disarms on an empty census, and test 7 sings the opposite note (v2.3, v2.6, closure test 7; fold 8 incomplete).** The operational rule is "every end of a UUID removes it; disarm iff the set is now empty." Ending a UUID that was never inserted leaves the set empty, and "iff empty" fires `disarm()`. Closure test 7 says that path never disarms. The prose and the proof cannot both be the design. The 3am that test 7 exists for: an outgoing call (v2.6: not an `arm()` site, same `CallAudioSession` the lease describes), an incoming rings, the user declines. B was never in `armed`. Remove is a no-op, the set is empty, `disarm()` tears the outgoing mic down. The same empty-census fires on the v2.3 swap: `answer(B)` ends A in one critical section; remove A, set empty, `disarm()`, then `arm()` B. Audio dies in the gap, and B answers into a muted session. Decline-B-while-A-connected is safe only because A remains in the set; the swap and the outgoing+decline are the two notes that hit the vacuum. Fold 8 closed the insert list and dropped prune; it left the predicate that made `CXEndCallAction` lethal.
+- **The map's exhaust was prune; v2.6 deletes prune and does not write delete-on-end (v2.6; Kelvin's leak in a new jar).** Disarm no longer consults the persisted map, so a corpse cannot withhold audio. The map still maps UUID to row across process death, which is the only way a killed app restores a live CallKit call. Rows that are never deleted and never pruned accumulate for the life of the install. Rows that a time window would have harvested can also stay as occupancy for a channel that has already moved on, so the next `reportInvite` on that channel displaces a ghost UUID or overwrites the UUID instance 2 still needs. The in-memory set was the right lifetime for audio. The map still needs a death: delete the row when that UUID ends, keep it while ringing or answered, and never harvest a UUID that is in `armed`.
+- **v1 on the VoIP pipe is a revocation primitive until the island stops sending it (v2.0, open question 3; island Decision 4).** v2.0's iOS cell is report-and-end: a momentary buzz, "old dev builds only." Island Decision 4 is the standing law of that pipe: every VoIP push is a call, the client must report before the handler returns, and repeated junk reports revoke the privilege. v2.0's table makes "not a call" the app's truth about v1, then uses the call pipe to report it. The cross-tab ask (stop waking on v1 bodies) is the only cut that removes the buzz *and* the entitlement storm. Until that ask is a shipping gate, every leftover v1 wake in a calling-ON build is a CallKit transaction Apple is entitled to count against the app. Open question 3 prices this as taste. It is blast radius.
+- **`answer(B)` ends A inverts the pinned one-call product on the only path CallKit actually presents (v2.3, open question 1; v1 "Not in this design").** Kelvin's pinned test: a second answer while in a call ends the *new* one. v2.3: the native transition ends *A*, "the newer answer wins." In-app refuse-B and lock-screen accept-B-kill-A are two products for one user. Call-waiting was measured on 2026-09-20; §5's `armed` set exists so declining B leaves A's audio up. Answering B now performs a programmatic end of A, which CallKit will also surface as the connected call dying under the user's finger. Combined with the empty-set disarm above, the swap is how a user who taps Answer on the waiting call loses both mics for a beat and the first remote hears a hangup. The set was killed so a hangup of A could not be lost; the fold made A dead instead of remembered. That is a coherent one-cell machine only after the product is pinned to *one* winner on *every* UI, and the native transition is a replace that never takes the disarm path in the middle.
+
+**What holds:**
+- v2-only calling. No store build has ever placed a v1 call; rendering v1 as history and refusing it at `admitRing` / Android drop dissolves the `V1(channel)` arm, the random-UUID path, `sameCall`'s fallback, and the announcer's `reply_to` wait. Maxwell's option-frame was right, and Nick's confirmation holds it.
+- `CallRef` as a grammar-checked ULID, equality on the id alone, channel stored beside it, `oneChannelPerCall` as the single seam Decision 1b / #3196 will change. Round 3's Android channel skip is met at the door. `==` stays a tuning fork, not a policy engine.
+- One `fromWire` / `toWire` per language as the only place absence is interpreted; malformed `m` still drops or must-report-ends; golden vectors across three languages.
+- §2's order: parse, duplicate, door policy, then displace. A refusal spends no side effect.
+- Native instance on artifacts, with a stale instance a no-op. That is the right second oscillator for FCM's at-least-once, and closure test 1 is the right proof of it.
+- v2.5: a joined room requires an admitted `CallRef`; a bare `/call` goes home; `namesACall` stays dead. The hot mic with no name cannot be constructed.
+- §5's lifetime insight: a process-local audio lease belongs in process memory; `providerDidReset` clears it; process death ends the lease and the session together.
+- Sealing *what happened* under the lock, plus the ordering test that `end` committed after `answer` for one ref is never observed first. FIFO was never the proof; the seal is.
+- Net-negative delta as acceptance, grep as tripwire, seven semantic tests as the real closure list. The class is being proved, not merely named.
+- Wire bytes untouched; island still owns no call object.
+
+**If RECAST, what to fold back:**
+- **Write the session.** One native object, key `(CallRef, instance)`, owns the engine lease, the ConnectionService/CallKit UUID, the answer cell, the armed bit, and the channel stored beside the ref. Mint it when a ring or answer presentation begins. Every artifact already listed in v2.1 points at it. Retiring it drops *this instance's* engine claim, sealed beside the verb; `releaseIfHeadless` becomes "this claim released, release the engine only if no other session holds a claim," never a global census of listeners at run time.
+- **Make Dart's hold, the snapshot, and the seal the same shape.** On listen, Dart reads `{phase, ref, instance, channel}` (ringing or answered or empty). Events may still wake it; they carry that same tuple. Dart ignores a tuple it does not hold. `CallScreen` takes the admitted session's `CallRef` *and* keeps the instance for as long as it is joined. Delete the sentence that the answer cell is the snapshot. iOS `pending` is named as the pre-listen buffer until the snapshot includes ringing and ended-while-headless.
+- **Rewrite the disarm predicate so test 7 *is* the rule.** Disarm only when a UUID that *was* in `armed` is removed and the set is then empty. Ending an unarmed UUID is a no-op on the lease. `answer(B)` while A is answered is a *replace*: insert B, remove A, never pass through empty. Same critical section, same main queue. Predicted device test: decline waiting B while outgoing (or connected A) is live → audio survives; answer B while A is connected → A's audio ends, B's audio lives, no mute gap.
+- **Map exhaust:** delete the row when that UUID ends; keep it while the session is ringing or answered (process death still restores a live CallKit call); no time-based prune. Duplicate detection is live-session identity (`CallRef` + instance), not a corpse in prefs.
+- **Island stop-waking-v1 is a shipping gate** for any calling-ON build that reports VoIP. Until it lands, iOS v1 policy stays report-and-end *and* the entitlement risk is written in v2.0's table as a counted blast, not "a momentary buzz." Android drop stays.
+- **Pin the one-call product in one sentence both UIs obey.** Either a second answer is refused everywhere (A lives, B's system call is ended as the already-in-a-call refusal), or a second answer switches everywhere (replace as above). Strike "newer wins" as an inversion of a pinned test unless that test is rewritten in this design. Call-waiting UI remains a later product question; it cannot disagree with the native transition that already ends A.
+- **Close the three open questions with those rulings** so the next cage-match is a delta against a finished identity, not another pass at the same oscillator.
