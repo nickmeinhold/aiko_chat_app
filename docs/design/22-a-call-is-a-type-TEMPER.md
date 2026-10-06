@@ -298,7 +298,7 @@ Hans Gruber: "When you steal $600, you can just disappear. When you steal 600 mi
 
 ---
 
-# Re-strike round 3 (dt-1791281566, FINAL) — against design 22 v3  ⏳ IN PROGRESS
+# Re-strike round 3 (dt-1791281566, FINAL) — against design 22 v3: RECAST 3/4 (Maxwell SOUND) — TEMPER CAP REACHED
 
 ---
 
@@ -392,3 +392,71 @@ Ellen Ripley: "Did IQs just drop sharply while I was away?" (No. They went up: r
 > unknown or expired call is a no-op on Android and report-and-end on iOS (must-report). The only
 > open item that could move these is claude-tasks#4233 (the four call clocks), and the island will
 > flag it before merge.
+
+---
+
+<!-- landed 17:19:28 rc=0 -->
+## Tesla, the Arc-Prophet's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** v3 still keeps six clocks for one call, and the redelivered VoIP push, the third minute, and the lock-screen decline are the three frequencies that shake it to glass (Tesla: "If you want the secrets of the universe, think in energy, frequency and vibration.").
+
+**Fatal flaws:**
+- **Six lifetimes, one call (v3.1, v3.2, v3.3, v3.4, v3.5).** The answer cell dies at 120s. The tombstone dies at `RING_CEILING_MS × 2`, counted from the end. `armed` dies with the process. The map row dies on `forgetLiveCall` and outlives the process. The engine claim dies at `retire`. Dart's `CallState` is whatever the slots say at listen. A live call is the beat those clocks do not share. Design 12 already measured this disease on the wire: island expiration 60s, app freshness 10s, six times apart, reconciliation named as unfinished work. v3.2's safety proof declares "the island's FCM invite TTL is the ring ceiling, so a later redelivery cannot arrive." That equality is the grounding document's open bug, borrowed as a premise. FCM TTL is not APNs VoIP expiration, and neither starts when the ring ends.
+- **The tombstone ends the call it was built to protect (v3.2, v2.2 §2 step 2, design 12 Decision 1, Decision 4).** UUID is a pure function of the ULID. Answer writes a tombstone. A duplicate invite is then "report-and-ended." On iOS that phrase means a CallKit transaction against the UUID CallKit already holds for the connected call. `reportEnd` on that UUID removes it from `armed`; v3.5 then disarms because the set goes empty. The mic dies at 3am because the birth announcement was redelivered. v2.0 deleted the random UUID, so there is no sacrificial id left to satisfy must-report. v3.7 gates that same instant-end pattern for v1 dev wakes, then v3.2 makes it the production path for every legitimate redelivery. The FCM sentence does not bind APNs. An end that shares the tombstone's "already done" predicate is dropped, and the remote hangs up into silence.
+- **Native refusal goes dark while the call is still up (v3.1, v2.6).** The ruling "a second answer is refused" is implemented as "the answer cell holds A." That cell expires at 120s, and a real call is longer than its grace. After that, native passes B: the lock-screen answer is fulfilled, and Dart is hoped to refuse later. CallKit has already accepted the second answer. The cell is also never written for outgoing — v2.6's outgoing call does not arm and does not pass through `answer()`. For every call the user places, and for every answered call older than two minutes, the native door is empty and the pocket answers B. "A's `call_end` always finds it" is the same sentence as "once it expires," and they cannot both be true. Withdrawing `consumed(ref)` because the outcomes match is only true inside the window, on an incoming call, with Dart awake.
+- **Ended and empty are the same note, so history re-rings a buried call (v3.3, v3.6 door 3).** `CallState` is `ringing`, `answered`, or empty. A decline before Flutter exists clears the slot and writes a tombstone the snapshot does not read. Android explicitly keeps no pre-listen `ended`. iOS `pending` exists because the snapshot has already forgotten. The primary wake path, design 12 Decision 6, is native-before-Dart. The local decline is never signed out, the caller keeps ringing, and `admitRing` — door 3 checks the envelope, not the tombstone — raises the banner for the ref the lock screen already buried. v3.3 says the tombstone stops that banner and names no read.
+- **Door 4 and the engine claim are wired to the wrong clock (v3.6 door 4, v3.4).** Door 4 drops a sealed event whose channel is not the held state's channel. v3.3 says an event for a ref you do not hold still reaches that ref's banner and route. Call-waiting was measured 2026-09-20 across two groups: decline waiting B while A is held, B's `ended` is eaten, B's banner stays. The channel was already bound at doors 1–3. Engine claims are taken only in `ring()` and released in `retire()`. The outgoing session never rings. Screen off, activity detached, a queued retire sees no claims and releases the engine under a live outgoing call. "No activity attached" is not a call lifetime.
+
+**What holds:**
+- v2-only calling, on the measured premise, with Nick's confirmation. v1 renders in history and is refused at the ring. The `V1(channel)` arm stays dead.
+- `CallRef` is the ULID alone. The channel sits beside it. `oneChannelPerCall` is the seam #3196 / Decision 1b will change. `==` is not a policy engine.
+- One `fromWire` / `toWire` per language. Malformed `m` drops or must-report-ends. Wire bytes untouched. The island still owns no call object.
+- Refusals before side effects: parse, duplicate, door, then displace. The order holds. The duplicate's action on a live UUID does not.
+- The product ruling itself: a second answer is refused, A is untouched, no break-before-make. Kelvin's blackout is closed as a ruling. The memory that is supposed to enforce it is not.
+- v3.5's disarm predicate is the rule: disarm only when removing a UUID that was in `armed` leaves the set empty. An unarmed end is a no-op on the lease. Delete-on-end for the map, no time prune, rows survive death while the call is live.
+- v3.7: stop-waking-v1 is a shipping gate for 0.0.6, island-owned. Dev report-and-end is named debt.
+- v3.8: semantic tests, line count as a smell. Dropping iOS `instance` is right for synchronous main. Sealing the verb under the lock still holds. v2.5: no joined room without a `CallRef`.
+- v3.4's incoming race is closed for two refs that both claimed: a retire of A does not drop B's claim. The hole is the call that never claims.
+
+**If RECAST, what to fold back:**
+- **One session, one lifetime.** Mint it at incoming ring and at outgoing mint, before the ack and before media. Key `(CallRef, channel, phase)`. It owns the answer memory, the engine claim, the CallKit/ConnectionService UUID, and the armed bit. It dies only on end. Delete the 120s cell as product memory and delete `RING_CEILING × 2` as the tombstone's clock. `ANSWERED_TRUST_MS` survives only as crash grace for a hold no session still shows as connected.
+- **v3.2:** A tombstone means "do not create a session." It never `reportEnd`s a UUID that is ringing or answered. A duplicate push for a UUID CallKit already has completes the handler and leaves that call up. A tombstoned ref with no live UUID may report-and-end a fresh report, and that buzz is the same counted entitlement cost as v3.7, not a silent drop. Ends bypass the tombstone. Tombstone deadline is first-seen plus a named upper bound on invite push TTL for both FCM and APNs, pinned next to design 12's expiration — not inferred from the ring ceiling. Rewrite closure test 1: a redelivery never ends the live UUID and never starts a second ring.
+- **v3.1:** While any session is live — incoming or outgoing, of any age — `answer(B)` is refused before the system answer is fulfilled, on Android and on iOS. After the cell's 120s, a connected map row or an `armed` UUID still refuses. Outgoing inserts the session at mint so the native door can see it. Add test 8b: answer B at t>120s while A is connected leaves A up and does not fulfill B; answer B during outgoing does the same.
+- **v3.3:** `CallState` can be `{phase: ended, ref, channel}` for as long as the tombstone lives, read from the same store on Android and iOS. `admitRing` refuses it. A decline before listen is replayed so Dart still announces the signed end. Add the test: decline before first listen, history does not banner.
+- **v3.6 / v3.4:** Remove door 4's comparison against the held channel. Doors 1–3 bind the channel; later events trust it and still apply to that ref's banner and route while another ref is held. Test: decline waiting B during A, B's banner stops, A stays. Engine claim is taken at session mint, including outgoing, and released at that session's retire.
+
+---
+
+## Round 3 synthesis: cap reached, design is **NOT tempered SOUND**
+
+Three rounds, and none came back clean from at least two families: R1 RECAST 4/4, R2 RECAST 4/4,
+R3 RECAST 3/4. Per the skill's guardrail, this stops here and is reported. **Status: RECAST
+outstanding. Not cleared to build as v3.**
+
+**The round-3 findings, classified** (against the code and the record, 2026-10-06 17:20):
+
+| Finding | Families | Ruling |
+|---|---|---|
+| Native refusal goes dark after the 120s answer cell, and the native door never sees an OUTGOING call, so a lock-screen answer to B is fulfilled under a live A. On iOS CallKit then takes the audio session under a non-CallKit outgoing call | Tesla, Carnot (and Maxwell r2's withdrawn `consumed(ref)`) | **Real.** Native lacks the fact "a call is live" |
+| A decline before Dart exists leaves no ended state that Dart reads; the invite then arrives over the websocket inside `kCallInviteFreshness` (10s), and the banner rings a call the lock screen buried | Tesla | **Real** |
+| Tombstone has no exhaust | Kelvin | **Real** (doc gap; prune-on-write) |
+| Tombstone TTL proof was FCM-only | Carnot, Tesla | **Closed after launch:** pinned to the island's shared constants (see above) |
+| A wrong-channel END must be refused before any destructive effect | Carnot | **Real** (doc: split door 3 into invite vs end) |
+| Door 4 contradicts v3.3 (an event for an unheld ref) | Tesla | **Real** (doc inconsistency) |
+| The engine claim is never taken by an outgoing call | Tesla | **Real** (doc gap) |
+| v3.7 gate absent from v3.8's acceptance list | Carnot | **Real** (doc) |
+| "The tombstone report-and-ends the LIVE UUID and disarms" | Tesla | **Rejected: misread.** iOS report-and-end mints a throwaway `UUID()` (`AppDelegate.swift:823`), and never touches the live UUID or `armed`. Caused by v2.0's wording ("the random UUID is deleted" meant v1's ring UUID). The wording must be fixed |
+
+**The convergence:** every real round-3 finding is the same missing object, **one call session
+with one lifetime**: minted at incoming ring AND at outgoing mint; owning the answer memory, the
+engine claim, the CallKit/ConnectionService UUID, the armed bit and the ended/tombstone phase;
+dying only on end; and readable by native, so every door refuses with the same fact. **That object
+is design 21 v2 item 2 ("a call session per callId owns everything a ring creates"), which has
+never been built.** Each round of both designs has re-derived it piece by piece: slots, then
+cells, then claims, then tombstones.
+
+**Disposition: Nick's call** — see the session report. The options are a v4 that builds the
+session as the spine (folding every row above), with the delta cage-match as the next gate; or
+another design pass (`/crucible`) on the session object itself.
