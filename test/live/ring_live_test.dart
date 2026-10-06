@@ -196,11 +196,12 @@ void main() {
     );
     final live = container.read(incomingRingProvider)!;
     // ignore: avoid_print
-    print('RINGING: invite=${live.inviteId} server=${live.islandMsgId}');
+    print('RINGING: call=${live.call.id} server=${live.islandMsgId}');
 
     // --- the other party hangs up ---------------------------------------------
     final stoppedAt = DateTime.now();
-    await _probe(['end', live.islandMsgId]);
+    // call/2: the end names the CALL ID in its signed body (design 22).
+    await _probe(['end', live.call.id]);
 
     final stopped = await _await(
       () => container.read(incomingRingProvider) == null,
