@@ -473,3 +473,68 @@ tombstone*), plus:
 > v1 bodies are stored and served but never wake on FCM or APNs; `m` is on every wake
 > (`WakePayload.call_id: str`, with no None arm); FCM collapses on `m`. The gate closes when #192
 > merges. The app's `fromWire` still treats an absent `m` as "no call", for robustness.
+
+---
+
+## v4 — the session, as the spine (Nick, 2026-10-06: "v4 + build", after the temper cap)
+
+The temper's three rounds converged on one unbuilt object: design 21 v2 item 2's call session.
+v4 builds it **as a re-scoping of what exists**, not as a new subsystem. The next gate is the
+delta cage-match of the build, not a fourth strike. v1-v3 stand except where v4 replaces them.
+
+### v4.1 — Native call state is three cells, each with ONE lifetime
+
+| Cell | Holds | Born | Dies | Persisted |
+|---|---|---|---|---|
+| **ring** | `(ref, channel)` (+ Android `instance` for its notification artifacts) | invite admitted at the door | retire: end, decline, deadline, answer, refusal, displacement | yes (the process that starts a ring is not the one that ends it) |
+| **session** | `(ref, channel, phase: answered \| live)` | native answer (`answered`), or Dart `callStarted(ref, channel)` (`live`; outgoing at mint, incoming at join) | a native end of that ref, or Dart `endSystemCall(ref)` | `answered` yes, with crash grace `ANSWERED_TRUST_MS`; `live` is **process memory**, because media dies with the process |
+| **tombstones** | `ref → at` | every retire of a ring, every end of a session | `TOMBSTONE_TTL` = 2 × max(`RING_CEILING_SECONDS`, `_ALERT_EXPIRATION_SECONDS`) = 120s; **pruned on every write** (Kelvin r3) | yes |
+
+The 120s answer cell as product memory is gone (Tesla r3). `ANSWERED_TRUST_MS` survives only as
+crash grace for an `answered` session that no live process has confirmed.
+
+### v4.2 — Every door reads the same fact
+
+- **Second answer** (v3.1's rule): `answer(ring B)` is refused if the **session** cell holds any
+  ref. That covers incoming of any age, outgoing, and the 120s window and beyond. Refusal happens
+  **before** any system-answer side effect: Android doesn't write or emit, and retires B; iOS
+  `action.fail()`s, then reports the end. Dart's `isInLiveCall` refusal stays as the in-app door's
+  own check, and the two now agree because `callStarted` feeds native.
+- **Invite at the door:** drop (Android) or report-and-end on a **throwaway UUID** (iOS) if `ref` is
+  tombstoned or is the session's ref. `oneChannelPerCall` runs first (§2 order).
+- **End at the door:** `oneChannelPerCall` (stored channel must equal `c`) runs **before any
+  effect** (Carnot r3). Then end the ring or session holding `ref`, and tombstone it.
+- **Native → Dart:** `onListen` delivers `ended(ref)` for every live tombstone, then the session
+  snapshot. Dart keeps `systemEnded: Set<CallRef>` (TTL as above). **`admitRing` refuses a ref in
+  `systemEnded`**, so a lock-screen decline before Flutter existed never becomes a banner (Tesla
+  r3). Door 4 (v3.6) is **deleted**: doors 1-3 bind the channel, and later events act on their
+  ref's banner and route whatever else is held.
+
+### v4.3 — The engine and the audio follow the session
+
+- Android engine: kept while `ring != null || session != null` (incoming ringing, answered,
+  outgoing, live), released when both cells are empty and no activity is attached. This replaces
+  v3.4's claims set, with the same effect and one fewer structure.
+- iOS audio: v3.5's predicate stands (`armed` is the set of answered CallKit UUIDs; outgoing never
+  uses CallKit audio). Answering is refused while any session exists, so `armed` holds at most
+  one UUID.
+
+### v4.4 — Wording fixes (Tesla r3's misread)
+
+v2.0's "the iOS random UUID is deleted" means **v1's ring UUID**. iOS report-and-end always mints a
+throwaway `UUID()` and never touches the live call's UUID or `armed`.
+
+### v4.5 — Acceptance gates (supersede v3.8's list)
+
+All gates are RED-proved tests unless stated:
+1. a redelivered `m` within the tombstone TTL is dropped and the live call is untouched;
+2. v1 never rings, admits or ends;
+3. same `m` on another channel is refused at each door, including an END, before any effect;
+4. a second answer is refused at t < 120s AND t > 120s after the first, and during an outgoing call,
+   on both doors;
+5. for one ref, `end` committed after `answer` is never observed first;
+6. a bare `/call` deep link joins nothing;
+7. ending an unarmed UUID never disarms;
+8. a decline before first listen never banners;
+9. tombstones are pruned on write (the store is bounded);
+10. **(gate, not a test)** island PR #192 merged before the first calling-ON store build.
