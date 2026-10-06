@@ -89,3 +89,59 @@ minute. Every message that says only "channel X" is ambiguous about which of tho
 The native lock-screen ring screen, warming the engine at push time, the compile-time calling gate,
 the single answer door (non-exported activity), and doing the work inside FCM's wake lock were each
 challenged in review and held. The hardware results stand.
+
+---
+
+## v2 — after the temper (dt-ring21: RECAST from Maxwell, Kelvin and Carnot; Tesla dark)
+
+Full strike: `21-a-ring-is-not-a-channel-TEMPER.md`. The v1 recast above is kept as written. v2
+replaces it.
+
+**The temper's central correction:** v1 proposed one locally minted "ring id" and treated the wire
+id as an open question. All three seated families said that id was doing **two jobs**, and that one
+of them can't be done on the device:
+
+- **What the call IS** (dedup: is this invite the same call delivered twice?). Only the sender knows.
+  → **`callId`, from the wire.**
+- **Which incarnation a screen, timer or callback belongs to** (routing). A device-local fact.
+  → **`ringInstanceId`, minted locally.**
+
+### v2 shape
+
+1. **PREREQUISITE: the invite carries its identity.** FCM `data = {c, k, m}`, where `m` is the
+   invite's server message id. `call_end` already names the same id via `reply_to`, so the end
+   carries `m` too. An invite without `m` doesn't ring (Kelvin). This is a change to the
+   #4421 contract, and it's cheapest **now**: island PR #192 is unmerged and no Android build
+   consumes FCM call wakes. The same field goes on the APNs VoIP payload.
+2. **A call session per `callId`.** The session owns everything a ring creates: the notification
+   intents (carrying `callId` + `ringInstanceId`), the ring-screen binding, the keyguard callback,
+   the timer, the stop listeners and the engine lease. Retiring the session invalidates all of
+   them. An event whose `(callId, ringInstanceId)` isn't the live session is a no-op by
+   construction.
+3. **Duplicate is decided by identity, not by phase.** `invite(callId)` when that `callId` is
+   already Ringing or Answered → duplicate, dropped. A different `callId` on the same channel → a
+   new call. `end(callId)` ends only that call. Answered is keyed by `callId` and lives
+   `ANSWERED_TRUST_MS`.
+4. **State, not events, crosses to Dart.** `call/actions` carries a *change signal*. On listen and
+   on each signal, Dart reads the current state `{phase, channel, callId}` from native. The held
+   buffer is **deleted**: a newly attached engine reads what is true now, not a backlog from a
+   previous engine. `SystemCallNavigator` keys its hold by `callId`.
+5. **iOS converges in the same arc.** `CallKitRinger` keys its UUID map by channel and carries an
+   8-hour `answeredCallTrustWindow` because of a duplicate-push incident, which is this same flaw.
+   With `m` on the VoIP payload it keys by `callId`, and the shared Dart bridge reads state on both
+   platforms. A mixed design (Android on `callId`, iOS on channel) is explicitly NOT a stable end
+   state.
+
+### Sequencing
+
+1. Agree `m` with the island tab, and get it into PR #192 before merge (FCM) plus the APNs VoIP
+   payload builder.
+2. Android: the session + state-read bridge on `feat/android-ring` (PR #210 stays open).
+3. Dart: `SystemCallNavigator` keyed by `callId`; the bridge reads state.
+4. iOS: `CallKitRinger` keyed by `callId`.
+5. Re-strike v2 (temper round 2 of ≤3), then a fresh cage-match on the result.
+
+### What v2 does NOT change
+
+Everything in "What is NOT in question" above. Also the hardware results for invite, end, answer,
+decline and cold start: those paths keep their shape, and only what they're keyed by changes.
