@@ -211,7 +211,19 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   }
 
   void _trackLiveness() {
-    _mountedCallEnded = _session.state.value == CallConnectionState.ended;
+    final ended = _session.state.value == CallConnectionState.ended;
+    if (ended && !_mountedCallEnded) {
+      // THE CALL IS OVER NOW, not when this screen is closed. The native half
+      // refuses a second system answer while a call is live (design 22 v4.2),
+      // and a "Call ended" screen can stay up indefinitely — so ending the
+      // system call only at dispose left native refusing an answer that Dart's
+      // own door (`pushCallOverSpent`) would allow. Dispose ends it again;
+      // ending is idempotent. (Fix-interaction pass, design 22 build.)
+      unawaited(
+        _systemCall?.end(widget.channelId, widget.call) ?? Future<void>.value(),
+      );
+    }
+    _mountedCallEnded = ended;
   }
 
   @override

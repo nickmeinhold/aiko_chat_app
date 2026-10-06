@@ -221,12 +221,35 @@ object CallRing {
    */
   fun tombstonedCalls(context: Context): List<Pair<String, String>> =
     synchronized(lock) {
-      liveTombstones(context.applicationContext).map { (callId, t) -> t.channel to callId }
+      val app = context.applicationContext
+      // NEVER the call this device is holding an answer for. Answering
+      // tombstones the RING (it can never ring again), and replaying that as
+      // `ended` ahead of the answer snapshot made Dart record the answered
+      // call as system-ended — its invitation then arrived dead, was never
+      // admitted, and the cold-start answer timed out. (Fix-interaction pass,
+      // design 22 build: tombstone-on-answer × replay-on-listen.)
+      val held = readAnswerApplied(app)?.callId
+      val inProcess = live?.callId
+      liveTombstones(app)
+        .filterKeys { it != held && it != inProcess }
+        .map { (callId, t) -> t.channel to callId }
     }
 
   /**
-   * Whether a ring or a session needs the engine kept — MainActivity hands the
-   * engine back instead of destroying it while this is true (design 22 v4.3).
+   * Whether a ring, or an answer not yet joined, needs the engine kept past
+   * its activity — MainActivity hands the engine back instead of destroying it
+   * while this is true. NOT a live call: backing out of a live call closes it,
+   * as before; keeping it would run a call (and a camera) with no UI.
+   * (Fix-interaction pass, design 22 build.)
+   */
+  fun holdsEngineForRing(context: Context): Boolean {
+    val app = context.applicationContext
+    return ringSlot(app) != null || answerSlot(app) != null
+  }
+
+  /**
+   * Whether anything at all needs the engine — the retire runnable's test for
+   * "is a headless engine nobody's" (design 22 v4.3).
    */
   fun holdsEngine(context: Context): Boolean {
     val app = context.applicationContext

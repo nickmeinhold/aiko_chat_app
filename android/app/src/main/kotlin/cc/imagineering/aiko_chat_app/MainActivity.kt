@@ -32,7 +32,7 @@ class MainActivity : FlutterActivity() {
     // hands the engine back to the ring instead, and the ring's own close path
     // ([AikoEngine.releaseIfHeadless], run by CallRing.stop) stays the single
     // closer. (Tesla, PR #210 round 1.)
-    if (CallRing.holdsEngine(this)) {
+    if (CallRing.holdsEngineForRing(this)) {
       AikoEngine.detachedDuringRing()
       return false
     }
