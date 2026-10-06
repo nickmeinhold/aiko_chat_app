@@ -107,7 +107,7 @@ object IncomingCallNotifier {
   fun show(
     context: Context,
     channelId: String,
-    callId: String?,
+    callId: String,
     instance: Long,
     callerLabel: String,
   ) {
@@ -192,11 +192,11 @@ object IncomingCallNotifier {
    * identity (`m`, absent for v1), and THIS ring's instance — so whatever acts
    * on the intent later acts on this ring, or on nothing. (design 21 v2)
    */
-  private fun Intent.putRing(channelId: String, callId: String?, instance: Long) {
+  private fun Intent.putRing(channelId: String, callId: String, instance: Long) {
     // Part of PendingIntent identity, so each ring's tokens are its own.
     data = Uri.fromParts("aiko-ring", instance.toString(), null)
     putExtra(CallRing.EXTRA_CHANNEL, channelId)
-    if (callId != null) putExtra(CallRing.EXTRA_CALL, callId)
+    putExtra(CallRing.EXTRA_CALL, callId)
     putExtra(CallRing.EXTRA_INSTANCE, instance)
   }
 

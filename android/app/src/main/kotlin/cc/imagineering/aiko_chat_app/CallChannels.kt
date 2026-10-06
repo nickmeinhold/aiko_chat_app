@@ -44,10 +44,17 @@ object CallChannels {
       object : EventChannel.StreamHandler {
         override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
           sink = events
-          // THE SNAPSHOT: an answer this device is holding — the cold-start
-          // Answer, given while Dart was still booting — is the one piece of
-          // state a new listener needs. Read from the persisted slot, so it
-          // is the truth NOW, never a backlog from an engine that is gone.
+          // THE SNAPSHOT, read from the persisted cells, so it is the truth
+          // NOW, never a backlog from an engine that is gone:
+          //  1. every call this device has ended and still remembers, as
+          //     `ended` — so a call declined before Dart existed never rings
+          //     as a banner when its invite arrives over the websocket
+          //     (design 22 v4.2).
+          //  2. the answer this device is holding — the cold-start Answer,
+          //     given while Dart was still booting.
+          CallRing.tombstonedCalls(app).forEach { (channel, callId) ->
+            events.success(event(ACTION_ENDED, channel, callId))
+          }
           CallRing.heldAnswer(app)?.let { (channel, callId) ->
             events.success(event(ACTION_ANSWERED, channel, callId))
           }
@@ -61,10 +68,21 @@ object CallChannels {
     MethodChannel(messenger, CONTROL_CHANNEL).setMethodCallHandler { call, result ->
       when (call.method) {
         "endSystemCall" -> {
-          // `call` absent = v1; present = exactly that v2 call. Exact match
-          // (Carnot + Kelvin, PR #210 v2 round 1).
-          call.argument<String>("channel")?.let {
-            CallRing.endFromDart(app, it, call.argument<String>("call"))
+          // Exactly that call (design 22: calling is v2-only, so `call` is
+          // always present; without it there is nothing to end).
+          val channel = call.argument<String>("channel")
+          val callId = call.argument<String>("call")
+          if (channel != null && callId != null) CallRing.endFromDart(app, channel, callId)
+          result.success(null)
+        }
+        "callStarted" -> {
+          // Dart has a call live in this process — outgoing, or answered and
+          // joined. A second system answer is refused until it ends
+          // (design 22 v4.2).
+          val channel = call.argument<String>("channel")
+          val callId = call.argument<String>("call")
+          if (channel != null && callId != null) {
+            CallRing.callStartedFromDart(app, channel, callId)
           }
           result.success(null)
         }
@@ -89,14 +107,14 @@ object CallChannels {
    * channel. Absent for v1 — never null, never "". No listener → dropped; see
    * the note above `attach`.
    */
-  fun emit(action: String, channel: String, callId: String? = null) {
+  fun emit(action: String, channel: String, callId: String) {
     main.post { sink?.success(event(action, channel, callId)) }
   }
 
-  private fun event(action: String, channel: String, callId: String?) = buildMap {
+  private fun event(action: String, channel: String, callId: String) = buildMap {
     put("action", action)
     put("channel", channel)
-    if (callId != null) put("call", callId)
+    put("call", callId)
   }
 
   /**

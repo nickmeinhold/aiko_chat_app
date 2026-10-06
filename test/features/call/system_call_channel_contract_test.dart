@@ -85,7 +85,7 @@ void main() {
       'lib/features/call/data/system_call_bridge.dart',
     ).readAsStringSync();
     final invoked = RegExp(
-      r"invokeMethod<[^>]*>\(\s*'([A-Za-z0-9_]+)'",
+      r"(?:invokeMethod<[^>]*>|_invoke)\(\s*'([A-Za-z0-9_]+)'",
     ).allMatches(dart).map((m) => m.group(1)!).toSet();
     expect(
       invoked,
@@ -205,7 +205,7 @@ void main() {
         'lib/features/call/data/system_call_bridge.dart',
       ).readAsStringSync();
       final invoked = RegExp(
-        r"invokeMethod<[^>]*>\(\s*'([A-Za-z0-9_]+)'",
+        r"(?:invokeMethod<[^>]*>|_invoke)\(\s*'([A-Za-z0-9_]+)'",
       ).allMatches(dart).map((m) => m.group(1)!).toSet();
       final handled = RegExp(
         r'"([A-Za-z0-9_]+)" ->',
@@ -267,6 +267,23 @@ void main() {
     expect(dart, contains(grammar), reason: 'Dart');
     expect(kotlin, contains('Regex("$grammar")'), reason: 'Kotlin');
     expect(swift, contains(r'#"\A' + grammar + r'\z"#'), reason: 'Swift');
+  });
+
+  test('the tombstone lifetime is ONE quantity in Dart and Kotlin', () {
+    // How long an ended call stays ended on a device (design 22 v4.1). Dart's
+    // half refuses a late banner; Kotlin's refuses a late native ring. If they
+    // drift, one door rings a call the other already buried.
+    final kotlin = File(
+      'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app/CallRing.kt',
+    ).readAsStringSync();
+    final ms = RegExp(
+      r'const val TOMBSTONE_TTL_MS = ([0-9_]+)L',
+    ).firstMatch(kotlin)?.group(1);
+    expect(ms, isNotNull, reason: 'the Kotlin constant did not parse');
+    expect(
+      int.parse(ms!.replaceAll('_', '')),
+      kCallTombstoneTtl.inMilliseconds,
+    );
   });
 
   test('Swift emits the v2 call id under the key Dart decodes', () {
