@@ -226,3 +226,135 @@ already deferred in the handoff, and it is now a test with a predicted outcome.
 4. Hardware: Android v2 on the Pixel (cold+locked, end by `m`, answer, decline, cross-process end,
    displacement, plus §3's answer-A-ring-B-answer-B-end-A). iOS call-waiting audio (§5) when an
    iPhone session is available.
+
+---
+
+## v2 — after the temper (dt-1791273013: RECAST 4/4; full record in `22-a-call-is-a-type-TEMPER.md`)
+
+The draft above is kept as written. **v2 replaces it.** Nick confirmed the v2-only frame on
+2026-10-06.
+
+### v2.0 — Calling is v2-only. v1 is history, not a call
+
+- **Measured premise:** the v1 sentinel first landed 2026-08-16 (#139), after 0.0.3 was cut
+  (2026-08-10). Calling was gated off from 0.0.4 (#170) and is off in every store build since
+  (0.0.5 verified 2026-10-05). **No store build has ever placed or rung a v1 call.**
+- **Island design 12's "v1 is recognised forever" is honoured as RENDERING:** a v1 body is a
+  signed message in history and displays as one, forever. It is never a call.
+
+| Surface | v1 body or v1 wake (no `m`) after v2 |
+|---|---|
+| Chat history | renders, as today |
+| In-app ring / admission | not a call: `admitRing` refuses with the named reason `v1Call` |
+| Android native wake | dropped and logged (Android has no must-report) |
+| iOS VoIP wake | report-and-end (must-report): a momentary buzz, from old dev builds only |
+| Hangup / announcer | never sent for v1; the announcer's wait-for-ack (v1 `reply_to`) is deleted |
+
+**Cross-tab ask (island):** stop waking devices for v1 call bodies. Still store and serve them.
+That removes the iOS buzz. The contract is otherwise unchanged.
+
+### v2.1 — Two identities, both explicit (folds 1, 3)
+
+- **`CallRef(id)`**: which call. A value class around a grammar-checked call/2 ULID.
+  **Equality is the id alone.** It is built only by the one `fromWire` per language: `m` absent →
+  no call (v1, see v2.0); `m` valid → `CallRef`; `m` malformed → dropped (Android, Dart) or
+  report-and-end (iOS).
+- **The channel is stored beside the ref, not inside it.** It is checked at the door by ONE named
+  policy, `oneChannelPerCall(ref, channel)`: "a call is one DM today; the same id on a different
+  channel is a bad payload". That function is the seam #3196 / design 12 Decision 1b will change,
+  and nothing else encodes the rule.
+- **`instance`**: which incarnation. Minted natively when a ring (or an answer presentation)
+  begins. Android already has it; iOS gains it on its row. **Every native artifact carries
+  `(ref, instance)`**: timers, PendingIntents (in the data URI, per a86bf64), the ring activity,
+  the keyguard callback, and every posted runnable. An artifact whose instance is not current is a
+  no-op even when the ref matches. Example: FCM redelivers `m`, a queued retire of the old ring
+  runs, and it ends nothing.
+- **`null` means only "no call".** It never appears where a call is being acted on (v2.5).
+
+### v2.2 — Refusals before side effects (§2, unchanged)
+
+The order is parse, then duplicate (same ref, live), then `oneChannelPerCall`, and only then
+displace and remember. This is the same on Android and iOS.
+
+### v2.3 — One answer, owned natively (fold 4; design 21 item 3 as written)
+
+The answer slot stays **one cell**, holding a `CallRef`, which is what design 21 item 3 asked for.
+The one-answer product rule moves into the native transition: **`answer(B)` while A is answered
+ends A in the same critical section.** That means A's system call is ended, A's slot is replaced,
+and a sealed `ended(A)` goes to Dart. A's later `call_end` then finds nothing, correctly, because
+A is already over on this device. No set, no pruning, no one-cell snapshot of a many-cell store.
+
+### v2.4 — Sealed events, posted in transition order (fold 5)
+
+Inside the critical section that writes the slot, the transition seals `(verb, ref, instance)` and
+posts it. The main-thread runnable does the engine work *with that sealed value*. It decides late
+only **whether anyone is listening** (`AikoEngine.releaseIfHeadless`), never **what happened** or
+**which call**. Dart ignores an event for a `(ref, instance)` it does not hold. iOS `reportEnd`
+emits the same sealed `ended`, closing the round-3 asymmetry.
+
+**Required test:** for one ref, `end` committed after `answer` is never observed by Dart before
+it.
+
+**Named tradeoff (fold 6):** design 22 **supersedes** design 21 v2 item 4 ("Dart reads state on a
+change signal") with *sealed, incarnation-tagged events plus a snapshot on listen*.
+- Why: item 4's target was a stale event acting on the wrong ring or phase. The ref + instance
+  check stops exactly that, and a third bridge rewrite in this PR fails the cap rule's
+  shrinking-diff test.
+- Owner: the app tab.
+- Revisit trigger: a stale-phase defect that the instance check does not stop.
+
+### v2.5 — No call, no room (fold 7)
+
+`/call` joins media only for an admitted `CallRef`. The route requires its extra, and a bare deep
+link (no extra) redirects home without joining. `CallScreen.call` is **non-null**, so a joined
+room that is addressable by nothing cannot be constructed. `namesACall` and `callScreenFor`'s null
+branch are deleted. The caller's own screen carries the ref it minted.
+
+### v2.6 — The audio lease (fold 8)
+
+- `armed: Set<UUID>`, in memory, touched on main. **Closed list of insert sites: one**, the
+  CallKit answer after `CallAudioSession.arm()` succeeds. That is the only `arm()` call in the
+  file, and outgoing calls do not use CallKit audio.
+- Every end of a UUID removes it; disarm iff the set is now empty. `providerDidReset` clears it and
+  disarms.
+- **Map pruning is dropped.** Once disarm stops consulting the persisted map, a corpse row costs
+  nothing that the existing trust windows don't already bound, and a prune could harvest a live
+  row (Tesla).
+- iOS device test (deferred, predicted): decline the waiting call during call-waiting; the
+  connected call's audio survives.
+
+### Closure proof (replaces "class closed by grep")
+
+The grep (no `String? callId` outside `fromWire`/`toWire`) stays as a tripwire. Closure is proved
+by these tests, each RED-proved by revert:
+1. a redelivered `m` after a queued retire does not end the new incarnation;
+2. a v1 invite never rings or admits (each surface in v2.0's table);
+3. the same `m` on another channel is refused at the door, and the live call is untouched (§2
+   order);
+4. `answer(B)` over answered A ends A and tells Dart `ended(A)` before `answered(B)`;
+5. `end` after `answer` for one ref is never observed first;
+6. a bare `/call` deep link joins nothing;
+7. iOS: ending a UUID that is not in `armed` never disarms.
+
+### Expected delta
+
+**Net negative.** Deleted:
+- the v1 call paths (wake, admission, announcer ack wait, `sameCall`'s fallback, the iOS random
+  UUID);
+- `namesACall`;
+- the answered-set proposal.
+
+Added: `CallRef`, `oneChannelPerCall`, the iOS instance, and the `armed` set.
+
+Acceptance criterion: the PR's line count after v2 is below a86bf64's. If it isn't, that is a
+finding.
+
+### Open questions for the re-strike
+
+1. v2.3: is ending A natively on `answer(B)` right for the user? It mirrors the in-app "already in
+   a call" refusal inverted: here the newer answer wins. CallKit call-waiting may present it
+   differently on iOS.
+2. v2.4: is "decide late only whether anyone is listening" a real seam, or does `retire` still
+   need global state?
+3. v2.0: is report-and-end of v1 VoIP wakes (from old dev builds) acceptable until the island stops
+   sending them?
