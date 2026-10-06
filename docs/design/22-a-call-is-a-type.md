@@ -358,3 +358,113 @@ finding.
    need global state?
 3. v2.0: is report-and-end of v1 VoIP wakes (from old dev builds) acceptable until the island stops
    sending them?
+
+---
+
+## v3 — after re-strike round 2 (RECAST 4/4 again, narrower; record in the TEMPER)
+
+v2 stands except where v3 replaces it. All four families converged on v2.3, and three further
+holes were real. v3 closes the open questions with rulings.
+
+### v3.1 — One product rule, every door: a second answer is REFUSED (replaces v2.3)
+
+v2.3's "newer answer wins" inverted a pinned behaviour (`answering a second call while one is live
+ENDS it`), made the lock screen and the in-app banner disagree, swapped calls break-before-make
+(Kelvin), and passed the audio lease through empty mid-swap (Tesla). **Ruling: the pinned rule
+everywhere.** If an answer is held or a call is live, a second answer is refused: B's ring and
+system call end, and A is untouched.
+- Native: `answer(B)` when the answer cell holds a live A → refuse, retire B, and tell Dart
+  nothing about B beyond its end.
+- Dart: `isInLiveCall` → refuse, as today. The banner shows "You're already in a call", as today.
+- Consistency across the 120s trust window: while A's cell lives, native refuses; once it
+  expires, native passes B and Dart refuses (`alreadyInLiveCall`). Same outcome either side, so
+  no `consumed(ref)` signal is needed (Maxwell's round-2 fold is withdrawn).
+- No swap exists, so there is no break-before-make and no empty-set gap. The answer cell is one
+  cell holding a `CallRef`, and A's `call_end` always finds it.
+
+### v3.2 — A call rings at most once per device: the tombstone (replaces v2.1's incarnation machinery for Dart and iOS)
+
+Round 1's incarnation fold existed for one scenario: FCM redelivers `m` after the ring was retired,
+and a queued retire then hits the new ring. **Dissolve the scenario instead of guarding it.** When
+a ring for `ref` ends for any reason (end, decline, deadline, answer, refusal), native writes a
+**tombstone** for `ref`, persisted and living `RING_CEILING_MS × 2`. An invite for a tombstoned
+`ref` is a duplicate and is dropped (Android) or report-and-ended (iOS, must-report). The island's
+FCM invite TTL is the ring ceiling, so a later redelivery cannot arrive.
+
+Consequences:
+- **A `CallRef` names at most one ring on a device.** So **Dart keys everything by `CallRef`
+  alone** — the hold, the snapshot, the events, the screen — and never needs an instance. That
+  answers Tesla's "a chord it is never handed".
+- **iOS has no `instance`** (Maxwell r2: it guarded nothing once every handler runs on main).
+- **Android keeps `instance`** only where it is already built and where it guards a non-call
+  artifact: PendingIntent identity (the data URI) and the ring activity binding. It is an
+  implementation detail of the notification, not a call identity, and Dart never sees it.
+
+### v3.3 — The snapshot, the hold and the event are one shape (replaces v2.4's unwritten snapshot)
+
+`CallState = {phase: ringing | answered, ref: CallRef, channel}`, or empty.
+- **On listen**, Dart reads `CallState` (Android from the slots; iOS from the map row of the live
+  call).
+- **Events carry the same shape** plus a verb (`answered`, `ended`). They are sealed under the
+  slot's lock (v2.4 stands) and posted in lock order.
+- **Dart holds a `CallState`.** An event for a `ref` it does not hold acts only on what is keyed
+  by that ref: the in-app banner for that ref, and the route for that ref.
+- **iOS `pending` is named** as the pre-listen buffer for `ended` events whose call the snapshot no
+  longer shows (the cold-start diagnostic, design 21 v2's named exception). It is replayed after
+  the snapshot, and each entry is keyed by ref, so it acts on nothing else.
+- Android: a `ended` before listen needs no buffer. The snapshot shows the slot empty, and the
+  tombstone stops the banner's ref from re-ringing. The in-app banner is websocket-driven and
+  ends on the signed end.
+
+**Design 21 item 4, final disposition:** superseded by "snapshot on listen + sealed same-shape
+events, keyed by a ref that names one ring". Named tradeoff, owner app tab, revisit trigger: a
+defect where an event reaches Dart that the snapshot would have answered differently.
+
+### v3.4 — The engine lease is a set of claims (closes v2's open question 2; Tesla r2)
+
+`AikoEngine` holds `claims: Set<CallRef>` (Android, on main). `ring(ref)` claims, and `retire(ref)`
+releases that ref's claim. The engine is destroyed only when no claims remain **and** no activity
+is attached. `releaseIfHeadless` no longer consults a global census at run time. A queued retire of
+ref A cannot release the engine ref B claimed. With the tombstone, A ≠ B always holds for distinct
+rings.
+
+### v3.5 — The audio lease predicate, exactly (fixes v2.6; Tesla r2)
+
+**Disarm when — and only when — removing a UUID that WAS in `armed` leaves the set empty.**
+Ending a UUID that was never armed (a declined waiting call, any ring) is a no-op on the lease.
+That is closure test 7, now stated as the rule itself. There's no swap (v3.1), so the set never
+passes through empty between two calls.
+
+**The map's exhaust is delete-on-end**, which is what the code already does (`forgetLiveCall` on
+every end path). It is stated here because v2 dropped pruning without saying so. There is no
+time-based prune. Rows survive process death while ringing or answered, which is how a relaunched
+app finds a live CallKit call.
+
+### v3.6 — `oneChannelPerCall`: the closed list of doors (Carnot r2)
+
+The policy runs exactly at the points where an external `(c, m)` first becomes a `CallRef`:
+1. the Android FCM wake (`CallRing.handle`);
+2. the iOS VoIP wake (`handle(payload:)`);
+3. Dart admission of a signed invite or end (`admitRing`, `admitCallEnd`), which already check the
+   channel against the envelope;
+4. the native → Dart action decode (the channel in the sealed event must equal the held state's
+   channel, or the event is dropped).
+
+Everything after a door compares `CallRef` and trusts the channel stored beside it. Closure test 3
+runs at each of the four doors.
+
+### v3.7 — v1 VoIP wakes: a shipping gate, not a buzz (Tesla r2, Carnot r2)
+
+A VoIP push for something the app says is not a call still costs a CallKit transaction Apple may
+count. **The island stopping v1 call wakes is a gate for the first calling-ON store build
+(0.0.6)**, owned by the island tab (asked 2026-10-06). Until then, dev builds report-and-end, which
+is the accepted debt, and the debt is removed when the island ships the change.
+
+### v3.8 — Acceptance (Carnot r2)
+
+Line count is a smell, not a gate. The gates are semantic, and each is a RED-proved test:
+v2's closure tests 1-7 (test 1 now reads: *a redelivered `m` after its ring ended is dropped by the
+tombstone*), plus:
+- 8: a second answer is refused at both doors, and A is untouched;
+- 9: a queued retire of A never releases an engine B claims;
+- 10: ending an unarmed UUID never disarms (test 7 restated as the rule).
