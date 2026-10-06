@@ -26,22 +26,17 @@ object CallChannels {
   const val ACTION_ANSWERED = "answered"
   const val ACTION_ENDED = "ended"
 
-  /**
-   * Bounded: a backlog is only ever the few actions taken while Dart was
-   * booting. Anything past this is not a backlog, it is a bug, and dropping the
-   * oldest keeps the newest — the one the user just pressed.
-   */
-  private const val MAX_HELD = 8
-
   private val main = Handler(Looper.getMainLooper())
   private var sink: EventChannel.EventSink? = null
 
-  /**
-   * Actions taken before Dart listened. NORMAL, not an edge: the user answers
-   * from the notification while the engine is still booting, and an action
-   * emitted into no listener would be the doorbell on the empty house.
-   */
-  private val held = ArrayDeque<Map<String, String>>()
+  // NO HELD BUFFER — deleted, not keyed (design 21 v2, step 4). It used to
+  // queue actions taken before Dart listened, and in PR #210 it leaked into
+  // the NEXT engine in all three cage-match rounds: a queue outlives whatever
+  // it was queued for. Now Dart is handed STATE when it listens — the answer
+  // CallRing has persisted, if any — and every later event is live-only. An
+  // event with nobody listening is dropped, and that is correct rather than
+  // lossy: whatever it reported is already in CallRing's slots, which are what
+  // the next listener reads.
 
   fun attach(engine: FlutterEngine, app: Context) {
     val messenger = engine.dartExecutor.binaryMessenger
@@ -49,7 +44,13 @@ object CallChannels {
       object : EventChannel.StreamHandler {
         override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
           sink = events
-          while (held.isNotEmpty()) events.success(held.removeFirst())
+          // THE SNAPSHOT: an answer this device is holding — the cold-start
+          // Answer, given while Dart was still booting — is the one piece of
+          // state a new listener needs. Read from the persisted slot, so it
+          // is the truth NOW, never a backlog from an engine that is gone.
+          CallRing.heldAnswer(app)?.let { (channel, callId) ->
+            events.success(event(ACTION_ANSWERED, channel, callId))
+          }
         }
 
         override fun onCancel(arguments: Any?) {
@@ -78,26 +79,20 @@ object CallChannels {
   }
 
   /**
-   * Thread-safe: FCM delivers on a worker thread, and the sink is main-only.
-   * [callId] rides as `call` when the call has one (v2), so Dart can tell an
-   * `ended` for THIS call from the remains of an older one on the same
-   * channel. Absent for v1 — never null, never "".
+   * Live-only. Thread-safe: FCM delivers on a worker thread, and the sink is
+   * main-only. [callId] rides as `call` when the call has one (v2), so Dart can
+   * tell an `ended` for THIS call from the remains of an older one on the same
+   * channel. Absent for v1 — never null, never "". No listener → dropped; see
+   * the note above `attach`.
    */
   fun emit(action: String, channel: String, callId: String? = null) {
-    main.post {
-      val event = buildMap {
-        put("action", action)
-        put("channel", channel)
-        if (callId != null) put("call", callId)
-      }
-      val live = sink
-      if (live != null) {
-        live.success(event)
-      } else {
-        if (held.size >= MAX_HELD) held.removeFirst()
-        held.addLast(event)
-      }
-    }
+    main.post { sink?.success(event(action, channel, callId)) }
+  }
+
+  private fun event(action: String, channel: String, callId: String?) = buildMap {
+    put("action", action)
+    put("channel", channel)
+    if (callId != null) put("call", callId)
   }
 
   /**

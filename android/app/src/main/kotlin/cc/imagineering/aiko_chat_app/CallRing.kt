@@ -181,6 +181,15 @@ object CallRing {
   fun ringingInstance(context: Context, channel: String): Long? =
     ringSlot(context.applicationContext)?.takeIf { it.channel == channel }?.instance
 
+  /**
+   * The answer this device is holding for Dart, if any — the snapshot a new
+   * `call/actions` listener is handed instead of a replayed event queue. Lives
+   * [ANSWERED_TRUST_MS] and is cleared by Dart's own end, so a finished call is
+   * never re-announced.
+   */
+  fun heldAnswer(context: Context): Pair<String, String?>? =
+    answerSlot(context.applicationContext)?.let { it.channel to it.callId }
+
   /** Whether any ring is live — MainActivity keeps the engine for it. */
   fun isRinging(context: Context): Boolean = ringSlot(context.applicationContext) != null
 

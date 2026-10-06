@@ -1099,6 +1099,16 @@ final class SystemCallChannel: NSObject, FlutterStreamHandler {
   private var sink: FlutterEventSink?
 
   /// Actions that arrived with nobody listening yet. See the cold-start note.
+  // KEPT ON iOS, deliberately, where Android deleted its equivalent (design 21
+  // v2, step 4). Android's held buffer leaked actions into a later engine in
+  // every round of PR #210; Android now hands a listener STATE instead. Here
+  // the queue also carries the one diagnostic a cold-start failure leaves —
+  // which party ended the call before Dart existed (2026-09-20) — into the
+  // ring buffer that "Report a problem" exports. Deleting it would trade a
+  // harm that no longer exists for a blind spot that would: every event now
+  // carries its call id, and SystemCallNavigator matches by it, so a replayed
+  // action for an older call cannot act on a newer one. Revisit if the
+  // diagnostic moves native-side.
   private var pending: [[String: String]] = []
 
   func register(with registrar: FlutterPluginRegistrar) {
