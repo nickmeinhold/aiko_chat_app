@@ -49,7 +49,10 @@ object AikoEngine {
           // cannot be live in a destroyed isolate. Without this, Back out of a
           // live call left `live` set for the life of the process, and every
           // later answer was refused (Tesla, design 22 delta review).
-          CallRing.mediaGone(context)
+          // The APPLICATION context, like the two lines above: this listener
+          // lives as long as the process-cached engine, and capturing an
+          // Activity here would pin it (Tesla, delta round 3).
+          CallRing.mediaGone(context.applicationContext)
         }
       },
     )

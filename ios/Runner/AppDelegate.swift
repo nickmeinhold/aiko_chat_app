@@ -827,12 +827,23 @@ final class CallKitRinger: NSObject {
     channel: String?, callId: String, completion: @escaping () -> Void
   ) {
     // Remembered whatever happens below, so a late invite for this call never
-    // rings (the tombstone gates invites only; design 22 v4.1). And the call's
-    // session dies whatever happens below too: an outgoing call has no CallKit
-    // row for the guard to find, so clearing it only on the row-found arm left
-    // the session refusing every later answer (Tesla, delta review round 2).
+    // rings (the tombstone gates invites only; design 22 v4.1).
     tombstone(callId)
-    if liveSession?.call == callId { liveSession = nil }
+    // THE SESSION DIES WITH ITS CALL — through the same door. Matched on the
+    // session's OWN stored channel (oneChannelPerCall), not the id alone: an
+    // outgoing call has no CallKit row for the guard below to find (delta
+    // round 2), but an end naming the live id on the wrong or no channel must
+    // not reach it (Carnot + Tesla, delta round 3). Dart is told, so its call
+    // screen leaves with the session.
+    var told = false
+    if let session = liveSession, session.call == callId, let channel,
+      Self.oneChannelPerCall(session.channel, channel)
+    {
+      liveSession = nil
+      SystemCallChannel.shared.emit(
+        action: .ended, channel: channel, origin: "remoteEnd", call: callId)
+      told = true
+    }
     // Ends only the call it NAMES, on the channel it rings on — the
     // channel-keyed lookup is the oneChannelPerCall door, checked before any
     // effect. Anything else is reported-and-ended (must-report) and leaves the
@@ -846,8 +857,10 @@ final class CallKitRinger: NSObject {
     // TELL DART, as Android's retire does: an unanswered ring is still an
     // answer door in the in-app banner until something ends it (Tesla, PR
     // #210 v2 round 3 — iOS emitted only on displacement).
-    SystemCallChannel.shared.emit(
-      action: .ended, channel: channel, origin: "remoteEnd", call: callId)
+    if !told {
+      SystemCallChannel.shared.emit(
+        action: .ended, channel: channel, origin: "remoteEnd", call: callId)
+    }
     // MUST DISARM, and this path is why `disarm()` had only two call sites.
     // `reportCall(endedAt:)` deliberately does NOT round-trip through our
     // `CXEndCallAction` delegate (see `endSystemCall` — the echo loop), so the
