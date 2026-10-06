@@ -751,7 +751,11 @@ void main() {
         // prevent. Consent you cannot withdraw is not consent.
         expect(
           admit(
-            invite(kind: SenderKind.unknown, key: residentKey, hasAccount: false),
+            invite(
+              kind: SenderKind.unknown,
+              key: residentKey,
+              hasAccount: false,
+            ),
             allowedKeys: {mk(residentKey)},
           ),
           isNull,
@@ -1285,5 +1289,147 @@ void main() {
     test('an end in a different channel does not stop this ring', () {
       expect(stops(end(channelId: 'dm:ccc:ddd')), isFalse);
     });
+  });
+
+  // ---- call/2: the call has an identity (design 21 v2, island design 12 D1) --
+  group('call/2 — a call is named by its id, not its channel', () {
+    const idA = '01JABCDEFGHJKMNPQRSTVWXYZ0';
+    const idB = '7ZZZZZZZZZZZZZZZZZZZZZZZZZ';
+
+    Message v2End(
+      String id, {
+      String from = robin,
+      String? replyTo,
+      String channelId = 'dm:aaa:bbb',
+    }) => Message(
+      clientTempId: 'e2',
+      id: 'e2',
+      channelId: channelId,
+      sender: MessageSender(
+        userId: from,
+        kind: SenderKind.human,
+        label: 'Robin',
+      ),
+      body: callEndBodyV2(id),
+      replyToId: replyTo,
+      createdAt: now,
+      origin: signedAt(now),
+      originCryptoValid: true,
+      deliveryState: DeliveryState.sent,
+    );
+
+    CallEnd? admitEnd(Message m) => switch (admitCallEnd(
+      m,
+      meUserId: me,
+      consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
+    )) {
+      CallEndAdmitted(:final end) => end,
+      CallEndRefused() => null,
+    };
+
+    test('a v2 invite is admitted CARRYING its id', () {
+      final got = admit(invite(body: callInviteBodyV2(idA)));
+      expect(got, isNotNull);
+      expect(got!.callId, idA);
+      expect(got.endKey, idA);
+    });
+
+    test('a v1 invite is admitted with NO id, keyed by its island id', () {
+      final got = admit(invite())!;
+      expect(got.callId, isNull);
+      expect(got.endKey, got.islandMsgId);
+    });
+
+    test('a v2 end needs NO reply_to — its body names the call', () {
+      // The misdial path: the hangup goes out before the invite is acked, so
+      // there is no island id to reply to yet. v1 would refuse this.
+      final end = admitEnd(v2End(idA));
+      expect(end, isNotNull);
+      expect(end!.callId, idA);
+      expect(end.targetIslandMsgId, isNull);
+      expect(end.key, idA);
+    });
+
+    test('a v1 end with no reply_to is still refused — it names nothing', () {
+      final m = callEnd();
+      final noTarget = Message(
+        clientTempId: m.clientTempId,
+        id: m.id,
+        channelId: m.channelId,
+        sender: m.sender,
+        body: kCallEndBody,
+        createdAt: m.createdAt,
+        origin: m.origin,
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(
+        admitCallEnd(
+          noTarget,
+          meUserId: me,
+          consent: RingConsent.inChannel(
+            channelId: m.channelId,
+            keys: const {},
+          ),
+        ),
+        isA<CallEndRefused>().having(
+          (r) => r.reason,
+          'reason',
+          RingRefusal.endMissingTarget,
+        ),
+      );
+    });
+
+    test(
+      'a v2 end ends ITS call — and not another call on the same channel',
+      () {
+        // The whole class design 21 is about: one channel, two calls.
+        final callA = admit(invite(body: callInviteBodyV2(idA)))!;
+        final callB = admit(invite(body: callInviteBodyV2(idB)))!;
+        final endA = admitEnd(v2End(idA))!;
+        expect(endsInvite(endA, callA), isTrue);
+        expect(endsInvite(endA, callB), isFalse);
+      },
+    );
+
+    test('a v2 end from someone else does not end the call', () {
+      final call = admit(invite(body: callInviteBodyV2(idA)))!;
+      final stranger = admitEnd(v2End(idA, from: 'mallory-key'))!;
+      expect(endsInvite(stranger, call), isFalse);
+    });
+
+    test('a v2 end in another channel does not end the call', () {
+      final call = admit(invite(body: callInviteBodyV2(idA)))!;
+      final elsewhere = admitEnd(v2End(idA, channelId: 'dm:aaa:ccc'))!;
+      expect(endsInvite(elsewhere, call), isFalse);
+    });
+
+    test('a v2 end never ends a v1 invite, even replying to its island id', () {
+      // A v1 invite has no id for a v2 end to name; reply_to is not how v2
+      // speaks, so it cannot be used to reach across versions.
+      final v1 = admit(invite())!;
+      final end = admitEnd(v2End(idA, replyTo: v1.islandMsgId))!;
+      expect(endsInvite(end, v1), isFalse);
+    });
+
+    test('a v1 end still ends a v1 invite by reply_to', () {
+      final v1 = admit(invite())!;
+      final end = admitEnd(callEnd())!;
+      expect(endsInvite(end, v1), isTrue);
+    });
+
+    test('a v2 end renders as a hangup without reply_to (named tradeoff)', () {
+      expect(isRenderableCallEnd(v2End(idA), isMine: false), isTrue);
+    });
+
+    test(
+      'a v2-shaped body with a non-canonical id is neither call nor end',
+      () {
+        final lower = invite(
+          body: 'aiko:call/2 01jabcdefghjkmnpqrstvwxyz0 · 📞 started a call',
+        );
+        expect(refusal(lower), RingRefusal.notAnInvite);
+      },
+    );
   });
 }

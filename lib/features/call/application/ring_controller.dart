@@ -221,7 +221,7 @@ class RingController extends Notifier<CallInvite?> {
         .consentIn(m.channelId);
     switch (admitCallEnd(m, meUserId: me, consent: consent)) {
       case CallEndAdmitted(:final end):
-        (_ended[end.targetIslandMsgId] ??= []).add((end: end, at: now));
+        (_ended[end.key] ??= []).add((end: end, at: now));
         final live = _live;
         if (live != null && endsInvite(end, live)) {
           stopRinging(RingStopCause.callerHungUp);
@@ -264,7 +264,7 @@ class RingController extends Notifier<CallInvite?> {
     // ring, so an at-least-once replay cannot ring either. Matched through the
     // SAME predicate the live path uses, so a remembered end can never suppress
     // a ring that an in-order end would not have.
-    final owed = _ended[invite.islandMsgId];
+    final owed = _ended[invite.endKey];
     if (owed != null && owed.any((e) => endsInvite(e.end, invite))) {
       // Dead on arrival: its hangup got here first, so it never rings. `_live`
       // cannot be this invitation — it is only being admitted now, so the end

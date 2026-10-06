@@ -17,8 +17,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/providers.dart';
 import '../../call/application/call_end_announcer.dart'
     show callEndAnnouncerProvider;
-import '../../call/domain/call_invite.dart' show kCallInviteBody;
-import '../../call/presentation/call_screen.dart' show pushCall;
+import '../../call/domain/call_wire.dart' show callInviteBodyV2, mintCallId;
+import '../../call/presentation/call_screen.dart' show OutgoingCall, pushCall;
 import '../../moderation/application/moderation_controller.dart';
 import '../application/chat_providers.dart';
 import '../data/chat_rest_api.dart' show DmTargetNotFound, NetworkUnavailable;
@@ -103,7 +103,7 @@ Future<void> startCall(
   // arm of this function — early return, throw, or success — is allowed to leave
   // the peer ringing. Channel and invitation travel together because the
   // announcement needs both and neither is meaningful alone.
-  ({String channelId, String inviteId})? owedHangup;
+  ({String channelId, OutgoingCall call})? owedHangup;
   final String failure;
   try {
     // openDm stays idempotent (same room on a re-open) — belt-and-braces under
@@ -114,9 +114,9 @@ Future<void> startCall(
     // was inverted in the pre-move `_call` (cage-match #133).
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
-    final inviteId = await _ring(ref, dm.id);
-    if (inviteId != null) {
-      owedHangup = (channelId: dm.id, inviteId: inviteId);
+    final call = await _ring(ref, dm.id);
+    if (call != null) {
+      owedHangup = (channelId: dm.id, call: call);
     }
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
     // longer holds here. A mounted check does not survive a subsequent await —
@@ -124,7 +124,7 @@ Future<void> startCall(
     // (the #133 bug class, caught by `use_build_context_synchronously`).
     // This return is the one that used to strand the peer — see the `finally`.
     if (!context.mounted) return;
-    if (inviteId == null) {
+    if (call == null) {
       // Honest, not fatal: the room is still opening behind this.
       messenger.showSnackBar(
         SnackBar(
@@ -135,7 +135,7 @@ Future<void> startCall(
     // The invitation's id rides along so the leave can END this call by name.
     // Null is fine and ordinary: a call opened without a ring (or whose ring
     // failed) has nothing to end, and the leave simply says nothing.
-    await pushCall(context, dm.id, inviteId: inviteId);
+    await pushCall(context, dm.id, outgoing: call);
     return;
   } on DmTargetNotFound {
     failure = "Couldn't reach $name for a call.";
@@ -166,7 +166,11 @@ Future<void> startCall(
     // through here as a no-op rather than saying it twice into signed history.
     final owed = owedHangup;
     if (owed != null) {
-      endAnnouncer.announce(channelId: owed.channelId, inviteId: owed.inviteId);
+      endAnnouncer.announce(
+        channelId: owed.channelId,
+        inviteId: owed.call.inviteId,
+        callId: owed.call.callId,
+      );
     }
   }
   // Liveness on the ERROR path too. Every arm above fires after an await and the
@@ -203,7 +207,7 @@ void resetCallActionGuard() => _callActionInFlight = false;
 /// before the wire send (invariant B-optimistic), so this returns fast and does
 /// not gate navigation on a round-trip.
 ///
-/// The body is [kCallInviteBody] and nothing else — room, caller and start time
+/// The body is a v2 invite — the call id and nothing else — room, caller and start time
 /// are already inside the signed envelope (channelId, signing key, signedAtMs).
 /// Returns the invitation's signed `clientMsgId`, or null if it did not send.
 ///
@@ -212,10 +216,20 @@ void resetCallActionGuard() => _callActionInFlight = false;
 /// [kCallEndBody]). Null still means "they may not have been rung" — the caller
 /// reports that and the call proceeds, because the call is the capability and
 /// the ring is only its announcement.
-Future<String?> _ring(WidgetRef ref, String channelId) async {
+Future<OutgoingCall?> _ring(WidgetRef ref, String channelId) async {
+  // THE CALL'S IDENTITY IS MINTED HERE, by the caller, and goes INSIDE the
+  // signed body (island design 12, Decision 1; app design 21 v2). Every later
+  // message about this call — the hangup, the system ring's key on the other
+  // handset, the island's wake `m` — names this id, so a second call on the
+  // same channel can never be mistaken for this one.
+  final callId = mintCallId();
   try {
     final repo = await ref.read(chatRepositoryProvider.future);
-    return await repo.sendMessage(channelId, kCallInviteBody);
+    final inviteId = await repo.sendMessage(
+      channelId,
+      callInviteBodyV2(callId),
+    );
+    return inviteId == null ? null : (inviteId: inviteId, callId: callId);
   } catch (_) {
     return null; // reported to the user by the caller; the call proceeds.
   }

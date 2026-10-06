@@ -47,11 +47,18 @@ bool get isCallRouteOpen => _callLaunchInFlight;
 /// has to be told the truth about which of the two conditions refused it.
 bool get isInLiveCall => _callLaunchInFlight && !_mountedCallEnded;
 
+/// An invitation THIS device sent: the two ids its hangup needs.
+///
+/// [inviteId] is the invite's signed clientMsgId (the v1 hangup waits for its
+/// island id to reply to). [callId] is the v2 call identity in the invite's
+/// signed body, which the hangup names directly, without waiting for any ack.
+typedef OutgoingCall = ({String inviteId, String? callId});
+
 Future<void> pushCall(
   BuildContext context,
   String channelId, {
-  String? inviteId,
-}) => pushCallOn(GoRouter.of(context), channelId, inviteId: inviteId);
+  OutgoingCall? outgoing,
+}) => pushCallOn(GoRouter.of(context), channelId, outgoing: outgoing);
 
 /// Router-first form of [pushCall], for callers that have a [GoRouter] but no
 /// in-scope context.
@@ -67,12 +74,12 @@ Future<void> pushCall(
 Future<void> pushCallOn(
   GoRouter router,
   String channelId, {
-  String? inviteId,
+  OutgoingCall? outgoing,
 }) async {
   if (_callLaunchInFlight) return;
   _callLaunchInFlight = true;
   try {
-    await router.push('/call/$channelId', extra: inviteId);
+    await router.push('/call/$channelId', extra: outgoing);
   } finally {
     _callLaunchInFlight = false;
   }
@@ -89,7 +96,7 @@ void resetCallLaunchGuard() => _callLaunchInFlight = false;
 /// derived from the channel, but is NOT the bare channel id). Renders the first remote
 /// participant full-screen with a mirrored local PiP overlay.
 class CallScreen extends ConsumerStatefulWidget {
-  const CallScreen({super.key, required this.channelId, this.inviteId});
+  const CallScreen({super.key, required this.channelId, this.outgoing});
 
   final String channelId;
 
@@ -100,7 +107,7 @@ class CallScreen extends ConsumerStatefulWidget {
   /// restored route. Only the caller ends the call it started: an end from
   /// anyone else names no live invitation and would be refused anyway
   /// ([admitCallEnd]), so sending one would be a signed row saying nothing.
-  final String? inviteId;
+  final OutgoingCall? outgoing;
 
   @override
   ConsumerState<CallScreen> createState() => _CallScreenState();
@@ -167,9 +174,13 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // The screen is the wrong owner for work that may have to outlive it: the
     // invitation may not be acked yet (so it has no id the wire can name) and
     // this widget's repository may be replaced mid-ring. See CallEndAnnouncer.
-    final inviteId = widget.inviteId;
-    if (inviteId != null) {
-      _endAnnouncer.announce(channelId: widget.channelId, inviteId: inviteId);
+    final outgoing = widget.outgoing;
+    if (outgoing != null) {
+      _endAnnouncer.announce(
+        channelId: widget.channelId,
+        inviteId: outgoing.inviteId,
+        callId: outgoing.callId,
+      );
     }
     // TELL THE OS THE CALL IS OVER — unconditionally, from the one place every
     // exit already lands in (claude-tasks#4420).

@@ -430,6 +430,63 @@ void main() {
 
     expect(a.settling, isEmpty);
   });
+  // ---- v2: the hangup names its call in its own body (design 21 v2) --------
+  group('v2 — the hangup does not wait for the ack', () {
+    const callId = '01JABCDEFGHJKMNPQRSTVWXYZ0';
+
+    test(
+      'a v2 hangup BEFORE the ack goes out at once, naming the call id',
+      () async {
+        // The misdial path, closed: place the call, back straight out. v1 had to
+        // wait for the island id to reply to; v2 carries the id in its signed
+        // body, so there is nothing to wait for.
+        final inviteId = (await repo.sendMessage(
+          _channel,
+          callInviteBodyV2(callId),
+        ))!;
+        final a = announcer();
+
+        a.announce(channelId: _channel, inviteId: inviteId, callId: callId);
+        await Future.wait(a.settling);
+
+        final ends = transport.sent
+            .where((m) => m.body == callEndBodyV2(callId))
+            .toList();
+        expect(ends, hasLength(1), reason: 'sent with no ack ever arriving');
+        expect(
+          ends.single.replyToId,
+          isNull,
+          reason: 'no island id existed yet, and v2 does not need one',
+        );
+        expect(
+          transport.sent.where((m) => m.body == kCallEndBody),
+          isEmpty,
+          reason: 'a v2 call is never ended with the v1 sentinel',
+        );
+      },
+    );
+
+    test('a v2 hangup AFTER the ack still attaches reply_to', () async {
+      final inviteId = (await repo.sendMessage(
+        _channel,
+        callInviteBodyV2(callId),
+      ))!;
+      transport.emitAck(inviteId, '01M0GS7FDWBVQ31950B1PTV2DW');
+      await pumpEventQueue();
+      final a = announcer();
+
+      a.announce(channelId: _channel, inviteId: inviteId, callId: callId);
+      await Future.wait(a.settling);
+
+      expect(
+        transport.sent
+            .where((m) => m.body == callEndBodyV2(callId))
+            .single
+            .replyToId,
+        '01M0GS7FDWBVQ31950B1PTV2DW',
+      );
+    });
+  });
 }
 
 /// A repository whose first [nullsToReturn] sends report the documented `null`

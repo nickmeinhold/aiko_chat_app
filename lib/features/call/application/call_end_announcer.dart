@@ -92,7 +92,11 @@ class CallEndAnnouncer {
   ///
   /// Returns immediately. Safe to call from `dispose()` — it captures nothing
   /// that is being torn down.
-  void announce({required String channelId, required String inviteId}) {
+  void announce({
+    required String channelId,
+    required String inviteId,
+    String? callId,
+  }) {
     // SNAPSHOT WHO WE ARE, not just what we are ending (cage-match round 2,
     // Tesla). This object was built to outlive the screen and therefore outlives
     // the USER: /call/:channelId is not a logged-out zone, so when the session
@@ -120,7 +124,7 @@ class CallEndAnnouncer {
       return;
     }
     late final Future<void> f;
-    f = _announce(channelId, inviteId, identity).whenComplete(() {
+    f = _announce(channelId, inviteId, callId, identity).whenComplete(() {
       // Completed obligations must not accumulate: this object is pinned for the
       // app's lifetime, so an ever-growing list would retain every hangup's
       // closure graph forever (cage-match round 2, Carnot).
@@ -154,6 +158,7 @@ class CallEndAnnouncer {
   Future<void> _announce(
     String channelId,
     String inviteId,
+    String? callId,
     (String?, String) identity,
   ) async {
     final deadline = DateTime.now().add(_ackWait);
@@ -198,8 +203,14 @@ class CallEndAnnouncer {
           final slice = left < _attemptSlice ? left : _attemptSlice;
           final repo = await _repositoryWithin(slice);
           if (repo != null) {
+            // v1 must wait for the invite's island id — reply_to is the only
+            // way a v1 end names its call. v2 names it in its own signed body,
+            // so it goes out NOW: the misdial ("place it, back out at once")
+            // no longer waits on an ack that may not have arrived (design 21
+            // v2). reply_to is still attached when already known; it costs
+            // nothing and the island's own reply check stays satisfied.
             final islandId = await repo.islandIdFor(inviteId);
-            if (islandId != null) {
+            if (callId != null || islandId != null) {
               // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
               // identity check and then awaited twice; a liveness test does not
               // survive an await. Round 3 added exactly this guard and the
@@ -218,7 +229,7 @@ class CallEndAnnouncer {
               }
               final sentId = await repo.sendMessage(
                 channelId,
-                kCallEndBody,
+                callId != null ? callEndBodyV2(callId) : kCallEndBody,
                 replyToId: islandId,
               );
               if (sentId != null) return; // spoken; the claim stands.

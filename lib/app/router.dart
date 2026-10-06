@@ -180,7 +180,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           // restored /call has no invitation of ours to end — null, correctly.
           builder: (_, s) => CallScreen(
             channelId: s.pathParameters['channelId']!,
-            inviteId: s.extra is String ? s.extra as String : null,
+            outgoing: s.extra is OutgoingCall ? s.extra as OutgoingCall : null,
           ),
         ),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
