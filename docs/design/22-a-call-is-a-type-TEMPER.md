@@ -294,3 +294,101 @@ Hans Gruber: "When you steal $600, you can just disappear. When you steal 600 mi
 - **Island stop-waking-v1 is a shipping gate** for any calling-ON build that reports VoIP. Until it lands, iOS v1 policy stays report-and-end *and* the entitlement risk is written in v2.0's table as a counted blast, not "a momentary buzz." Android drop stays.
 - **Pin the one-call product in one sentence both UIs obey.** Either a second answer is refused everywhere (A lives, B's system call is ended as the already-in-a-call refusal), or a second answer switches everywhere (replace as above). Strike "newer wins" as an inversion of a pinned test unless that test is rewritten in this design. Call-waiting UI remains a later product question; it cannot disagree with the native transition that already ends A.
 - **Close the three open questions with those rulings** so the next cage-match is a delta against a finished identity, not another pass at the same oscillator.
+
+
+---
+
+# Re-strike round 3 (dt-1791281566, FINAL) — against design 22 v3  ⏳ IN PROGRESS
+
+---
+
+<!-- landed 17:13:17 (in-process) -->
+## MaxwellMergeSlam's Design Strike (re-strike round 3, final)
+
+**Verdict:** SOUND
+
+**Summary:** v3 closes round 2 by restoring a rule instead of inventing one (the pinned one-call refusal) and by deleting a scenario instead of guarding it (the tombstone). One transport assumption under the tombstone needs pinning before build.
+
+Ellen Ripley: "Did IQs just drop sharply while I was away?" (No. They went up: round 3 is shorter than round 2.)
+
+**Fatal flaws:**
+- none fatal. One **unstated assumption to pin (v3.2):** "a later redelivery cannot arrive" rests on the island's push TTL being the ring ceiling on BOTH transports. FCM's invite TTL is stated (30s, design 21 / island). The APNs VoIP `apns-expiration` for `call_invite` is not stated in this bundle. If APNs can hold a VoIP invite longer than the tombstone (60s) for an offline device, iOS would report a dead call as new. Bounded (CallKit self-expiry, the island's `call_end`), but the tombstone's TTL must be derived from the larger of the two transport TTLs, not from the ring ceiling. Ask the island for the APNs figure, and set the tombstone to max(FCM TTL, APNs expiration) × 2.
+
+**What holds:**
+- v3.1: the second answer is refused at every door. The swap, the mute gap and the break-before-make all disappear with it, and the pinned test was already right.
+- v3.1's cross-window consistency argument: native refuses while the cell lives, Dart refuses after, and the outcome is the same. No new signal is needed.
+- v3.2: the tombstone makes `CallRef` name one ring, which is what lets Dart key by ref alone and drops iOS `instance`. Deleting a scenario beats guarding it.
+- v3.3: one shape for the snapshot, the hold and the event; iOS `pending` named and ref-keyed.
+- v3.4: engine claims by ref, so a retire releases only its own claim.
+- v3.5: the disarm predicate is now test 10 itself.
+- v3.6: a closed list of four doors.
+- v3.7: v1 VoIP as a shipping gate with an owner.
+
+**If RECAST, what to fold back:**
+- (Not a RECAST.) Before build: pin the APNs VoIP expiration for `call_invite` with the island tab, and derive the tombstone TTL from it.
+
+> **Maxwell's assumption, pinned (read from island `src/aiko_gateway/domain/apns.py`, 2026-10-06):** VoIP invite lease `_VOIP_LEASE_SECONDS = 30`; alert pushes `_ALERT_EXPIRATION_SECONDS = 60`; VoIP end `_VOIP_END_EXPIRATION_SECONDS = 300`; FCM invite TTL = 30s. The longest an invite can be stored is **60s**, so v3.2's `RING_CEILING_MS × 2` (60s) sits exactly on the edge. **Build with tombstone TTL = 2 × max invite lease = 120s**, and name the derivation in code.
+
+---
+
+<!-- landed 17:13:48 rc=0 -->
+## KelvinBitBrawler's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The design replaces an oscillating failure with a slow, freezing one by introducing a persistent tombstone state with no exhaust.
+
+**Fatal flaws:**
+- **(Unstated Assumption / Missing Failure Mode, v3.2)** The tombstone is a thermodynamic dead end. The design introduces a new class of persisted state (`tombstone` for a `CallRef`) to prevent re-ringing but fails to specify its exhaust mechanism. It defines a TTL (`RING_CEILING_MS × 2`) but is silent on the process that removes expired entries from persistent storage. This creates a resource leak; the tombstone store will grow indefinitely, a slow accumulation of entropy that will eventually degrade or break the system. A state machine must account for the total lifecycle of its artifacts, including their disposal. `Roy Batty: "All those moments will be lost in time, like tears in rain."` Except these tears are written to disk and never wiped away.
+
+**What holds:**
+- The `v2-only` premise, folded from the v2 temper, is the correct, simplifying dissolution of the v1 state class.
+- Refusing the second answer (`v3.1`) is a safe, conservative resolution to the break-before-make failure, correctly prioritizing connection stability over a feature (call-waiting) that is not yet built.
+- The unified `CallState` shape (`v3.3`) for snapshots and events brings necessary clarity and consistency to the native-Dart boundary.
+- The explicit engine claims (`v3.4`) and the precise audio lease predicate (`v3.5`) correctly model resource ownership and prevent the previously identified leaks.
+- The enumeration of `oneChannelPerCall` doors (`v3.6`) closes the cross-channel policy hole identified in the prior round.
+
+**If RECAST, what to fold back:**
+- Amend v3.2 to specify the tombstone exhaust. The same mechanism that writes a tombstone must also be responsible for garbage-collecting expired entries from the persisted store. This could be a simple periodic sweep on app start, or a GC pass piggy-backed on any new tombstone write. The design must state the mechanism that ensures the set of tombstones does not grow infinitely.
+
+---
+
+<!-- landed 17:13:48 rc=0 -->
+## CarnotCodeCarver's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** No real engine matches the Carnot cycle; a reviewer's job is to say how far short we are. v3 is much closer: it deletes the swap, deletes Dart-visible incarnation machinery, names the snapshot shape, gives the engine a per-call lease, and turns the v1 VoIP problem into a gate. Entropy is down. But the design still lets native and Dart split authority over the single-call rule, and the tombstone proof rests on TTL assumptions that are not closed across every wake pipe. Dijkstra: "Simplicity is prerequisite for reliability." This is fixable, but not sound.
+
+**Fatal flaws:**
+- v3.1 says the product rule is "a second answer is REFUSED" everywhere, then admits that after the 120s answer trust window native passes B and Dart refuses via `alreadyInLiveCall`. That is not the same door, and it is not the same side-effect profile. Native has already accepted the system action, may dismiss UI, may touch audio, and may emit an answered-shaped transition before Dart kills B. The design has removed the swap, but it has not given native the fact it needs: whether a live Dart call exists after the answer cell expires. Fold-back: either native has a live-call claim/lease from Dart, or native never performs answer side effects for B until Dart admission confirms no live call.
+- v3.2's tombstone dissolves instances by assuming a redelivered invite cannot arrive after `RING_CEILING_MS × 2` because the island's FCM invite TTL is the ring ceiling. That proof is transport-specific while the design is Android+iOS. The v1 section correctly prices VoIP as special, but the tombstone section does not state the APNs/VoIP expiration contract, offline delivery behavior, or island gate that makes the same proof true there. Feynman: "What I cannot create, I do not understand." Fold-back: make the tombstone lifetime a protocol invariant for every call wake transport, or keep instance protection on any platform/path where the TTL proof is not physically true.
+- v3.6's `oneChannelPerCall` door list still mixes two different events under one Dart door: `admitRing` and `admitCallEnd`. An end is not just admission; it is a destructive action against existing UI/state. If an end with the same `m` and wrong channel reaches Dart after equality-by-ref, the only thing preventing cross-channel damage is this door. The design needs to say the wrong-channel end is refused before it can stop banners, close routes, clear holds, or write tombstones. The second law bites here: once a destructive event has diffused into consumers, you do not get reversibility back by documenting the policy upstream.
+- `CallState = {phase, ref, channel}` is still missing ownership of the joined media session. v3 intentionally deletes Dart-visible `instance`, which is fine if a `CallRef` names at most one ring, but a live joined call can outlast native ring state, answer trust, process restarts, and tombstone windows. The design says Dart holds `CallState`, yet does not define when that state is consumed, cleared, or revalidated against native after crash/listen boundaries. Hamming: "The purpose of computing is insight, not numbers." The insight should be one native/Dart session ownership story, not a snapshot plus hope.
+- v3.7 makes stopping v1 VoIP wakes a shipping gate for 0.0.6, which is the right price, but v3.8's acceptance gates do not list that gate. That turns a release blocker back into prose. Fold-back: add the island v1-wake stop as an explicit semantic gate alongside tests 1-10, with owner and verification signal.
+
+**What holds:**
+- v2-only calling still holds. Refusing to model `V1(channel)` as a live call dissolves the nullable-string swamp instead of insulating it.
+- `CallRef(id)` equality by ULID, with channel as a door policy, is the right separation. Identity should not smuggle today's topology.
+- v3.1 correctly rejects v2.3's newer-answer-wins swap. Refuse-B is the product rule that matches the pinned behavior and avoids break-before-make audio loss.
+- v3.2's tombstone is a strong simplification where the TTL premise is true. If a call can ring only once per device, Dart does not need an incarnation token for that call.
+- v3.3 improves the event model by making snapshot, hold, and event share one shape. That is real entropy reduction over sealed events with a hidden tuple Dart never received.
+- v3.4's engine `claims: Set<CallRef>` is the correct direction: a queued retire of A must release A's claim, not consult a global listener census and accidentally kill B's engine.
+- v3.5 states the audio lease predicate exactly: ending an unarmed UUID must not disarm. That closes Tesla's empty-set trap.
+- v3.7 correctly prices v1 VoIP wakes as entitlement blast radius, not a cosmetic buzz.
+
+**If RECAST, what to fold back:**
+- Give native an explicit live-call/admission claim from Dart, or make native answer side effects provisional until Dart confirms admission. The single-call rule must be enforced with the same facts at every door, including after the 120s answer cell expires.
+- Promote the tombstone TTL proof to a cross-transport invariant. Name FCM, APNs/VoIP, island expiration, and device behavior; where the invariant cannot be proven, keep a local instance guard.
+- Split and test destructive wrong-channel ends separately from wrong-channel invites. Same `m` on another channel must not stop a banner, close a route, clear a hold, end a system call, or write a tombstone.
+- Define the joined-call lifecycle: who owns it, when `CallState` is consumed, how it survives listener attach/crash, and how native learns enough to refuse later answers consistently.
+- Move the v1 VoIP island change into the acceptance gate list. A gate that is not in acceptance is just heat leaking through polished prose.
+
+> **Derivation, final (island tab, 2026-10-06 17:14, as of PR #192 77ca1ab):** invite lifetimes are
+> APNs VoIP 30s and FCM 30s, both `push_result.RING_CEILING_SECONDS`, and APNs alert 60s
+> (`apns._ALERT_EXPIRATION_SECONDS`, the max). **Tombstone TTL = 2 × max(RING_CEILING_SECONDS,
+> _ALERT_EXPIRATION_SECONDS) = 120s**, and the code comment cites those two names. **The tombstone
+> gates INVITES only.** Ends (300s, `END_WAKE_EXPIRY_SECONDS`) do not bound it: an end for an
+> unknown or expired call is a no-op on Android and report-and-end on iOS (must-report). The only
+> open item that could move these is claude-tasks#4233 (the four call clocks), and the island will
+> flag it before merge.
