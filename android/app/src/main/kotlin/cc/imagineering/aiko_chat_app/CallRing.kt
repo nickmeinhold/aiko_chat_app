@@ -358,16 +358,11 @@ object CallRing {
    * call ended. The slot is already cleared by the caller.
    */
   private fun retire(app: Context, ring: Ring, ended: Boolean) {
-    // Dismiss unless a DIFFERENT ring is now recorded live. One notification id
-    // is shared by every ring: if a racing ring() already wrote a newer slot,
-    // its show() replaces this notification anyway, and cancelling here would
-    // take the NEW ring down (Tesla, v2 round 1). Decided from the persisted
-    // slot, never from process memory — the end routinely runs in a fresh
-    // process that never saw the notification posted (v2 round 2).
-    val newer = synchronized(lock) { readRing(app) }
-    if (newer == null || newer.instance == ring.instance) {
-      IncomingCallNotifier.dismiss(app)
-    }
+    // By instance: each ring's notification is its own tag, so this can only
+    // take down THIS ring's — never a newer one a racing ring() just posted
+    // (Tesla, v2 round 1) — and it needs nothing from process memory, because
+    // the instance came from the persisted slot (v2 round 2).
+    IncomingCallNotifier.dismiss(app, ring.instance)
     val listeners = stopListeners.toList()
     main.post {
       listeners.forEach { it.onRingStopped(ring.instance) }

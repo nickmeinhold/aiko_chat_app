@@ -14,7 +14,7 @@ import '../domain/system_call_action.dart';
 import '../application/ring_telemetry.dart';
 import '../domain/answer_outcome.dart';
 import 'call_screen.dart'
-    show CallRouteExtra, callIdOf, isInLiveCall, pushCallOn;
+    show CallRouteExtra, callIdOf, isInLiveCall, pushCallOverSpent;
 
 /// Turns an answered system call into a joined room (claude-tasks#4420).
 ///
@@ -459,7 +459,11 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // announce the end of, and this is the callee's side. `CallScreen` documents
     // null as the correct value for every way in but the caller's.
     _telemetry.answerResolved(channelId, AnswerOutcome.joined);
-    unawaited(pushCallOn(ref.read(routerProvider), channelId, callId: callId));
+    // Over a spent route if one is open: `isInLiveCall` above refused only the
+    // LIVE case, and the latch is still held by a "Call ended" screen.
+    unawaited(
+      pushCallOverSpent(ref.read(routerProvider), channelId, callId: callId),
+    );
   }
 
   @override

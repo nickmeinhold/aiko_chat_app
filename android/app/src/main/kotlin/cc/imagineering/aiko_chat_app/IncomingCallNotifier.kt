@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -46,6 +47,11 @@ object IncomingCallNotifier {
   // The ring screen and the Answer button both target IncomingCallActivity and
   // differ only by EXTRA_AUTO_ANSWER: with one code, Answer would be the ring
   // screen, and every full-screen launch would auto-answer.
+  //
+  // The same rule is why the ring's INSTANCE also rides in the intent's DATA
+  // (see [putRing]): in extras alone, a second ring's show() rewrote the first
+  // ring's tokens in place, so a Decline aimed at ring A was delivered naming
+  // ring B — and obeyed. (Tesla, PR #210 v2 round 2.)
   private const val REQUEST_RING = 0
   private const val REQUEST_ANSWER = 1
   private const val REQUEST_DECLINE = 2
@@ -174,7 +180,7 @@ object IncomingCallNotifier {
     // SecurityException rather than no-opping, and a denied notification
     // permission is an ordinary user choice, not a crash.
     try {
-      NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+      NotificationManagerCompat.from(context).notify(tag(instance), NOTIFICATION_ID, notification)
     } catch (_: SecurityException) {
       // Nothing to recover: the user declined notifications. The in-app ring
       // overlay still fires when the app is foregrounded.
@@ -187,19 +193,25 @@ object IncomingCallNotifier {
    * on the intent later acts on this ring, or on nothing. (design 21 v2)
    */
   private fun Intent.putRing(channelId: String, callId: String?, instance: Long) {
+    // Part of PendingIntent identity, so each ring's tokens are its own.
+    data = Uri.fromParts("aiko-ring", instance.toString(), null)
     putExtra(CallRing.EXTRA_CHANNEL, channelId)
     if (callId != null) putExtra(CallRing.EXTRA_CALL, callId)
     putExtra(CallRing.EXTRA_INSTANCE, instance)
   }
 
   /**
-   * Stop ringing. UNCONDITIONAL — there is one notification id, and the
-   * decision whether this ring's notification is still the one on screen
-   * belongs to [CallRing.retire], which reads the PERSISTED slot. (A process-
-   * memory check here broke the cross-process end: a fresh process knows
-   * nothing of the notification an earlier one posted. PR #210 v2 round 2.)
+   * Stop THIS ring's notification, and only it. Each ring posts under its own
+   * tag, so a stale retire addresses a notification that is already gone and
+   * cannot reach a newer ring's — no check, no race, nothing in process memory.
+   * The instance comes from the persisted slot, so a fresh process cancels
+   * what an earlier one posted. (PR #210 v2 round 2: first a process-memory
+   * guard broke the cross-process end; then a persisted-slot check still raced
+   * a concurrent show() on the one shared id.)
    */
-  fun dismiss(context: Context) {
-    NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
+  fun dismiss(context: Context, instance: Long) {
+    NotificationManagerCompat.from(context).cancel(tag(instance), NOTIFICATION_ID)
   }
+
+  private fun tag(instance: Long) = "ring:$instance"
 }

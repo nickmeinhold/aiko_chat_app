@@ -540,7 +540,18 @@ final class CallKitRinger: NSObject {
     config.includesCallsInRecents = true
     provider = CXProvider(configuration: config)
     super.init()
-    provider.setDelegate(self, queue: nil)
+    // ONE QUEUE FOR EVERY WRITER — main. PushKit is registered on `.main`,
+    // Flutter's method and event channels run on main, and with the delegate
+    // here too, every handler body is atomic against every other. `queue: nil`
+    // gave CallKit its own private queue, and the map and the event sink became
+    // two currents meeting out of phase: an answer could resolve UUID A and
+    // then emit the call that displaced A on the same channel, and a cold-start
+    // emit could land in `pending` after `onListen` had already drained it.
+    // `mapLock` made each WRITE atomic; the bugs were read-decide-write
+    // SEQUENCES, which only one queue makes atomic. (Tesla + Carnot, PR #210
+    // v2 round 2.) Cost: `CallAudioSession.arm()` runs on main during an
+    // answer — milliseconds, under CallKit's own UI.
+    provider.setDelegate(self, queue: .main)
   }
 
   // MARK: The total function on `k`
@@ -690,6 +701,18 @@ final class CallKitRinger: NSObject {
     // v2: the CallKit UUID IS the call id — lossless, which is why design 12
     // chose a ULID. Every delivery of one call names one UUID. v1: random.
     let uuid = callId.flatMap(Self.uuid(fromCallId:)) ?? UUID()
+    // ONE CALL ID, ONE CHANNEL. The same id on a second channel would map two
+    // channels to one CallKit UUID, and an answer would join whichever the
+    // scan found first. A caller-minted id is unique per call, so this is a
+    // bad payload: reported and ended, the live call left alone. (Kelvin, PR
+    // #210 v2 round 2.)
+    if callId != nil, let other = entry(for: uuid), other.channel != channel {
+      os_log(
+        "[callkit] call id already live on another channel; reporting and ending",
+        log: aikoCallLog, type: .error)
+      reportAndEndImmediately(reason: .failed, completion: completion)
+      return
+    }
     let update = CXCallUpdate()
     // Tier 3 of design 12 Decision 6's three tiers: the placeholder. It names the
     // PRODUCT, not a person (Nick, 2026-08-30) — a wrong name on a locked screen
@@ -893,7 +916,8 @@ final class CallKitRinger: NSObject {
   /// The live entry on [channel] — its UUID, whether answered, and its v2 call
   /// id — under the same trust windows as [liveCall].
   private func liveEntry(for channel: String) -> (uuid: UUID, answered: Bool, call: String?)? {
-    guard let uuid = liveCall(for: channel), let entry = stored()[channel] else { return nil }
+    // ONE snapshot: the UUID and the call id must describe the same row.
+    guard let entry = stored()[channel], let uuid = Self.live(entry) else { return nil }
     return (uuid: uuid, answered: entry.answered, call: entry.call)
   }
 
@@ -930,9 +954,12 @@ final class CallKitRinger: NSObject {
       bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
   }
 
-  private func channel(for uuid: UUID) -> String? {
+  /// The row a CallKit UUID names — its channel AND its call id, from ONE
+  /// snapshot, so the answer emits the call the user answered and not whatever
+  /// has since occupied the channel. (Tesla, PR #210 v2 round 2.)
+  private func entry(for uuid: UUID) -> (channel: String, call: String?)? {
     for (channel, entry) in stored() where entry.uuid == uuid.uuidString {
-      return channel
+      return (channel: channel, call: entry.call)
     }
     return nil
   }
@@ -954,16 +981,20 @@ final class CallKitRinger: NSObject {
   /// not a longer window; it is the same window applied only to the thing it
   /// describes.
   private func liveCall(for channel: String) -> UUID? {
-    guard
-      let entry = stored()[channel],
-      let uuid = UUID(uuidString: entry.uuid)
-    else { return nil }
+    guard let entry = stored()[channel] else { return nil }
+    return Self.live(entry)
+  }
+
+  private static func live(
+    _ entry: (uuid: String, at: TimeInterval, answered: Bool, call: String?)
+  ) -> UUID? {
+    guard let uuid = UUID(uuidString: entry.uuid) else { return nil }
     let age = Date().timeIntervalSince1970 - entry.at
     // Two windows, because they bound two different things: a RING's lease, and a
     // CALL's. Applying the ring's 120s to an answered call was the phantom bug;
     // applying NO window to it was the blackhole bug. Each state gets the bound
     // that describes it.
-    let window = entry.answered ? Self.answeredCallTrustWindow : Self.liveCallTrustWindow
+    let window = entry.answered ? answeredCallTrustWindow : liveCallTrustWindow
     guard age < window else { return nil }
     return uuid
   }
@@ -1018,9 +1049,11 @@ final class CallKitRinger: NSObject {
   /// action is fulfilled — an entry that expires mid-call is the defect this
   /// flag exists to remove, so it must not depend on anything downstream of the
   /// answer succeeding.
-  private func markAnswered(channel: String) {
+  private func markAnswered(channel: String, uuid: UUID) {
     mutateMap { map in
-      guard let entry = map[channel] else { return }
+      // Only the row the user answered — never a call that has since taken
+      // the channel.
+      guard let entry = map[channel], entry.uuid == uuid.uuidString else { return }
       map[channel] = (uuid: entry.uuid, at: entry.at, answered: true, call: entry.call)
     }
   }
@@ -1032,6 +1065,10 @@ final class CallKitRinger: NSObject {
   /// and write was silently erased — `onlyIf:` looked like a compare-and-swap
   /// and still published every other key from the stale read (Tesla, PR #210 v2
   /// round 1). Now each mutation is one critical section over one lock.
+  ///
+  /// Since v2 round 2 the delegate runs on main too, so every handler is
+  /// already serial; the lock stays for the completion handlers
+  /// (`reportNewIncomingCall`'s), whose queue is not ours to name.
   private static let mapLock = NSLock()
 
   private func mutateMap(
@@ -1253,7 +1290,7 @@ extension CallKitRinger: CXProviderDelegate {
     // a call — the island token, the room, the camera — lives in Dart, so all
     // this can do is name the channel and let the Dart half join it. See
     // `SystemCallChannel` for why the answer survives Dart not existing yet.
-    guard let channel = channel(for: action.callUUID) else {
+    guard let (channel, answeredCall) = entry(for: action.callUUID) else {
       // No mapping, so nothing to join: there is no other carrier of the
       // channel id, and the room IS the channel. `fail()` rather than
       // `fulfill()` — fulfilling would present a connected call that can never
@@ -1266,7 +1303,7 @@ extension CallKitRinger: CXProviderDelegate {
     }
     // BEFORE fulfilling: from here the entry describes a CALL, not a ring, and
     // must stop aging out from under the teardown path.
-    markAnswered(channel: channel)
+    markAnswered(channel: channel, uuid: action.callUUID)
     // BEFORE the emit, not after: the emit is what sends Dart to join the room,
     // and joining is what creates the audio track. Arming after it would be a
     // race whose losing side is a track that took the session under automatic
@@ -1307,7 +1344,7 @@ extension CallKitRinger: CXProviderDelegate {
     }
     SystemCallChannel.shared.emit(
       action: .answered, channel: channel, origin: "answerAction",
-      call: stored()[channel]?.call)
+      call: answeredCall)
     os_log("[callkit] CXAnswerCallAction fulfilled for channel %{public}@", log: aikoCallLog, type: .info, channel)
     action.fulfill()
   }

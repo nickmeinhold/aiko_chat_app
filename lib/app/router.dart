@@ -178,15 +178,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           // call by name. It is deliberately not a path/query parameter: it is
           // meaningless to anyone but this navigation, and a deep-linked or
           // restored /call has no invitation of ours to end — null, correctly.
-          builder: (_, s) => CallScreen(
-            channelId: s.pathParameters['channelId']!,
-            outgoing: s.extra is CallRouteExtra
-                ? (s.extra as CallRouteExtra).outgoing
-                : null,
-            callId: s.extra is CallRouteExtra
-                ? (s.extra as CallRouteExtra).callId
-                : null,
-          ),
+          builder: (_, s) =>
+              callScreenFor(s.pathParameters['channelId']!, s.extra),
         ),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
       GoRoute(

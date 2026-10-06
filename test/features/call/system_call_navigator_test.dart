@@ -22,7 +22,7 @@ import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/call/domain/system_call_action.dart';
 import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
-    show resetCallLaunchGuard;
+    show debugMarkMountedCallEnded, resetCallLaunchGuard;
 import 'package:aiko_chat_app/features/call/presentation/system_call_navigator.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter/material.dart';
@@ -527,6 +527,33 @@ void main() {
 
     expect(find.text('CALL $channel'), findsOneWidget);
     expect(bridge.ended, ['dm:ccc:ddd']);
+  });
+
+  testWidgets('an answer over a SPENT call screen closes it and joins', (
+    tester,
+  ) async {
+    // "Call ended" is still on screen and still holds the launch latch, but
+    // the call is over — so the one-call refusal above does not apply, and a
+    // push into the held latch was a silent no-op: answer consumed, recorded
+    // as joined, no room. (Tesla, PR #210 v2 round 2.)
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsOneWidget);
+    debugMarkMountedCallEnded();
+
+    ring.admit('dm:ccc:ddd');
+    bridge.emit(SystemCallActionKind.answered, 'dm:ccc:ddd');
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL dm:ccc:ddd'), findsOneWidget);
+    expect(find.text('CALL $channel'), findsNothing);
+    expect(
+      bridge.ended,
+      isNot(contains('dm:ccc:ddd')),
+      reason: 'the answered call is joined, not refused',
+    );
   });
 
   testWidgets('answering silences the in-app ring for the same call', (

@@ -105,8 +105,51 @@ Future<void> pushCallOn(
 /// Clear the launch guard between widget tests (a test that navigates to the
 /// call route never pops it, so the latch would leak into the next test). Not a
 /// production seam.
+/// [pushCallOn] for an answer that arrives while a SPENT call route — "Call
+/// ended", not yet closed — still holds the latch: close it first, then push.
+///
+/// Without this a system-UI answer during that window was consumed, recorded
+/// as joined, and then silently dropped by the latch, with the OS showing a
+/// connected call and no room behind it (Tesla, PR #210 v2 round 2). The ring
+/// banner's Answer already did this inline; this is the one door for both.
+/// A LIVE call is the caller's to refuse — this never closes one.
+Future<void> pushCallOverSpent(
+  GoRouter router,
+  String channelId, {
+  String? callId,
+}) async {
+  if (isCallRouteOpen && !isInLiveCall) {
+    if (router.canPop()) router.pop();
+    // The latch is released when the popped route's `router.push` future
+    // resolves, which is after this turn.
+    await Future<void>.delayed(Duration.zero);
+  }
+  await pushCallOn(router, channelId, callId: callId);
+}
+
 @visibleForTesting
-void resetCallLaunchGuard() => _callLaunchInFlight = false;
+void resetCallLaunchGuard() {
+  _callLaunchInFlight = false;
+  _mountedCallEnded = false;
+}
+
+/// Mark the mounted call route's call as over, for a test whose call route is
+/// a stand-in with no [CallSession]. Not a production seam.
+@visibleForTesting
+void debugMarkMountedCallEnded() => _mountedCallEnded = true;
+
+/// The `/call/:channelId` route's screen for whatever navigation [extra] it
+/// arrived with. Only our own navigations carry a [CallRouteExtra]; anything
+/// else — a deep link, a restored route — names no call, and must not end one.
+CallScreen callScreenFor(String channelId, Object? extra) {
+  final route = extra is CallRouteExtra ? extra : null;
+  return CallScreen(
+    channelId: channelId,
+    outgoing: route?.outgoing,
+    callId: route?.callId,
+    namesACall: route != null,
+  );
+}
 
 /// Full-screen A/V call for a channel (handoff #2726). Owns a [CallSession] for
 /// its lifetime; the room is whatever the island's minted token names (it is
@@ -118,6 +161,7 @@ class CallScreen extends ConsumerStatefulWidget {
     required this.channelId,
     this.outgoing,
     this.callId,
+    this.namesACall = true,
   });
 
   final String channelId;
@@ -133,6 +177,13 @@ class CallScreen extends ConsumerStatefulWidget {
 
   /// The incoming call's id, when this screen was opened by answering one.
   final String? callId;
+
+  /// False for a deep-linked or restored `/call`, which carries no call of
+  /// ours. Its [callId] is null for a different reason than a v1 call's, and
+  /// the bridge reads a null id as "the v1 call": closing such a screen ended
+  /// a v1 system call on the channel that this screen never had. (Tesla, PR
+  /// #210 v2 round 2.)
+  final bool namesACall;
 
   @override
   ConsumerState<CallScreen> createState() => _CallScreenState();
@@ -217,6 +268,10 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // whether THIS call came from a ring — is a second copy of a fact the
     // native side already holds, and the failure of getting it wrong is a
     // phantom connected call in the system UI that outlives the app.
+    if (!widget.namesACall) {
+      super.dispose();
+      return;
+    }
     unawaited(
       _systemCall?.end(
             widget.channelId,

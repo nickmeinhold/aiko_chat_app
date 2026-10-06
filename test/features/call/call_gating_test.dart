@@ -8,6 +8,8 @@ import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/moderation/presentation/message_actions.dart';
+import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
+    show callScreenFor;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -226,6 +228,19 @@ void main() {
         pathsWithCallingEnabled(false),
         isNot(contains('/call/:channelId')),
       );
+    });
+
+    test('a deep-linked /call names no call — it never ends a v1 one', () {
+      // A null call id means "the v1 call" to the bridge, and a deep link's
+      // id is null for a different reason: it has no call at all. Without the
+      // split, closing it ended a v1 system call on that channel. (Tesla, PR
+      // #210 v2 round 2.)
+      expect(callScreenFor('dm:a:b', null).namesACall, isFalse);
+      expect(callScreenFor('dm:a:b', 'junk').namesACall, isFalse);
+      // A v1 answer IS a call of ours, with a null id that means v1.
+      final v1 = callScreenFor('dm:a:b', (outgoing: null, callId: null));
+      expect(v1.namesACall, isTrue);
+      expect(v1.callId, isNull);
     });
 
     test('gated ON: /call is registered', () {
