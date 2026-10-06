@@ -145,3 +145,44 @@ of them can't be done on the device:
 
 Everything in "What is NOT in question" above. Also the hardware results for invite, end, answer,
 decline and cold start: those paths keep their shape, and only what they're keyed by changes.
+
+---
+
+## v2 correction — the call id was ALREADY DECIDED (island design 12, Decision 1)
+
+**v2 item 1 above is superseded.** It proposed `m` = the invite's *server* message id. The island
+tab pointed out (2026-10-06) that its merged design record already decided which identity, and it
+isn't that one:
+
+> island `docs/design/12-native-call-ui-callkit-connectionservice.md`, **Decision 1** (PR#149/#150):
+> "the call id is CLIENT-minted; the island carries it, and owns no call object …
+> `aiko:call/2 <ulid>` — the id is IN the signed invite body … The end sentinel references the
+> same id."
+
+It was decided and never built (`call/2` appears in neither repo's code). **Design 21 and its
+temper never read it.** That's the #2634 failure this repo's CLAUDE.md exists to prevent. The
+temper then hardened the gap: three families correctly converged on "identity must be on the wire",
+but none of them had the record that says WHICH identity. A design-blind adversary confirms the
+author's frame.
+
+**Why the client-minted id is the right one**, beyond being the record (island tab's points,
+verified):
+
+1. **Signed, not asserted.** A ULID in the signed body is verifiable end to end. A server id is
+   assigned after signing, so the device has to trust the island's `m`.
+2. **The misdial path.** `CallEndAnnouncer` waits for the ack because `reply_to` needs the server
+   ULID. With the id in the end's own signed body, the end can go out immediately.
+3. **No sender-chosen pointer.** The island checks only that an end's `reply_to` exists in the
+   channel, not that it's a call invite. A server-id `m` taken from `reply_to` would let a sender
+   point an end at any row. With call/2, the island copies the id out of the signed body.
+4. **Federation.** Server ids are island-local, and a client ULID crosses islands.
+
+**v2 item 1, as corrected:** invite body `aiko:call/2 <ulid>`, end body its signed twin carrying
+the same ulid (exact bytes to be pinned jointly). The wake payload is `{c, k, m}` with `m` = that
+ulid, **copied by the island from the signed body**, on both FCM and APNs VoIP. The v1 sentinels
+stay recognised forever because they're in signed history. A v1 wake still rings keyed by channel,
+and the dedup weakness stays confined to v1 traffic. Items 2-5 stand, with `callId` = the ulid.
+
+**App-side cost now includes a signed-body change:** minting the ulid; `isCallInviteBody`,
+`admitRing`, `admitCallEnd` and `CallEndAnnouncer` learning v2; the end no longer waiting for the
+ack. That touches the signing trust boundary, so it gets a `/cage-match` of its own.
