@@ -468,3 +468,8 @@ tombstone*), plus:
 - 8: a second answer is refused at both doors, and A is untouched;
 - 9: a queued retire of A never releases an engine B claims;
 - 10: ending an unarmed UUID never disarms (test 7 restated as the rule).
+
+> **v3.7 status (2026-10-06 17:13):** the island has built the gate in PR #192 (77ca1ab, unmerged):
+> v1 bodies are stored and served but never wake on FCM or APNs; `m` is on every wake
+> (`WakePayload.call_id: str`, with no None arm); FCM collapses on `m`. The gate closes when #192
+> merges. The app's `fromWire` still treats an absent `m` as "no call", for robustness.
