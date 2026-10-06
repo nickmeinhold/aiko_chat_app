@@ -173,7 +173,6 @@ object IncomingCallNotifier {
     // POST_NOTIFICATIONS may be denied on 13+; NotificationManagerCompat throws
     // SecurityException rather than no-opping, and a denied notification
     // permission is an ordinary user choice, not a crash.
-    shownInstance = instance
     try {
       NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
     } catch (_: SecurityException) {
@@ -194,17 +193,13 @@ object IncomingCallNotifier {
   }
 
   /**
-   * The ring instance whose notification is on screen. There is one
-   * notification id, so without this, dismissing an OLD ring that lost a race
-   * with a newer one cancelled the NEWER ring's notification (Tesla, PR #210 v2
-   * round 1). Volatile: FCM's worker shows, main often dismisses.
+   * Stop ringing. UNCONDITIONAL — there is one notification id, and the
+   * decision whether this ring's notification is still the one on screen
+   * belongs to [CallRing.retire], which reads the PERSISTED slot. (A process-
+   * memory check here broke the cross-process end: a fresh process knows
+   * nothing of the notification an earlier one posted. PR #210 v2 round 2.)
    */
-  @Volatile private var shownInstance: Long = -1L
-
-  /** Stop ringing [instance] — and nothing that has since replaced it. */
-  fun dismiss(context: Context, instance: Long) {
-    if (shownInstance != instance) return
-    shownInstance = -1L
+  fun dismiss(context: Context) {
     NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
   }
 }

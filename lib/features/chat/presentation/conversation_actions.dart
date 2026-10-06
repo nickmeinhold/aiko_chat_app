@@ -115,9 +115,7 @@ Future<void> startCall(
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
     final call = await _ring(ref, dm.id);
-    {
-      owedHangup = (channelId: dm.id, call: call);
-    }
+    owedHangup = (channelId: dm.id, call: call);
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
     // longer holds here. A mounted check does not survive a subsequent await —
     // adding the ring introduced a NEW async gap, not just another statement
