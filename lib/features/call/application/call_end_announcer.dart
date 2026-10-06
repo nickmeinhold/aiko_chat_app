@@ -88,20 +88,14 @@ class CallEndAnnouncer {
   /// or has SUCCEEDED", never "someone once intended to".
   final Set<String> _claimed = {};
 
-  /// Say that the call opened by [inviteId] in [channelId] has ended.
+  /// Say that [call] in [channelId] has ended.
   ///
   /// Returns immediately. Safe to call from `dispose()` — it captures nothing
   /// that is being torn down.
-  /// [inviteId] may be null for a v2 call whose invite send reported failure
-  /// (the frame may still have left); [callId] alone is then enough. With
-  /// neither there is nothing to name, and nothing is owed.
-  void announce({
-    required String channelId,
-    required String? inviteId,
-    String? callId,
-  }) {
-    final claim = callId ?? inviteId;
-    if (claim == null) return;
+  /// The hangup names [call] in its own signed body, so it needs nothing from
+  /// the invite's ack and goes out at once (design 21 v2, design 22 v2.0).
+  void announce({required String channelId, required CallRef call}) {
+    final claim = call.id;
     // SNAPSHOT WHO WE ARE, not just what we are ending (cage-match round 2,
     // Tesla). This object was built to outlive the screen and therefore outlives
     // the USER: /call/:channelId is not a logged-out zone, so when the session
@@ -124,12 +118,12 @@ class CallEndAnnouncer {
     try {
       identity = _identity();
     } catch (e) {
-      debugPrint('CallEndAnnouncer: could not read identity for $inviteId: $e');
-      _claimed.remove(callId ?? inviteId);
+      debugPrint('CallEndAnnouncer: could not read identity for $call: $e');
+      _claimed.remove(claim);
       return;
     }
     late final Future<void> f;
-    f = _announce(channelId, inviteId, callId, identity).whenComplete(() {
+    f = _announce(channelId, call, identity).whenComplete(() {
       // Completed obligations must not accumulate: this object is pinned for the
       // app's lifetime, so an ever-growing list would retain every hangup's
       // closure graph forever (cage-match round 2, Carnot).
@@ -162,8 +156,7 @@ class CallEndAnnouncer {
   /// the peer's ring has expired on its own and there is nothing left to still.
   Future<void> _announce(
     String channelId,
-    String? inviteId,
-    String? callId,
+    CallRef call,
     (String?, String) identity,
   ) async {
     final deadline = DateTime.now().add(_ackWait);
@@ -175,9 +168,9 @@ class CallEndAnnouncer {
         if (_identity() != identity) {
           debugPrint(
             'CallEndAnnouncer: identity changed — abandoning the hangup for '
-            '$inviteId.',
+            '$call.',
           );
-          _claimed.remove(callId ?? inviteId);
+          _claimed.remove(call.id);
           return;
         }
         if (!DateTime.now().isBefore(deadline)) break;
@@ -208,67 +201,60 @@ class CallEndAnnouncer {
           final slice = left < _attemptSlice ? left : _attemptSlice;
           final repo = await _repositoryWithin(slice);
           if (repo != null) {
-            // v1 must wait for the invite's island id — reply_to is the only
-            // way a v1 end names its call. v2 names it in its own signed body,
-            // so it goes out NOW: the misdial ("place it, back out at once")
-            // no longer waits on an ack that may not have arrived (design 21
-            // v2). reply_to is still attached when already known; it costs
-            // nothing and the island's own reply check stays satisfied.
-            final islandId = inviteId == null
-                ? null
-                : await repo.islandIdFor(inviteId);
-            if (callId != null || islandId != null) {
-              // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
-              // identity check and then awaited twice; a liveness test does not
-              // survive an await. Round 3 added exactly this guard and the
-              // round-5 rewrite dropped it, unnoticed, because it had no test.
-              // Snapshot A, obtain repository B, and the hangup is signed by
-              // whoever is current: the callee will not stop (the caller no
-              // longer matches) and permanent signed history grows a row from a
-              // person who never placed the call.
-              if (_identity() != identity) {
-                debugPrint(
-                  'CallEndAnnouncer: identity changed before signing — '
-                  'abandoning the hangup for $inviteId.',
-                );
-                _claimed.remove(callId ?? inviteId);
-                return;
-              }
-              final sentId = await repo.sendMessage(
-                channelId,
-                callId != null ? callEndBodyV2(callId) : kCallEndBody,
-                replyToId: islandId,
+            // NO WAIT FOR THE INVITE'S ACK. The end names its call in its own
+            // signed body, so there is nothing to look up. A `reply_to` lookup
+            // used to sit here, and a lookup that never completed kept the
+            // hangup in series with an ack it does not need (Tesla, PR #210 v2
+            // round 2). v1's reply_to binding is gone with v1 calling.
+            // RE-CHECKED WITH THE REPOSITORY IN HAND. The pass began with an
+            // identity check and then awaited; a liveness test does not
+            // survive an await. Round 3 added exactly this guard and the
+            // round-5 rewrite dropped it, unnoticed, because it had no test.
+            // Snapshot A, obtain repository B, and the hangup is signed by
+            // whoever is current: the callee will not stop (the caller no
+            // longer matches) and permanent signed history grows a row from a
+            // person who never placed the call.
+            if (_identity() != identity) {
+              debugPrint(
+                'CallEndAnnouncer: identity changed before signing — '
+                'abandoning the hangup for $call.',
               );
-              if (sentId != null) return; // spoken; the claim stands.
-              // NAMED COMPROMISE, found by a fix-interaction pass rather than a
-              // reviewer: `sendMessage` fires the transport BEFORE it returns,
-              // and its catch returns null. So a throw in that window yields
-              // null with the frame ALREADY on the wire, and this retry sends a
-              // second END — two signed rows for one hangup, in permanent
-              // history. Kept deliberately, because the failures are not
-              // symmetric: a duplicate end is inert at the receiver (`_ended`
-              // holds a list, `stopRinging` is idempotent) while a MISSING end
-              // rings a handset for thirty seconds at a room nobody is coming
-              // to. Removing it properly needs a write-ahead attempt record,
-              // not another guard here.
+              _claimed.remove(call.id);
+              return;
             }
+            final sentId = await repo.sendMessage(
+              channelId,
+              callEndBodyV2(call),
+            );
+            if (sentId != null) return; // spoken; the claim stands.
+            // NAMED COMPROMISE, found by a fix-interaction pass rather than a
+            // reviewer: `sendMessage` fires the transport BEFORE it returns,
+            // and its catch returns null. So a throw in that window yields
+            // null with the frame ALREADY on the wire, and this retry sends a
+            // second END — two signed rows for one hangup, in permanent
+            // history. Kept deliberately, because the failures are not
+            // symmetric: a duplicate end is inert at the receiver (`_ended`
+            // holds a list, `stopRinging` is idempotent) while a MISSING end
+            // rings a handset for thirty seconds at a room nobody is coming
+            // to. Removing it properly needs a write-ahead attempt record,
+            // not another guard here.
           }
         } catch (e) {
           // "Not this millisecond", never "not this universe".
-          debugPrint('CallEndAnnouncer: transient failure for $inviteId: $e');
+          debugPrint('CallEndAnnouncer: transient failure for $call: $e');
         }
         await Future<void>.delayed(_retryCadence);
       }
       debugPrint(
-        'CallEndAnnouncer: gave up on $inviteId after $_ackWait — the peer ring '
+        'CallEndAnnouncer: gave up on $call after $_ackWait — the peer ring '
         'has expired on its own, so there is nothing left to stop.',
       );
-      _claimed.remove(callId ?? inviteId);
+      _claimed.remove(call.id);
     } catch (e) {
       // Only an identity read can reach here now; everything inside the pass is
       // caught above.
       debugPrint('CallEndAnnouncer: could not announce the hangup: $e');
-      _claimed.remove(callId ?? inviteId);
+      _claimed.remove(call.id);
     }
   }
 

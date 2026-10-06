@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart';
+import 'call_fixtures.dart';
 
 const _channel = 'CH1';
 
@@ -101,7 +102,7 @@ void main() {
 
   /// Send an invitation and ACK it, so it has a server ULID like a real one.
   Future<String> sendAndAck({bool ack = true}) async {
-    final id = (await repo.sendMessage(_channel, kCallInviteBody))!;
+    final id = (await repo.sendMessage(_channel, kTestInviteBody))!;
     if (ack) {
       transport.emitAck(id, '01M0GS7FDWBVQ31950B1PTV2DW');
       await pumpEventQueue();
@@ -113,68 +114,57 @@ void main() {
   /// Ref it holds in production.
   CallEndAnnouncer announcer() => container.read(callEndAnnouncerProvider);
 
-  test('an acked invitation is ended by its SERVER id', () async {
-    final inviteId = await sendAndAck();
+  test(
+    'the hangup names its call in its body and carries no reply_to',
+    () async {
+      // call/2 (design 21 v2, design 22): the end's signed body names the call,
+      // so the island's server id is not needed and is not attached.
+      await sendAndAck();
+      final a = announcer();
+
+      a.announce(channelId: _channel, call: kTestCall);
+      await Future.wait(a.settling);
+
+      final ends = transport.sent.where((m) => m.body == kTestEndBody).toList();
+      expect(ends, hasLength(1));
+      expect(ends.single.replyToId, isNull);
+    },
+  );
+
+  test('a hangup BEFORE the ack goes out at once — the misdial path', () async {
+    // The fastest, most human path: place the call, realise it is a misdial,
+    // back straight out. v1 had to wait for the island id to reply to; the
+    // id in the body needs nothing.
+    await sendAndAck(ack: false);
     final a = announcer();
 
-    a.announce(channelId: _channel, inviteId: inviteId);
-    await Future.wait(a.settling);
-
-    final ends = transport.sent.where((m) => m.body == kCallEndBody).toList();
-    expect(ends, hasLength(1));
-    expect(
-      ends.single.replyToId,
-      '01M0GS7FDWBVQ31950B1PTV2DW',
-      reason:
-          'the wire binding is the SERVER id — a client_msg_id gets the whole '
-          'frame refused with no_reply_target',
-    );
-  });
-
-  test('a hangup BEFORE the ack still lands, once the ack arrives', () async {
-    // The finding Carnot and Tesla reached independently, and the reason it
-    // matters: this is the fastest, most human path — place the call, realise
-    // it is a misdial, back straight out. Exactly when you most want the peer's
-    // phone to stop. The first version gave up here and printed a line.
-    final inviteId = await sendAndAck(ack: false);
-    final a = announcer();
-
-    a.announce(channelId: _channel, inviteId: inviteId);
-    await pumpEventQueue();
-    expect(
-      transport.sent.where((m) => m.body == kCallEndBody),
-      isEmpty,
-      reason: 'precondition: it cannot have sent yet — there is no id to name',
-    );
-
-    transport.emitAck(inviteId, '01M0GS7FDWBVQ31950B1PTV2DW');
+    a.announce(channelId: _channel, call: kTestCall);
     await Future.wait(a.settling);
 
     expect(
-      transport.sent.where((m) => m.body == kCallEndBody).single.replyToId,
-      '01M0GS7FDWBVQ31950B1PTV2DW',
+      transport.sent.where((m) => m.body == kTestEndBody),
+      hasLength(1),
+      reason: 'sent with no ack ever arriving',
     );
   });
 
   test(
-    'an invitation never acked announces NOTHING — there is no ring to stop',
+    'an invitation never acked is STILL owed a hangup (it may have left)',
     () async {
-      final inviteId = await sendAndAck(ack: false);
+      // Reversed from v1, deliberately. `sendMessage` reports null both for
+      // "never left" and "left, then failed", and an end needs nothing from the
+      // ack, so the hangup is owed regardless (Tesla, PR #210 v2 round 1). A
+      // duplicate end for a call that never rang is inert; a missing end rings
+      // a handset for thirty seconds.
       ackWait = const Duration(milliseconds: 300);
       container.dispose();
       container = build();
       final a = announcer();
 
-      a.announce(channelId: _channel, inviteId: inviteId);
+      a.announce(channelId: _channel, call: kTestCall);
       await Future.wait(a.settling);
 
-      expect(
-        transport.sent.where((m) => m.body == kCallEndBody),
-        isEmpty,
-        reason:
-            'an unacked invitation almost certainly never reached the peer, and a '
-            'reply_to the island cannot resolve would sink the whole message',
-      );
+      expect(transport.sent.where((m) => m.body == kTestEndBody), hasLength(1));
     },
   );
 
@@ -185,7 +175,7 @@ void main() {
     // current one flowed. The actual bug is a mortal capture — invitation minted
     // on repo A, lookup and send happening after A has been swapped out — and
     // that frequency was never placed on the coil.
-    final inviteId = await sendAndAck(); // ...on repo A (`repo`)
+    await sendAndAck(); // ...on repo A (`repo`)
 
     // A is replaced, as a reconnect / subscription-set change / seedOpenedDm
     // does. Its cache still holds the invitation's ULID, so a correct
@@ -210,12 +200,12 @@ void main() {
     final a = c2.read(callEndAnnouncerProvider);
 
     await repo.dispose(); // A is now dead — a captured reference would be inert
-    a.announce(channelId: _channel, inviteId: inviteId);
+    a.announce(channelId: _channel, call: kTestCall);
     await Future.wait(a.settling);
 
     expect(
-      liveTransport.sent.where((m) => m.body == kCallEndBody).single.replyToId,
-      '01M0GS7FDWBVQ31950B1PTV2DW',
+      liveTransport.sent.where((m) => m.body == kTestEndBody),
+      hasLength(1),
       reason:
           'the hangup went out through the LIVE repository, naming an '
           'invitation minted by one that has since been disposed',
@@ -260,12 +250,12 @@ void main() {
     final c = build(repoOverride: flaky);
     addTearDown(c.dispose);
 
-    final inviteId = (await flaky.sendMessage(_channel, kCallInviteBody))!;
+    final inviteId = (await flaky.sendMessage(_channel, kTestInviteBody))!;
     transport.emitAck(inviteId, '01M0GS7FDWBVQ31950B1PTV2DX');
     await pumpEventQueue();
 
     final a = c.read(callEndAnnouncerProvider);
-    a.announce(channelId: _channel, inviteId: inviteId);
+    a.announce(channelId: _channel, call: kTestCall);
     await Future.wait(a.settling);
 
     expect(
@@ -273,7 +263,7 @@ void main() {
       greaterThan(1),
       reason: 'a null send is not a delivery — it must be tried again',
     );
-    final ends = transport.sent.where((m) => m.body == kCallEndBody).toList();
+    final ends = transport.sent.where((m) => m.body == kTestEndBody).toList();
     expect(
       ends,
       hasLength(1),
@@ -281,7 +271,6 @@ void main() {
           'and the retry must eventually SPEAK, exactly once — the whole point '
           'of the obligation is that the peer stops ringing',
     );
-    expect(ends.single.replyToId, '01M0GS7FDWBVQ31950B1PTV2DX');
   });
 
   test('a repository ERROR is retried, not fatal', () async {
@@ -314,9 +303,9 @@ void main() {
     c.listen(callEndAnnouncerProvider, (_, _) {}, fireImmediately: true);
     addTearDown(c.dispose);
 
-    final inviteId = await sendAndAck();
+    await sendAndAck();
     final a = c.read(callEndAnnouncerProvider);
-    a.announce(channelId: _channel, inviteId: inviteId);
+    a.announce(channelId: _channel, call: kTestCall);
     await Future.wait(a.settling);
 
     expect(
@@ -324,7 +313,7 @@ void main() {
       0,
       reason: 'precondition — both error passes were actually consumed',
     );
-    final ends = transport.sent.where((m) => m.body == kCallEndBody).toList();
+    final ends = transport.sent.where((m) => m.body == kTestEndBody).toList();
     expect(
       ends,
       hasLength(1),
@@ -357,7 +346,7 @@ void main() {
     final a = c.read(callEndAnnouncerProvider);
 
     expect(
-      () => a.announce(channelId: _channel, inviteId: 'whatever'),
+      () => a.announce(channelId: _channel, call: kTestCall),
       returnsNormally,
       reason:
           'a hangup that cannot even be started must not take the widget '
@@ -368,7 +357,7 @@ void main() {
     // succeeded"; an announcement that never started is neither, and leaving it
     // claimed would silently no-op the mint site's `finally` — the second owner
     // that exists for exactly this case.
-    a.announce(channelId: _channel, inviteId: 'whatever');
+    a.announce(channelId: _channel, call: kTestCall);
     expect(
       a.settling,
       isEmpty,
@@ -397,12 +386,12 @@ void main() {
     final c = build(repoOverride: flaky);
     addTearDown(c.dispose);
 
-    final inviteId = (await flaky.sendMessage(_channel, kCallInviteBody))!;
+    final inviteId = (await flaky.sendMessage(_channel, kTestInviteBody))!;
     transport.emitAck(inviteId, '01M0GS7FDWBVQ31950B1PTV2DY');
     await pumpEventQueue();
 
     final a = c.read(callEndAnnouncerProvider);
-    a.announce(channelId: _channel, inviteId: inviteId);
+    a.announce(channelId: _channel, call: kTestCall);
     await Future.wait(a.settling);
 
     expect(
@@ -410,7 +399,7 @@ void main() {
       0,
       reason: 'precondition — both throwing attempts were actually consumed',
     );
-    final ends = transport.sent.where((m) => m.body == kCallEndBody).toList();
+    final ends = transport.sent.where((m) => m.body == kTestEndBody).toList();
     expect(
       ends,
       hasLength(1),
@@ -421,88 +410,25 @@ void main() {
   });
 
   test('a completed announcement is not retained', () async {
-    final inviteId = await sendAndAck();
+    await sendAndAck();
     final a = announcer();
 
-    a.announce(channelId: _channel, inviteId: inviteId);
+    a.announce(channelId: _channel, call: kTestCall);
     await Future.wait(a.settling);
     await pumpEventQueue();
 
     expect(a.settling, isEmpty);
   });
-  // ---- v2: the hangup names its call in its own body (design 21 v2) --------
-  group('v2 — the hangup does not wait for the ack', () {
-    const callId = '01JABCDEFGHJKMNPQRSTVWXYZ0';
-
-    test(
-      'a v2 hangup BEFORE the ack goes out at once, naming the call id',
-      () async {
-        // The misdial path, closed: place the call, back straight out. v1 had to
-        // wait for the island id to reply to; v2 carries the id in its signed
-        // body, so there is nothing to wait for.
-        final inviteId = (await repo.sendMessage(
-          _channel,
-          callInviteBodyV2(callId),
-        ))!;
-        final a = announcer();
-
-        a.announce(channelId: _channel, inviteId: inviteId, callId: callId);
-        await Future.wait(a.settling);
-
-        final ends = transport.sent
-            .where((m) => m.body == callEndBodyV2(callId))
-            .toList();
-        expect(ends, hasLength(1), reason: 'sent with no ack ever arriving');
-        expect(
-          ends.single.replyToId,
-          isNull,
-          reason: 'no island id existed yet, and v2 does not need one',
-        );
-        expect(
-          transport.sent.where((m) => m.body == kCallEndBody),
-          isEmpty,
-          reason: 'a v2 call is never ended with the v1 sentinel',
-        );
-      },
-    );
-
-    test(
-      'a v2 hangup is owed even when the invite send reported failure',
-      () async {
-        // `sendMessage` returns null both for "never left" and "left, then
-        // failed" — and a v2 end needs nothing from the ack, so it is owed
-        // regardless (Tesla, PR #210 v2 round 1).
-        final a = announcer();
-        a.announce(channelId: _channel, inviteId: null, callId: callId);
-        await Future.wait(a.settling);
-        expect(
-          transport.sent.where((m) => m.body == callEndBodyV2(callId)),
-          hasLength(1),
-        );
-      },
-    );
-
-    test('a v2 hangup AFTER the ack still attaches reply_to', () async {
-      final inviteId = (await repo.sendMessage(
-        _channel,
-        callInviteBodyV2(callId),
-      ))!;
-      transport.emitAck(inviteId, '01M0GS7FDWBVQ31950B1PTV2DW');
-      await pumpEventQueue();
+  test(
+    'ONE call, ONE end — a second announce for the same call is a no-op',
+    () async {
       final a = announcer();
-
-      a.announce(channelId: _channel, inviteId: inviteId, callId: callId);
+      a.announce(channelId: _channel, call: kTestCall);
+      a.announce(channelId: _channel, call: kTestCall);
       await Future.wait(a.settling);
-
-      expect(
-        transport.sent
-            .where((m) => m.body == callEndBodyV2(callId))
-            .single
-            .replyToId,
-        '01M0GS7FDWBVQ31950B1PTV2DW',
-      );
-    });
-  });
+      expect(transport.sent.where((m) => m.body == kTestEndBody), hasLength(1));
+    },
+  );
 }
 
 /// A repository whose first [nullsToReturn] sends report the documented `null`
@@ -533,7 +459,7 @@ class _FlakySendRepo extends ChatRepository {
     String body, {
     String? replyToId,
   }) async {
-    if (body == kCallEndBody) {
+    if (body == kTestEndBody) {
       sendAttempts++;
       if (throwsToRaise > 0) {
         throwsToRaise--;

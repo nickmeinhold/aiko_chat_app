@@ -162,31 +162,23 @@ bool isCallEndBody(String body) =>
 /// both consumers run [endsInvite].
 class CallEnd {
   const CallEnd({
-    required this.targetIslandMsgId,
+    required this.call,
     required this.fromUserId,
     required this.channelId,
-    this.callId,
-  }) : assert(
-         callId != null || targetIslandMsgId != null,
-         'an end must name its call: by v2 id, or by v1 reply_to',
-       );
+    this.targetIslandMsgId,
+  });
 
-  /// The v2 call this ends — the id in its own signed body. Null for a v1 end,
-  /// which names its call only through [targetIslandMsgId].
-  final String? callId;
+  /// The call this ends — the id in its own signed body. Also the key
+  /// [RingController] remembers an early end under, so an end that overtakes
+  /// its invitation finds it by the same name.
+  final CallRef call;
 
-  /// The island ULID of the invitation being ended — the signed `replyTo`.
-  /// The island id of the invite this replies to. REQUIRED for v1 (it is the
-  /// only thing a v1 end names); OPTIONAL for v2, whose identity is [callId] —
-  /// which is what lets a v2 hangup go out before the invite's ack (design 21).
+  /// The island id of the invite this replies to, when the hangup knew it.
+  /// Threading only: the call is named by [call], which is what lets a hangup
+  /// go out before the invite's ack (design 21 v2).
   final String? targetIslandMsgId;
   final String fromUserId;
   final String channelId;
-
-  /// The key [RingController] remembers an early end under — the same key
-  /// [CallInvite.endKey] produces, so a v2 end finds its v2 invite and a v1 end
-  /// its v1 invite, and never across.
-  String get key => callId ?? targetIslandMsgId!;
 }
 
 /// **Is [message] a verified hangup at all?** The single door, and the only
@@ -207,7 +199,7 @@ class CallEnd {
 /// - **a bot** — mirroring [admitRing]. Unreachable while an end must match a
 ///   human's invitation, but the two gates sit side by side and asymmetric
 ///   clauses are how a later reader "fixes" the wrong one.
-/// - **names no call** — a stop with no `replyTo` is about everything or nothing.
+/// - **a v1 body** — history, never a call (design 22 v2.0).
 /// - **has no author** — `MessageSender.userId` is null for an external actor.
 ///   "Only the caller may end the call" is unanswerable without one, and an
 ///   authorless stop would then be a stop from anybody.
@@ -244,7 +236,10 @@ bool _isCallEndShape(Message message) {
   // author and id), and the only thing it misleads is the timeline's wording.
   // Accepted in exchange for a hangup that does not wait on the invite's ack —
   // the misdial path. Owner: the app tab.
-  return body!.isV2 || message.replyToId != null;
+  //
+  // A v1 end still RENDERS by its old rule (it is history), though it is never
+  // admitted as a call (design 22 v2.0).
+  return body!.call != null || message.replyToId != null;
 }
 
 /// A verified sovereign origin: this key signed these bytes, checked at ingest.
@@ -321,11 +316,9 @@ CallEndDecision admitCallEnd(
   if (message.sender.userId == null) {
     return const CallEndRefused(RingRefusal.endMissingAuthor);
   }
-  // A v1 end names its call only through reply_to; a v2 end names it in its
-  // own signed body, so reply_to is optional there (design 21 v2).
-  if (!body.isV2 && message.replyToId == null) {
-    return const CallEndRefused(RingRefusal.endMissingTarget);
-  }
+  // A v1 end is history, not a call (design 22 v2.0): it ends nothing.
+  final call = body.call;
+  if (call == null) return const CallEndRefused(RingRefusal.v1Call);
   // DECOMPOSED, mirroring `admitRing` clause for clause. `_hasVerifiedOrigin` is
   // `originCryptoValid == true && origin != null` — one bool over two different
   // invariant breaks — so the stop gate answered `unverifiedOrigin` for an
@@ -357,7 +350,7 @@ CallEndDecision admitCallEnd(
   if (from == meUserId) return const CallEndRefused(RingRefusal.ownEnd);
   return CallEndAdmitted(
     CallEnd(
-      callId: body.callId,
+      call: call,
       targetIslandMsgId: message.replyToId,
       fromUserId: from,
       channelId: message.channelId,
@@ -368,15 +361,14 @@ CallEndDecision admitCallEnd(
 /// Does [end] end [invite]? Applied identically whether the end arrived while
 /// the invitation was ringing or before it existed.
 ///
-/// The binding is the SERVER id, and that is not a preference: a live probe
-/// showed `reply_to` is an FK onto `messages.id`, so a frame carrying a
-/// `client_msg_id` there is refused outright (`no_reply_target`) and the hangup
-/// never leaves the device. Comparing the client id would have matched a message
-/// that cannot exist.
+/// The binding is the CALL ID both bodies carry inside their signatures
+/// (call/2, island design 12 Decision 1). It used to be the invite's server id
+/// via `reply_to`, which made the hangup wait for the ack and let a sender
+/// point an end at any row in the channel. The id needs neither.
 ///
-/// FRESHNESS NEEDS NO CLOCK, and that falls out of the binding: a replayed end
-/// can only match an invitation still live, and a live invitation is at most
-/// [kInAppRingDuration] old. Re-delivery is idempotent.
+/// FRESHNESS NEEDS NO CLOCK: a replayed end can only match an invitation still
+/// live, and a live invitation is at most [kInAppRingDuration] old.
+/// Re-delivery is idempotent.
 bool endsInvite(CallEnd end, CallInvite invite) {
   // Only the account that started the call may end it, and only in the channel
   // it was started in. (Inherited caveat: `sender` is server-supplied and outside
@@ -384,24 +376,17 @@ bool endsInvite(CallEnd end, CallInvite invite) {
   // stronger — see admitRing. What IS signed is the end body — and, in v2, the
   // call id inside it; the claim is not cryptographic caller identity.)
   if (end.fromUserId != invite.from.userId) return false;
-  if (end.channelId != invite.channelId) return false;
-  // v2 names its call by the id both bodies carry, signed. A v2 end never ends
-  // a v1 invite: a v1 invite has no id for it to name.
-  final callId = end.callId;
-  if (callId != null) return callId == invite.callId;
-  // v1 names its call by replying to the invite's island id — and ends ONLY a
-  // v1 invite. A v1-shaped end replying to a v2 invite's island id used to
-  // match here while RingController stored it under the island id and looked
-  // the v2 invite up under its call id: one event, two answers depending on
-  // arrival order (Tesla + Kelvin, PR #210 v2 round 1). Versions match
-  // exactly, both directions, so both consumers agree.
-  return invite.callId == null && end.targetIslandMsgId == invite.islandMsgId;
+  // The door policy, applied before the identity match: the same id on another
+  // channel ends nothing (design 22 v4.2).
+  if (!oneChannelPerCall(invite.channelId, end.channelId)) return false;
+  // The call is named by the id both bodies carry, signed.
+  return end.call == invite.call;
 }
 
 /// An admitted, ringable invitation — the room to join and who is calling.
 class CallInvite {
   const CallInvite({
-    this.callId,
+    required this.call,
     required this.inviteId,
     required this.islandMsgId,
     required this.channelId,
@@ -420,15 +405,10 @@ class CallInvite {
   /// you must remember having dismissed needs a name, not a shape.
   final String inviteId;
 
-  /// The v2 call id — the ULID inside the signed invite body, minted by the
-  /// caller (island design 12, Decision 1). Null for a v1 invite, which has
-  /// none. When present it is what the system ring (CallKit / the Android
-  /// ring) is keyed by, and what a v2 end names.
-  final String? callId;
-
-  /// The key an early end for this invitation is remembered under — matching
-  /// [CallEnd.key]: the call id for v2, the island id for v1.
-  String get endKey => callId ?? islandMsgId;
+  /// The call — the id inside the signed invite body, minted by the caller
+  /// (island design 12, Decision 1). What the system ring (CallKit / the
+  /// Android ring) is keyed by, and what an end names.
+  final CallRef call;
 
   /// The island's ULID for this invitation — what a hangup's `reply_to` names.
   ///
@@ -667,10 +647,10 @@ enum RingRefusal {
   /// level down.
   endMissingAuthor(refusedAnAttempt: true, startGate: false, stopGate: true),
 
-  /// A call-END sentinel naming NO CALL (`reply_to` absent). It could never stop
-  /// any ring, so a bell may still be ringing for a call the caller believes is
-  /// over — the failure is silent and user-visible at once.
-  endMissingTarget(refusedAnAttempt: true, startGate: false, stopGate: true),
+  /// A v1 call body (`aiko:call/1`). History, never a call: no store build ever
+  /// placed one, so only an old dev build sends it (design 22 v2.0). Recorded,
+  /// because somebody did try to reach this handset.
+  v1Call(refusedAnAttempt: true),
 
   /// `originCryptoValid != true` — unsigned, or carried-but-invalid. The
   /// security-relevant refusal: a ring that could not prove who sent it.
@@ -883,7 +863,8 @@ RingDecision admitRing(
   required bool isDm,
   required DateTime now,
 }) {
-  if (!isCallInviteBody(message.body)) {
+  final body = parseCallBody(message.body);
+  if (body == null || body.kind != CallBodyKind.invite) {
     return const RingRefused(RingRefusal.notAnInvite);
   }
   // VERIFY BEFORE ANY SERVER-SUPPLIED FIELD IS CONSULTED — `userId` included.
@@ -952,9 +933,14 @@ RingDecision admitRing(
   // `reply_to` is an FK onto `messages.id`, so there would be nothing to name.
   final islandMsgId = message.id;
   if (islandMsgId == null) return const RingRefused(RingRefusal.noIslandId);
+  // LAST, after every security clause, so a forged v1 invite is still named by
+  // its security fault first. A v1 body is history, never a call (design 22
+  // v2.0).
+  final call = body.call;
+  if (call == null) return const RingRefused(RingRefusal.v1Call);
   return RingAdmitted(
     CallInvite(
-      callId: parseCallBody(message.body)?.callId,
+      call: call,
       inviteId: origin.clientMsgId,
       islandMsgId: islandMsgId,
       channelId: message.channelId,

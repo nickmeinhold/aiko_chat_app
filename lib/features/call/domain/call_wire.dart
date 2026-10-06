@@ -30,26 +30,72 @@ import 'dart:math';
 /// Which half of a call a body is.
 enum CallBodyKind { invite, end }
 
-/// A recognised call body. [callId] is null exactly for v1.
+/// A call's identity: a grammar-checked call/2 id, and nothing else.
+///
+/// **ONE MEANING FOR ABSENCE (design 22).** A call's identity used to travel
+/// as `String? callId`, and null meant three things: a v1 call, a screen that
+/// names no call, and an id nobody passed. Each of a dozen sites re-derived
+/// which, and they disagreed, through six review rounds. Now a call IS a
+/// [CallRef], and `CallRef?` null means only "no call".
+///
+/// **v1 IS NOT A CALL** (design 22 v2.0, Nick 2026-10-06). No store build ever
+/// placed a v1 call, so a v1 body is history: it renders, and it never rings,
+/// admits, answers or ends. That is why there is no `V1` variant here.
+///
+/// **Equality is the id alone.** The channel a call rings on is stored beside
+/// the ref and checked at the door by [oneChannelPerCall], so the rule that a
+/// call is one DM lives in one function, which island #3196 may one day
+/// change, and not inside `==`.
+final class CallRef {
+  /// [id] must be a canonical call id — see [isCallId].
+  CallRef(this.id) {
+    _checkCallId(id);
+  }
+
+  /// The ref [id] names, or null if it is not a call id. For decoding a
+  /// boundary (the native bridge) where a malformed id is dropped, never thrown.
+  static CallRef? tryParse(Object? id) =>
+      id is String && isCallId(id) ? CallRef(id) : null;
+
+  final String id;
+
+  @override
+  bool operator ==(Object other) => other is CallRef && other.id == id;
+
+  @override
+  int get hashCode => id.hashCode;
+
+  @override
+  String toString() => 'CallRef($id)';
+}
+
+/// THE door policy for a call's channel: a call is one DM today.
+///
+/// [stored] is the channel the call was first seen on; [seen] is the channel
+/// an event for the same [CallRef] names now. The single seam a cross-channel
+/// gathering (island #3196, design 12 Decision 1b) would change. Nothing else
+/// encodes this rule.
+bool oneChannelPerCall(String stored, String seen) => stored == seen;
+
+/// A recognised call body. [call] is null exactly for a v1 body, which is
+/// history and never a call.
 final class CallBody {
-  const CallBody(this.kind, this.callId);
+  const CallBody(this.kind, this.call);
 
   final CallBodyKind kind;
 
-  /// The v2 call identity, or null for a v1 body (which has none).
-  final String? callId;
-
-  bool get isV2 => callId != null;
+  /// The call a v2 body names. Null for v1.
+  final CallRef? call;
 
   @override
   bool operator ==(Object other) =>
-      other is CallBody && other.kind == kind && other.callId == callId;
+      other is CallBody && other.kind == kind && other.call == call;
 
   @override
-  int get hashCode => Object.hash(kind, callId);
+  int get hashCode => Object.hash(kind, call);
 
   @override
-  String toString() => 'CallBody(${kind.name}, ${callId ?? 'v1'})';
+  String toString() => 'CallBody(${kind.name}, ${call?.id ?? 'v1'})';
 }
 
 /// The v1 invite sentinel. **Signed and durable — never edit this string.**
@@ -90,26 +136,22 @@ CallBody? parseCallBody(String body) {
   }
   if (body == kCallEndBodyV1) return const CallBody(CallBodyKind.end, null);
   final invite = _v2Invite.firstMatch(body);
-  if (invite != null) return CallBody(CallBodyKind.invite, invite.group(1));
+  if (invite != null) {
+    return CallBody(CallBodyKind.invite, CallRef(invite.group(1)!));
+  }
   final end = _v2End.firstMatch(body);
-  if (end != null) return CallBody(CallBodyKind.end, end.group(1));
+  if (end != null) return CallBody(CallBodyKind.end, CallRef(end.group(1)!));
   return null;
 }
 
 /// True when [id] is a canonical call id.
 bool isCallId(String id) => _callIdPattern.hasMatch(id);
 
-/// The v2 invite body for [callId].
-String callInviteBodyV2(String callId) {
-  _checkCallId(callId);
-  return '$_v2Prefix$callId$_inviteTail';
-}
+/// The v2 invite body for [call].
+String callInviteBodyV2(CallRef call) => '$_v2Prefix${call.id}$_inviteTail';
 
-/// The v2 end body for [callId] — the hangup for the call that invite named.
-String callEndBodyV2(String callId) {
-  _checkCallId(callId);
-  return '$_v2Prefix$callId$_endTail';
-}
+/// The v2 end body for [call] — the hangup for the call that invite named.
+String callEndBodyV2(CallRef call) => '$_v2Prefix${call.id}$_endTail';
 
 void _checkCallId(String id) {
   if (!isCallId(id)) throw ArgumentError.value(id, 'callId', 'not a call id');
@@ -126,6 +168,9 @@ const String _crockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /// to a canonical id — the leading character is the top three bits, always
 /// `0`-`7` — so pure randomness satisfies the shape without a special case.
 /// Sortability, the timestamp's only job, is something calls do not need.
+CallRef mintCall({Random? random}) => CallRef(mintCallId(random: random));
+
+/// The id [mintCall] wraps. Exposed for the grammar's own tests.
 String mintCallId({Random? random}) {
   final rng = random ?? Random.secure();
   var value = BigInt.zero;

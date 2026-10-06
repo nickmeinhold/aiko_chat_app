@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-import '../domain/call_wire.dart' show isCallId;
+import '../domain/call_wire.dart' show CallRef;
 import '../domain/system_call_action.dart';
 
 /// The two-way seam between the platform's call UI and this app's call
@@ -36,11 +36,20 @@ abstract class SystemCallBridge {
   /// too, and the native side is a structural no-op when the channel names no
   /// system call. Callers do not have to track which kind of call they are in.
   ///
-  /// [callId] names WHICH call on the channel: a v2 call by its id, a v1 call
-  /// by null. The native side ends only an exact match, so the teardown of
-  /// call A can never end call B that displaced it on the same channel
-  /// (Carnot + Kelvin, PR #210 v2 round 1).
-  Future<void> end(String channelId, {String? callId});
+  /// [call] names WHICH call. The native side ends only that call, so the
+  /// teardown of call A can never end call B that displaced it on the same
+  /// channel (Carnot + Kelvin, PR #210 v2 round 1).
+  Future<void> end(String channelId, CallRef call);
+
+  /// [call] is live in this process: outgoing from the moment it is placed,
+  /// incoming from the moment it is joined.
+  ///
+  /// The native half refuses a second system answer while any call is live
+  /// (design 22 v4.2). Without this it knew only about calls IT answered, so
+  /// after its 120s answer memory lapsed, or during any outgoing call, a
+  /// lock-screen answer went through under a live call (Tesla + Carnot, design
+  /// 22 temper round 3). Ended by [end], like every call.
+  Future<void> callStarted(String channelId, CallRef call);
 }
 
 /// The native implementation, on BOTH platforms: an `EventChannel` fed by the
@@ -91,27 +100,33 @@ class NativeSystemCallBridge implements SystemCallBridge {
     final channelId = event['channel'];
     if (kind == null || channelId is! String || channelId.isEmpty) return null;
     final origin = event['origin'];
-    final call = event['call'];
-    // ABSENT means v1. PRESENT-BUT-MALFORMED is not "absent" — read as null it
-    // matched every v1 hold and admission in the room, the exact wildcard this
-    // id exists to remove (Tesla, PR #210 v2 round 1). It is dropped instead.
-    if (call != null && (call is! String || !isCallId(call))) return null;
+    // Absent or malformed: no call, so the event is dropped. Calling is v2-only
+    // (design 22), so absence no longer means "v1", and a malformed id read as
+    // absent was once a wildcard over every call in the room (Tesla, PR #210
+    // v2 round 1).
+    final call = CallRef.tryParse(event['call']);
+    if (call == null) return null;
     return SystemCallAction(
       kind: kind,
       channelId: channelId,
+      call: call,
       origin: origin is String && origin.isNotEmpty ? origin : null,
-      // Only a canonical id is an id: anything else is treated as absent
-      // (v1), never as a key that could match something by accident.
-      callId: call as String?,
     );
   }
 
   @override
-  Future<void> end(String channelId, {String? callId}) async {
+  Future<void> end(String channelId, CallRef call) =>
+      _invoke('endSystemCall', channelId, call);
+
+  @override
+  Future<void> callStarted(String channelId, CallRef call) =>
+      _invoke('callStarted', channelId, call);
+
+  Future<void> _invoke(String method, String channelId, CallRef call) async {
     try {
-      await _control.invokeMethod<void>('endSystemCall', {
+      await _control.invokeMethod<void>(method, {
         'channel': channelId,
-        if (callId != null) 'call': callId,
+        'call': call.id,
       });
     } on MissingPluginException {
       // An older native half, or a platform that never registered the channel.
@@ -148,3 +163,15 @@ const kSystemCallControlChannel = 'cc.imagineering.aikoChatApp/call/control';
 /// — so it is pinned across the boundary by
 /// `system_call_channel_contract_test.dart` rather than by this comment.
 const Duration kSystemCallRingTrust = Duration(seconds: 120);
+
+/// How long a call the system UI ended stays ended on this device — the
+/// tombstone (design 22 v4.1).
+///
+/// **2 × the longest an invitation can wait in a push provider**, so no
+/// redelivery of a call's invite can outlive its tombstone. The island's
+/// invite lifetimes (PR #192): FCM and APNs VoIP both
+/// `push_result.RING_CEILING_SECONDS` (30s), APNs alert
+/// `apns._ALERT_EXPIRATION_SECONDS` (60s, the max). So 2 × 60s. Pinned
+/// across Dart, Kotlin and Swift by `system_call_channel_contract_test.dart`.
+/// If the island moves either constant (claude-tasks#4233), this moves.
+const Duration kCallTombstoneTtl = Duration(seconds: 120);

@@ -158,7 +158,7 @@ class _RingBanner extends ConsumerWidget {
     // THIS call by id, not the channel: the system ring for a newer call on the
     // same channel must survive this invitation's Ignore/Answer.
     if (bridge != null) {
-      unawaited(bridge.end(invite.channelId, callId: invite.callId));
+      unawaited(bridge.end(invite.channelId, invite.call));
     }
   }
 
@@ -197,7 +197,7 @@ class _RingBanner extends ConsumerWidget {
             .read(incomingRingProvider.notifier)
             .stopRinging(RingStopCause.answeredOverSpentCall);
         _endSystemCall(ref, invite);
-        pushCallOn(router, invite.channelId, callId: invite.callId);
+        pushCallOn(router, invite.channelId, call: invite.call);
       });
       return;
     }
@@ -212,10 +212,6 @@ class _RingBanner extends ConsumerWidget {
     // Router in `MaterialApp.router`'s builder, so `context.push` would throw
     // `No GoRouter found in context` (cage-match #139 — the feature's primary
     // button was dead until `ring_overlay_test.dart` pressed it).
-    pushCallOn(
-      ref.read(routerProvider),
-      invite.channelId,
-      callId: invite.callId,
-    );
+    pushCallOn(ref.read(routerProvider), invite.channelId, call: invite.call);
   }
 }

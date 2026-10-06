@@ -30,14 +30,14 @@ void main() {
     test('the valid invite parses to its id', () {
       expect(
         parseCallBody(kValidInvite),
-        const CallBody(CallBodyKind.invite, kGoldenId),
+        CallBody(CallBodyKind.invite, CallRef(kGoldenId)),
       );
     });
 
     test('the valid end parses to the SAME id', () {
       expect(
         parseCallBody(kValidEnd),
-        const CallBody(CallBodyKind.end, kGoldenId),
+        CallBody(CallBodyKind.end, CallRef(kGoldenId)),
       );
     });
 
@@ -48,13 +48,13 @@ void main() {
     }
 
     test('the builders produce the golden bytes exactly', () {
-      expect(callInviteBodyV2(kGoldenId), kValidInvite);
-      expect(callEndBodyV2(kGoldenId), kValidEnd);
+      expect(callInviteBodyV2(CallRef(kGoldenId)), kValidInvite);
+      expect(callEndBodyV2(CallRef(kGoldenId)), kValidEnd);
     });
   });
 
-  group('v1 is recognised forever, with no identity', () {
-    test('both v1 sentinels parse, callId null', () {
+  group('v1 is recognised forever — as history, never a call', () {
+    test('both v1 sentinels parse, with no call (design 22 v2.0)', () {
       expect(
         parseCallBody(kCallInviteBodyV1),
         const CallBody(CallBodyKind.invite, null),
@@ -81,9 +81,9 @@ void main() {
   group('minting', () {
     test('every minted id is canonical — 1000 draws', () {
       for (var i = 0; i < 1000; i++) {
-        final id = mintCallId();
-        expect(isCallId(id), isTrue, reason: id);
-        expect(parseCallBody(callInviteBodyV2(id))?.callId, id);
+        final call = mintCall();
+        expect(isCallId(call.id), isTrue, reason: call.id);
+        expect(parseCallBody(callInviteBodyV2(call))?.call, call);
       }
     });
 
@@ -94,9 +94,28 @@ void main() {
       expect(mintCallId(random: _Fixed(255)), '7${'Z' * 25}');
     });
 
-    test('builders refuse a non-canonical id rather than emit a non-call', () {
-      expect(() => callInviteBodyV2('01jabc'), throwsArgumentError);
-      expect(() => callEndBodyV2('8${'0' * 25}'), throwsArgumentError);
+    test(
+      'a CallRef refuses a non-canonical id, so no builder can emit one',
+      () {
+        expect(() => CallRef('01jabc'), throwsArgumentError);
+        expect(() => CallRef('8${'0' * 25}'), throwsArgumentError);
+        expect(CallRef.tryParse('01jabc'), isNull);
+        expect(CallRef.tryParse(42), isNull);
+        expect(CallRef.tryParse(kGoldenId), CallRef(kGoldenId));
+      },
+    );
+  });
+
+  group('CallRef (design 22 v2.1)', () {
+    test('equality is the id alone', () {
+      expect(CallRef(kGoldenId), CallRef(kGoldenId));
+      expect(CallRef(kGoldenId).hashCode, CallRef(kGoldenId).hashCode);
+      expect(CallRef(kGoldenId) == CallRef('0' * 26), isFalse);
+    });
+
+    test('oneChannelPerCall is the single channel policy', () {
+      expect(oneChannelPerCall('dm:a:b', 'dm:a:b'), isTrue);
+      expect(oneChannelPerCall('dm:a:b', 'dm:c:d'), isFalse);
     });
   });
 }

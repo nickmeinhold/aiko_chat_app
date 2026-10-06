@@ -6,6 +6,8 @@ import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'call_fixtures.dart';
+
 /// The ring's admission door (#2808). A ring is the highest-privilege message in
 /// the app — it lights up a device and offers to turn on the camera — so every
 /// refusal it makes gets its own test, and the sentinel that will live in
@@ -34,7 +36,7 @@ void main() {
   Message invite({
     String from = robin,
     String channelId = 'dm:aaa:bbb',
-    String body = kCallInviteBody,
+    String body = kTestInviteBody,
     Duration age = const Duration(seconds: 1),
     bool? cryptoValid = true,
     bool withOrigin = true,
@@ -78,7 +80,7 @@ void main() {
     id: '01M0GS7FDWBVQ31950B1PTV2DX',
     channelId: 'dm:aaa:bbb',
     sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
-    body: kCallEndBody,
+    body: kTestEndBody,
     replyToId: target,
     createdAt: now,
     origin: signedAt(now, key: key),
@@ -237,7 +239,7 @@ void main() {
         id: '01M0GS7FDWBVQ31950B1PTV2DX',
         channelId: 'dm:aaa:bbb',
         sender: const MessageSender(userId: null, kind: SenderKind.human),
-        body: kCallEndBody,
+        body: kTestEndBody,
         replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
         createdAt: now,
         origin: signedAt(now),
@@ -255,33 +257,43 @@ void main() {
       expect(RingRefusal.endMissingAuthor.refusedAnAttempt, isTrue);
     });
 
-    test(
-      'a hangup NAMING NO CALL is observable — a bell may still be ringing',
-      () {
-        // The nastier of the two: it could never stop any ring, so the caller
-        // believes the call is over while the callee's handset is still going.
-        final noTarget = Message(
-          clientTempId: 'e1',
-          id: '01M0GS7FDWBVQ31950B1PTV2DX',
-          channelId: 'dm:aaa:bbb',
-          sender: const MessageSender(userId: robin, kind: SenderKind.human),
-          body: kCallEndBody,
-          createdAt: now,
-          origin: signedAt(now),
-          originCryptoValid: true,
-          deliveryState: DeliveryState.sent,
-        );
-        expect(
-          admitCallEnd(noTarget, meUserId: me, consent: RingConsent.none),
-          isA<CallEndRefused>().having(
-            (r) => r.reason,
-            'reason',
-            RingRefusal.endMissingTarget,
-          ),
-        );
-        expect(RingRefusal.endMissingTarget.refusedAnAttempt, isTrue);
-      },
-    );
+    test('a v1 call body is NAMED at both gates — history, never a call', () {
+      // Design 22 v2.0: no store build ever placed a v1 call, so a v1 body is
+      // history. It is refused at both doors with its own reason, and the
+      // refusal is recorded (somebody did try to reach this handset).
+      final v1Invite = invite(body: kCallInviteBody);
+      final v1End = Message(
+        clientTempId: 'e1',
+        id: '01M0GS7FDWBVQ31950B1PTV2DX',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(userId: robin, kind: SenderKind.human),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: now,
+        origin: signedAt(now),
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(refusal(v1Invite), RingRefusal.v1Call);
+      expect(
+        admitCallEnd(v1End, meUserId: me, consent: RingConsent.none),
+        isA<CallEndRefused>().having(
+          (r) => r.reason,
+          'reason',
+          RingRefusal.v1Call,
+        ),
+      );
+      expect(RingRefusal.v1Call.refusedAnAttempt, isTrue);
+    });
+
+    test('a forged v1 invite is still named by its SECURITY fault first', () {
+      // v1Call is the LAST clause of admitRing, so an unsigned v1 body reports
+      // `unverifiedOrigin`, never the quieter `v1Call`.
+      expect(
+        refusal(invite(body: kCallInviteBody, cryptoValid: null)),
+        RingRefusal.unverifiedOrigin,
+      );
+    });
 
     test('each gate produces EXACTLY its own reasons — driven, not counted', () {
       // REPLACES a roster with a graph (Tesla, round 2, #3591). The first version
@@ -306,6 +318,7 @@ void main() {
         invite(withOrigin: false), // cryptoValid true, origin absent
         invite(hasAccount: false),
         invite(kind: SenderKind.llm),
+        invite(body: kCallInviteBody), // v1: history, never a call
         invite(),
       ]) {
         for (final blocked in [
@@ -330,7 +343,7 @@ void main() {
           clientTempId: 'm1',
           channelId: 'dm:aaa:bbb',
           sender: const MessageSender(userId: robin, kind: SenderKind.human),
-          body: kCallInviteBody,
+          body: kTestInviteBody,
           createdAt: now,
           origin: signedAt(now),
           originCryptoValid: true,
@@ -354,7 +367,7 @@ void main() {
 
       final producedByStop = <RingRefusal>{};
       Message end({
-        String body = kCallEndBody,
+        String body = kTestEndBody,
         String? from = robin,
         String? target = '01M0GS7FDWBVQ31950B1PTV2DW',
         bool? cryptoValid = true,
@@ -376,6 +389,7 @@ void main() {
         end(body: 'hello'),
         end(from: null),
         end(target: null),
+        end(body: kCallEndBody), // v1: history, never a call
         end(cryptoValid: null),
         end(withOrigin: false), // cryptoValid true, origin absent
         end(kind: SenderKind.llm),
@@ -621,7 +635,7 @@ void main() {
           kind: SenderKind.human,
           label: 'Robin',
         ),
-        body: kCallInviteBody,
+        body: kTestInviteBody,
         createdAt: now, // island says "just now"
         origin: signedAt(now.subtract(const Duration(days: 7))), // truth
         originCryptoValid: true,
@@ -1022,13 +1036,15 @@ void main() {
         // rather than the id alone (call_invite.dart). Both the live path and
         // the memory path run it, so this pins the property both share.
         final ringInA = CallInvite(
+          call: kTestCall,
           inviteId: 'c-1',
           islandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
           channelId: here,
           from: const MessageSender(userId: 'agent', kind: SenderKind.llm),
           startedAt: now,
         );
-        const endFromB = CallEnd(
+        final endFromB = CallEnd(
+          call: kTestCall,
           targetIslandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
           fromUserId: 'agent',
           channelId: elsewhere,
@@ -1043,7 +1059,8 @@ void main() {
         );
         expect(
           endsInvite(
-            const CallEnd(
+            CallEnd(
+              call: kTestCall,
               targetIslandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
               fromUserId: 'agent',
               channelId: here,
@@ -1111,7 +1128,7 @@ void main() {
       String from = robin,
       String? replyTo = '01M0GS7FDWBVQ31950B1PTV2DW',
       String channelId = 'dm:aaa:bbb',
-      String body = kCallEndBody,
+      String body = kTestEndBody,
       bool? cryptoValid = true,
       bool withOrigin = true,
     }) => Message(
@@ -1196,7 +1213,7 @@ void main() {
         id: 'e1',
         channelId: 'dm:aaa:bbb',
         sender: const MessageSender(kind: SenderKind.human, label: 'ghost'),
-        body: kCallEndBody,
+        body: kTestEndBody,
         replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
         createdAt: now,
         origin: signedAt(now),
@@ -1230,7 +1247,7 @@ void main() {
         id: 'e1',
         channelId: 'dm:aaa:bbb',
         sender: const MessageSender(userId: robin, kind: SenderKind.robot),
-        body: kCallEndBody,
+        body: kTestEndBody,
         replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
         createdAt: now,
         origin: signedAt(now),
@@ -1267,23 +1284,22 @@ void main() {
       expect(stops(end(from: me)), isFalse);
     });
 
-    test('the end must name the SERVER id — a client_msg_id is a frame the '
-        'gateway REFUSES outright', () {
-      // Found live, not by review: `reply_to` is an FK onto `messages.id`, so a
-      // frame carrying a client_msg_id there comes back `no_reply_target` and
-      // the hangup never leaves the device — silently, because announcing it is
-      // best-effort. Both ids are opaque 26-char strings, so nothing but the
-      // real island could tell them apart.
-      expect(stops(end(replyTo: 'm1')), isFalse);
+    test('reply_to does not name the call — the body does (call/2)', () {
+      // The binding used to be the signed reply_to, an FK onto the invite's
+      // server id. Under call/2 the call id inside the signed body is the
+      // binding, so reply_to is threading only: present, absent or pointing
+      // anywhere, it neither creates nor breaks the match.
+      expect(stops(end(replyTo: 'm1')), isTrue);
+      expect(stops(end(replyTo: null)), isTrue);
       expect(stops(end(replyTo: '01M0GS7FDWBVQ31950B1PTV2DW')), isTrue);
     });
 
     test('an end for a DIFFERENT call does not stop this one', () {
       // The double-call race: hang up, ring again immediately, and the first
-      // end must not reach through and kill the second ring. The signed replyTo
-      // is what makes the end about ONE call.
-      expect(stops(end(replyTo: 'some-other-invite')), isFalse);
-      expect(stops(end(replyTo: null)), isFalse);
+      // end must not reach through and kill the second ring. The call id in
+      // the signed body is what makes the end about ONE call.
+      expect(stops(end(body: kOtherEndBody)), isFalse);
+      expect(stops(end(body: kTestEndBody)), isTrue, reason: 'control');
     });
 
     test('an end in a different channel does not stop this ring', () {
@@ -1293,11 +1309,11 @@ void main() {
 
   // ---- call/2: the call has an identity (design 21 v2, island design 12 D1) --
   group('call/2 — a call is named by its id, not its channel', () {
-    const idA = '01JABCDEFGHJKMNPQRSTVWXYZ0';
-    const idB = '7ZZZZZZZZZZZZZZZZZZZZZZZZZ';
+    final callA = CallRef('01JABCDEFGHJKMNPQRSTVWXYZ0');
+    final callB = CallRef('7ZZZZZZZZZZZZZZZZZZZZZZZZZ');
 
     Message v2End(
-      String id, {
+      CallRef call, {
       String from = robin,
       String? replyTo,
       String channelId = 'dm:aaa:bbb',
@@ -1310,7 +1326,7 @@ void main() {
         kind: SenderKind.human,
         label: 'Robin',
       ),
-      body: callEndBodyV2(id),
+      body: callEndBodyV2(call),
       replyToId: replyTo,
       createdAt: now,
       origin: signedAt(now),
@@ -1327,110 +1343,68 @@ void main() {
       CallEndRefused() => null,
     };
 
-    test('a v2 invite is admitted CARRYING its id', () {
-      final got = admit(invite(body: callInviteBodyV2(idA)));
+    test('an invite is admitted CARRYING its call', () {
+      final got = admit(invite(body: callInviteBodyV2(callA)));
       expect(got, isNotNull);
-      expect(got!.callId, idA);
-      expect(got.endKey, idA);
+      expect(got!.call, callA);
     });
 
-    test('a v1 invite is admitted with NO id, keyed by its island id', () {
-      final got = admit(invite())!;
-      expect(got.callId, isNull);
-      expect(got.endKey, got.islandMsgId);
-    });
-
-    test('a v2 end needs NO reply_to — its body names the call', () {
+    test('an end needs NO reply_to — its body names the call', () {
       // The misdial path: the hangup goes out before the invite is acked, so
-      // there is no island id to reply to yet. v1 would refuse this.
-      final end = admitEnd(v2End(idA));
+      // there is no island id to reply to yet.
+      final end = admitEnd(v2End(callA));
       expect(end, isNotNull);
-      expect(end!.callId, idA);
+      expect(end!.call, callA);
       expect(end.targetIslandMsgId, isNull);
-      expect(end.key, idA);
     });
 
-    test('a v1 end with no reply_to is still refused — it names nothing', () {
-      final m = callEnd();
-      final noTarget = Message(
-        clientTempId: m.clientTempId,
-        id: m.id,
-        channelId: m.channelId,
-        sender: m.sender,
-        body: kCallEndBody,
-        createdAt: m.createdAt,
-        origin: m.origin,
-        originCryptoValid: true,
-        deliveryState: DeliveryState.sent,
-      );
-      expect(
-        admitCallEnd(
-          noTarget,
-          meUserId: me,
-          consent: RingConsent.inChannel(
-            channelId: m.channelId,
-            keys: const {},
-          ),
-        ),
-        isA<CallEndRefused>().having(
-          (r) => r.reason,
-          'reason',
-          RingRefusal.endMissingTarget,
-        ),
-      );
+    test('an end ends ITS call — and not another call on the same channel', () {
+      // The whole class design 21 is about: one channel, two calls.
+      final a = admit(invite(body: callInviteBodyV2(callA)))!;
+      final b = admit(invite(body: callInviteBodyV2(callB)))!;
+      final endA = admitEnd(v2End(callA))!;
+      expect(endsInvite(endA, a), isTrue);
+      expect(endsInvite(endA, b), isFalse);
     });
 
-    test(
-      'a v2 end ends ITS call — and not another call on the same channel',
-      () {
-        // The whole class design 21 is about: one channel, two calls.
-        final callA = admit(invite(body: callInviteBodyV2(idA)))!;
-        final callB = admit(invite(body: callInviteBodyV2(idB)))!;
-        final endA = admitEnd(v2End(idA))!;
-        expect(endsInvite(endA, callA), isTrue);
-        expect(endsInvite(endA, callB), isFalse);
-      },
-    );
-
-    test('a v2 end from someone else does not end the call', () {
-      final call = admit(invite(body: callInviteBodyV2(idA)))!;
-      final stranger = admitEnd(v2End(idA, from: 'mallory-key'))!;
+    test('an end from someone else does not end the call', () {
+      final call = admit(invite(body: callInviteBodyV2(callA)))!;
+      final stranger = admitEnd(v2End(callA, from: 'mallory-key'))!;
       expect(endsInvite(stranger, call), isFalse);
     });
 
-    test('a v2 end in another channel does not end the call', () {
-      final call = admit(invite(body: callInviteBodyV2(idA)))!;
-      final elsewhere = admitEnd(v2End(idA, channelId: 'dm:aaa:ccc'))!;
+    test('the SAME id in another channel ends nothing (oneChannelPerCall)', () {
+      // Design 22 v4.2: the channel is checked at the door, before identity.
+      final call = admit(invite(body: callInviteBodyV2(callA)))!;
+      final elsewhere = admitEnd(v2End(callA, channelId: 'dm:aaa:ccc'))!;
       expect(endsInvite(elsewhere, call), isFalse);
     });
 
-    test('a v2 end never ends a v1 invite, even replying to its island id', () {
-      // A v1 invite has no id for a v2 end to name; reply_to is not how v2
-      // speaks, so it cannot be used to reach across versions.
-      final v1 = admit(invite())!;
-      final end = admitEnd(v2End(idA, replyTo: v1.islandMsgId))!;
-      expect(endsInvite(end, v1), isFalse);
-    });
-
-    test('a v1 end never ends a v2 invite, even replying to its island id', () {
-      // Versions match exactly in BOTH directions. This matched once, while
-      // RingController stored it under the island id and looked the v2 invite
-      // up under its call id — one event, two outcomes by arrival order
-      // (Tesla + Kelvin, PR #210 v2 round 1).
-      final v2 = admit(invite(body: callInviteBodyV2(idA)))!;
-      final v1End = admitEnd(callEnd())!;
-      expect(v1End.targetIslandMsgId, v2.islandMsgId, reason: 'precondition');
-      expect(endsInvite(v1End, v2), isFalse);
-    });
-
-    test('a v1 end still ends a v1 invite by reply_to', () {
-      final v1 = admit(invite())!;
-      final end = admitEnd(callEnd())!;
-      expect(endsInvite(end, v1), isTrue);
+    test('a v1 end is never admitted, so it can end nothing', () {
+      // Replaces four cross-version tests (v1 end vs v2 invite and back):
+      // with v1 never admitted, there is no second version to cross.
+      expect(
+        admitEnd(callEnd(target: '01M0GS7FDWBVQ31950B1PTV2DW')),
+        isNotNull,
+        reason: 'positive control: the fixture end IS admitted as v2',
+      );
+      final v1 = Message(
+        clientTempId: 'e3',
+        id: 'e3',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(userId: robin, kind: SenderKind.human),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: now,
+        origin: signedAt(now),
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(admitEnd(v1), isNull);
     });
 
     test('a v2 end renders as a hangup without reply_to (named tradeoff)', () {
-      expect(isRenderableCallEnd(v2End(idA), isMine: false), isTrue);
+      expect(isRenderableCallEnd(v2End(callA), isMine: false), isTrue);
     });
 
     test(

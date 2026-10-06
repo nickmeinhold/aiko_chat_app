@@ -14,6 +14,7 @@ import '../application/ring_telemetry.dart';
 import '../data/call_session.dart';
 import '../data/system_call_bridge.dart';
 import '../domain/call_connection_state.dart';
+import '../domain/call_wire.dart' show CallRef;
 import 'media_confidentiality_chip.dart';
 
 /// Single door for opening a call (#18). Rapid double-taps — or a tap while a
@@ -47,33 +48,21 @@ bool get isCallRouteOpen => _callLaunchInFlight;
 /// has to be told the truth about which of the two conditions refused it.
 bool get isInLiveCall => _callLaunchInFlight && !_mountedCallEnded;
 
-/// An invitation THIS device sent: the two ids its hangup needs.
+/// What a `/call/:channelId` navigation carries beyond the room: WHICH call,
+/// and whether this device placed it (only the caller announces the hangup).
 ///
-/// [inviteId] is the invite's signed clientMsgId (the v1 hangup waits for its
-/// island id to reply to). [callId] is the v2 call identity in the invite's
-/// signed body, which the hangup names directly, without waiting for any ack.
-///
-/// [inviteId] is null when the invite's send failed AFTER the frame may have
-/// left (`sendMessage` reports both as null): a v2 hangup is still owed, since
-/// it needs nothing from the ack (Tesla, PR #210 v2 round 1).
-typedef OutgoingCall = ({String? inviteId, String? callId});
-
-/// What a `/call/:channelId` navigation carries beyond the room: the outgoing
-/// call's ids (if we placed it) or the incoming call's id (if we answered it).
-/// Either way the screen knows WHICH call it is, so its teardown ends that
-/// call and no other on the channel.
-typedef CallRouteExtra = ({OutgoingCall? outgoing, String? callId});
+/// Required, never null: a joined room is a call, and a call has a [CallRef]
+/// (design 22 v2.5). A navigation without one — a bare deep link — is
+/// redirected home by the router and joins nothing.
+typedef CallRouteExtra = ({CallRef call, bool outgoing});
 
 Future<void> pushCall(
   BuildContext context,
   String channelId, {
-  OutgoingCall? outgoing,
-}) => pushCallOn(GoRouter.of(context), channelId, outgoing: outgoing);
-
-/// The call id a route names — outgoing or incoming. Null for a v1 call or a
-/// deep link (which has no call of ours).
-String? callIdOf(CallRouteExtra? extra) =>
-    extra?.outgoing?.callId ?? extra?.callId;
+  required CallRef call,
+  bool outgoing = false,
+}) =>
+    pushCallOn(GoRouter.of(context), channelId, call: call, outgoing: outgoing);
 
 /// Router-first form of [pushCall], for callers that have a [GoRouter] but no
 /// in-scope context.
@@ -89,13 +78,13 @@ String? callIdOf(CallRouteExtra? extra) =>
 Future<void> pushCallOn(
   GoRouter router,
   String channelId, {
-  OutgoingCall? outgoing,
-  String? callId,
+  required CallRef call,
+  bool outgoing = false,
 }) async {
   if (_callLaunchInFlight) return;
   _callLaunchInFlight = true;
   try {
-    final CallRouteExtra extra = (outgoing: outgoing, callId: callId);
+    final CallRouteExtra extra = (call: call, outgoing: outgoing);
     await router.push('/call/$channelId', extra: extra);
   } finally {
     _callLaunchInFlight = false;
@@ -116,7 +105,7 @@ Future<void> pushCallOn(
 Future<void> pushCallOverSpent(
   GoRouter router,
   String channelId, {
-  String? callId,
+  required CallRef call,
 }) async {
   if (isCallRouteOpen && !isInLiveCall) {
     if (router.canPop()) router.pop();
@@ -124,7 +113,7 @@ Future<void> pushCallOverSpent(
     // resolves, which is after this turn.
     await Future<void>.delayed(Duration.zero);
   }
-  await pushCallOn(router, channelId, callId: callId);
+  await pushCallOn(router, channelId, call: call);
 }
 
 @visibleForTesting
@@ -138,18 +127,12 @@ void resetCallLaunchGuard() {
 @visibleForTesting
 void debugMarkMountedCallEnded() => _mountedCallEnded = true;
 
-/// The `/call/:channelId` route's screen for whatever navigation [extra] it
-/// arrived with. Only our own navigations carry a [CallRouteExtra]; anything
-/// else — a deep link, a restored route — names no call, and must not end one.
-CallScreen callScreenFor(String channelId, Object? extra) {
-  final route = extra is CallRouteExtra ? extra : null;
-  return CallScreen(
-    channelId: channelId,
-    outgoing: route?.outgoing,
-    callId: route?.callId,
-    namesACall: route != null,
-  );
-}
+/// The `/call/:channelId` route's redirect: a navigation that names no call
+/// (a bare or crafted deep link) goes home and joins nothing. A joined room
+/// that no event can address was the "hot mic with no name" (Tesla, design 22
+/// temper round 1).
+String? callRouteRedirect(Object? extra) =>
+    extra is CallRouteExtra ? null : '/';
 
 /// Full-screen A/V call for a channel (handoff #2726). Owns a [CallSession] for
 /// its lifetime; the room is whatever the island's minted token names (it is
@@ -159,31 +142,19 @@ class CallScreen extends ConsumerStatefulWidget {
   const CallScreen({
     super.key,
     required this.channelId,
-    this.outgoing,
-    this.callId,
-    this.namesACall = true,
+    required this.call,
+    this.outgoing = false,
   });
 
   final String channelId;
 
-  /// The signed `clientMsgId` of the invitation that opened this call, when we
-  /// are the party that sent it. Leaving announces the end of THAT call.
-  ///
-  /// Null for every other way in — answering someone else's ring, a deep link, a
-  /// restored route. Only the caller ends the call it started: an end from
-  /// anyone else names no live invitation and would be refused anyway
-  /// ([admitCallEnd]), so sending one would be a signed row saying nothing.
-  final OutgoingCall? outgoing;
+  /// The call this screen is in. Its teardown ends exactly this call.
+  final CallRef call;
 
-  /// The incoming call's id, when this screen was opened by answering one.
-  final String? callId;
-
-  /// False for a deep-linked or restored `/call`, which carries no call of
-  /// ours. Its [callId] is null for a different reason than a v1 call's, and
-  /// the bridge reads a null id as "the v1 call": closing such a screen ended
-  /// a v1 system call on the channel that this screen never had. (Tesla, PR
-  /// #210 v2 round 2.)
-  final bool namesACall;
+  /// Whether this device placed the call. Only the caller announces the end:
+  /// an end from anyone else would be refused at the peer ([admitCallEnd]),
+  /// so sending one would be a signed row saying nothing.
+  final bool outgoing;
 
   @override
   ConsumerState<CallScreen> createState() => _CallScreenState();
@@ -228,6 +199,14 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // later call never inherits a stale `ended`.
     _mountedCallEnded = false;
     _session.state.addListener(_trackLiveness);
+    // THIS CALL IS LIVE, as far as the native half is concerned: it refuses a
+    // second system answer from here until `end` (design 22 v4.2). Outgoing
+    // and answered calls alike, because the native half otherwise knew only
+    // the calls IT answered, and only for 120s (design 22 temper round 3).
+    unawaited(
+      _systemCall?.callStarted(widget.channelId, widget.call) ??
+          Future<void>.value(),
+    );
     unawaited(_session.connect());
   }
 
@@ -250,13 +229,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // The screen is the wrong owner for work that may have to outlive it: the
     // invitation may not be acked yet (so it has no id the wire can name) and
     // this widget's repository may be replaced mid-ring. See CallEndAnnouncer.
-    final outgoing = widget.outgoing;
-    if (outgoing != null) {
-      _endAnnouncer.announce(
-        channelId: widget.channelId,
-        inviteId: outgoing.inviteId,
-        callId: outgoing.callId,
-      );
+    if (widget.outgoing) {
+      _endAnnouncer.announce(channelId: widget.channelId, call: widget.call);
     }
     // TELL THE OS THE CALL IS OVER — unconditionally, from the one place every
     // exit already lands in (claude-tasks#4420).
@@ -268,19 +242,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // whether THIS call came from a ring — is a second copy of a fact the
     // native side already holds, and the failure of getting it wrong is a
     // phantom connected call in the system UI that outlives the app.
-    if (!widget.namesACall) {
-      super.dispose();
-      return;
-    }
     unawaited(
-      _systemCall?.end(
-            widget.channelId,
-            callId: callIdOf((
-              outgoing: widget.outgoing,
-              callId: widget.callId,
-            )),
-          ) ??
-          Future<void>.value(),
+      _systemCall?.end(widget.channelId, widget.call) ?? Future<void>.value(),
     );
     super.dispose();
   }

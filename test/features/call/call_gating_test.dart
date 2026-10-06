@@ -9,13 +9,14 @@ import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/moderation/presentation/message_actions.dart';
 import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
-    show callScreenFor;
+    show callRouteRedirect;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../support/test_helpers.dart';
+import 'call_fixtures.dart';
 
 /// Calling is gated OFF for the store build (`app/feature_flags.dart`): it works,
 /// but it does not yet disclose that media crosses the island's SFU in the clear,
@@ -60,6 +61,7 @@ void main() {
   );
 
   final invite = CallInvite(
+    call: kTestCall,
     inviteId: 'inv-1',
     islandMsgId: 'srv-1',
     channelId: 'dm:me:robin',
@@ -230,18 +232,18 @@ void main() {
       );
     });
 
-    test('a deep-linked /call names no call — it never ends a v1 one', () {
-      // A null call id means "the v1 call" to the bridge, and a deep link's
-      // id is null for a different reason: it has no call at all. Without the
-      // split, closing it ended a v1 system call on that channel. (Tesla, PR
-      // #210 v2 round 2.)
-      expect(callScreenFor('dm:a:b', null).namesACall, isFalse);
-      expect(callScreenFor('dm:a:b', 'junk').namesACall, isFalse);
-      // A v1 answer IS a call of ours, with a null id that means v1.
-      final v1 = callScreenFor('dm:a:b', (outgoing: null, callId: null));
-      expect(v1.namesACall, isTrue);
-      expect(v1.callId, isNull);
-    });
+    test(
+      'a /call with no call of ours is redirected home — it joins nothing',
+      () {
+        // Design 22 v2.5: a joined room is a call, and a call has a CallRef. A
+        // bare or crafted deep link names none, so it never reaches CallScreen:
+        // no room is joined that no event could address (Tesla, design 22
+        // temper round 1).
+        expect(callRouteRedirect(null), '/');
+        expect(callRouteRedirect('junk'), '/');
+        expect(callRouteRedirect((call: kTestCall, outgoing: false)), isNull);
+      },
+    );
 
     test('gated ON: /call is registered', () {
       // Must-fail arm: without it, a typo in the path string above would make

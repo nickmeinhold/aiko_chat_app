@@ -13,6 +13,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'call_fixtures.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -51,36 +53,39 @@ void main() {
 
     test('a well-formed event becomes a typed action', () async {
       final out = await decoded([
-        {'action': 'answered', 'channel': 'dm:aaa:bbb'},
-        {'action': 'ended', 'channel': 'dm:aaa:bbb'},
+        {'action': 'answered', 'channel': 'dm:aaa:bbb', 'call': kTestCallId},
+        {'action': 'ended', 'channel': 'dm:aaa:bbb', 'call': kTestCallId},
       ]).toList();
       expect(out, [
-        const SystemCallAction(
+        SystemCallAction(
           kind: SystemCallActionKind.answered,
           channelId: 'dm:aaa:bbb',
+          call: kTestCall,
         ),
-        const SystemCallAction(
+        SystemCallAction(
           kind: SystemCallActionKind.ended,
           channelId: 'dm:aaa:bbb',
+          call: kTestCall,
         ),
       ]);
     });
 
-    test('a canonical `call` rides; a MALFORMED one drops the event', () async {
-      // Read as null, a malformed id matched every v1 hold in the room — the
-      // wildcard the call id exists to remove (Tesla, PR #210 v2 round 1).
-      const id = '01JABCDEFGHJKMNPQRSTVWXYZ0';
+    test('an ABSENT or MALFORMED `call` drops the event (v2-only)', () async {
+      // Design 22: calling is v2-only, so a missing id no longer means "v1";
+      // it means no call. Read as absent, a malformed id once matched every
+      // hold in the room (Tesla, PR #210 v2 round 1).
       final out = await decoded([
-        {'action': 'answered', 'channel': 'c', 'call': id},
+        {'action': 'answered', 'channel': 'c', 'call': kTestCallId},
+        {'action': 'ended', 'channel': 'c'},
         {'action': 'ended', 'channel': 'c', 'call': 'nope'},
-        {'action': 'ended', 'channel': 'c', 'call': '${id}\n'},
+        {'action': 'ended', 'channel': 'c', 'call': '$kTestCallId\n'},
         {'action': 'ended', 'channel': 'c', 'call': 42},
       ]).toList();
       expect(out, [
-        const SystemCallAction(
+        SystemCallAction(
           kind: SystemCallActionKind.answered,
           channelId: 'c',
-          callId: id,
+          call: kTestCall,
         ),
       ]);
     });
@@ -98,15 +103,41 @@ void main() {
         {'action': 'answered', 'channel': 7}, // channel not a string
         {'channel': 'dm:aaa:bbb'}, // no action
         {'action': 'exploded', 'channel': 'dm:aaa:bbb'}, // unknown kind
-        {'action': 'ended', 'channel': 'dm:ccc:ddd'}, // the one good one
+        // the one good one
+        {'action': 'ended', 'channel': 'dm:ccc:ddd', 'call': kTestCallId},
       ]).toList();
       expect(out, [
-        const SystemCallAction(
+        SystemCallAction(
           kind: SystemCallActionKind.ended,
           channelId: 'dm:ccc:ddd',
+          call: kTestCall,
         ),
       ]);
     });
+
+    test(
+      'end and callStarted send {channel, call} on the control channel',
+      () async {
+        final calls = <MethodCall>[];
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+              const MethodChannel(kSystemCallControlChannel),
+              (c) async {
+                calls.add(c);
+                return null;
+              },
+            );
+        final bridge = NativeSystemCallBridge(
+          platformOverride: TargetPlatform.android,
+        );
+        await bridge.callStarted('dm:a:b', kTestCall);
+        await bridge.end('dm:a:b', kTestCall);
+        expect(calls.map((c) => c.method), ['callStarted', 'endSystemCall']);
+        for (final c in calls) {
+          expect(c.arguments, {'channel': 'dm:a:b', 'call': kTestCallId});
+        }
+      },
+    );
 
     test('a channel id needing percent-encoding survives the seam intact', () {
       // Pinned because the NAVIGATOR used to compare a reconstructed
@@ -115,9 +146,10 @@ void main() {
       // proving the id reaching the navigator is the raw one.
       const weird = 'dm:a b:é';
       expect(
-        const SystemCallAction(
+        SystemCallAction(
           kind: SystemCallActionKind.ended,
           channelId: weird,
+          call: kTestCall,
         ).channelId,
         weird,
       );

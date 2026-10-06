@@ -30,6 +30,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'call_fixtures.dart';
+
 void main() {
   setUp(resetCallLaunchGuard);
 
@@ -587,8 +589,8 @@ void main() {
   });
 
   // ---- v2: one channel, two calls (design 21 v2) ----------------------------
-  const callA = '01JABCDEFGHJKMNPQRSTVWXYZ0';
-  const callB = '7ZZZZZZZZZZZZZZZZZZZZZZZZZ';
+  final callA = CallRef('01JABCDEFGHJKMNPQRSTVWXYZ0');
+  final callB = CallRef('7ZZZZZZZZZZZZZZZZZZZZZZZZZ');
 
   testWidgets('an ENDED for another call on this channel keeps the answer', (
     tester,
@@ -599,10 +601,10 @@ void main() {
     await tester.pumpWidget(harness(session: _Session.restoring));
     await tester.pumpAndSettle();
 
-    bridge.emit(SystemCallActionKind.answered, channel, callId: callA);
-    bridge.emit(SystemCallActionKind.ended, channel, callId: callB);
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
+    bridge.emit(SystemCallActionKind.ended, channel, call: callB);
     await tester.pumpAndSettle();
-    ring.admit(channel, callId: callA);
+    ring.admit(channel, call: callA);
     auth.signIn(me);
     await tester.pumpAndSettle();
 
@@ -616,7 +618,7 @@ void main() {
     await tester.pumpAndSettle();
     bridge.emit(SystemCallActionKind.answered, channel); // v1: no id
     await tester.pumpAndSettle();
-    ring.admit(channel, callId: callA);
+    ring.admit(channel, call: callA);
     await tester.pumpAndSettle();
     expect(
       find.text('CALL $channel'),
@@ -628,10 +630,10 @@ void main() {
   testWidgets('an id-less ENDED does not drop a v2 hold', (tester) async {
     await tester.pumpWidget(harness(session: _Session.restoring));
     await tester.pumpAndSettle();
-    bridge.emit(SystemCallActionKind.answered, channel, callId: callA);
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
     bridge.emit(SystemCallActionKind.ended, channel); // v1-shaped
     await tester.pumpAndSettle();
-    ring.admit(channel, callId: callA);
+    ring.admit(channel, call: callA);
     auth.signIn(me);
     await tester.pumpAndSettle();
     expect(find.text('CALL $channel'), findsOneWidget);
@@ -641,9 +643,9 @@ void main() {
       'first system call, by id', (tester) async {
     await tester.pumpWidget(harness(admitted: null));
     await tester.pumpAndSettle();
-    bridge.emit(SystemCallActionKind.answered, channel, callId: callA);
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
     await tester.pumpAndSettle();
-    bridge.emit(SystemCallActionKind.answered, channel, callId: callB);
+    bridge.emit(SystemCallActionKind.answered, channel, call: callB);
     await tester.pumpAndSettle();
     expect(
       bridge.endedCalls,
@@ -653,15 +655,51 @@ void main() {
     expect(bridge.endedCalls, isNot(contains(callB)));
   });
 
+  testWidgets('a system ENDED is remembered as a tombstone for its call', (
+    tester,
+  ) async {
+    // Design 22 v4.2: a lock-screen decline before Flutter existed must never
+    // become a banner when the invitation arrives over the websocket.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.ended, channel, call: callA);
+    await tester.pumpAndSettle();
+    expect(ring.systemEnded, [callA]);
+  });
+
+  testWidgets('joining call A never silences the banner of call B', (
+    tester,
+  ) async {
+    // Tesla + Carnot, PR #210 v2 round 3: the join admitted by IDENTITY and
+    // then stopped whatever was ringing. A answered on the lock screen, B
+    // became the live banner while the session restored, and the join of A
+    // silenced B.
+    await tester.pumpWidget(
+      harness(session: _Session.restoring, admitted: null),
+    );
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
+    ring.admit(channel, call: callA);
+    await tester.pumpAndSettle();
+    ring.admit('dm:ccc:ddd', call: callB);
+    await tester.pumpAndSettle();
+
+    auth.signIn(me);
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL $channel'), findsOneWidget, reason: 'A joined');
+    expect(ring.state?.call, callB, reason: "B's banner still rings");
+  });
+
   testWidgets('an answer to call A never joins call B on the same channel', (
     tester,
   ) async {
     await tester.pumpWidget(harness(admitted: null));
     await tester.pumpAndSettle();
 
-    bridge.emit(SystemCallActionKind.answered, channel, callId: callA);
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
     await tester.pumpAndSettle();
-    ring.admit(channel, callId: callB);
+    ring.admit(channel, call: callB);
     await tester.pumpAndSettle();
     expect(
       find.text('CALL $channel'),
@@ -669,7 +707,7 @@ void main() {
       reason: 'admitted, but a DIFFERENT call — the answer was not for it',
     );
 
-    ring.admit(channel, callId: callA);
+    ring.admit(channel, call: callA);
     await tester.pumpAndSettle();
     expect(find.text('CALL $channel'), findsOneWidget);
   });
@@ -682,22 +720,39 @@ void main() {
 class _FakeBridge implements SystemCallBridge {
   final _controller = StreamController<SystemCallAction>.broadcast();
   final List<String> ended = [];
-  final List<String?> endedCalls = [];
+  final List<CallRef> endedCalls = [];
+  final List<CallRef> started = [];
 
-  void emit(SystemCallActionKind kind, String channelId, {String? callId}) =>
+  void emit(SystemCallActionKind kind, String channelId, {CallRef? call}) =>
       _controller.add(
-        SystemCallAction(kind: kind, channelId: channelId, callId: callId),
+        SystemCallAction(
+          kind: kind,
+          channelId: channelId,
+          call: call ?? _callOn(channelId),
+        ),
       );
 
   @override
   Stream<SystemCallAction> get actions => _controller.stream;
 
   @override
-  Future<void> end(String channelId, {String? callId}) async {
+  Future<void> end(String channelId, CallRef call) async {
     ended.add(channelId);
-    endedCalls.add(callId);
+    endedCalls.add(call);
+  }
+
+  @override
+  Future<void> callStarted(String channelId, CallRef call) async {
+    started.add(call);
   }
 }
+
+/// ONE DISTINCT CALL PER CHANNEL unless a test names one. Defaulting every
+/// emit and admission to one shared ref would silently make two calls on two
+/// channels the SAME call — and the tests below that are about two calls would
+/// then pass for the wrong reason.
+final Map<String, CallRef> _calls = {};
+CallRef _callOn(String channelId) => _calls.putIfAbsent(channelId, mintCall);
 
 /// The session has THREE states, not two, and the third is the one a cold start
 /// spends its first seconds in. Collapsing "still restoring" into "nobody is
@@ -752,9 +807,9 @@ class _FakeRing extends RingController {
   _FakeRing([this._initialChannel]);
   final String? _initialChannel;
 
-  static CallInvite inviteFor(String channelId, {String? callId}) => CallInvite(
-    callId: callId,
-    inviteId: 'inv-$channelId-${callId ?? 'v1'}',
+  static CallInvite inviteFor(String channelId, {CallRef? call}) => CallInvite(
+    call: call ?? _callOn(channelId),
+    inviteId: 'inv-$channelId-${(call ?? _callOn(channelId)).id}',
     islandMsgId: 'srv-$channelId',
     channelId: channelId,
     from: const MessageSender(
@@ -772,8 +827,21 @@ class _FakeRing extends RingController {
   @override
   void stopRinging(RingStopCause cause) => state = null;
 
+  @override
+  void stopRingingFor(CallRef call, RingStopCause cause) {
+    if (state?.call == call) state = null;
+  }
+
+  final List<CallRef> systemEnded = [];
+
+  @override
+  void noteSystemEnded(CallRef call) {
+    systemEnded.add(call);
+    stopRingingFor(call, RingStopCause.endedInSystemUi);
+  }
+
   /// `admitRing` accepted an invitation for [channelId] — the websocket
   /// delivered it and the signature checked out.
-  void admit(String channelId, {String? callId}) =>
-      state = inviteFor(channelId, callId: callId);
+  void admit(String channelId, {CallRef? call}) =>
+      state = inviteFor(channelId, call: call);
 }

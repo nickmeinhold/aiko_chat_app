@@ -15,6 +15,7 @@ import '../../chat/application/mute_controller.dart';
 import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../moderation/application/moderation_controller.dart';
+import '../data/system_call_bridge.dart' show kCallTombstoneTtl;
 import '../domain/answer_outcome.dart';
 import '../domain/call_invite.dart';
 import 'ring_telemetry.dart';
@@ -76,7 +77,18 @@ class RingController extends Notifier<CallInvite?> {
   /// `isDmChannelId` was deleted precisely BECAUSE channel-wide calls will put
   /// those ids in a shared room. A single "current" slot for a contested key is
   /// the same bug this file already fixed for `_live`.
-  final Map<String, List<({CallEnd end, DateTime at})>> _ended = {};
+  final Map<CallRef, List<({CallEnd end, DateTime at})>> _ended = {};
+
+  /// Calls the SYSTEM call UI has already ended on this device, and when: the
+  /// Dart half of the native tombstones (design 22 v4.2).
+  ///
+  /// A lock-screen decline can happen before Flutter exists. The invitation
+  /// then arrives over the websocket a few seconds later, still inside
+  /// [kCallInviteFreshness], and without this it rang as a banner for a call
+  /// the user had already declined (Tesla, design 22 temper round 3). Fed by
+  /// the navigator from every native `ended`, including the ones replayed on
+  /// listen. Lives [kCallTombstoneTtl], the native tombstone's own lifetime.
+  final Map<CallRef, DateTime> _systemEnded = {};
 
   /// The user this ring state belongs to; see the identity guard in [build].
   String? _identity;
@@ -93,6 +105,7 @@ class RingController extends Notifier<CallInvite?> {
       ends.removeWhere((e) => now.difference(e.at) > kCallInviteFreshness * 2);
     }
     _ended.removeWhere((_, ends) => ends.isEmpty);
+    _systemEnded.removeWhere((_, at) => now.difference(at) > kCallTombstoneTtl);
   }
 
   /// Re-publish the live invitation after a rebuild, re-arming its expiry with
@@ -221,7 +234,7 @@ class RingController extends Notifier<CallInvite?> {
         .consentIn(m.channelId);
     switch (admitCallEnd(m, meUserId: me, consent: consent)) {
       case CallEndAdmitted(:final end):
-        (_ended[end.key] ??= []).add((end: end, at: now));
+        (_ended[end.call] ??= []).add((end: end, at: now));
         final live = _live;
         if (live != null && endsInvite(end, live)) {
           stopRinging(RingStopCause.callerHungUp);
@@ -264,7 +277,7 @@ class RingController extends Notifier<CallInvite?> {
     // ring, so an at-least-once replay cannot ring either. Matched through the
     // SAME predicate the live path uses, so a remembered end can never suppress
     // a ring that an in-order end would not have.
-    final owed = _ended[invite.endKey];
+    final owed = _ended[invite.call];
     if (owed != null && owed.any((e) => endsInvite(e.end, invite))) {
       // Dead on arrival: its hangup got here first, so it never rings. `_live`
       // cannot be this invitation — it is only being admitted now, so the end
@@ -277,6 +290,13 @@ class RingController extends Notifier<CallInvite?> {
       // ANNOUNCED rather than silent: the gate said YES and the handset stays
       // quiet, which is the one shape this whole change exists to make
       // impossible to mistake for "nobody called" (Tesla, #3591 cage-match).
+      _telemetry.ringDeadOnArrival(invite.channelId);
+      return;
+    }
+    // Already ended in the system call UI on this device — declined on the
+    // lock screen before this invitation reached Dart. Same treatment as an
+    // owed hangup: it never rings.
+    if (_systemEnded.containsKey(invite.call)) {
       _telemetry.ringDeadOnArrival(invite.channelId);
       return;
     }
@@ -350,6 +370,25 @@ class RingController extends Notifier<CallInvite?> {
   /// that rang, was admitted, and died 1.4 seconds later left exactly one log
   /// line behind it (2026-09-20). A default value would let the next caller
   /// re-create that silence by omission.
+  /// Stop ringing [call], and only [call]. A no-op when a different call (or
+  /// none) is ringing.
+  ///
+  /// The navigator joins a call it admitted by identity, so its stop has to
+  /// name one too. Unkeyed, joining call A silenced call B whenever B had
+  /// become the live banner in between (Tesla + Carnot, PR #210 v2 round 3).
+  void stopRingingFor(CallRef call, RingStopCause cause) {
+    if (_live?.call == call) stopRinging(cause);
+  }
+
+  /// The system call UI ended [call] on this device. Remember it so its
+  /// invitation never rings late, and stop its banner if it is ringing now.
+  void noteSystemEnded(CallRef call) {
+    final now = DateTime.now().toUtc();
+    _forget(now);
+    _systemEnded[call] = now;
+    stopRingingFor(call, RingStopCause.endedInSystemUi);
+  }
+
   void stopRinging(RingStopCause cause) {
     // Logged BEFORE the state is torn down, so the channel is still nameable.
     // A stop with nothing live is a real and ordinary case (idempotent), and

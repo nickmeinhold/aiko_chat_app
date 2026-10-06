@@ -174,12 +174,19 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (ref.read(callingEnabledProvider))
         GoRoute(
           path: '/call/:channelId',
-          // `extra` carries the invitation's signed id so the leave can end THIS
-          // call by name. It is deliberately not a path/query parameter: it is
-          // meaningless to anyone but this navigation, and a deep-linked or
-          // restored /call has no invitation of ours to end — null, correctly.
-          builder: (_, s) =>
-              callScreenFor(s.pathParameters['channelId']!, s.extra),
+          // `extra` carries WHICH call (design 22). It is deliberately not a
+          // path/query parameter: it is meaningless to anyone but this
+          // navigation. A navigation without it — a bare or crafted deep link —
+          // names no call, so it is redirected home and joins nothing.
+          redirect: (_, s) => callRouteRedirect(s.extra),
+          builder: (_, s) {
+            final extra = s.extra! as CallRouteExtra;
+            return CallScreen(
+              channelId: s.pathParameters['channelId']!,
+              call: extra.call,
+              outgoing: extra.outgoing,
+            );
+          },
         ),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
       GoRoute(

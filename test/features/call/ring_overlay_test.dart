@@ -17,6 +17,8 @@ import 'package:aiko_chat_app/app/feature_flags.dart';
 import 'package:aiko_chat_app/app/router.dart';
 import 'package:go_router/go_router.dart';
 
+import 'call_fixtures.dart';
+
 /// The ring OVERLAY (#2808) — mounted in `MaterialApp.router`'s `builder`, which
 /// is a genuinely load-bearing placement choice: the banner must sit ABOVE the
 /// Navigator (so a call reaches any route) while still being INSIDE go_router's
@@ -26,6 +28,7 @@ void main() {
   setUp(resetCallLaunchGuard);
 
   final invite = CallInvite(
+    call: kTestCall,
     inviteId: 'inv-1',
     islandMsgId: 'srv-1',
     channelId: 'dm:aaa:bbb',
@@ -203,6 +206,7 @@ void main() {
     'an unnamed caller still renders as a person, never a blank row',
     (tester) async {
       final anon = CallInvite(
+        call: kOtherCall,
         inviteId: 'inv-2',
         islandMsgId: 'srv-2',
         channelId: 'dm:aaa:bbb',
@@ -284,16 +288,19 @@ void main() {
 /// Records what the app asked the platform call UI to do.
 class _FakeSystemCall implements SystemCallBridge {
   final List<String> ended = [];
-  final List<String?> endedCalls = [];
+  final List<CallRef> endedCalls = [];
 
   @override
   Stream<SystemCallAction> get actions => const Stream.empty();
 
   @override
-  Future<void> end(String channelId, {String? callId}) async {
+  Future<void> end(String channelId, CallRef call) async {
     ended.add(channelId);
-    endedCalls.add(callId);
+    endedCalls.add(call);
   }
+
+  @override
+  Future<void> callStarted(String channelId, CallRef call) async {}
 }
 
 class _FakeRing extends RingController {

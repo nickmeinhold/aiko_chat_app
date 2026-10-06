@@ -21,6 +21,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/test_helpers.dart';
+import 'call_fixtures.dart';
 
 /// The ring WIRING (#2808) — the seam the pure `admitRing` tests cannot reach:
 /// does an invitation actually travel transport → repository → cross-channel
@@ -84,7 +85,7 @@ void main() {
   /// persist → announce → admit → ring.
   Future<Message> inbound({
     String from = robinId,
-    String body = kCallInviteBody,
+    String body = kTestInviteBody,
     Duration age = const Duration(seconds: 1),
     String clientMsgId = 'M1',
     String? replyTo,
@@ -227,6 +228,50 @@ void main() {
     expect(ring, isNotNull, reason: 'the invite should have rung');
     expect(ring!.channelId, dmId);
     expect(ring.from.userId, robinId);
+  });
+
+  test('a v1 invite over the wire never rings (design 22 v2.0)', () async {
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+
+    transport.emitMessage(await inbound(body: kCallInviteBodyV1));
+    await pump();
+
+    expect(container.read(incomingRingProvider), isNull);
+  });
+
+  test(
+    'a call the SYSTEM already ended never rings when its invite arrives late',
+    () async {
+      // Design 22 v4.2, Tesla (temper round 3): a lock-screen decline before
+      // Flutter existed, then the invitation over the websocket inside its
+      // 10s freshness. Without the tombstone it rang as a banner for a call
+      // the user had already declined.
+      await warmDms();
+      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+      await pump();
+
+      container.read(incomingRingProvider.notifier).noteSystemEnded(kTestCall);
+      transport.emitMessage(await inbound());
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNull);
+    },
+  );
+
+  test('a system end of ANOTHER call leaves this ring alone', () async {
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await pump();
+    transport.emitMessage(await inbound());
+    await pump();
+
+    container.read(incomingRingProvider.notifier).noteSystemEnded(kOtherCall);
+    expect(container.read(incomingRingProvider)?.call, kTestCall);
+
+    container.read(incomingRingProvider.notifier).noteSystemEnded(kTestCall);
+    expect(container.read(incomingRingProvider), isNull, reason: 'control');
   });
 
   test('an ordinary message does not ring', () async {
@@ -419,7 +464,7 @@ void main() {
 
       transport.emitMessage(
         await inbound(
-          body: kCallEndBody,
+          body: kTestEndBody,
           clientMsgId: 'M2',
           replyTo: islandIdFor('M1'),
         ),
@@ -432,7 +477,8 @@ void main() {
 
   test('an end naming a DIFFERENT call leaves this ring alone', () async {
     // Hang up, ring again immediately, and the first end must not reach through
-    // and kill the second ring. The signed replyTo is what scopes it to ONE call.
+    // and kill the second ring. The call id in the signed body is what scopes
+    // it to ONE call (call/2).
     await warmDms();
     container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
     await pump();
@@ -440,7 +486,7 @@ void main() {
     await pump();
 
     transport.emitMessage(
-      await inbound(body: kCallEndBody, clientMsgId: 'M2', replyTo: 'OTHER'),
+      await inbound(body: kOtherEndBody, clientMsgId: 'M2'),
     );
     await pump();
 
@@ -466,7 +512,7 @@ void main() {
     // The caller's genuine hangup, overtaking its own invitation.
     transport.emitMessage(
       await inbound(
-        body: kCallEndBody,
+        body: kTestEndBody,
         clientMsgId: 'M2',
         replyTo: islandIdFor('M1'),
       ),
@@ -476,7 +522,7 @@ void main() {
     transport.emitMessage(
       await inbound(
         from: 'mallory-key',
-        body: kCallEndBody,
+        body: kTestEndBody,
         clientMsgId: 'M9',
         replyTo: islandIdFor('M1'),
       ),
@@ -513,7 +559,7 @@ void main() {
     // The hangup lands FIRST, naming an invitation this client has not seen.
     transport.emitMessage(
       await inbound(
-        body: kCallEndBody,
+        body: kTestEndBody,
         clientMsgId: 'M2',
         replyTo: islandIdFor('M1'),
       ),
@@ -554,7 +600,7 @@ void main() {
     transport.emitMessage(
       await inbound(
         from: 'mallory-key',
-        body: kCallEndBody,
+        body: kTestEndBody,
         clientMsgId: 'M9',
         replyTo: islandIdFor('M1'),
       ),
@@ -711,7 +757,7 @@ void main() {
           channelId: otherRoom,
           clientMsgId: 'M1',
           signedAtMs: signedAt.millisecondsSinceEpoch,
-          body: kCallInviteBody,
+          body: kTestInviteBody,
           replyTo: null,
         ),
       );
@@ -725,7 +771,7 @@ void main() {
             kind: SenderKind.llm,
             label: 'Robin',
           ),
-          body: kCallInviteBody,
+          body: kTestInviteBody,
           replyToId: null,
           createdAt: DateTime.now().toUtc(),
           origin: OriginEnvelope.fromSignature(sig, clientMsgId: 'M1'),
