@@ -827,8 +827,12 @@ final class CallKitRinger: NSObject {
     channel: String?, callId: String, completion: @escaping () -> Void
   ) {
     // Remembered whatever happens below, so a late invite for this call never
-    // rings (the tombstone gates invites only; design 22 v4.1).
+    // rings (the tombstone gates invites only; design 22 v4.1). And the call's
+    // session dies whatever happens below too: an outgoing call has no CallKit
+    // row for the guard to find, so clearing it only on the row-found arm left
+    // the session refusing every later answer (Tesla, delta review round 2).
     tombstone(callId)
+    if liveSession?.call == callId { liveSession = nil }
     // Ends only the call it NAMES, on the channel it rings on — the
     // channel-keyed lookup is the oneChannelPerCall door, checked before any
     // effect. Anything else is reported-and-ended (must-report) and leaves the
@@ -839,7 +843,6 @@ final class CallKitRinger: NSObject {
     }
     provider.reportCall(with: entry.uuid, endedAt: Date(), reason: .remoteEnded)
     forgetLiveCall(for: channel, onlyIf: entry.uuid)
-    if liveSession?.call == callId { liveSession = nil }
     // TELL DART, as Android's retire does: an unanswered ring is still an
     // answer door in the in-app banner until something ends it (Tesla, PR
     // #210 v2 round 3 — iOS emitted only on displacement).

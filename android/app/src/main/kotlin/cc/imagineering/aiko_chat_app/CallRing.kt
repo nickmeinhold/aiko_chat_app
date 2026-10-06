@@ -471,8 +471,16 @@ object CallRing {
    * The engine that held Dart is being destroyed, so no call can be live in
    * this process any more (design 22 delta review: the session is the media).
    */
-  fun mediaGone() {
-    synchronized(lock) { live = null }
+  fun mediaGone(context: Context) {
+    val app = context.applicationContext
+    synchronized(lock) {
+      // An end of a session like any other: tombstoned, so the FCM retry that
+      // `live` was holding down cannot ring again over the call the user just
+      // left (Tesla, design 22 delta review round 2). Dart cannot be told —
+      // its isolate is what is being destroyed.
+      live?.let { tombstone(app, it.callId, it.channel) }
+      live = null
+    }
   }
 
   /**

@@ -102,6 +102,9 @@ Future<void> startCall(
   // already gone. The announcer is app-scoped (pinned in `main`), so holding one
   // across a teardown is the whole point of the class rather than a leak.
   final endAnnouncer = ref.read(callEndAnnouncerProvider);
+  // Captured for the same reason: the `finally` below must be able to end the
+  // native live session even when this widget is already gone.
+  final systemCall = ref.read(systemCallBridgeProvider);
   // Hoisted out of the try so EVERY exit below can see it. The obligation is
   // owed from the instant the invitation is on the wire, and after that point no
   // arm of this function — early return, throw, or success — is allowed to leave
@@ -126,10 +129,7 @@ Future<void> startCall(
     // while a call is live, and for an outgoing call "live" starts here, not
     // at the call screen's first frame (Tesla, design 22 delta review). The
     // screen says it again on mount; saying it twice is harmless.
-    unawaited(
-      ref.read(systemCallBridgeProvider)?.callStarted(dm.id, call) ??
-          Future<void>.value(),
-    );
+    unawaited(systemCall?.callStarted(dm.id, call) ?? Future<void>.value());
     final rang = await _ring(ref, dm.id, call);
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
     // longer holds here. A mounted check does not survive a subsequent await —
@@ -178,6 +178,15 @@ Future<void> startCall(
     final owed = owedHangup;
     if (owed != null) {
       endAnnouncer.announce(channelId: owed.channelId, call: owed.call);
+      // AND THE NATIVE SESSION, born at the mint by `callStarted`. On the
+      // ordinary path the call screen's dispose already ended it and this is
+      // an idempotent repeat; on every early exit (unmounted before the push,
+      // a throw) no screen ever mounted, and without this the native door
+      // refused every later answer for the life of the process (Tesla, design
+      // 22 delta review round 2).
+      unawaited(
+        systemCall?.end(owed.channelId, owed.call) ?? Future<void>.value(),
+      );
     }
   }
   // Liveness on the ERROR path too. Every arm above fires after an await and the

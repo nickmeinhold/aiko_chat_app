@@ -49,7 +49,7 @@ object AikoEngine {
           // cannot be live in a destroyed isolate. Without this, Back out of a
           // live call left `live` set for the life of the process, and every
           // later answer was refused (Tesla, design 22 delta review).
-          CallRing.mediaGone()
+          CallRing.mediaGone(context)
         }
       },
     )

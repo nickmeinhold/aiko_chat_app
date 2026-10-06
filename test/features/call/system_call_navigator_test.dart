@@ -631,8 +631,15 @@ void main() {
     ring.admit(channel, call: callA);
     await tester.pumpAndSettle();
     bridge.emit(SystemCallActionKind.answered, 'dm:other:room', call: callA);
-    await tester.pumpAndSettle();
+    await tester.pump();
     expect(find.textContaining('CALL'), findsNothing);
+    expect(
+      bridge.endedCalls,
+      [callA],
+      reason:
+          'released AT ONCE — admitted on another channel is "never", not '
+          '"not yet", so no connected system call is left to the deadline',
+    );
   });
 
   testWidgets('a system ENDED is remembered as a tombstone for its call', (

@@ -437,6 +437,16 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // THE VERIFIED INVITATION, or nothing. Only `admitRing` puts anything in
     // `_admitted`, so this REUSES the nine start-gate refusals rather than
     // re-deciding them — `unverifiedOrigin`, the signature check, at the head.
+    // ADMITTED ON ANOTHER CHANNEL is "never", not "not yet": under
+    // oneChannelPerCall this answer can never become valid, so it is released
+    // now rather than left holding a connected system call until the deadline
+    // (Carnot, design 22 delta review round 2).
+    final admitted = _admitted[call];
+    if (admitted != null && !oneChannelPerCall(admitted.channelId, channelId)) {
+      _telemetry.answerResolved(channelId, AnswerOutcome.neverAdmitted);
+      _release(channelId, call);
+      return;
+    }
     if (!_wasAdmitted(call, channelId)) {
       // Not yet, or never. Hold, and let the deadline decide which — the
       // invitation is a websocket message and this is routinely a cold start.
