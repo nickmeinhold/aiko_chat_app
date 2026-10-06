@@ -186,3 +186,13 @@ and the dedup weakness stays confined to v1 traffic. Items 2-5 stand, with `call
 **App-side cost now includes a signed-body change:** minting the ulid; `isCallInviteBody`,
 `admitRing`, `admitCallEnd` and `CallEndAnnouncer` learning v2; the end no longer waiting for the
 ack. That touches the signing trust boundary, so it gets a `/cage-match` of its own.
+
+### Dependency note — #4278 (the iOS end-wake interlock)
+
+Today the island does not send `call_end` to VoIP rows (#4278 closed; alert rows skip ends as
+`end_wake_needs_voip`), so a TYPED v2 end with an invented id reaches no iOS ring at all. **When
+#4278 opens**, a forged end with an unknown `m` reaches iOS as a VoIP push, and it must still be
+reported to CallKit (must-report). `reportEnd` handles it with report-then-end-immediately. If that
+draws anything on screen, a DM peer gets a "flash per forged end" primitive. That's no worse than
+v1 ends today, but it's the case to test on hardware when #4278 is answered. (Island tab,
+2026-10-06.)
