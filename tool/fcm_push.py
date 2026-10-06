@@ -21,8 +21,12 @@ USAGE
     # accepted. Run this BEFORE trusting silence.
     tool/fcm_push.py probe
 
-    tool/fcm_push.py invite --token <fcm> --channel <channel id>
-    tool/fcm_push.py end    --token <fcm> --channel <channel id>
+    tool/fcm_push.py invite --token <fcm> --channel <channel id> [--call <ULID>]
+    tool/fcm_push.py end    --token <fcm> --channel <channel id> [--call <ULID>]
+
+`--call` sends `m`, the v2 call id (call/2, design 21 v2 / island design 12
+Decision 1): the ULID the caller signed into the invite body. Omit it for a v1
+wake, which carries `{c, k}` only — the island sends `m` exactly for v2.
     tool/fcm_push.py raw    --token <fcm> --data '{"c":"x","k":"bogus"}'
 
 CREDENTIAL. No service account exists for `aiko-chat-push` and none should be
@@ -33,6 +37,7 @@ account that can see the project). Override with FCM_ACCOUNT / FCM_PROJECT.
 
 import argparse
 import json
+import re
 import os
 import subprocess
 import sys
@@ -46,6 +51,10 @@ GCLOUD = os.environ.get("GCLOUD", "gcloud")
 # Short on purpose: a ring delivered a minute late is a ring for a call that is
 # over. Matches the order of the app's RING_CEILING_MS backstop.
 TTL = "30s"
+
+# The SAME grammar as call_wire.dart, CallRing.kt, AppDelegate.swift and the
+# island's parse_call_body. A wake the receiver would refuse is not a test.
+CALL_ID = re.compile(r"[0-7][0-9A-HJKMNP-TV-Z]{25}")
 
 
 def access_token() -> str:
@@ -97,6 +106,7 @@ def main() -> int:
         p = sub.add_parser(name)
         p.add_argument("--token", required=True)
         p.add_argument("--channel", required=True)
+        p.add_argument("--call", help="v2 call id (ULID); omit for a v1 wake")
     raw = sub.add_parser("raw")
     raw.add_argument("--token", required=True)
     raw.add_argument("--data", required=True, help="JSON object of strings")
@@ -116,7 +126,12 @@ def main() -> int:
     if args.cmd == "raw":
         return send(args.token, json.loads(args.data))
     kind = "call_invite" if args.cmd == "invite" else "call_end"
-    return send(args.token, {"c": args.channel, "k": kind})
+    data = {"c": args.channel, "k": kind}
+    if args.call is not None:
+        if not CALL_ID.fullmatch(args.call):
+            sys.exit(f"--call {args.call!r} is not a canonical call id")
+        data["m"] = args.call
+    return send(args.token, data)
 
 
 if __name__ == "__main__":
