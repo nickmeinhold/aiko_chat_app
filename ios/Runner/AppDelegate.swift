@@ -572,16 +572,19 @@ final class CallKitRinger: NSObject {
     // the SAME grammar as call_wire.dart and Kotlin's CallRing. A present but
     // malformed `m` is a bad payload: it is reported and ended — never dropped,
     // because must-report is not optional — and never rung.
-    let callId: String?
-    if let raw = payload["m"] {
-      guard let s = raw as? String, Self.isCallId(s) else {
-        os_log("[callkit] malformed `m`; reporting and ending", log: aikoCallLog, type: .error)
-        reportAndEndImmediately(reason: .failed, completion: completion)
-        return
-      }
-      callId = s
-    } else {
-      callId = nil
+    //
+    // CALLING IS v2-ONLY (design 22 v2.0): a wake with no `m` is not a call —
+    // v1 is history, and the island no longer wakes for v1 bodies (island PR
+    // #192). Must-report still applies, so it is reported and ended.
+    guard let raw = payload["m"] else {
+      os_log("[callkit] wake with no `m` (v1 is history); reporting and ending", log: aikoCallLog, type: .error)
+      reportAndEndImmediately(reason: .failed, completion: completion)
+      return
+    }
+    guard let callId = raw as? String, Self.isCallId(callId) else {
+      os_log("[callkit] malformed `m`; reporting and ending", log: aikoCallLog, type: .error)
+      reportAndEndImmediately(reason: .failed, completion: completion)
+      return
     }
 
     switch kind {
@@ -615,7 +618,7 @@ final class CallKitRinger: NSObject {
   }
 
   private func reportInvite(
-    channel: String?, callId: String?, completion: @escaping () -> Void
+    channel: String?, callId: String, completion: @escaping () -> Void
   ) {
     // A DUPLICATE DELIVERY OF A RING ALREADY ON SCREEN, and it is the whole
     // bug of 2026-09-20. This handset carries two VoIP tokens on the island —
@@ -671,8 +674,42 @@ final class CallKitRinger: NSObject {
     //
     // The real defect was never the QUERY, it was the LIFETIME — see
     // `answeredCallTrustWindow`. Bound the entry; leave the guard alone.
+    // REFUSALS FIRST, every one before any side effect (design 22 §2; Tesla,
+    // design 22 temper round 3: the cross-channel refusal used to run AFTER
+    // displacement had already ended the live call).
+    //
+    // 1. Already ended on this device: a call rings at most once (the
+    //    tombstone, design 22 v3.2). Redelivery of an ended call's invite.
+    if isTombstoned(callId) {
+      os_log("[callkit] invite for a call already ended on this device; reporting and ending", log: aikoCallLog, type: .info)
+      reportAndEndImmediately(reason: .remoteEnded, completion: completion)
+      return
+    }
+    // 2. The call Dart already has live in this process.
+    if liveSession?.call == callId {
+      os_log("[callkit] invite for the call already live in this process; reporting and ending", log: aikoCallLog, type: .info)
+      reportAndEndImmediately(reason: .remoteEnded, completion: completion)
+      return
+    }
+    // v2: the CallKit UUID IS the call id — lossless, which is why design 12
+    // chose a ULID. Every delivery of one call names one UUID.
+    guard let uuid = Self.uuid(fromCallId: callId) else {
+      reportAndEndImmediately(reason: .failed, completion: completion)
+      return
+    }
+    // 3. ONE CALL ID, ONE CHANNEL (oneChannelPerCall). The same id on a second
+    //    channel would map two channels to one CallKit UUID, and an answer
+    //    would join whichever the scan found first. A bad payload: reported and
+    //    ended, the live call left alone. (Kelvin, PR #210 v2 round 2.)
+    if let other = entry(for: uuid), !Self.oneChannelPerCall(other.channel, channel ?? "") {
+      os_log(
+        "[callkit] call id already live on another channel; reporting and ending",
+        log: aikoCallLog, type: .error)
+      reportAndEndImmediately(reason: .failed, completion: completion)
+      return
+    }
     if let channel, let live = liveEntry(for: channel) {
-      if let callId, live.call != callId {
+      if live.call != callId {
         // A DIFFERENT v2 call on a channel that still has one (design 21 v2).
         // The old call is over from the caller's side — a DM carries one call
         // at a time — so it is ENDED in CallKit (and, if answered, in Dart)
@@ -686,32 +723,19 @@ final class CallKitRinger: NSObject {
         // banner, which is an answer door until something ends it. The id
         // means the navigator applies it to A and to nothing else (Tesla, PR
         // #210 v2 round 1).
-        SystemCallChannel.shared.emit(
-          action: .ended, channel: channel, origin: "displaced", call: live.call)
+        if let old = live.call {
+          SystemCallChannel.shared.emit(
+            action: .ended, channel: channel, origin: "displaced", call: old)
+          tombstone(old)
+        }
         forgetLiveCall(for: channel, onlyIf: live.uuid)
-        disarmIfNoCallRemains()
+        releaseLease(live.uuid)
       } else {
-        // The SAME call delivered again (v2: same id), or a v1 invite while a
-        // call is live on the channel.
+        // The SAME call delivered again.
         os_log("[callkit] duplicate invite for a ring already live on %{public}@", log: aikoCallLog, type: .info, channel)
         reportAndEndImmediately(reason: .remoteEnded, completion: completion)
         return
       }
-    }
-    // v2: the CallKit UUID IS the call id — lossless, which is why design 12
-    // chose a ULID. Every delivery of one call names one UUID. v1: random.
-    let uuid = callId.flatMap(Self.uuid(fromCallId:)) ?? UUID()
-    // ONE CALL ID, ONE CHANNEL. The same id on a second channel would map two
-    // channels to one CallKit UUID, and an answer would join whichever the
-    // scan found first. A caller-minted id is unique per call, so this is a
-    // bad payload: reported and ended, the live call left alone. (Kelvin, PR
-    // #210 v2 round 2.)
-    if callId != nil, let other = entry(for: uuid), other.channel != channel {
-      os_log(
-        "[callkit] call id already live on another channel; reporting and ending",
-        log: aikoCallLog, type: .error)
-      reportAndEndImmediately(reason: .failed, completion: completion)
-      return
     }
     let update = CXCallUpdate()
     // Tier 3 of design 12 Decision 6's three tiers: the placeholder. It names the
@@ -796,24 +820,33 @@ final class CallKitRinger: NSObject {
   /// while ends still go out (claude-tasks#4233/#4265). So the safe arm is bound
   /// to exactly the input that produces it, rather than to a preference.
   private func reportEnd(
-    channel: String?, callId: String?, completion: @escaping () -> Void
+    channel: String?, callId: String, completion: @escaping () -> Void
   ) {
-    // Ends only the call it NAMES: a v2 end must carry the live call's id, and
-    // a v1 end matches only a v1 call. Anything else is reported-and-ended
-    // (must-report) and leaves the live call alone. (design 21 v2)
+    // Remembered whatever happens below, so a late invite for this call never
+    // rings (the tombstone gates invites only; design 22 v4.1).
+    tombstone(callId)
+    // Ends only the call it NAMES, on the channel it rings on — the
+    // channel-keyed lookup is the oneChannelPerCall door, checked before any
+    // effect. Anything else is reported-and-ended (must-report) and leaves the
+    // live call alone.
     guard let channel, let entry = liveEntry(for: channel), entry.call == callId else {
       reportAndEndImmediately(reason: .remoteEnded, completion: completion)
       return
     }
     provider.reportCall(with: entry.uuid, endedAt: Date(), reason: .remoteEnded)
     forgetLiveCall(for: channel, onlyIf: entry.uuid)
+    // TELL DART, as Android's retire does: an unanswered ring is still an
+    // answer door in the in-app banner until something ends it (Tesla, PR
+    // #210 v2 round 3 — iOS emitted only on displacement).
+    SystemCallChannel.shared.emit(
+      action: .ended, channel: channel, origin: "remoteEnd", call: callId)
     // MUST DISARM, and this path is why `disarm()` had only two call sites.
     // `reportCall(endedAt:)` deliberately does NOT round-trip through our
     // `CXEndCallAction` delegate (see `endSystemCall` — the echo loop), so the
     // delegate's `disarm()` never runs for a remote hangup. (Tesla, cage-match
-    // PR #201 round 1.) CONDITIONAL, because this caller is channel-scoped and
-    // `disarm()` is not — see `disarmIfNoCallRemains` (round 3).
-    disarmIfNoCallRemains()
+    // PR #201 round 1.) Through the lease, so it disarms only if THIS call
+    // was the last one armed (design 22 v3.5).
+    releaseLease(entry.uuid)
     completion()
   }
 
@@ -877,10 +910,14 @@ final class CallKitRinger: NSObject {
   /// closest member and it is not literally true (nobody remote ended it). There
   /// is no "this app's own UI ended it" case; the Recents entry is the one
   /// place a reader could notice.
-  func endSystemCall(channel: String, call: String?) {
-    // EXACT: the live entry on the channel must be the call Dart names (v1 =
-    // no id). A mismatch ends nothing — the call Dart is tearing down is
-    // already gone, and the one on the channel now is somebody else's.
+  func endSystemCall(channel: String, call: String) {
+    // The call is over for this process, whatever CallKit holds: it is no
+    // longer live, and it never rings again here.
+    if liveSession?.call == call { liveSession = nil }
+    tombstone(call)
+    // EXACT: the live entry on the channel must be the call Dart names. A
+    // mismatch ends nothing — the call Dart is tearing down is already gone,
+    // and the one on the channel now is somebody else's.
     guard let entry = liveEntry(for: channel), entry.call == call else { return }
     let live = entry.uuid
     provider.reportCall(with: live, endedAt: Date(), reason: .remoteEnded)
@@ -899,10 +936,86 @@ final class CallKitRinger: NSObject {
     // with nothing to report it — until the app restarted.
     // (Tesla, cage-match PR #201 round 1.)
     //
-    // CONDITIONAL, because this caller is channel-scoped and `disarm()` is not.
-    // See `disarmIfNoCallRemains` (round 3).
-    disarmIfNoCallRemains()
+    // Through the lease: disarms only if THIS call was the last one armed.
+    releaseLease(live)
   }
+
+  /// Dart has [call] live in this process — outgoing from the moment it was
+  /// placed, incoming from the moment it was joined. From here a second
+  /// system answer is refused until Dart ends it (design 22 v4.2). Without it
+  /// the native side knew only the calls IT answered, so an answer to a
+  /// waiting call went through during any outgoing call (Tesla + Carnot,
+  /// design 22 temper round 3).
+  func callStarted(channel: String, call: String) {
+    liveSession = (channel: channel, call: call)
+  }
+
+  // MARK: The session, the lease and the tombstones (design 22 v4)
+
+  /// The call Dart has live in THIS process. Process memory on purpose: the
+  /// media dies with the process, and a persisted "live" would refuse every
+  /// later call. Main queue only (every handler runs on main since a86bf64).
+  private var liveSession: (channel: String, call: String)?
+
+  /// The call a second answer must yield to, if any: the live session, or a
+  /// CallKit call already answered on this device.
+  private func callInSession() -> String? {
+    if let live = liveSession { return live.call }
+    for (_, entry) in stored() where entry.answered && Self.live(entry) != nil {
+      if let call = entry.call { return call }
+    }
+    return nil
+  }
+
+  /// THE AUDIO LEASE: the CallKit UUIDs this process armed (design 22 v3.5).
+  ///
+  /// In memory, because the audio session dies with the process — the
+  /// persisted map outlives it, and asking the map "is any call left?" let an
+  /// expired row withhold `disarm()` forever (Carnot + Tesla, PR #210 v2
+  /// round 3). Closed list of inserts: ONE, the CallKit answer after
+  /// `CallAudioSession.arm()` succeeds — the only `arm()` call in this file.
+  private var armed = Set<UUID>()
+
+  /// End [uuid]'s claim on the audio session. **Disarms only when removing a
+  /// UUID that WAS armed leaves the set empty.** Ending an unarmed UUID — a
+  /// declined waiting call, any ring — is a no-op on the lease, so declining
+  /// call-waiting B no longer tears the audio out of connected A (Tesla, PR
+  /// #210 v2 round 3: call-waiting across two groups was measured 2026-09-20).
+  private func releaseLease(_ uuid: UUID) {
+    guard armed.remove(uuid) != nil else { return }
+    if armed.isEmpty { CallAudioSession.disarm() }
+  }
+
+  /// How long an ended call stays ended on this device — the tombstone.
+  /// 2 × the longest an invitation can wait in a push provider: the island's
+  /// `push_result.RING_CEILING_SECONDS` (30s, FCM and APNs VoIP) and
+  /// `apns._ALERT_EXPIRATION_SECONDS` (60s, the max). The same number as
+  /// Dart's `kCallTombstoneTtl` and Kotlin's `TOMBSTONE_TTL_MS`, pinned by
+  /// `system_call_channel_contract_test.dart`.
+  static let tombstoneTtl: TimeInterval = 120
+
+  private static let tombstonesKey = "callkit.tombstones"
+
+  private func liveTombstones() -> [String: TimeInterval] {
+    let raw = UserDefaults.standard.dictionary(forKey: Self.tombstonesKey) as? [String: TimeInterval] ?? [:]
+    let now = Date().timeIntervalSince1970
+    return raw.filter { now - $0.value >= 0 && now - $0.value <= Self.tombstoneTtl }
+  }
+
+  /// Remember [call] as ended. PRUNES ON EVERY WRITE, so the store holds only
+  /// the last `tombstoneTtl` of calls (Kelvin, design 22 temper).
+  private func tombstone(_ call: String) {
+    var kept = liveTombstones()
+    kept[call] = Date().timeIntervalSince1970
+    UserDefaults.standard.set(kept, forKey: Self.tombstonesKey)
+  }
+
+  private func isTombstoned(_ call: String) -> Bool { liveTombstones()[call] != nil }
+
+  /// THE door policy for a call's channel: a call is one DM today. The single
+  /// seam a cross-channel gathering (island #3196) would change; Dart's and
+  /// Kotlin's `oneChannelPerCall` are its twins.
+  static func oneChannelPerCall(_ stored: String, _ seen: String) -> Bool { stored == seen }
 
   // MARK: The device-local channel → UUID map
 
@@ -997,37 +1110,6 @@ final class CallKitRinger: NSObject {
     let window = entry.answered ? answeredCallTrustWindow : liveCallTrustWindow
     guard age < window else { return nil }
     return uuid
-  }
-
-  /// Return the process to automatic audio management, but ONLY once no call is
-  /// left to need it.
-  ///
-  /// **`disarm()` IS PROCESS-WIDE AND THESE CALLERS ARE CHANNEL-SCOPED**, which is
-  /// the mismatch. `reportEnd` and `endSystemCall` are driven by a channel id, and
-  /// the map can hold more channels than CallKit holds calls — `map[channel]` is
-  /// written per channel and `maximumCallsPerCallGroup = 1` constrains CallKit, not
-  /// this dictionary. So a stale entry for channel B, plus a `call_end` push for B
-  /// arriving during a real armed call on channel A, would have ended B's mapping
-  /// and then torn the audio session out from under A: `useManualAudio = false` and
-  /// `isAudioEnabled = false` mid-conversation, on a call nobody ended.
-  ///
-  /// Round 1 added those two `disarm()` calls to fix Tesla's finding — every exit
-  /// must disarm — and applied the rule at the new sites without checking that the
-  /// SITE's scope matched the RULE's scope. The rule is about the last exit, not
-  /// about every exit.
-  ///
-  /// `CXEndCallAction` and `providerDidReset` stay UNCONDITIONAL and should: the
-  /// first is CallKit-driven under a one-call limit, and the second is the system
-  /// telling us every call is gone. (Maxwell, cage-match PR #201 round 3, against
-  /// his own round-1 fix.)
-  private func disarmIfNoCallRemains() {
-    guard stored().isEmpty else {
-      os_log(
-        "[audio] disarm withheld — %d call mapping(s) still live", log: aikoCallLog,
-        type: .info, stored().count)
-      return
-    }
-    CallAudioSession.disarm()
   }
 
   private func rememberLiveCall(_ uuid: UUID, for channel: String, call: String?) {
@@ -1204,11 +1286,21 @@ final class SystemCallChannel: NSObject, FlutterStreamHandler {
               message: "endSystemCall requires a non-empty `channel`",
               details: nil))
         }
-        // `call` absent = a v1 call; present = exactly that v2 call. Ending is
-        // by EXACT match, so call A's teardown can never end call B that
-        // displaced it on the same channel (Carnot, PR #210 v2 round 1).
-        let callId = args["call"] as? String
-        CallKitRinger.shared.endSystemCall(channel: channel, call: callId)
+        // Exactly that call (design 22: v2-only, so `call` is always sent;
+        // without one there is nothing to end). Exact match, so call A's
+        // teardown can never end call B on the same channel.
+        if let callId = args["call"] as? String {
+          CallKitRinger.shared.endSystemCall(channel: channel, call: callId)
+        }
+        result(nil)
+      case "callStarted":
+        // Dart has a call live in this process (design 22 v4.2).
+        if let args = call.arguments as? [String: Any],
+          let channel = args["channel"] as? String, !channel.isEmpty,
+          let callId = args["call"] as? String
+        {
+          CallKitRinger.shared.callStarted(channel: channel, call: callId)
+        }
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
@@ -1266,10 +1358,10 @@ extension CallKitRinger: CXProviderDelegate {
     var told: [(String, String)] = []
     for (channel, entry) in stored() {
       told.append((channel, entry.uuid))
-      // With its call id: Dart matches by it, and an id-less `ended` now
-      // matches only a v1 hold (Carnot, PR #210 v2 round 1).
+      guard let call = entry.call else { continue }  // a v1 row: never a call
+      tombstone(call)
       SystemCallChannel.shared.emit(
-        action: .ended, channel: channel, origin: "providerReset", call: entry.call)
+        action: .ended, channel: channel, origin: "providerReset", call: call)
     }
     os_log("[callkit] providerDidReset — the system tore down every call we had", log: aikoCallLog, type: .info)
     // Only the entries that were enumerated and told — not the whole key. An
@@ -1281,7 +1373,10 @@ extension CallKitRinger: CXProviderDelegate {
     }
     // A reset is the end that arrives with no action and no UUID, so it is the
     // one path that would otherwise strand the process in manual mode with no
-    // `CXEndCallAction` ever coming to release it.
+    // `CXEndCallAction` ever coming to release it. Every call is gone, so the
+    // lease is empty by definition.
+    armed.removeAll()
+    liveSession = nil
     CallAudioSession.disarm()
   }
 
@@ -1290,7 +1385,7 @@ extension CallKitRinger: CXProviderDelegate {
     // a call — the island token, the room, the camera — lives in Dart, so all
     // this can do is name the channel and let the Dart half join it. See
     // `SystemCallChannel` for why the answer survives Dart not existing yet.
-    guard let (channel, answeredCall) = entry(for: action.callUUID) else {
+    guard let (channel, mappedCall) = entry(for: action.callUUID), let answeredCall = mappedCall else {
       // No mapping, so nothing to join: there is no other carrier of the
       // channel id, and the room IS the channel. `fail()` rather than
       // `fulfill()` — fulfilling would present a connected call that can never
@@ -1298,6 +1393,20 @@ extension CallKitRinger: CXProviderDelegate {
       // call we cannot place. Only reachable if the map was cleared between the
       // report and the answer (`providerDidReset`, or a reinstall).
       os_log("[callkit] answered a call with no channel mapping; failing the action", log: aikoCallLog, type: .error)
+      action.fail()
+      return
+    }
+    // A SECOND ANSWER IS REFUSED while another call is in session — live in
+    // Dart (outgoing or joined) or already answered here — at every door
+    // (design 22 v3.1 / v4.2). BEFORE `markAnswered` and `arm()`: a refused
+    // answer writes nothing and takes no audio. The refused call is over for
+    // this device, and Dart is told so its in-app banner stops too.
+    if let busy = callInSession(), busy != answeredCall {
+      os_log("[callkit] answer refused: another call is in session", log: aikoCallLog, type: .info)
+      forgetLiveCall(for: channel, onlyIf: action.callUUID)
+      tombstone(answeredCall)
+      SystemCallChannel.shared.emit(
+        action: .ended, channel: channel, origin: "answerRefused", call: answeredCall)
       action.fail()
       return
     }
@@ -1322,8 +1431,9 @@ extension CallKitRinger: CXProviderDelegate {
         log: aikoCallLog, type: .error)
       // Back to automatic management before leaving — otherwise this failure
       // strands the process in manual mode, which is the durable break the class
-      // doc calls worse than the bug being fixed.
-      CallAudioSession.disarm()
+      // doc calls worse than the bug being fixed. Only if nothing else holds
+      // the lease (a second answer is refused, so nothing does; stated anyway).
+      if armed.isEmpty { CallAudioSession.disarm() }
       // `fail()`, not `fulfill()`, on the file's own stated rule for the mapping
       // case: "fulfilling would present a connected call that can never carry
       // media, and a call that visibly fails is the honest render of a call we
@@ -1342,6 +1452,9 @@ extension CallKitRinger: CXProviderDelegate {
       action.fail()
       return
     }
+    armed.insert(action.callUUID)
+    // The ring is over for this device; this call never rings again here.
+    tombstone(answeredCall)
     SystemCallChannel.shared.emit(
       action: .answered, channel: channel, origin: "answerAction",
       call: answeredCall)
@@ -1371,8 +1484,10 @@ extension CallKitRinger: CXProviderDelegate {
     // a call answered from a locked handset. Emitted before the mapping is
     // forgotten, because the channel is what identifies the call to Dart.
     for (channel, entry) in stored() where entry.uuid == action.callUUID.uuidString {
+      guard let call = entry.call else { continue }  // a v1 row: never a call
+      tombstone(call)
       SystemCallChannel.shared.emit(
-        action: .ended, channel: channel, origin: "endAction", call: entry.call)
+        action: .ended, channel: channel, origin: "endAction", call: call)
       // SCOPED, and the `where` above is NOT a substitute for it. That clause
       // matches against a SNAPSHOT from `stored()`; `forgetLiveCall` then takes
       // its OWN read and deletes by channel, so an invite landing between the two
@@ -1384,12 +1499,12 @@ extension CallKitRinger: CXProviderDelegate {
       forgetLiveCall(for: channel, onlyIf: action.callUUID)
     }
     os_log("[callkit] CXEndCallAction performed for %{public}@", log: aikoCallLog, type: .info, action.callUUID.uuidString)
-    // Unconditional, and deliberately OUTSIDE the loop: a hangup whose UUID
-    // matches no stored entry still ends whatever CallKit call was live, and
-    // leaving the process in manual mode would silently break the in-app ring
-    // path from here on — a durable break outliving the call that caused it.
-    // Disarming a call that never armed is a no-op (see `CallAudioSession`).
-    CallAudioSession.disarm()
+    // THROUGH THE LEASE, no longer unconditional. The unconditional disarm
+    // rested on a one-call limit, but call-waiting across two call groups was
+    // MEASURED (2026-09-20), so declining waiting call B tore the audio out of
+    // connected call A (Tesla, PR #210 v2 round 3). Ending an unarmed UUID is
+    // now a no-op on the lease; ending the last armed one disarms.
+    releaseLease(action.callUUID)
     action.fulfill()
   }
 }

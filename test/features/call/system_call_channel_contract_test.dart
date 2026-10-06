@@ -269,7 +269,7 @@ void main() {
     expect(swift, contains(r'#"\A' + grammar + r'\z"#'), reason: 'Swift');
   });
 
-  test('the tombstone lifetime is ONE quantity in Dart and Kotlin', () {
+  test('the tombstone lifetime is ONE quantity in Dart, Kotlin and Swift', () {
     // How long an ended call stays ended on a device (design 22 v4.1). Dart's
     // half refuses a late banner; Kotlin's refuses a late native ring. If they
     // drift, one door rings a call the other already buried.
@@ -284,6 +284,11 @@ void main() {
       int.parse(ms!.replaceAll('_', '')),
       kCallTombstoneTtl.inMilliseconds,
     );
+    final swiftTtl = RegExp(
+      r'static let tombstoneTtl: TimeInterval = (\d+)',
+    ).firstMatch(swift)?.group(1);
+    expect(swiftTtl, isNotNull, reason: 'the Swift constant did not parse');
+    expect(int.parse(swiftTtl!), kCallTombstoneTtl.inSeconds);
   });
 
   test('Swift emits the v2 call id under the key Dart decodes', () {
