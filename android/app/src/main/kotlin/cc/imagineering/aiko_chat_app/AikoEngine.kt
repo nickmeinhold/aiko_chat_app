@@ -45,6 +45,11 @@ object AikoEngine {
           cache.remove(ID)
           CallChannels.detach()
           headless = false
+          // The session is the media, and the media is this engine: a call
+          // cannot be live in a destroyed isolate. Without this, Back out of a
+          // live call left `live` set for the life of the process, and every
+          // later answer was refused (Tesla, design 22 delta review).
+          CallRing.mediaGone()
         }
       },
     )

@@ -10,7 +10,7 @@ import '../application/ring_controller.dart';
 import '../application/system_call_providers.dart';
 import '../data/system_call_bridge.dart';
 import '../domain/call_invite.dart';
-import '../domain/call_wire.dart' show CallRef;
+import '../domain/call_wire.dart' show CallRef, oneChannelPerCall;
 import '../domain/system_call_action.dart';
 import '../application/ring_telemetry.dart';
 import '../domain/answer_outcome.dart';
@@ -160,7 +160,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// wall-clock comparison is unreachable by `tester.pump`, so the expiry it
   /// claimed could not be tested at all, and an expiry no test can reach is an
   /// expiry nobody should believe in.
-  final Map<CallRef, Timer> _admitted = {};
+  final Map<CallRef, ({String channelId, Timer expiry})> _admitted = {};
 
   /// How long the held answer may wait for its invitation to be admitted.
   ///
@@ -192,8 +192,8 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   @override
   void dispose() {
     _sub?.cancel();
-    for (final timer in _admitted.values) {
-      timer.cancel();
+    for (final entry in _admitted.values) {
+      entry.expiry.cancel();
     }
     _joinDeadline?.cancel();
     super.dispose();
@@ -280,16 +280,18 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       _tryJoin();
       return;
     }
-    _telemetry.answerHeld(channelId);
-    final displacedChannel = _answered;
-    final displacedCall = _answeredCall;
-    // CONSERVATION OF OWNERSHIP, by call, not by room: a second answer on the
-    // SAME channel for a different call displaces the first just as one in
-    // another room does, and its system call is ended, never dropped.
-    if (displacedChannel != null && displacedCall != null) {
-      _telemetry.answerResolved(displacedChannel, AnswerOutcome.displaced);
-      _release(displacedChannel, displacedCall);
+    // A SECOND ANSWER IS REFUSED, here as at every door (design 22 v3.1, the
+    // pinned one-call rule): the answer already held keeps its hold and its
+    // deadline, and the NEW one is released — its system call ended, never
+    // dropped (conservation of ownership). This used to displace the FIRST,
+    // so a raced or late `answered` hung up the call being held (Tesla,
+    // design 22 delta review).
+    if (_answeredCall != null) {
+      _telemetry.answerResolved(channelId, AnswerOutcome.displaced);
+      _release(channelId, call);
+      return;
     }
+    _telemetry.answerHeld(channelId);
     _answered = channelId;
     _answeredCall = call;
     _joinDeadline?.cancel();
@@ -311,8 +313,11 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
       // One admission per CALL: a newer invitation on the channel never evicts
       // the proof of the call the user already answered.
       final key = invite.call;
-      _admitted[key]?.cancel();
-      _admitted[key] = Timer(kSystemCallRingTrust, () => _admitted.remove(key));
+      _admitted[key]?.expiry.cancel();
+      _admitted[key] = (
+        channelId: invite.channelId,
+        expiry: Timer(kSystemCallRingTrust, () => _admitted.remove(key)),
+      );
     }
     _tryJoin();
   }
@@ -325,8 +330,14 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// `system_call_channel_contract_test.dart` rather than by a comment. Past it
   /// the native map has stopped believing in the ring too, so there is nothing
   /// left for an admission to be proof of.
-  /// Admitted, as EXACTLY the call the answer names.
-  bool _wasAdmitted(CallRef call) => _admitted.containsKey(call);
+  /// Admitted, as EXACTLY the call the answer names, on the channel it was
+  /// answered on — `oneChannelPerCall` is a door here too (Carnot, design 22
+  /// delta review: id-only admission let an answer for `m` on channel B join
+  /// on the proof of an invite for `m` on channel A).
+  bool _wasAdmitted(CallRef call, String channelId) {
+    final admitted = _admitted[call];
+    return admitted != null && oneChannelPerCall(admitted.channelId, channelId);
+  }
 
   /// The held answer became a call. Drop the hold; end nothing.
   void _consume() {
@@ -426,7 +437,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // THE VERIFIED INVITATION, or nothing. Only `admitRing` puts anything in
     // `_admitted`, so this REUSES the nine start-gate refusals rather than
     // re-deciding them — `unverifiedOrigin`, the signature check, at the head.
-    if (!_wasAdmitted(call)) {
+    if (!_wasAdmitted(call, channelId)) {
       // Not yet, or never. Hold, and let the deadline decide which — the
       // invitation is a websocket message and this is routinely a cold start.
       // The deadline is already running — it was armed when the answer was

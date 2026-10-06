@@ -305,6 +305,12 @@ object CallRing {
     }
     Log.i(TAG, "ring: c=$channel m=$callId instance=${ring.instance}")
     IncomingCallNotifier.show(app, channel, callId, ring.instance, "Aiko Chat")
+    // The ring was written under the lock and drawn after it. If it was ended
+    // in that gap (Dart's endFromDart, from the in-app banner), its dismiss ran
+    // before this show and cancelled nothing — and an INSISTENT ring would
+    // sound over an empty slot until the timeout (Tesla, design 22 delta
+    // review). Re-read the slot now that the notification is up.
+    if (!isLive(app, ring.instance)) IncomingCallNotifier.dismiss(app, ring.instance)
     // Start Dart NOW, while the phone rings, exactly as a VoIP push starts the
     // Flutter engine on iOS: the signed invitation is admitted inside its 10s
     // freshness window while ringing, and held for kSystemCallRingTrust — so a
@@ -325,6 +331,10 @@ object CallRing {
           return
         }
         clearRing(app)
+        // A call can be ringing AND live at once (Dart joined it in-app before
+        // the native ring was retired); its end clears both (Tesla, design 22
+        // delta review).
+        if (live?.callId == callId) live = null
         retireLocked(app, current, ended = true)
         stoppedRing = current
       } else {
@@ -395,6 +405,14 @@ object CallRing {
     var refused: Ring? = null
     val answered = synchronized(lock) {
       val current = ringSlot(app)?.takeIf { it.instance == instance } ?: return@synchronized null
+      if (live?.callId == current.callId) {
+        // Already live in Dart (joined in-app): the notification is stale. Not
+        // a second answer, and not a fresh crash-grace cell either — that would
+        // re-arm what the join superseded (Tesla, design 22 delta review).
+        clearRing(app)
+        retireLocked(app, current, ended = false)
+        return@synchronized current
+      }
       val busy = live ?: readAnswerApplied(app)?.let { Live(it.channel, it.callId) }
       if (busy != null && busy.callId != current.callId) {
         clearRing(app)
@@ -434,11 +452,27 @@ object CallRing {
    */
   fun callStartedFromDart(context: Context, channel: String, callId: String) {
     val app = context.applicationContext
-    synchronized(lock) {
+    val ring = synchronized(lock) {
       live = Live(channel, callId)
       readAnswer(app)?.takeIf { it.callId == callId }?.let { clearAnswer(app) }
+      // The call is live; a native ring for it is over (it was answered in
+      // the app). Left up, its Answer could be pressed into a second
+      // `answered` (Tesla, design 22 delta review).
+      readRing(app)?.takeIf { it.callId == callId }?.also {
+        clearRing(app)
+        retireLocked(app, it, ended = false)
+      }
     }
     Log.i(TAG, "callStarted: m=$callId")
+    ring?.let { IncomingCallNotifier.dismiss(app, it.instance) }
+  }
+
+  /**
+   * The engine that held Dart is being destroyed, so no call can be live in
+   * this process any more (design 22 delta review: the session is the media).
+   */
+  fun mediaGone() {
+    synchronized(lock) { live = null }
   }
 
   /**

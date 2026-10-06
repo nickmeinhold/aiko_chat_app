@@ -11,12 +11,15 @@
 /// Report/Block; the sheet composes both halves.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../call/application/call_end_announcer.dart'
     show callEndAnnouncerProvider;
+import '../../call/application/system_call_providers.dart';
 import '../../call/domain/call_wire.dart'
     show CallRef, callInviteBodyV2, mintCall;
 import '../../call/presentation/call_screen.dart' show pushCall;
@@ -119,6 +122,14 @@ Future<void> startCall(
     // OWED FROM THE MINT, before the send: the ref exists before any ack, and
     // so does the hangup (design 22 temper round 2, Maxwell).
     owedHangup = (channelId: dm.id, call: call);
+    // LIVE FROM THE MINT, too: the native half refuses a second system answer
+    // while a call is live, and for an outgoing call "live" starts here, not
+    // at the call screen's first frame (Tesla, design 22 delta review). The
+    // screen says it again on mount; saying it twice is harmless.
+    unawaited(
+      ref.read(systemCallBridgeProvider)?.callStarted(dm.id, call) ??
+          Future<void>.value(),
+    );
     final rang = await _ring(ref, dm.id, call);
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
     // longer holds here. A mounted check does not survive a subsequent await —

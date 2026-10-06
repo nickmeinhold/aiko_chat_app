@@ -727,6 +727,10 @@ final class CallKitRinger: NSObject {
           SystemCallChannel.shared.emit(
             action: .ended, channel: channel, origin: "displaced", call: old)
           tombstone(old)
+          // A native end of a call kills its session too, or the displaced
+          // call's ghost refuses the call that displaced it (Carnot + Tesla,
+          // design 22 delta review).
+          if liveSession?.call == old { liveSession = nil }
         }
         forgetLiveCall(for: channel, onlyIf: live.uuid)
         releaseLease(live.uuid)
@@ -835,6 +839,7 @@ final class CallKitRinger: NSObject {
     }
     provider.reportCall(with: entry.uuid, endedAt: Date(), reason: .remoteEnded)
     forgetLiveCall(for: channel, onlyIf: entry.uuid)
+    if liveSession?.call == callId { liveSession = nil }
     // TELL DART, as Android's retire does: an unanswered ring is still an
     // answer door in the in-app banner until something ends it (Tesla, PR
     // #210 v2 round 3 — iOS emitted only on displacement).
@@ -999,7 +1004,12 @@ final class CallKitRinger: NSObject {
   private func liveTombstones() -> [String: TimeInterval] {
     let raw = UserDefaults.standard.dictionary(forKey: Self.tombstonesKey) as? [String: TimeInterval] ?? [:]
     let now = Date().timeIntervalSince1970
-    return raw.filter { now - $0.value >= 0 && now - $0.value <= Self.tombstoneTtl }
+    // NO LOWER BOUND: this is the wall clock, and a step backward made every
+    // age negative, so the filter dropped every row and the next prune-on-
+    // write persisted the amnesia (Tesla, design 22 delta review). Keeping a
+    // row too long only refuses a re-ring of a call id that is unique and
+    // already over, so erring long is harmless.
+    return raw.filter { now - $0.value <= Self.tombstoneTtl }
   }
 
   /// Remember [call] as ended. PRUNES ON EVERY WRITE, so the store holds only
@@ -1408,6 +1418,10 @@ extension CallKitRinger: CXProviderDelegate {
       SystemCallChannel.shared.emit(
         action: .ended, channel: channel, origin: "answerRefused", call: answeredCall)
       action.fail()
+      // And end it provider-side: the mapping is gone, so nothing later in
+      // this file could still address this UUID (Tesla, design 22 delta
+      // review). Ending an already-ended call is a no-op.
+      provider.reportCall(with: action.callUUID, endedAt: Date(), reason: .failed)
       return
     }
     // BEFORE fulfilling: from here the entry describes a CALL, not a ring, and
@@ -1486,6 +1500,7 @@ extension CallKitRinger: CXProviderDelegate {
     for (channel, entry) in stored() where entry.uuid == action.callUUID.uuidString {
       guard let call = entry.call else { continue }  // a v1 row: never a call
       tombstone(call)
+      if liveSession?.call == call { liveSession = nil }
       SystemCallChannel.shared.emit(
         action: .ended, channel: channel, origin: "endAction", call: call)
       // SCOPED, and the `where` above is NOT a substitute for it. That clause

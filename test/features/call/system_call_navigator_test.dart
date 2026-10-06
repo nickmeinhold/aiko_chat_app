@@ -30,7 +30,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
-
 void main() {
   setUp(resetCallLaunchGuard);
 
@@ -373,45 +372,38 @@ void main() {
     ], reason: 'the clock started when the answer did, not when the retry did');
   });
 
-  testWidgets('a SECOND held answer gets its own deadline', (tester) async {
-    // Carnot's two-transition path (cage-match round 2). With the deadline
-    // keyed to nothing, answer A arms the timer, answer B is refused one
-    // because a timer already exists, then A's timer fires against a channel it
-    // no longer matches and clears itself — leaving B held forever with no
-    // deadline. The unbounded hold restored by the guard that bounds it.
+  testWidgets('a second answer is REFUSED, and the first keeps its deadline', (
+    tester,
+  ) async {
+    // Design 22 v3.1, the pinned one-call rule at this door too: the held
+    // answer is not displaced by a later one (which used to hang up the call
+    // being held — Tesla, design 22 delta review). The NEW one is released at
+    // once, and the first keeps its own clock.
     await tester.pumpWidget(harness(admitted: null));
     await tester.pumpAndSettle();
 
     bridge.emit(SystemCallActionKind.answered, channel);
     await tester.pump(const Duration(seconds: 20));
 
-    // A second wake, 20s later: the first answer is displaced — and RELEASED,
-    // which is the round-3 fix. This assertion used to read `isEmpty` here,
-    // which is the leak written down as an expectation.
     bridge.emit(SystemCallActionKind.answered, 'dm:second:call');
-    await tester.pump(const Duration(seconds: 11));
-    // A's ORIGINAL deadline has now passed. It must not have taken B's with it.
-    expect(
-      bridge.ended,
-      [channel],
-      reason:
-          "A was released on displacement, and B is still inside ITS own "
-          "window — A's clock is not B's",
-    );
-
-    await tester.pump(const Duration(seconds: 20));
+    await tester.pump();
     expect(bridge.ended, [
-      channel,
       'dm:second:call',
-    ], reason: 'and B must have a deadline of its own that actually fires');
+    ], reason: 'the second answer is refused: its system call is ended');
+
+    await tester.pump(const Duration(seconds: 11));
+    expect(bridge.ended, [
+      'dm:second:call',
+      channel,
+    ], reason: "and A's own deadline still fires — it was never displaced");
   });
 
-  testWidgets('a displaced answer is RELEASED, never dropped', (tester) async {
-    // Carnot's round-3 finding, and the third instance of one class: six sites
-    // wrote the held answer and each decided for itself whether to dispose of
-    // the system call. A second answer overwrote the first and its CallKit call
-    // was never ended — left CONNECTED in the OS with nothing behind it,
-    // forever, with the user's only escape being the red button.
+  testWidgets('a refused second answer is RELEASED, never dropped', (
+    tester,
+  ) async {
+    // Carnot's round-3 class (PR #201): an answer that is not kept must have
+    // its system call ENDED, or the OS shows a connected call with nothing
+    // behind it. Under the one-call rule the answer not kept is the second.
     await tester.pumpWidget(harness(admitted: null));
     await tester.pumpAndSettle();
 
@@ -422,12 +414,12 @@ void main() {
     bridge.emit(SystemCallActionKind.answered, 'dm:second:call');
     await tester.pumpAndSettle();
     expect(bridge.ended, [
-      channel,
-    ], reason: 'the displaced call must be ended, not forgotten');
+      'dm:second:call',
+    ], reason: 'the refused call must be ended, not forgotten');
 
-    // And the new one is held properly, with a deadline of its own.
+    // And the first is still held, with its own deadline.
     await tester.pump(kInAppRingDuration + const Duration(seconds: 1));
-    expect(bridge.ended, [channel, 'dm:second:call']);
+    expect(bridge.ended, ['dm:second:call', channel]);
   });
 
   testWidgets('a session stuck LOADING still ends the call eventually', (
@@ -610,48 +602,37 @@ void main() {
     expect(find.text('CALL $channel'), findsOneWidget);
   });
 
-  testWidgets('a v1 answer never joins a v2 call in the same room', (
-    tester,
-  ) async {
-    await tester.pumpWidget(harness(admitted: null));
-    await tester.pumpAndSettle();
-    bridge.emit(SystemCallActionKind.answered, channel); // v1: no id
-    await tester.pumpAndSettle();
-    ring.admit(channel, call: callA);
-    await tester.pumpAndSettle();
-    expect(
-      find.text('CALL $channel'),
-      findsNothing,
-      reason: 'a missing id is v1, not a wildcard (Kelvin, v2 round 1)',
-    );
-  });
+  // (Two tests here drove "an id-less native action" and are deleted rather
+  // than kept green: calling is v2-only, so an action without a call id is
+  // dropped at the bridge's decoder — see system_call_bridge_test.dart — and
+  // this file's fake cannot represent one. Carnot + Tesla, design 22 delta
+  // review: they had quietly become duplicates of the different-call tests.)
 
-  testWidgets('an id-less ENDED does not drop a v2 hold', (tester) async {
-    await tester.pumpWidget(harness(session: _Session.restoring));
-    await tester.pumpAndSettle();
-    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
-    bridge.emit(SystemCallActionKind.ended, channel); // v1-shaped
-    await tester.pumpAndSettle();
-    ring.admit(channel, call: callA);
-    auth.signIn(me);
-    await tester.pumpAndSettle();
-    expect(find.text('CALL $channel'), findsOneWidget);
-  });
-
-  testWidgets('a second answer on the SAME room for another call ends the '
-      'first system call, by id', (tester) async {
+  testWidgets('a second answer on the SAME room for another call is refused, '
+      'by id', (tester) async {
     await tester.pumpWidget(harness(admitted: null));
     await tester.pumpAndSettle();
     bridge.emit(SystemCallActionKind.answered, channel, call: callA);
     await tester.pumpAndSettle();
     bridge.emit(SystemCallActionKind.answered, channel, call: callB);
     await tester.pumpAndSettle();
-    expect(
-      bridge.endedCalls,
-      contains(callA),
-      reason: 'conservation of ownership — A is released, never dropped',
-    );
-    expect(bridge.endedCalls, isNot(contains(callB)));
+    expect(bridge.endedCalls, [
+      callB,
+    ], reason: 'B is refused and released; A — the call being held — is not');
+  });
+
+  testWidgets('admission is per call AND per channel (oneChannelPerCall)', (
+    tester,
+  ) async {
+    // Carnot, design 22 delta review: an answer for call A on channel B must
+    // not join on the proof of an invite for A admitted on channel A.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    ring.admit(channel, call: callA);
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, 'dm:other:room', call: callA);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('CALL'), findsNothing);
   });
 
   testWidgets('a system ENDED is remembered as a tombstone for its call', (

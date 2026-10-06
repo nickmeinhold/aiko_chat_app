@@ -313,6 +313,11 @@ class _FakeRing extends RingController {
   @override
   void stopRinging(RingStopCause cause) => state = null;
 
+  @override
+  void stopRingingFor(CallRef call, RingStopCause cause) {
+    if (state?.call == call) state = null;
+  }
+
   /// Re-publish a ring, so a test can reach the "already in a call" branch —
   /// which is only reachable with a live call AND a live ring at once.
   void ring(CallInvite invite) => state = invite;

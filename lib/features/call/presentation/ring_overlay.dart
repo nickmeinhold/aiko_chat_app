@@ -163,7 +163,9 @@ class _RingBanner extends ConsumerWidget {
   }
 
   void _ignore(WidgetRef ref, CallInvite invite) {
-    ref.read(incomingRingProvider.notifier).stopRinging(RingStopCause.declined);
+    ref
+        .read(incomingRingProvider.notifier)
+        .stopRingingFor(invite.call, RingStopCause.declined);
     _endSystemCall(ref, invite);
   }
 
@@ -195,7 +197,9 @@ class _RingBanner extends ConsumerWidget {
       Future<void>.delayed(Duration.zero, () {
         ref
             .read(incomingRingProvider.notifier)
-            .stopRinging(RingStopCause.answeredOverSpentCall);
+            // KEYED: a turn has passed, and another call may be ringing now
+            // (Tesla, design 22 delta review).
+            .stopRingingFor(invite.call, RingStopCause.answeredOverSpentCall);
         _endSystemCall(ref, invite);
         pushCallOn(router, invite.channelId, call: invite.call);
       });
@@ -206,7 +210,7 @@ class _RingBanner extends ConsumerWidget {
     // painted over the live call for its whole duration.
     ref
         .read(incomingRingProvider.notifier)
-        .stopRinging(RingStopCause.answeredInApp);
+        .stopRingingFor(invite.call, RingStopCause.answeredInApp);
     _endSystemCall(ref, invite);
     // Router from the PROVIDER, not from context: this widget lives above the
     // Router in `MaterialApp.router`'s builder, so `context.push` would throw
