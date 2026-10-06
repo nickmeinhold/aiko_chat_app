@@ -38,6 +38,28 @@ dependencies:
   riverpod_annotation: ^4.0.3
   go_router: ^17.3.0
   livekit_client: ^2.10.0
+  # DECLARED, not new. It was already in the tree transitively via
+  # livekit_client — this line adds no package and moves no version, it just
+  # makes a direct import legal (`depend_on_referenced_packages`). The P2P
+  # direct-path spike uses PeerConnection outside LiveKit's wrapper; see
+  # features/call/data/p2p_peer_session.dart and claude-tasks#3740.
+  #
+  # EXACT, not a caret, and the pin is a NATIVE constraint wearing a Dart
+  # costume. livekit_client pins `flutter_webrtc: 1.6.0` exactly for a reason it
+  # states in its own pubspec: both packages depend on the WebRTC-SDK CocoaPod,
+  # and one binary can hold only one copy of a native framework. So while
+  # livekit_client is in the tree its pin is the tighter constraint and ours is
+  # decorative — but a caret here would have said something the resolution does
+  # not, and would float freely the moment livekit_client leaves the graph,
+  # which is exactly what the fallback-vs-deletion proposal contemplates.
+  # Matching the constraint to the invariant means the day LiveKit goes, this
+  # line still holds the native framework still.
+  #
+  # Failure mode, on purpose: if livekit_client moves its pin, resolution FAILS
+  # here rather than following it. That is the loud version. A caret would have
+  # tracked the move silently, which on a native media framework is the one
+  # thing we do not want happening without a decision.
+  flutter_webrtc: 1.6.0
   # ANDROID ONLY at runtime, deliberately. `initializeApp` is never called on
   # Apple platforms — iOS takes its APNs device token natively, so Google is not
   # an intermediary there. See features/notifications/domain/device_platform.dart.
