@@ -250,4 +250,24 @@ void main() {
       }
     });
   });
+
+  // ---- call/2: ONE grammar for the call id, on all three sides --------------
+  test('the call-id grammar is byte-identical in Dart, Kotlin and Swift', () {
+    // The island copies `m` out of the signed body with its own copy of this
+    // pattern (pinned by the shared golden vectors). If any app-side copy
+    // drifts, a well-formed call is refused on one platform and admitted on
+    // another — the wake rings, the screen will not answer.
+    const grammar = '[0-7][0-9A-HJKMNP-TV-Z]{25}';
+    final dart = File('lib/features/call/domain/call_wire.dart').readAsStringSync();
+    final kotlin = File(
+      'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app/CallRing.kt',
+    ).readAsStringSync();
+    expect(dart, contains(grammar), reason: 'Dart');
+    expect(kotlin, contains('Regex("$grammar")'), reason: 'Kotlin');
+    expect(swift, contains('"^$grammar\$"'), reason: 'Swift');
+  });
+
+  test('Swift emits the v2 call id under the key Dart decodes', () {
+    expect(systemCallChannelSource(), contains('event["call"]'));
+  });
 }
