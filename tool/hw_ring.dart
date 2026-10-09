@@ -2,6 +2,7 @@
 // a Pixel 4 against enspyr, 2026-10-08.
 //
 //   dart run tool/hw_ring.dart ring             # alive → mint → cold → invite → rang?
+//   dart run tool/hw_ring.dart ring --island    # the same, but the ISLAND sends the wake
 //   dart run tool/hw_ring.dart tap Answer --shade
 //   dart run tool/hw_ring.dart island 1m        # the join proof: a video-token mint
 //   dart run tool/hw_ring.dart end <call>
@@ -21,6 +22,13 @@
 //      the "cold start" was warm. `cold` fails if a pid survives.
 //   4. EXPAND THE SHADE BEFORE `uiautomator dump`. Notification actions are absent
 //      from the dump while the shade is collapsed: `tap Answer --shade`.
+//
+// WHO SENDS THE WAKE. By default the harness sends the FCM wake itself
+// (tool/fcm_push.py, straight from this machine) — a RECEIVER test that needs no
+// island sender. `--island` sends only the signed invite/end and lets the island's
+// own FCM path wake the handset — the END-TO-END test. The 2026-10-08 run was the
+// former and was briefly reported as the latter (island tab, 2026-10-09): enspyr
+// had no FCM credential at the time. Every result line says which one it was.
 //
 // And one the bash original had: it sent both halves of `invite` to /dev/null, so
 // a failed signed send or a rejected FCM push still printed "pushed". Here every
@@ -55,11 +63,12 @@ class HarnessFailure implements Exception {
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty) return _usage();
-  final rest = args.sublist(1);
+  final viaIsland = args.contains('--island');
+  final rest = args.sublist(1).where((a) => a != '--island').toList();
   try {
     switch (args.first) {
       case 'ring':
-        await ring(rest.isEmpty ? null : rest.first);
+        await ring(rest.isEmpty ? null : rest.first, viaIsland: viaIsland);
       case 'alive':
         await alive();
       case 'mint':
@@ -67,11 +76,11 @@ Future<void> main(List<String> args) async {
       case 'cold':
         await cold();
       case 'invite':
-        await invite(rest.isEmpty ? await mint() : rest.first);
+        await invite(rest.isEmpty ? await mint() : rest.first, viaIsland: viaIsland);
       case 'wake':
         await _fcm('invite', _need(rest, 'call id'));
       case 'end':
-        await end(_need(rest, 'call id'));
+        await end(_need(rest, 'call id'), viaIsland: viaIsland);
       case 'endwake':
         await _fcm('end', _need(rest, 'call id'));
       case 'waitlog':
@@ -96,15 +105,23 @@ Future<void> main(List<String> args) async {
 
 /// The whole cold+locked ring in one command: the four traps in order, ending at
 /// the device's own word that it rang this exact call.
-Future<void> ring(String? callId) async {
+Future<void> ring(String? callId, {bool viaIsland = false}) async {
   await alive();
   final call = callId ?? await mint();
   await cold();
   await _run('adb', ['logcat', '-c']);
-  await invite(call);
-  final line = await waitLog(RegExp('ring: c=\\S+ m=$call'), const Duration(seconds: 25));
-  stdout.writeln('RANG $call\n  $line\nnext: tap Answer --shade | tap Decline --shade | end $call');
+  final sent = _clock();
+  await invite(call, viaIsland: viaIsland);
+  // The island's wake can trail the signed send by FCM latency (measured up to
+  // 14s), so its window is wider than the harness's own overlapped wake.
+  final within = Duration(seconds: viaIsland ? 40 : 25);
+  final line = await waitLog(RegExp('ring: c=\\S+ m=$call'), within);
+  stdout.writeln('RANG $call — wake sent by ${_sender(viaIsland)}, invite at $sent\n  $line\n'
+      'next: tap Answer --shade | tap Decline --shade | end $call${viaIsland ? ' --island' : ''}'
+      '${viaIsland ? '\nthen ask the island tab to read its log from $sent ("fcm sent", android_ready)' : ''}');
 }
+
+String _sender(bool viaIsland) => viaIsland ? 'the ISLAND (end-to-end)' : 'this machine (receiver test)';
 
 /// Trap 1: the handset must reach the network before silence means anything.
 Future<void> alive() async {
@@ -138,20 +155,19 @@ Future<void> cold() async {
 }
 
 /// Trap 2: the signed invite and the wake overlap, in the island's order.
-Future<void> invite(String call) async {
-  final signed = _probe('invite', call);
-  await Future<void>.delayed(_wakeLag);
-  await _fcm('invite', call);
-  await signed;
-  stdout.writeln('invite $call: signed + woken');
-}
+/// With [viaIsland] only the signed message goes out and the island wakes.
+Future<void> invite(String call, {bool viaIsland = false}) => _signAndWake('invite', call, viaIsland);
 
-Future<void> end(String call) async {
-  final signed = _probe('end', call);
-  await Future<void>.delayed(_wakeLag);
-  await _fcm('end', call);
+Future<void> end(String call, {bool viaIsland = false}) => _signAndWake('end', call, viaIsland);
+
+Future<void> _signAndWake(String verb, String call, bool viaIsland) async {
+  final signed = _probe(verb, call);
+  if (!viaIsland) {
+    await Future<void>.delayed(_wakeLag);
+    await _fcm(verb, call);
+  }
   await signed;
-  stdout.writeln('end $call: signed + woken');
+  stdout.writeln('$verb $call: signed; wake sent by ${_sender(viaIsland)}');
 }
 
 /// Wait for an AikoRing logcat line; returns it.
@@ -287,7 +303,7 @@ String _clock() => DateTime.now().toIso8601String().substring(11, 19);
 
 void _usage() {
   stderr.writeln('usage: dart run tool/hw_ring.dart '
-      '<ring [call]|alive|mint|cold|invite [call]|wake call|end call|endwake call|'
+      '<ring [call] [--island]|alive|mint|cold|invite [call] [--island]|wake call|end call [--island]|endwake call|'
       'waitlog regex [secs]|tap label [--shade]|notifs|focus|island [since]>');
   exitCode = 64;
 }
