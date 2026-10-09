@@ -148,13 +148,21 @@ Future<String> mint() async {
 
 /// Trap 3: Home first, or `am kill` does nothing.
 Future<void> cold() async {
+  // Home does nothing on the keyguard: a phone that locked with the app on top
+  // leaves it TOP_SLEEPING, which `am kill` will not touch (2026-10-09).
+  final window = await _run('adb', ['shell', 'dumpsys', 'window']);
+  if (window.contains('isKeyguardShowing=true')) {
+    throw HarnessFailure('cold: the handset is LOCKED — unlock it first; Home cannot leave the '
+        'keyguard, so the app stays on top and am kill is a no-op. cold re-locks it after the kill.');
+  }
   await _run('adb', ['shell', 'input', 'keyevent', '3']);
   await Future<void>.delayed(const Duration(seconds: 2));
   await _run('adb', ['shell', 'am', 'kill', _pkg]);
   await Future<void>.delayed(const Duration(seconds: 1));
   final pid = (await Process.run('adb', ['shell', 'pidof', _pkg])).stdout.toString().trim();
   if (pid.isNotEmpty) throw HarnessFailure('cold: pid $pid survived am kill — not a cold start');
-  stdout.writeln('cold: no process');
+  await _run('adb', ['shell', 'input', 'keyevent', '223']); // KEYCODE_SLEEP: cold AND locked
+  stdout.writeln('cold: no process, screen off');
 }
 
 /// Trap 2: the signed invite and the wake overlap, in the island's order.
