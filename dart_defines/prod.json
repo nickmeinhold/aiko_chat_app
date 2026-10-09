@@ -1,3 +1,4 @@
 {
-  "ISLAND_BASE_URL": "https://chat.imagineering.cc"
+  "ISLAND_BASE_URL": "https://chat.imagineering.cc",
+  "ENABLE_CALLING": "true"
 }

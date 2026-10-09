@@ -9,38 +9,34 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Whether 1:1 A/V calling is reachable in this build. **Off unless
-/// `--dart-define=ENABLE_CALLING=true`.**
+/// `--dart-define=ENABLE_CALLING=true` — which `dart_defines/prod.json` now
+/// carries, so every store build since 0.0.6 has calling ON.**
 ///
-/// Calling works — DM long-press → Call opens a LiveKit room and the ring
-/// reaches a live peer. It owed the user two things. **One is now built:**
+/// The gate held while calling owed the user two things. Both are now built:
 ///
-///  1. ~~The pre-connect disclosure.~~ **DONE.** Media still terminates at the
-///     island's SFU, which decrypts it (forced-relay, no `e2eeOptions`) — that
-///     has not changed and will not without media E2EE — but the user is now
-///     TOLD, which is what Decision 9d actually required.
+///  1. **The pre-connect disclosure.** Media still terminates at the island's
+///     SFU, which decrypts it (forced-relay, no `e2eeOptions`), and the user is
+///     TOLD — "not end-to-end encrypted", never "in the clear", because WebRTC
+///     mandates DTLS-SRTP. See `features/call/domain/media_confidentiality.dart`.
+///  2. **A ring that reaches a closed app.** iOS rings through PushKit/CallKit;
+///     Android through an FCM data wake and a full-screen ring (PR #210,
+///     design 22). Verified end to end through enspyr 2026-10-09: island sends
+///     the wake, a cold locked Pixel rings in 0.40 s, Answer joins.
 ///
-///     Two scope notes, both corrected in cage-match rather than discovered
-///     later. It is NOT "in the clear": WebRTC mandates DTLS-SRTP, so the media
-///     is encrypted on the wire and decrypted AT the island — the honest claim
-///     is "not end-to-end encrypted", and the UI says exactly that. And "before
-///     connect" holds for the CALLEE, who must press Answer with the warning on
-///     the same surface; for the caller the indicator is concurrent with
-///     connect, because an indicator cannot gate an action that has no gate.
-///     See `features/call/domain/media_confidentiality.dart`.
-///  2. **A ring that reaches a closed app.** CallKit is designed, not built, so
-///     an invitation to a backgrounded app is silence — and a caller has no way
-///     to know that is what happened. **This is now the only thing holding the
-///     gate.**
+/// Opened on Nick's call, 2026-10-09, for ALL platforms. One gap is accepted,
+/// not closed: **macOS has no closed-app ring** — a call reaches the Mac only
+/// while the app is open. The gap the flag existed to hide is therefore still
+/// real there; it was weighed and shipped, not missed.
 ///
-/// So the store build still closes every door into calling rather than deleting
-/// the code behind them: dev and test builds pass the define and keep exercising
-/// the feature while the remaining gap is closed.
+/// What this flag does NOT cover: cross-island calling carries its own gate
+/// (island design 13, Decision 9c / claude-tasks#3697). It is not opened by
+/// this flag because callee-hosting is unbuilt — every call is hosted by the
+/// island you are signed in to — so a cross-island call cannot be placed. When
+/// it is built, #3697 must close first.
 ///
-/// NOT a licence to flip this flag. Gap 2 is a capability the user cannot work
-/// around and cannot even observe failing — silence is indistinguishable from
-/// being ignored. And cross-island calling carries its own separate gate
-/// (island design 13, Decision 9c / claude-tasks#3697), which this disclosure
-/// satisfies one arm of but does not retire.
+/// The flag stays (rather than being deleted) so a dev or test build can still
+/// run calling OFF, and a bare `flutter build` without prod.json stays
+/// calling-less (claude-tasks#4517).
 const kCallingEnabled = bool.fromEnvironment('ENABLE_CALLING');
 
 /// [kCallingEnabled] as a provider, so a test can override it and drive BOTH

@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:aiko_chat_app/app/feature_flags.dart';
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
@@ -75,11 +78,19 @@ void main() {
 
   group('the shipped default', () {
     test('calling is OFF unless a build explicitly defines ENABLE_CALLING', () {
-      // The tripwire for the whole file. Flip this const (or slip
-      // ENABLE_CALLING=true into a release dart-define) and calling ships with
-      // neither the disclosure nor a ring that reaches a closed app — so the
-      // default is asserted directly, not merely relied upon by the cases below.
+      // A build with no defines (this test run, a bare `flutter build`) stays
+      // calling-less, so the cases below exercise both states via the provider.
       expect(kCallingEnabled, isFalse);
+    });
+
+    test('the store config turns calling ON (opened 2026-10-09)', () {
+      // The release tripwire, inverted when the gate opened: every store build
+      // passes dart_defines/prod.json, so this is what ships. Dropping the key
+      // would silently ship a calling-less release — the 0.0.5 failure mode,
+      // whose notes promised calls that the build could not place.
+      final defines =
+          jsonDecode(File('dart_defines/prod.json').readAsStringSync()) as Map;
+      expect(defines['ENABLE_CALLING'], 'true');
     });
   });
 
