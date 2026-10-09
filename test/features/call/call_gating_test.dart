@@ -8,12 +8,15 @@ import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
 import 'package:aiko_chat_app/features/chat/domain/channel.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:aiko_chat_app/features/moderation/presentation/message_actions.dart';
+import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
+    show callRouteRedirect;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../support/test_helpers.dart';
+import 'call_fixtures.dart';
 
 /// Calling is gated OFF for the store build (`app/feature_flags.dart`): it works,
 /// but it does not yet disclose that media crosses the island's SFU in the clear,
@@ -58,6 +61,7 @@ void main() {
   );
 
   final invite = CallInvite(
+    call: kTestCall,
     inviteId: 'inv-1',
     islandMsgId: 'srv-1',
     channelId: 'dm:me:robin',
@@ -227,6 +231,19 @@ void main() {
         isNot(contains('/call/:channelId')),
       );
     });
+
+    test(
+      'a /call with no call of ours is redirected home — it joins nothing',
+      () {
+        // Design 22 v2.5: a joined room is a call, and a call has a CallRef. A
+        // bare or crafted deep link names none, so it never reaches CallScreen:
+        // no room is joined that no event could address (Tesla, design 22
+        // temper round 1).
+        expect(callRouteRedirect(null), '/');
+        expect(callRouteRedirect('junk'), '/');
+        expect(callRouteRedirect((call: kTestCall, outgoing: false)), isNull);
+      },
+    );
 
     test('gated ON: /call is registered', () {
       // Must-fail arm: without it, a typo in the path string above would make

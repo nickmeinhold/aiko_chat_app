@@ -22,7 +22,7 @@ final systemCallBridgeProvider = Provider<SystemCallBridge?>((ref) {
   if (kIsWeb) return null;
   if (!ref.watch(callingEnabledProvider)) return null;
   return switch (defaultTargetPlatform) {
-    TargetPlatform.iOS => AppleSystemCallBridge(),
+    TargetPlatform.iOS || TargetPlatform.android => NativeSystemCallBridge(),
     _ => null,
   };
 });

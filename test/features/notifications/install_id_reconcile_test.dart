@@ -111,11 +111,9 @@ void main() {
     await registrar.reconcileInstallId();
     await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    expect(
-      api.registeredInstallIds,
-      ['ID-1'],
-      reason: 'an anomaly is surfaced, never propagated',
-    );
+    expect(api.registeredInstallIds, [
+      'ID-1',
+    ], reason: 'an anomaly is surfaced, never propagated');
   });
 
   test('nothing registered yet is left to start()', () async {

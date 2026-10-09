@@ -22,7 +22,7 @@ import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/call/domain/system_call_action.dart';
 import 'package:aiko_chat_app/features/call/presentation/call_screen.dart'
-    show resetCallLaunchGuard;
+    show debugMarkMountedCallEnded, resetCallLaunchGuard;
 import 'package:aiko_chat_app/features/call/presentation/system_call_navigator.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter/material.dart';
@@ -372,45 +372,38 @@ void main() {
     ], reason: 'the clock started when the answer did, not when the retry did');
   });
 
-  testWidgets('a SECOND held answer gets its own deadline', (tester) async {
-    // Carnot's two-transition path (cage-match round 2). With the deadline
-    // keyed to nothing, answer A arms the timer, answer B is refused one
-    // because a timer already exists, then A's timer fires against a channel it
-    // no longer matches and clears itself — leaving B held forever with no
-    // deadline. The unbounded hold restored by the guard that bounds it.
+  testWidgets('a second answer is REFUSED, and the first keeps its deadline', (
+    tester,
+  ) async {
+    // Design 22 v3.1, the pinned one-call rule at this door too: the held
+    // answer is not displaced by a later one (which used to hang up the call
+    // being held — Tesla, design 22 delta review). The NEW one is released at
+    // once, and the first keeps its own clock.
     await tester.pumpWidget(harness(admitted: null));
     await tester.pumpAndSettle();
 
     bridge.emit(SystemCallActionKind.answered, channel);
     await tester.pump(const Duration(seconds: 20));
 
-    // A second wake, 20s later: the first answer is displaced — and RELEASED,
-    // which is the round-3 fix. This assertion used to read `isEmpty` here,
-    // which is the leak written down as an expectation.
     bridge.emit(SystemCallActionKind.answered, 'dm:second:call');
-    await tester.pump(const Duration(seconds: 11));
-    // A's ORIGINAL deadline has now passed. It must not have taken B's with it.
-    expect(
-      bridge.ended,
-      [channel],
-      reason:
-          "A was released on displacement, and B is still inside ITS own "
-          "window — A's clock is not B's",
-    );
-
-    await tester.pump(const Duration(seconds: 20));
+    await tester.pump();
     expect(bridge.ended, [
-      channel,
       'dm:second:call',
-    ], reason: 'and B must have a deadline of its own that actually fires');
+    ], reason: 'the second answer is refused: its system call is ended');
+
+    await tester.pump(const Duration(seconds: 11));
+    expect(bridge.ended, [
+      'dm:second:call',
+      channel,
+    ], reason: "and A's own deadline still fires — it was never displaced");
   });
 
-  testWidgets('a displaced answer is RELEASED, never dropped', (tester) async {
-    // Carnot's round-3 finding, and the third instance of one class: six sites
-    // wrote the held answer and each decided for itself whether to dispose of
-    // the system call. A second answer overwrote the first and its CallKit call
-    // was never ended — left CONNECTED in the OS with nothing behind it,
-    // forever, with the user's only escape being the red button.
+  testWidgets('a refused second answer is RELEASED, never dropped', (
+    tester,
+  ) async {
+    // Carnot's round-3 class (PR #201): an answer that is not kept must have
+    // its system call ENDED, or the OS shows a connected call with nothing
+    // behind it. Under the one-call rule the answer not kept is the second.
     await tester.pumpWidget(harness(admitted: null));
     await tester.pumpAndSettle();
 
@@ -421,12 +414,12 @@ void main() {
     bridge.emit(SystemCallActionKind.answered, 'dm:second:call');
     await tester.pumpAndSettle();
     expect(bridge.ended, [
-      channel,
-    ], reason: 'the displaced call must be ended, not forgotten');
+      'dm:second:call',
+    ], reason: 'the refused call must be ended, not forgotten');
 
-    // And the new one is held properly, with a deadline of its own.
+    // And the first is still held, with its own deadline.
     await tester.pump(kInAppRingDuration + const Duration(seconds: 1));
-    expect(bridge.ended, [channel, 'dm:second:call']);
+    expect(bridge.ended, ['dm:second:call', channel]);
   });
 
   testWidgets('a session stuck LOADING still ends the call eventually', (
@@ -529,6 +522,33 @@ void main() {
     expect(bridge.ended, ['dm:ccc:ddd']);
   });
 
+  testWidgets('an answer over a SPENT call screen closes it and joins', (
+    tester,
+  ) async {
+    // "Call ended" is still on screen and still holds the launch latch, but
+    // the call is over — so the one-call refusal above does not apply, and a
+    // push into the held latch was a silent no-op: answer consumed, recorded
+    // as joined, no room. (Tesla, PR #210 v2 round 2.)
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsOneWidget);
+    debugMarkMountedCallEnded();
+
+    ring.admit('dm:ccc:ddd');
+    bridge.emit(SystemCallActionKind.answered, 'dm:ccc:ddd');
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL dm:ccc:ddd'), findsOneWidget);
+    expect(find.text('CALL $channel'), findsNothing);
+    expect(
+      bridge.ended,
+      isNot(contains('dm:ccc:ddd')),
+      reason: 'the answered call is joined, not refused',
+    );
+  });
+
   testWidgets('answering silences the in-app ring for the same call', (
     tester,
   ) async {
@@ -558,6 +578,126 @@ void main() {
     );
     expect(container.read(systemCallBridgeProvider), isNull);
   });
+
+  // ---- v2: one channel, two calls (design 21 v2) ----------------------------
+  final callA = CallRef('01JABCDEFGHJKMNPQRSTVWXYZ0');
+  final callB = CallRef('7ZZZZZZZZZZZZZZZZZZZZZZZZZ');
+
+  testWidgets('an ENDED for another call on this channel keeps the answer', (
+    tester,
+  ) async {
+    // The remains of an older call (its ring expired, its `ended` delivered
+    // late) must not drop the answer the user just gave to a newer one. v1
+    // could not tell them apart; v2 names the call.
+    await tester.pumpWidget(harness(session: _Session.restoring));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
+    bridge.emit(SystemCallActionKind.ended, channel, call: callB);
+    await tester.pumpAndSettle();
+    ring.admit(channel, call: callA);
+    auth.signIn(me);
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL $channel'), findsOneWidget);
+  });
+
+  // (Two tests here drove "an id-less native action" and are deleted rather
+  // than kept green: calling is v2-only, so an action without a call id is
+  // dropped at the bridge's decoder — see system_call_bridge_test.dart — and
+  // this file's fake cannot represent one. Carnot + Tesla, design 22 delta
+  // review: they had quietly become duplicates of the different-call tests.)
+
+  testWidgets('a second answer on the SAME room for another call is refused, '
+      'by id', (tester) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel, call: callB);
+    await tester.pumpAndSettle();
+    expect(bridge.endedCalls, [
+      callB,
+    ], reason: 'B is refused and released; A — the call being held — is not');
+  });
+
+  testWidgets('admission is per call AND per channel (oneChannelPerCall)', (
+    tester,
+  ) async {
+    // Carnot, design 22 delta review: an answer for call A on channel B must
+    // not join on the proof of an invite for A admitted on channel A.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    ring.admit(channel, call: callA);
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, 'dm:other:room', call: callA);
+    await tester.pump();
+    expect(find.textContaining('CALL'), findsNothing);
+    expect(
+      bridge.endedCalls,
+      [callA],
+      reason:
+          'released AT ONCE — admitted on another channel is "never", not '
+          '"not yet", so no connected system call is left to the deadline',
+    );
+  });
+
+  testWidgets('a system ENDED is remembered as a tombstone for its call', (
+    tester,
+  ) async {
+    // Design 22 v4.2: a lock-screen decline before Flutter existed must never
+    // become a banner when the invitation arrives over the websocket.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.ended, channel, call: callA);
+    await tester.pumpAndSettle();
+    expect(ring.systemEnded, [callA]);
+  });
+
+  testWidgets('joining call A never silences the banner of call B', (
+    tester,
+  ) async {
+    // Tesla + Carnot, PR #210 v2 round 3: the join admitted by IDENTITY and
+    // then stopped whatever was ringing. A answered on the lock screen, B
+    // became the live banner while the session restored, and the join of A
+    // silenced B.
+    await tester.pumpWidget(
+      harness(session: _Session.restoring, admitted: null),
+    );
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
+    ring.admit(channel, call: callA);
+    await tester.pumpAndSettle();
+    ring.admit('dm:ccc:ddd', call: callB);
+    await tester.pumpAndSettle();
+
+    auth.signIn(me);
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL $channel'), findsOneWidget, reason: 'A joined');
+    expect(ring.state?.call, callB, reason: "B's banner still rings");
+  });
+
+  testWidgets('an answer to call A never joins call B on the same channel', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+
+    bridge.emit(SystemCallActionKind.answered, channel, call: callA);
+    await tester.pumpAndSettle();
+    ring.admit(channel, call: callB);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('CALL $channel'),
+      findsNothing,
+      reason: 'admitted, but a DIFFERENT call — the answer was not for it',
+    );
+
+    ring.admit(channel, call: callA);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsOneWidget);
+  });
 }
 
 /// A stand-in for CallKit. The real one is an `EventChannel` fed by
@@ -567,16 +707,39 @@ void main() {
 class _FakeBridge implements SystemCallBridge {
   final _controller = StreamController<SystemCallAction>.broadcast();
   final List<String> ended = [];
+  final List<CallRef> endedCalls = [];
+  final List<CallRef> started = [];
 
-  void emit(SystemCallActionKind kind, String channelId) =>
-      _controller.add(SystemCallAction(kind: kind, channelId: channelId));
+  void emit(SystemCallActionKind kind, String channelId, {CallRef? call}) =>
+      _controller.add(
+        SystemCallAction(
+          kind: kind,
+          channelId: channelId,
+          call: call ?? _callOn(channelId),
+        ),
+      );
 
   @override
   Stream<SystemCallAction> get actions => _controller.stream;
 
   @override
-  Future<void> end(String channelId) async => ended.add(channelId);
+  Future<void> end(String channelId, CallRef call) async {
+    ended.add(channelId);
+    endedCalls.add(call);
+  }
+
+  @override
+  Future<void> callStarted(String channelId, CallRef call) async {
+    started.add(call);
+  }
 }
+
+/// ONE DISTINCT CALL PER CHANNEL unless a test names one. Defaulting every
+/// emit and admission to one shared ref would silently make two calls on two
+/// channels the SAME call — and the tests below that are about two calls would
+/// then pass for the wrong reason.
+final Map<String, CallRef> _calls = {};
+CallRef _callOn(String channelId) => _calls.putIfAbsent(channelId, mintCall);
 
 /// The session has THREE states, not two, and the third is the one a cold start
 /// spends its first seconds in. Collapsing "still restoring" into "nobody is
@@ -631,8 +794,9 @@ class _FakeRing extends RingController {
   _FakeRing([this._initialChannel]);
   final String? _initialChannel;
 
-  static CallInvite inviteFor(String channelId) => CallInvite(
-    inviteId: 'inv-$channelId',
+  static CallInvite inviteFor(String channelId, {CallRef? call}) => CallInvite(
+    call: call ?? _callOn(channelId),
+    inviteId: 'inv-$channelId-${(call ?? _callOn(channelId)).id}',
     islandMsgId: 'srv-$channelId',
     channelId: channelId,
     from: const MessageSender(
@@ -650,7 +814,21 @@ class _FakeRing extends RingController {
   @override
   void stopRinging(RingStopCause cause) => state = null;
 
+  @override
+  void stopRingingFor(CallRef call, RingStopCause cause) {
+    if (state?.call == call) state = null;
+  }
+
+  final List<CallRef> systemEnded = [];
+
+  @override
+  void noteSystemEnded(CallRef call) {
+    systemEnded.add(call);
+    stopRingingFor(call, RingStopCause.endedInSystemUi);
+  }
+
   /// `admitRing` accepted an invitation for [channelId] — the websocket
   /// delivered it and the signature checked out.
-  void admit(String channelId) => state = inviteFor(channelId);
+  void admit(String channelId, {CallRef? call}) =>
+      state = inviteFor(channelId, call: call);
 }

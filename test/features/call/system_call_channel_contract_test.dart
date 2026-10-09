@@ -85,7 +85,7 @@ void main() {
       'lib/features/call/data/system_call_bridge.dart',
     ).readAsStringSync();
     final invoked = RegExp(
-      r"invokeMethod<[^>]*>\(\s*'([A-Za-z0-9_]+)'",
+      r"(?:invokeMethod<[^>]*>|_invoke)\(\s*'([A-Za-z0-9_]+)'",
     ).allMatches(dart).map((m) => m.group(1)!).toSet();
     expect(
       invoked,
@@ -177,5 +177,121 @@ void main() {
     ).readAsStringSync();
     expect(dart, contains("event['action']"));
     expect(dart, contains("event['channel']"));
+  });
+
+  // ---- ANDROID: the same contract, a third side ----
+  //
+  // `NativeSystemCallBridge` is ONE Dart class for both platforms, so every pin
+  // above has to hold for Kotlin too. A Kotlin-only rename would surface on a
+  // handset as an Answer that does nothing, with iOS still green.
+  group('the Kotlin side', () {
+    const kotlinDir =
+        'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app';
+    final channels = File('$kotlinDir/CallChannels.kt').readAsStringSync();
+    final ring = File('$kotlinDir/CallRing.kt').readAsStringSync();
+
+    test('positive control — the files read and carry the channel code', () {
+      expect(channels, contains('EventChannel'));
+      expect(ring, contains('fun handle('));
+    });
+
+    test('both channel names exist verbatim', () {
+      expect(channels, contains('"$kSystemCallActionsChannel"'));
+      expect(channels, contains('"$kSystemCallControlChannel"'));
+    });
+
+    test('the method Dart invokes, Kotlin answers', () {
+      final dart = File(
+        'lib/features/call/data/system_call_bridge.dart',
+      ).readAsStringSync();
+      final invoked = RegExp(
+        r"(?:invokeMethod<[^>]*>|_invoke)\(\s*'([A-Za-z0-9_]+)'",
+      ).allMatches(dart).map((m) => m.group(1)!).toSet();
+      final handled = RegExp(
+        r'"([A-Za-z0-9_]+)" ->',
+      ).allMatches(channels).map((m) => m.group(1)!).toSet();
+      expect(invoked, isNotEmpty);
+      expect(invoked.difference(handled), isEmpty);
+    });
+
+    test('every action kind Dart knows is one Kotlin emits, and no other', () {
+      final emitted = RegExp(
+        r'const val ACTION_[A-Z]+ = "([a-z]+)"',
+      ).allMatches(channels).map((m) => m.group(1)!).toSet();
+      expect(emitted, isNotEmpty, reason: 'regex blind');
+      expect(SystemCallActionKind.values.map((k) => k.name).toSet(), emitted);
+    });
+
+    test('the payload keys are the same words on both sides', () {
+      for (final key in ['action', 'channel', 'call']) {
+        expect(
+          channels,
+          contains('put("$key"'),
+          reason: 'Kotlin must emit `$key` under exactly this key',
+        );
+      }
+      final dart = File(
+        'lib/features/call/data/system_call_bridge.dart',
+      ).readAsStringSync();
+      expect(
+        dart,
+        contains("event['call']"),
+        reason: 'Dart must decode the v2 call id from the key Kotlin emits',
+      );
+    });
+
+    test('the wake kinds are the strings the iOS ringer switches on', () {
+      // The island is the authority (`WakeKind` in push_result.py) and is in
+      // another repo; Swift was live-verified against it, so Kotlin is pinned
+      // to Swift. A typo here would make Android silently never ring.
+      for (final kind in ['call_invite', 'call_end']) {
+        expect(swift, contains('case "$kind"'));
+        expect(ring, contains('= "$kind"'));
+      }
+    });
+  });
+
+  // ---- call/2: ONE grammar for the call id, on all three sides --------------
+  test('the call-id grammar is byte-identical in Dart, Kotlin and Swift', () {
+    // The island copies `m` out of the signed body with its own copy of this
+    // pattern (pinned by the shared golden vectors). If any app-side copy
+    // drifts, a well-formed call is refused on one platform and admitted on
+    // another — the wake rings, the screen will not answer.
+    const grammar = '[0-7][0-9A-HJKMNP-TV-Z]{25}';
+    final dart = File(
+      'lib/features/call/domain/call_wire.dart',
+    ).readAsStringSync();
+    final kotlin = File(
+      'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app/CallRing.kt',
+    ).readAsStringSync();
+    expect(dart, contains(grammar), reason: 'Dart');
+    expect(kotlin, contains('Regex("$grammar")'), reason: 'Kotlin');
+    expect(swift, contains(r'#"\A' + grammar + r'\z"#'), reason: 'Swift');
+  });
+
+  test('the tombstone lifetime is ONE quantity in Dart, Kotlin and Swift', () {
+    // How long an ended call stays ended on a device (design 22 v4.1). Dart's
+    // half refuses a late banner; Kotlin's refuses a late native ring. If they
+    // drift, one door rings a call the other already buried.
+    final kotlin = File(
+      'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app/CallRing.kt',
+    ).readAsStringSync();
+    final ms = RegExp(
+      r'const val TOMBSTONE_TTL_MS = ([0-9_]+)L',
+    ).firstMatch(kotlin)?.group(1);
+    expect(ms, isNotNull, reason: 'the Kotlin constant did not parse');
+    expect(
+      int.parse(ms!.replaceAll('_', '')),
+      kCallTombstoneTtl.inMilliseconds,
+    );
+    final swiftTtl = RegExp(
+      r'static let tombstoneTtl: TimeInterval = (\d+)',
+    ).firstMatch(swift)?.group(1);
+    expect(swiftTtl, isNotNull, reason: 'the Swift constant did not parse');
+    expect(int.parse(swiftTtl!), kCallTombstoneTtl.inSeconds);
+  });
+
+  test('Swift emits the v2 call id under the key Dart decodes', () {
+    expect(systemCallChannelSource(), contains('event["call"]'));
   });
 }

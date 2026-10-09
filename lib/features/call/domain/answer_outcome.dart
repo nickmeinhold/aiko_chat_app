@@ -87,4 +87,9 @@ enum RingStopCause {
   /// Answered while a spent call screen was still mounted — the banner pops it
   /// and lets the answer through a turn later.
   answeredOverSpentCall,
+
+  /// The system call UI ended this call: declined on the lock screen, timed
+  /// out natively, or hung up by the caller's push. The banner for THAT call
+  /// stops, and only that call's (design 22 v4.2).
+  endedInSystemUi,
 }

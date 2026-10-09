@@ -22,8 +22,9 @@ exactly as often as it is right.
 Usage (driven by the Dart test; env vars documented in its header):
     python3 tool/ring_probe.py selftest        # golden vector, no network
     python3 tool/ring_probe.py vector [reply_to]  # emit a signed frame, no network
-    python3 tool/ring_probe.py invite          # ring the other party
-    python3 tool/ring_probe.py end <server_id> # hang up on the call it names
+    python3 tool/ring_probe.py invite [ULID]   # ring the other party (call/2;
+                                               # mints the call id if not given)
+    python3 tool/ring_probe.py end <ULID>      # hang up on the call it names
 
 Requires: pynacl, websockets, requests. base58btc is implemented inline rather
 than imported, to keep the second implementation second.
@@ -35,6 +36,7 @@ import json
 import os
 import struct
 import sys
+import re
 import time
 
 # EXIT CODES ARE THE CONTRACT WITH THE DART SIDE, because "the probe could not
@@ -62,9 +64,29 @@ DOMAIN_TAG = b"aikochat:msg:v1:EdDSA"
 MULTICODEC_ED25519 = bytes([0xED, 0x01])
 B58_ALPHABET = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
-# The two pinned sentinels. Signed and durable — never edit (call_invite.dart).
+# The two v1 sentinels. Signed and durable — never edit (call_wire.dart). v1 is
+# history: the app no longer rings it (design 22), so `vector` keeps these only
+# as a fixed signing-conformance input; `invite`/`end` speak call/2.
 CALL_INVITE_BODY = "aiko:call/1 · 📞 started a call"
 CALL_END_BODY = "aiko:call/1 · 📞 ended the call"
+
+# call/2 (island design 12 Decision 1 + addendum; app call_wire.dart). The
+# grammar and the frame are byte-identical to the app's and the island's.
+CALL_ID = re.compile(r"[0-7][0-9A-HJKMNP-TV-Z]{25}")
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def mint_call_id() -> str:
+    """128 bits of OS randomness, no timestamp — the app's `mintCallId`."""
+    value = int.from_bytes(os.urandom(16), "big")
+    return "".join(_CROCKFORD[(value >> (5 * i)) & 31] for i in range(25, -1, -1))
+
+
+def call_body_v2(call_id: str, end: bool) -> str:
+    if not CALL_ID.fullmatch(call_id):
+        raise SystemExit(f"not a call id: {call_id!r}")
+    tail = " · 📞 ended the call" if end else " · 📞 started a call"
+    return f"aiko:call/2 {call_id}{tail}"
 
 
 def _len_prefixed(field: bytes) -> bytes:
@@ -330,11 +352,13 @@ def main() -> None:
         print(emit_vector(sys.argv[2] if len(sys.argv) > 2 else None))
         return
     if cmd == "invite":
-        print(asyncio.run(send_signed(CALL_INVITE_BODY, None)))
+        call_id = sys.argv[2] if len(sys.argv) > 2 else mint_call_id()
+        print(f"call id: {call_id}", file=sys.stderr)
+        print(asyncio.run(send_signed(call_body_v2(call_id, end=False), None)))
     elif cmd == "end":
         if len(sys.argv) < 3:
-            raise SystemExit("end requires the SERVER ULID of the invitation")
-        print(asyncio.run(send_signed(CALL_END_BODY, sys.argv[2])))
+            raise SystemExit("end requires the call id (ULID) the invite named")
+        print(asyncio.run(send_signed(call_body_v2(sys.argv[2], end=True), None)))
     else:
         raise SystemExit(f"unknown command {cmd!r}")
 
