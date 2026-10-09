@@ -1,7 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
-import 'package:aiko_chat_app/app/feature_flags.dart';
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
@@ -21,16 +17,14 @@ import 'package:go_router/go_router.dart';
 import '../../support/test_helpers.dart';
 import 'call_fixtures.dart';
 
-/// Calling is gated OFF for the store build (`app/feature_flags.dart`): it works,
-/// but it does not yet disclose that media crosses the island's SFU in the clear,
-/// and a ring cannot reach a closed app. This file proves the SHIPPED shape —
-/// that every door into calling is actually shut.
+/// Every door into calling is OPEN, and each one is proven reachable here.
 ///
-/// Every case here is paired with its opposite. An assertion that a thing is
-/// ABSENT is worth nothing on its own: a typo'd finder, a harness that never
-/// rendered, a widget renamed last week all produce `findsNothing` just as
-/// convincingly as a working gate. The `enabled` arm is what proves the probe
-/// could have seen the thing it reports missing.
+/// This was `call_gating_test`: while calling shipped behind a build flag, each
+/// door had a gated-OFF case paired with a gated-ON one. The flag was deleted in
+/// 0.0.6 once both things it held for were built (the media disclosure, and a
+/// ring that reaches a closed app). What survives is the half that still says
+/// something: the banner rings, the sheet offers Call WITH its disclosure, and
+/// `/call` is registered but joins nothing without a call of ours.
 void main() {
   setUpAll(() async {
     await initializeTestEnvironment();
@@ -76,54 +70,16 @@ void main() {
     startedAt: DateTime.utc(2026, 9, 1, 13),
   );
 
-  group('the shipped default', () {
-    test('calling is OFF unless a build explicitly defines ENABLE_CALLING', () {
-      // A build with no defines (this test run, a bare `flutter build`) stays
-      // calling-less, so the cases below exercise both states via the provider.
-      expect(kCallingEnabled, isFalse);
-    });
-
-    test('the store config turns calling ON (opened 2026-10-09)', () {
-      // The release tripwire, inverted when the gate opened: every store build
-      // passes dart_defines/prod.json, so this is what ships. Dropping the key
-      // would silently ship a calling-less release — the 0.0.5 failure mode,
-      // whose notes promised calls that the build could not place.
-      final defines =
-          jsonDecode(File('dart_defines/prod.json').readAsStringSync()) as Map;
-      expect(defines['ENABLE_CALLING'], 'true');
-    });
-  });
-
   group('the inbound door — the ring banner', () {
-    Widget harness({required bool enabled}) => ProviderScope(
-      overrides: [
-        callingEnabledProvider.overrideWithValue(enabled),
-        incomingRingProvider.overrideWith(() => _FakeRing(invite)),
-      ],
+    Widget harness() => ProviderScope(
+      overrides: [incomingRingProvider.overrideWith(() => _FakeRing(invite))],
       child: const MaterialApp(
         home: RingOverlay(child: Scaffold(body: Text('home'))),
       ),
     );
 
-    testWidgets('gated OFF: a live invitation raises no banner', (
-      tester,
-    ) async {
-      await tester.pumpWidget(harness(enabled: false));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Incoming call'), findsNothing);
-      expect(find.text('Answer'), findsNothing);
-      expect(find.text('Robin'), findsNothing);
-      // The route underneath is untouched — the gate removes the ring, not the app.
-      expect(find.text('home'), findsOneWidget);
-    });
-
-    testWidgets('gated ON: the same invitation DOES raise the banner', (
-      tester,
-    ) async {
-      // The must-fail arm. Without this, the case above would pass just as
-      // happily against an overlay that never rings for anyone.
-      await tester.pumpWidget(harness(enabled: true));
+    testWidgets('a live invitation raises the banner', (tester) async {
+      await tester.pumpWidget(harness());
       await tester.pumpAndSettle();
 
       expect(find.text('Incoming call'), findsOneWidget);
@@ -133,10 +89,9 @@ void main() {
   });
 
   group('the outbound door — Call in the long-press sheet', () {
-    Widget harness({required bool enabled}) {
+    Widget harness() {
       final container = ProviderContainer(
         overrides: [
-          callingEnabledProvider.overrideWithValue(enabled),
           currentUserProvider.overrideWithValue(me),
           channelsProvider.overrideWith((ref) async => const [generalChannel]),
           dmsProvider.overrideWith((ref) async => const <Channel>[]),
@@ -166,22 +121,6 @@ void main() {
       );
     }
 
-    testWidgets('gated OFF: no Call entry, and the sheet still moderates', (
-      tester,
-    ) async {
-      await tester.pumpWidget(harness(enabled: false));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('open-actions'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Call Robin'), findsNothing);
-      // The gate must remove ONE entry, not quietly break the sheet — Report and
-      // Block are an App Store 1.2 obligation and are not calling's to take with
-      // it on the way out.
-      expect(find.text('Report message'), findsOneWidget);
-      expect(find.text('Block Robin'), findsOneWidget);
-    });
-
     // THE CALLER'S PRE-CONNECT DISCLOSURE (Decision 9d; Carnot, cage-match
     // round 2). The in-call chip is painted on the call screen's first frame,
     // which for the CALLER is concurrent with connect rather than before it —
@@ -193,7 +132,7 @@ void main() {
     testWidgets('the Call entry discloses before the caller can tap it', (
       tester,
     ) async {
-      await tester.pumpWidget(harness(enabled: true));
+      await tester.pumpWidget(harness());
       await tester.pumpAndSettle();
       await tester.tap(find.text('open-actions'));
       await tester.pumpAndSettle();
@@ -208,40 +147,29 @@ void main() {
       );
     });
 
-    testWidgets('gated ON: the Call entry is there', (tester) async {
-      // The must-fail arm: proves `findsNothing` above is the gate talking and
-      // not a sheet that never opened or a label that has been renamed.
-      await tester.pumpWidget(harness(enabled: true));
+    testWidgets('Call sits alongside Report and Block', (tester) async {
+      // Report and Block are an App Store 1.2 obligation: adding Call must not
+      // crowd them out of the sheet.
+      await tester.pumpWidget(harness());
       await tester.pumpAndSettle();
       await tester.tap(find.text('open-actions'));
       await tester.pumpAndSettle();
 
       expect(find.text('Call Robin'), findsOneWidget);
+      expect(find.text('Report message'), findsOneWidget);
+      expect(find.text('Block Robin'), findsOneWidget);
     });
   });
 
   group('the deep-link door — the /call route', () {
-    List<String> pathsWithCallingEnabled(bool enabled) {
-      final container = ProviderContainer(
-        overrides: [callingEnabledProvider.overrideWithValue(enabled)],
-      );
+    List<String> routePaths() {
+      final container = ProviderContainer();
       addTearDown(container.dispose);
       return [
         for (final r in container.read(routerProvider).configuration.routes)
           if (r is GoRoute) r.path,
       ];
     }
-
-    test('gated OFF: /call is not registered at all', () {
-      // Not merely unreachable from the UI — UNREGISTERED. A mounted route is a
-      // door a crafted `aikochat://call/...` can still open, and it would land
-      // on a call screen that has told the user nothing about what it routes
-      // their camera through.
-      expect(
-        pathsWithCallingEnabled(false),
-        isNot(contains('/call/:channelId')),
-      );
-    });
 
     test(
       'a /call with no call of ours is redirected home — it joins nothing',
@@ -256,16 +184,13 @@ void main() {
       },
     );
 
-    test('gated ON: /call is registered', () {
-      // Must-fail arm: without it, a typo in the path string above would make
-      // the gated-OFF assertion pass forever regardless of the gate.
-      expect(pathsWithCallingEnabled(true), contains('/call/:channelId'));
+    test('/call is registered', () {
+      expect(routePaths(), contains('/call/:channelId'));
     });
   });
 }
 
-/// A ring that is already ringing at first build — the state the gate has to
-/// suppress. Mirrors the fake in `ring_overlay_test.dart`.
+/// A ring that is already ringing at first build. Mirrors the fake in `ring_overlay_test.dart`.
 class _FakeRing extends RingController {
   _FakeRing(this._initial);
 

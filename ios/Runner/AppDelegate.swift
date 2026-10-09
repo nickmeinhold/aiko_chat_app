@@ -1557,12 +1557,11 @@ extension CallKitRinger: CXProviderDelegate {
 /// The reverse pairing is normal too, on a device that has never run this build.
 ///
 /// **THE REGISTRY IS ARMED AT LAUNCH, IN EVERY BUILD** — `didFinishLaunching`
-/// calls `start(reportingTo:)` unconditionally, so iOS mints a VoIP token even
-/// in a calling-off store build. What keeps that build unringable is the DART
-/// side: `voipTokenSourceProvider` is null unless `ENABLE_CALLING`, so the token
-/// is never REGISTERED with the island and no VoIP push is ever addressed here.
-/// Measured 2026-09-30 on a 0.0.5 store install: one `alert` row, no `voip` row,
-/// the island logging `end_wake_needs_voip`.
+/// calls `start(reportingTo:)` unconditionally. Before 0.0.6 a Dart build flag
+/// kept the token from being REGISTERED with the island (measured 2026-09-30 on
+/// a 0.0.5 store install: one `alert` row, no `voip` row, the island logging
+/// `end_wake_needs_voip`). The flag is gone since 0.0.6: Dart registers the
+/// `voip` row on every iOS build.
 ///
 /// This comment previously said the opposite ("NO TOKEN IS MINTED BY THIS
 /// BUILD … nothing arms the registry"), written before `start()` was wired into
