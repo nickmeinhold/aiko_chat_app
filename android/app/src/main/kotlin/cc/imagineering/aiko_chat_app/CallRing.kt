@@ -172,11 +172,6 @@ object CallRing {
    * engine and the listeners are posted to main. (PR #210 round 1.)
    */
   fun handle(context: Context, data: Map<String, String>) {
-    // A calling-off build never rings, even with an island sending call wakes.
-    if (!BuildConfig.CALLING_ENABLED) {
-      Log.i(TAG, "handle: calling disabled in this build, k=${data["k"]}")
-      return
-    }
     val app = context.applicationContext
     val channel = data["c"]?.takeIf { it.isNotEmpty() }
     val rawCall = data["m"]

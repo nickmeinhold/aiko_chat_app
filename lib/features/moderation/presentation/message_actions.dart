@@ -22,7 +22,6 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../app/feature_flags.dart' show callingEnabledProvider;
 
 import '../../chat/application/chat_providers.dart'
     show currentUserProvider, dmConversationIdsProvider;
@@ -75,7 +74,6 @@ Future<void> showMessageActions(
   // a neighbour of the write, not a property of it.
   final container = ProviderScope.containerOf(context, listen: false);
   final actingUserId = container.read(currentUserProvider)?.userId;
-  final callingEnabled = ref.read(callingEnabledProvider);
 
   final action = await showModalBottomSheet<_Action>(
     context: context,
@@ -102,37 +100,32 @@ Future<void> showMessageActions(
               ),
             // Start a 1:1 A/V call with this sender: the same DM channel, joined
             // as its LiveKit room. `openDm` is idempotent, so both parties tapping
-            // Call resolve to the SAME room (DM handoff #2633; gating #2726).
-            //
-            // Read on the NEAR side of the sheet, beside `muted` and `inDm`, for
-            // the reason this file already gives: the sheet must describe the
-            // build the user is acting in, decided once before it opens.
-            if (callingEnabled)
-              ListTile(
-                leading: const Icon(Icons.videocam_outlined),
-                title: Text('Call $name'),
-                // THE CALLER'S PRE-CONNECT DISCLOSURE (Decision 9d; Carnot,
-                // cage-match round 2). The in-call chip is painted on the call
-                // screen's first frame, which for a CALLER is concurrent with
-                // connect, not before it — `CallScreen.initState` fires
-                // `unawaited(connect())` and returns before anything is painted.
-                // The callee is fine (they must press Answer with the warning on
-                // the same surface); the caller was not.
-                //
-                // The first attempt at this was to document the gap. Carnot
-                // refused that, correctly: a security disclosure whose failure
-                // mode is silence-before-media does not get resolved with prose
-                // when a fix exists. The fix is here, on the action surface —
-                // still an indicator, not a gate, so it keeps Nick's "no
-                // interruption, ever".
-                //
-                // Same sentence as the chip, from [MediaRouting] — see the
-                // subtitle on the mute entry above for why this file states
-                // consequences here at all.
-                subtitle: Text(mediaRouting.sentence),
-                isThreeLine: true,
-                onTap: () => Navigator.pop(ctx, _Action.call),
-              ),
+            // Call resolve to the SAME room (DM handoff #2633).
+            ListTile(
+              leading: const Icon(Icons.videocam_outlined),
+              title: Text('Call $name'),
+              // THE CALLER'S PRE-CONNECT DISCLOSURE (Decision 9d; Carnot,
+              // cage-match round 2). The in-call chip is painted on the call
+              // screen's first frame, which for a CALLER is concurrent with
+              // connect, not before it — `CallScreen.initState` fires
+              // `unawaited(connect())` and returns before anything is painted.
+              // The callee is fine (they must press Answer with the warning on
+              // the same surface); the caller was not.
+              //
+              // The first attempt at this was to document the gap. Carnot
+              // refused that, correctly: a security disclosure whose failure
+              // mode is silence-before-media does not get resolved with prose
+              // when a fix exists. The fix is here, on the action surface —
+              // still an indicator, not a gate, so it keeps Nick's "no
+              // interruption, ever".
+              //
+              // Same sentence as the chip, from [MediaRouting] — see the
+              // subtitle on the mute entry above for why this file states
+              // consequences here at all.
+              subtitle: Text(mediaRouting.sentence),
+              isThreeLine: true,
+              onTap: () => Navigator.pop(ctx, _Action.call),
+            ),
             // Mute sits ABOVE the moderation pair deliberately: it is the mild,
             // reversible, private option, and offering it first means "too noisy"
             // doesn't have to escalate to a moderation act. Muting is silent and

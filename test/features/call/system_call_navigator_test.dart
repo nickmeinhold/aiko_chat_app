@@ -11,7 +11,6 @@
 //    the only control the user has.
 import 'dart:async';
 
-import 'package:aiko_chat_app/app/feature_flags.dart';
 import 'package:aiko_chat_app/app/router.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
@@ -49,7 +48,6 @@ void main() {
 
   Widget harness({
     _Session session = _Session.live,
-    bool callingEnabled = true,
     String? admitted = channel,
   }) {
     bridge = _FakeBridge();
@@ -70,11 +68,8 @@ void main() {
     );
     return ProviderScope(
       overrides: [
-        callingEnabledProvider.overrideWithValue(callingEnabled),
         // The bridge is the seam under test; the real one needs CallKit.
-        systemCallBridgeProvider.overrideWithValue(
-          callingEnabled ? bridge : null,
-        ),
+        systemCallBridgeProvider.overrideWithValue(bridge),
         authControllerProvider.overrideWith(() => auth),
         // The navigator lives ABOVE the Router (it wraps `MaterialApp.router`'s
         // child), so it reaches the router through the provider — the same
@@ -565,18 +560,6 @@ void main() {
     bridge.emit(SystemCallActionKind.answered, channel);
     await tester.pumpAndSettle();
     expect(container.read(incomingRingProvider), isNull);
-  });
-
-  testWidgets('calling gated off → no bridge at all', (tester) async {
-    // The one-door law. A build that cannot open `/call/:id` must not be
-    // answerable INTO it — and with the VoIP token now behind the same gate, it
-    // cannot be rung either.
-    await tester.pumpWidget(harness(callingEnabled: false));
-    await tester.pumpAndSettle();
-    final container = ProviderScope.containerOf(
-      tester.element(find.text('home')),
-    );
-    expect(container.read(systemCallBridgeProvider), isNull);
   });
 
   // ---- v2: one channel, two calls (design 21 v2) ----------------------------

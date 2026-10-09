@@ -1,5 +1,4 @@
 import java.io.FileInputStream
-import java.util.Base64
 import java.util.Properties
 
 plugins {
@@ -17,17 +16,6 @@ val keystorePropertiesFile = rootProject.file("key.properties")
 val keystoreProperties = Properties().apply {
     if (keystorePropertiesFile.exists()) {
         load(FileInputStream(keystorePropertiesFile))
-    }
-}
-
-// Flutter hands Gradle every define — `--dart-define` and
-// `--dart-define-from-file` alike — as `-Pdart-defines=<b64>,<b64>,…`, each
-// entry base64("KEY=value"). `bool.fromEnvironment` is true only for the exact
-// string "true", so this is too.
-fun callingEnabled(): Boolean {
-    val encoded = project.findProperty("dart-defines")?.toString() ?: return false
-    return encoded.split(",").any {
-        String(Base64.getDecoder().decode(it)) == "ENABLE_CALLING=true"
     }
 }
 
@@ -57,17 +45,6 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        // The native half of `kCallingEnabled` (lib/app/feature_flags.dart),
-        // read from the SAME `--dart-define` at compile time. The ring is
-        // drawn by Kotlin before any Dart runs, so it cannot ask Dart whether
-        // calling is on; a runtime handshake would be a second source of truth
-        // that a cold push beats to the punch. One flag, read twice, at build
-        // time: the two halves cannot disagree.
-        buildConfigField("boolean", "CALLING_ENABLED", callingEnabled().toString())
-    }
-
-    buildFeatures {
-        buildConfig = true
     }
 
     signingConfigs {

@@ -11,7 +11,6 @@ import 'package:aiko_chat_app/features/moderation/presentation/message_actions.d
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:aiko_chat_app/app/feature_flags.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../support/ui_fakes.dart';
@@ -65,10 +64,6 @@ void main() {
         overrides: [
           restApiProvider.overrideWithValue(fake),
           blockedUserIdsProvider.overrideWithValue(blocked),
-          // Calling ships gated OFF (see `feature_flags.dart`); this suite is
-          // about the call PATH, so it opts the capability back on rather
-          // than losing the coverage.
-          callingEnabledProvider.overrideWithValue(true),
         ],
       ),
       child: MaterialApp.router(routerConfig: router),

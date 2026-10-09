@@ -19,8 +19,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import 'feature_flags.dart' show callingEnabledProvider;
-
 import '../features/chat/presentation/conversation_details_screen.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/chat/data/chat_rest_api.dart' show AccountSuspended;
@@ -167,27 +165,22 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/conversation',
         builder: (_, _) => const ConversationDetailsScreen(),
       ),
-      // Gated with the two visible doors (Call in the long-press sheet, the ring
-      // banner): a registered route is reachable by deep link even when nothing
-      // in the UI points at it, so leaving it mounted would leave calling one
-      // crafted `aikochat://call/...` away from the disclosure it still owes.
-      if (ref.read(callingEnabledProvider))
-        GoRoute(
-          path: '/call/:channelId',
-          // `extra` carries WHICH call (design 22). It is deliberately not a
-          // path/query parameter: it is meaningless to anyone but this
-          // navigation. A navigation without it — a bare or crafted deep link —
-          // names no call, so it is redirected home and joins nothing.
-          redirect: (_, s) => callRouteRedirect(s.extra),
-          builder: (_, s) {
-            final extra = s.extra! as CallRouteExtra;
-            return CallScreen(
-              channelId: s.pathParameters['channelId']!,
-              call: extra.call,
-              outgoing: extra.outgoing,
-            );
-          },
-        ),
+      GoRoute(
+        path: '/call/:channelId',
+        // `extra` carries WHICH call (design 22). It is deliberately not a
+        // path/query parameter: it is meaningless to anyone but this
+        // navigation. A navigation without it — a bare or crafted deep link —
+        // names no call, so it is redirected home and joins nothing.
+        redirect: (_, s) => callRouteRedirect(s.extra),
+        builder: (_, s) {
+          final extra = s.extra! as CallRouteExtra;
+          return CallScreen(
+            channelId: s.pathParameters['channelId']!,
+            call: extra.call,
+            outgoing: extra.outgoing,
+          );
+        },
+      ),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
       GoRoute(
         path: '/settings/carried-record',
