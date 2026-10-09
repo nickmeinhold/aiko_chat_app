@@ -38,7 +38,7 @@
 // RING_A_PASS (the caller) and FCM creds for tool/fcm_push.py; `ssh enspyr` with
 // passwordless `sudo -n docker` for `island`. The handset's FCM token comes from the
 // island DB (devices row for the callee): export FCM_TOKEN or write it to
-// $HW_STATE/fcm_token.txt.
+// $HW_STATE/fcm_token.txt. HW_RING_CHANNEL overrides the DM (default: nicka<->ringtest).
 import 'dart:async';
 import 'dart:io';
 
@@ -51,7 +51,10 @@ final Map<String, String> _env = {..._dotenv(), ...Platform.environment};
 final Directory _state = Directory(
   _env['HW_STATE'] ?? '${Directory.systemTemp.path}/aiko-hw-ring',
 )..createSync(recursive: true);
-final String _channel = _env['RING_CHANNEL'] ?? _defaultChannel;
+// Its OWN variable, never RING_CHANNEL: ~/.claude/.env sets RING_CHANNEL to the
+// ringtest<->ringtest2 DM for ring_live_test, and reading it here sent the first
+// two end-to-end rings (2026-10-09) to a DM whose callee has no handset at all.
+final String _channel = _env['HW_RING_CHANNEL'] ?? _defaultChannel;
 
 /// A step that failed in a way the operator must see — never a silent "pushed".
 class HarnessFailure implements Exception {
@@ -116,7 +119,7 @@ Future<void> ring(String? callId, {bool viaIsland = false}) async {
   // 14s), so its window is wider than the harness's own overlapped wake.
   final within = Duration(seconds: viaIsland ? 40 : 25);
   final line = await waitLog(RegExp('ring: c=\\S+ m=$call'), within);
-  stdout.writeln('RANG $call — wake sent by ${_sender(viaIsland)}, invite at $sent\n  $line\n'
+  stdout.writeln('RANG $call in $_channel — wake sent by ${_sender(viaIsland)}, invite at $sent\n  $line\n'
       'next: tap Answer --shade | tap Decline --shade | end $call${viaIsland ? ' --island' : ''}'
       '${viaIsland ? '\nthen ask the island tab to read its log from $sent ("fcm sent", android_ready)' : ''}');
 }
@@ -125,7 +128,7 @@ String _sender(bool viaIsland) => viaIsland ? 'the ISLAND (end-to-end)' : 'this 
 
 /// Trap 1: the handset must reach the network before silence means anything.
 Future<void> alive() async {
-  final r = await Process.run('adb', ['shell', 'ping', '-c', '1', '-W', '3', '8.8.8.8']);
+  final r = await Process.run('adb', ['shell', 'ping', '-c', '3', '-W', '3', '8.8.8.8']);
   if (r.exitCode != 0) {
     throw HarnessFailure('handset OFFLINE (or no adb device) — fix that before reading any result');
   }
@@ -167,7 +170,7 @@ Future<void> _signAndWake(String verb, String call, bool viaIsland) async {
     await _fcm(verb, call);
   }
   await signed;
-  stdout.writeln('$verb $call: signed; wake sent by ${_sender(viaIsland)}');
+  stdout.writeln('$verb $call in channel $_channel: signed; wake sent by ${_sender(viaIsland)}');
 }
 
 /// Wait for an AikoRing logcat line; returns it.
