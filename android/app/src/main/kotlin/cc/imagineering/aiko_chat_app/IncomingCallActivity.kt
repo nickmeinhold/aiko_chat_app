@@ -174,6 +174,14 @@ class IncomingCallActivity : Activity() {
       setBackgroundColor(Color.parseColor("#0B1F2A"))
       addView(label("Aiko Chat", 30f))
       addView(label("Incoming call", 18f).apply { setPadding(0, dp(8), 0, 0) })
+      // On the same surface as Answer, before it: Decision 9d's bar for the
+      // callee. See IncomingCallNotifier.MEDIA_DISCLOSURE.
+      addView(
+        label(IncomingCallNotifier.MEDIA_DISCLOSURE, 14f).apply {
+          setPadding(dp(32), dp(24), dp(32), 0)
+          alpha = 0.85f
+        },
+      )
       addView(buttons)
     }
   }
