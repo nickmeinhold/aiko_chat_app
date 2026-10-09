@@ -38,6 +38,17 @@ import androidx.core.app.NotificationManagerCompat
  * mysterious.
  */
 object IncomingCallNotifier {
+  /**
+   * The callee's pre-answer disclosure (island Decision 9d), native half. Word
+   * for word the Dart fallback in `media_confidentiality.dart`: this side cannot
+   * name the island, because the wake carries only `{c, k, m}`. Until 0.0.6 only
+   * the in-app banner said it, so a call answered from the lock screen or the
+   * shade (the main path once a ring reaches a closed app) was told only after
+   * Answer, by the in-call chip.
+   */
+  const val MEDIA_DISCLOSURE =
+    "This call is not end to end encrypted. The island carrying it can hear and see it."
+
   private const val CHANNEL_ID = "aiko_incoming_calls"
   private const val NOTIFICATION_ID = 4201
 
@@ -153,7 +164,11 @@ object IncomingCallNotifier {
     val notification = NotificationCompat.Builder(context, CHANNEL_ID)
       .setSmallIcon(android.R.drawable.sym_call_incoming)
       .setContentTitle(callerLabel)
-      .setContentText("Incoming call")
+      // Collapsed rows show one line, so it carries the short form; expanded,
+      // the full sentence. The shade's Answer button answers directly, so this
+      // is the only surface a shade-answer reads first.
+      .setContentText("Incoming call · not end to end encrypted")
+      .setStyle(NotificationCompat.BigTextStyle().bigText("Incoming call. $MEDIA_DISCLOSURE"))
       .setCategory(NotificationCompat.CATEGORY_CALL)
       .setPriority(NotificationCompat.PRIORITY_HIGH)
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
