@@ -149,3 +149,133 @@ Tesla: "If you want the secrets of the universe, think in energy, frequency and 
 - Migrate per key. A mixed-class pair is a recoverable state. `read()` returning null for the whole pair is what invites the clobbering write.
 - Replace the temper assumption with an enumerated bearer-versus-signature list covering message send, reaction, call invite, admit, media-token mint, device and session revoke, and key upload. Price the trade as live-call join, impersonation on bearer-only surfaces, and refresh rotation that can kick the phone, alongside history read.
 - Keep hardware tests 1 and 2, lock past the grace period. Change test 3 to assert the interaction-not-allowed status and an untouched legacy item. After migration, read `kSecAttrAccessible` back with `kSecReturnAttributes` so a joined call is not the only proof the class changed.
+
+
+---
+
+# Round 2 — v2 (an answered ring is judged by when it rang)
+
+**Overall verdict:** RECAST (4 of 4, no DISSOLVE). All four accept the reframe: judging freshness at native receipt dissolves every v1 keychain hazard.
+**Struck:** dt-1791594945, families seated: Maxwell + Kelvin (gemini-2.5-pro) + Carnot (gpt-5.5) + Tesla (Grok)
+
+## Fatal flaws (deduped, most-severe first) → fold into v3
+1. **The receipt and the invite race** (Maxwell, Tesla). The receipt rides bridge events (replayed at `onListen`); the invite arrives by REST; nothing orders them. If the fetch wins, `admitRing` falls back to `now`, refuses `stale`, and never re-enters. That is the original bug, now intermittent. → **Query, don't copy:** `RingController` awaits a native `wakeAge(callRef)` over the control channel before calling `admitRing` (which stays pure). Native already holds the live record when Dart admits.
+2. **Clock domains; the "receipt ≤ now" lemma is false** (Tesla, Carnot). `signedAt` is the caller's wall clock, native `at` is the device wall clock (iOS freezes it; Android re-projects `elapsedRealtime` at emit), and `now` is Dart's. → **Native returns a monotonic DURATION since the wake** (iOS `ProcessInfo.systemUptime`/`clock_gettime(CLOCK_MONOTONIC)` stamped at wake; Android `elapsedRealtime`), and Dart computes `receivedAt = now − wakeAge`. One clock (Dart's `now`) on our side, so `receivedAt ≤ now` holds by construction and native wall-clock steps drop out. Across a reboot the monotonic clock resets, but so does the record, so there is nothing to compare.
+3. **#220 is the safety proof, not a prerequisite; the 60 s horizon is an invented constant** (Carnot, Kelvin, Tesla). → **Trust the wake only while the native call is actionable**: ringing, or answered and not ended or joined, as the native side itself defines it, with a dedicated `wokeAt` set once by the wake handler (never by duplicate, displacement or Dart-report paths). #220's stale-record fix ships in the same change, and the replay test covers *old invite plus old same-call record present*.
+4. **The 30.0 s teardown after Answer must be pinned** (Kelvin, Carnot, Tesla). It is now the product's binding constraint, and naming it does not close it. → Trace it before v3 (island ring ceiling as an end wake, or an app-side expiry), and put the composed budget (Answer → Face ID → join versus that timer) in the doc, with a hardware case that strikes it (answer at ~20 s, unlock at ~25 s).
+5. **Admission order and call scope** (Carnot). The receipt query needs the signed `CallRef`, so parse it after `originCryptoValid` and reject missing or malformed calls before the lookup. The native records are channel-keyed with `call` as a value, so the lookup must be by `CallRef` and must prove that overlap, replacement and duplicate paths cannot return another call's wake.
+6. **END composition** (Carnot). A prompt wake must not admit a call whose end already raced in by another path: check the pending-END buffer and native retirement before trusting the wake.
+
+## Disposition
+RECAST. Pin the 30 s timer (flaw 4) and read #220's record lifecycle, then write v3 and run round 3 (the last of ≤3).
+
+## MaxwellMergeSlam's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The reframe is right, and it dissolves every v1 keychain hazard. But v2 assumes the receipt time is already in Dart's hands when admission runs. On a cold start the receipt (bridge events) and the invite (a REST fetch) race, and if the fetch wins, the stale refusal is final.
+
+**Fatal flaws:**
+- **Ordering race (missing failure mode).** `RingController` admits from messages as they arrive (`admitRing(..., now: now)` then telemetry and `return` on refusal). The receipt arrives on the bridge EventChannel, replayed at `onListen`. Nothing orders "bridge listener attached and pending replayed" before "first message fetch". In run 1 the first REST traffic and the websocket both came within about 2 s of unlock. If the invite is admitted before the receipt map is populated, it falls back to `now`, is refused as `stale`, and the refusal is terminal: the doc defines no re-evaluation. That reproduces the original bug intermittently, which is worse than reproducing it deterministically. Fold: either (a) admission **asks** native for the receipt (`receivedAt(callRef)` over the control MethodChannel, awaited before `admitRing`, which is sync), or (b) a stale refusal for an invite whose `CallRef` later receives a receipt within the horizon is re-admitted. (a) is simpler and removes the race, rather than guarding it.
+- **Receipt provenance is under-specified (unstated assumption).** "Only the wake handler writes it" must be a rule in code, not a description. On iOS the same persisted record map (`stored()`, `entry.at`) may also be written when Dart reports a ring it admitted in-app, or re-stamped on a duplicate push ("duplicate invite for a ring already live", seen in the 2026-10-09 logs). If any non-wake path creates or refreshes `at`, `receivedAt` stops meaning "the wake arrived". Fold: stamp a dedicated `wokeAt` field, set once by the push handler, never overwritten by duplicates, displacements or Dart reports. Admission uses `wokeAt` only.
+- **The call-id match must be against the signed body, at the moment of the query.** The doc says so in prose. With option (a) this becomes `receivedAt(callRef)` keyed by the `CallRef` parsed from the *verified* body, which also makes "names a different call id" structurally impossible rather than checked.
+- **Horizon vs answered state.** An answered record's receipt is honoured only while `now − wokeAt ≤ 60 s`. A user who answers at +25 s and takes 40 s to Face ID is refused, even though the call (if the 30 s teardown is extended later) might live. That is acceptable and should be stated as the coupling: the horizon must be at least the ring ceiling plus the answered-but-unjoined lifetime, so if one grows, the other must.
+
+**What holds:**
+- The reframe: judging freshness at native receipt removes the keychain trade, the migration, the pair-atomicity hazard and the rollback problem in one move. It is the "remove the coupling, don't guard it" answer to v1.
+- Replay analysis: a re-push of an old invite produces a fresh receipt with an old `signedAt`, so `receipt − signedAt` stays large. Receipt ≤ now makes the rule monotone toward admission, which is why the horizon and liveness bounds carry the load. The doc says this correctly.
+- The owned 60 s horizon instead of iOS's 120 s and 8 h trust windows is the right call, and the doc found those windows in the code rather than assuming them.
+- Naming #220 as a prerequisite rather than a nice-to-have.
+- Honesty about the unpinned 30.0 s teardown.
+
+**If RECAST, what to fold back:**
+- Replace the "Dart keeps a short map from bridge events" mechanism with an awaited `receivedAt(callRef)` query on the control channel, called by `RingController` before `admitRing`. Keep `admitRing` pure (the receipt is passed in, like `now`).
+- Specify `wokeAt`: set once by the wake handler on each platform, not touched by duplicate, displacement or Dart-report paths; null if the record was not created by a wake.
+- State the horizon coupling (horizon ≥ ring ceiling + answered-unjoined lifetime) next to the constant.
+- Add a unit and a hardware case for the race: the invite fetch completes before the bridge listener attaches.
+
+
+Ripgrep is not available. Falling back to GrepTool.
+## KelvinBitBrawler's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** This design correctly identifies absolute zero—the keychain lock state—as the thermal barrier, but its proposed solution is a fragile construct of unpinned timers and slushy dependencies, exchanging one ticking clock for two.
+
+**Fatal flaws:**
+- **Class: Unspecified Constraint.** The design has measured its own coffin but declines to ask who the carpenter is. It identifies its new binding constraint—a 30-second CallKit audio lease that dooms the call—and then labels the source of this timer as "Unpinned." This is not design; this is deferring the phase-change calculation until the material is already failing in production. A solution that does not understand its own critical path is merely a hypothesis. `Frank Herbert: "The mystery of life isn't a problem to solve, but a reality to experience."` This is not a mystery to experience; it is a time budget to be calculated.
+- **Class: Arbitrary Constant.** The design decommissions one magic number (`kCallInviteFreshness`'s 10s) only to commission another (a 60s "receipt horizon"), justified with combinatorial hand-waving ("covers ring ... plus Answer ..."). This is not a solution; it is thermal drift. It solves nothing; it merely moves the point of entropic decay, ensuring that a user who takes 61 seconds to find their face will still experience a cold death. A proper design derives its constants from first principles or empirical measurement; it does not invent them.
+- **Class: Brittle Dependency.** The entire security premise leans on the future, perfect fix for #220 ("a native ring record that outlives its call"), a problem so intractable that the native layer's current solution is an 8-hour trust window—a thermal exhaust port the size of a planet. To predicate v2's replay-safety on the perfect sealing of this wound, without defining the explicit contractual interface for what "fixed" means, is to build a cryogenic vessel on a foundation of rapidly melting ice. `GLaDOS: "This next test is impossible. Make no attempt to solve it."` This design assumes the impossible test will be solved by someone else.
+
+**What holds:**
+- The diagnosis is crystalline. Measuring freshness from the moment of native receipt is the correct thermodynamic principle. The clock was indeed being read at the wrong instant.
+- The decision to keep the session keys in cold storage (`WhenUnlocked`) and fix the clock, rather than warming the keys as v1 proposed, is fundamentally sound. It correctly prioritizes a stable, low-energy state over a dangerous security trade.
+
+**If RECAST, what to fold back:**
+- The 30-second "audio lease" must be pinned. In "The locked-call path", the design must identify the source of this timer, its variance, and its configurability. The budget is not a suggestion; it is physics.
+- The 60-second "receipt horizon" must be rigorously justified. In "Why this does not open a replay", the design must provide data on user unlock latencies to support this value or state the Pxx metric it is meant to satisfy.
+- The coupling to #220 must be replaced with a hard, explicit contract. The design must specify the exact, verifiable properties it requires of the native call record store (e.g., "The native layer guarantees that looking up a `callRef` will NEVER return a record whose `receivedAt` is older than the `liveCallTrustWindow` of 120 seconds, regardless of its `answered` state"). Define the interface; do not simply point to a bug number and hope. We are engineers, not archaeologists of failure.
+
+
+## CarnotCodeCarver's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** no real engine matches the Carnot cycle; a reviewer's job is to say how far short we are. This v2 finds the right thermodynamic variable: the freshness gate was reading heat after the engine had already lost work to Face ID. Measuring invite age at native receipt can dissolve the keychain-class trade. But the design is not yet reversible: it depends on a native live-record invariant it has not actually secured, borrows a 60s replay horizon while the real answer lease is still unpinned, and leaves clock/bridge semantics loose enough for entropy to leak back in. Dijkstra: "Simplicity is prerequisite for reliability." Feynman: "What I cannot create, I do not understand." Hamming: "The purpose of computing is insight, not numbers."
+
+**Fatal flaws:**
+- #220 is not merely a prerequisite; it is the load-bearing safety proof. The whole design says an old record for the same call id can admit an old invite if it remains live. Then it puts '#220 out of scope except prerequisite'. That is not a boundary, it is a hole with a label on it. The PR must either fix stale native records first or implement the 60s live-record horizon in the same change and prove ended/retired records cannot be consulted.
+- The 60s receipt horizon is under-justified against the actual post-answer lease. The doc says CallKit/audio teardown happened exactly 30.0s after Answer, but does not know whether island lease, app expiry, or CallKit behavior enforces it. A 60s receipt record can remain trusted after the user-visible call may already be dead. The design needs one composed invariant: native record trusted only while the system call is still actionable, not merely while a wall-clock horizon has not elapsed.
+- The bridge contract is underspecified for state, not just for a timestamp field. Dart needs to know that the receivedAt belongs to a live ring/answered record for this exact CallRef. A naked `receivedAtMs` on action events can become a fossil if pending events replay after native state has already ended, if end arrives before invite fetch, or if the Dart map misses the retirement edge. Entropy accumulates in maps that are only 'dropped when the record ends' without a proof every end path crosses the bridge.
+- The design moves the age gate before the current code can safely name the call record. In the excerpt, `admitRing` computes age before it rejects `v1Call` and before it binds `body.call` into the admitted invite. v2 needs the signed CallRef to query the native receipt, so the admission order changes. That is probably safe after `originCryptoValid == true`, but it must be made explicit: parse signed v2 call id after signature verification, reject missing/malformed call before receipt lookup, then compute age.
+- Android timestamp conversion is a clock-domain footgun. Android stores `elapsedRealtime` and later converts to wall time using `currentTimeMillis - (elapsedRealtime - instance)`. If wall clock moves between receipt and emit, the synthetic wall timestamp moves too. Since freshness compares against signed wall time, this can admit or refuse incorrectly. The cleaner design is to carry both domains or compute age at native receipt and pass a bounded age/proof, not reconstruct wall time later.
+- The replay test is too weak. 'Reuse an old call id' and 're-send a signed invite more than 10s old' proves fresh receipt cannot launder an old signature, but it does not test the actual scary case: old signed invite plus old same-call native record still present and marked live/answered. That is the second-law path: stale state does work later.
+- The design says the receipt is device-local and only the wake handler writes it, but the native record is keyed in the excerpt by channel with `call` as a value, not by CallRef as the primary identity. One-call-per-channel may be intended, but admission security is now call-scoped. The doc must prove channel-keyed storage cannot return the wrong call's receipt during overlapping, replacement, duplicate, or delayed-pending-event paths.
+- The product answer 'connects after Face ID' dissolves v1, but the design still treats native ring receipt as an admission credential without saying what happens when the user answers after the caller hung up. END admission, pending END buffers, native end wakes, and invite admission must be composed. Otherwise a prompt receipt can admit a call whose teardown raced through another path.
+
+**What holds:**
+- The main reframing is correct. Freshness should measure invite arrival at the handset, not Dart's eventual authenticated recovery after Face ID. That deletes the wasted work of weakening durable session-token storage.
+- Keeping session tokens `WhenUnlocked` preserves the stronger at-rest posture and avoids the migration trap that v1 fell into. That is the Carnot move: remove the heat leak instead of insulating it with more machinery.
+- The replay argument is directionally right: a fresh receipt cannot make an old signature fresh because `receivedAt - signedAt` still grows with the invite's age.
+- The design correctly separates invite freshness from ring duration. Those are different clocks, and conflating them was the original entropy source.
+- The locked-read contract is now stated correctly: locked keychain reads throw and must not be flattened to absence. That protects `SovereignKeyStore` from minting a new identity under lock.
+- The hardware test reproducing answer, wait 5s, then Face ID is the right liveness proof for the reported defect.
+
+**If RECAST, what to fold back:**
+- Make #220 part of this design's acceptance criteria: no trust of ended/retired records, no stranded answered record usable for admission, and a test where an old same-call record survives intentionally and must not admit.
+- Replace '60s horizon' with a named invariant tied to native call actionability. If 60s remains, justify it against the 30s teardown and prove the system cannot join after the native call has died.
+- Specify the exact admission order in Dart: verify signature, parse v2 CallRef from signed body, match native live receipt for that CallRef, compute age from receipt or now, then continue. Pin the refusal reason ordering deliberately.
+- Strengthen the bridge contract: include `receivedAtMs` plus an explicit native state or generation, replay pending events only with current native liveness, and clear Dart's map on every native end/reset/timeout path.
+- For Android, avoid wall-clock reconstruction drift. Prefer passing a receipt-age computed from monotonic clocks, or pass native wall time captured at receipt plus a test covering wall-clock changes between receipt and Dart emit.
+- Add replay tests for the real bad state: old invite, same call id, old native record still marked ringing/answered, pending event replayed after end, and channel replacement by a newer call.
+- Pin the 30s teardown source before merge. The design may still ship without extending it, but it cannot budget against a mystery clock.
+- State the simpler architecture as the long-term ideal: a narrow call-scoped admission proof, not durable session credentials and not broad native live records. v2 is acceptable only if it proves this local receipt is exactly that proof and no more.
+
+
+## Tesla, the Arc-Prophet's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** You moved the hand of the clock and left the gavel on the ingest wall, so a photocopy of the receipt riding an event bus will arrive after the judge has already said stale — and the lemma that a receipt can only shrink age is already humming out of tune.
+
+Tesla: "If you want the secrets of the universe, think in energy, frequency and vibration."
+
+**Fatal flaws:**
+- **The receipt is judged at ingest, and ingest does not yet have the receipt (Decision; The locked-call path; What it costs; ring_controller excerpt).** v1 read the clock at the wrong instant. v2 writes the right instant on the native record, then *decides* on the Dart fetch, from a `CallRef → receivedAt` map filled by bridge events and `onListen` replay. Those are two frequencies. Session restore and invite fetch are not sequenced against `onListen`. The first `admitRing` on the locked path can see `receivedAt == null`, fall back to `now`, refuse `stale`, and return. The controller does not re-enter the gate when the answer event later arrives carrying the stamp. Runs 1 and 4 fail in production the same way they fail today, with a 13 s Face ID wait, whenever the photocopy is late. You already own the live native record at the moment Dart admits — 13 s old, sitting in `callkit.liveCalls`. Photocopying it onto the event bus is the coupling that shakes the glass.
+- **The replay proof rests on a false lemma (Why this does not open a replay).** "A receipt can only make age smaller. `receivedAt ≤ now` always" is not physics, it is two wall clocks agreeing. `age = (receivedAt ?? now) − signedAt` can grow, and it can go negative: native wall ahead of Dart turns an admission into `stale`; native wall behind the signer turns a locked join into `clockSkew` on the path you are saving (receivedAt is earlier than `now`, so skew that today's late `now` would have forgiven now fails). The bound you need is still true without the lemma — signedAt versus receipt, live matching `CallRef`, device-local stamp, horizon on receipt age — but the proof as written will be cited as a closed door while a clock step walks through it.
+- **Three clocks, six windows, two platform meanings of the same field (Decision; Android; AppDelegate excerpt; How we know it worked §3–4).** `signedAt` is the signer, `receivedAt` is native, `now` is Dart. iOS freezes `entry.at` as wall-clock seconds at remember-time. Android *reprojects* elapsedRealtime into `currentTimeMillis` at emit, so a wall-clock step after receipt moves Android's stamp and does not move iOS's. One Dart rule cannot hold both. Around them sit `kCallInviteFreshness` (10 s), island ring ceiling (30 s), CallKit disarm (30 s, unpinned), proposed horizon (60 s), `liveCallTrustWindow` (120 s), `answeredCallTrustWindow` (8 h). Unit test 3 says "older than the ring lifetime" — that name already means 30 s in `kInAppRingDuration`. Implement 30 and a slow unlock after a long ring misses. Implement 60 and you have minted a new trust window. Either way, "live" as UserDefaults-answered-for-eight-hours is the #220 zombie: if that `at` is ever copied into the admit map, the horizon is the only remaining fuse, and it is the fuse whose name the tests already blur.
+- **The 30 s join lease is still an unnamed oscillator (The locked-call path; Not in scope).** The table hangs the whole product claim on Answer → Face ID → join < 30 s, then says the source of the 30.0 s `disarm` is unpinned and extending it is out of scope. Naming that hazard does not close it. If the island's ring ceiling is what ends an unanswered-to-the-island call, the user who answers at 20 s and unlocks at 25 s is inside your 60 s horizon and outside the island's mercy. The hardware test (answer, wait 5 s, Face ID) never strikes that frequency.
+
+**What holds:**
+- The four-run diagnosis still sings: the native wake is prompt in every lock state; Dart-now is what the 10 s gate was never meant to measure.
+- Nick's product answer holds. Tokens stay `WhenUnlocked`. Face ID before join is Android's contract. The v1 keychain migration, the delete-then-add pair-split, the locked-read-as-null mint — gone, and good riddance.
+- A fresh receipt cannot launder an old `signedAt`. Hostile re-push of an old body creates a record *now*; `receivedAt − signedAt` is the body's age. Mismatch of push `m` against the signed call id falls back to `now`. Fail closed.
+- No wire change, no island change, sovereign key stays class A, locked read stays a throw. Revert is drop the field.
+- The hardware test shape (lock past grace, kill, answer, wait, then Face ID) is the right strike. Keep it.
+
+**If RECAST, what to fold back:**
+- Make `receivedAt` an argument to `admitRing`, not a shadow map filled from events. `age = (receivedAt ?? now) − signedAt`. Parse `body.call` after signature and before the age clause so the controller can key the lookup; leave the v1 refusal last.
+- At admit time, *query* the live native record for that `CallRef` (method-channel read of the map you already persist — `entry.at` / Android instance). On the locked answered path it has been sitting there for seconds. Do not decide stale from an event-bus photocopy. If a native ring is live for this id and the query still returns null, *hold* the invite and re-run the stale clause when the stamp arrives; do not let the first refuse win.
+- Populate the freshness map only from the wake that created a ringing record, TTL the design's own horizon, matching call id. Never copy an 8 h answered UserDefaults zombie into it. Then #220 is not a prerequisite for this gate; say so, and keep #220 from blocking 0.0.6.
+- Strike the sentence "a receipt can only make age smaller." Bound replay by the four remaining clauses. Define one clock: stamp monotonic plus wall, horizon against monotonic delta, age against wall `receivedAt − signedAt`, same reconstruction on both platforms. Name `kNativeReceiptHorizon = 60s` in the tests; stop saying "ring lifetime."
+- Pin the 30 s `disarm` (island end vs app-side pending-answer) in this doc before the budget is a claim. If it is the island ending a call it has not heard joined, write that as the user-visible residual: unlock plus join must beat that lease. Extending it can stay a later decision; pretending the path is specified cannot.
