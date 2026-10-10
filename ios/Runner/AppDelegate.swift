@@ -679,7 +679,7 @@ final class CallKitRinger: NSObject {
     // displacement had already ended the live call).
     //
     // 1. Already spent on this device: a call rings at most once (design 22
-    //    v3.2; was "tombstone", #211). Redelivery of a spent call's invite.
+    //    v3.2). Redelivery of a spent call's invite.
     if isSpent(callId) {
       os_log("[callkit] invite for a call already ended on this device; reporting and ending", log: aikoCallLog, type: .info)
       reportAndEndImmediately(reason: .remoteEnded, completion: completion)
@@ -1016,8 +1016,8 @@ final class CallKitRinger: NSObject {
   /// `system_call_channel_contract_test.dart`.
   static let spentTtl: TimeInterval = 120
 
-  // The stored key keeps the old name on purpose: renaming it would forget
-  // every spent call across an upgrade, and #211 changes no behaviour.
+  // The key's spelling is persisted on devices: changing it forgets every
+  // spent call across an upgrade.
   private static let spentKey = "callkit.tombstones"
 
   private func liveSpent() -> [String: TimeInterval] {

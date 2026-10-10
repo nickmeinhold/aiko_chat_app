@@ -165,7 +165,7 @@ const kSystemCallControlChannel = 'cc.imagineering.aikoChatApp/call/control';
 const Duration kSystemCallRingTrust = Duration(seconds: 120);
 
 /// How long a call the system UI ended stays spent (cannot ring again) on
-/// this device (design 22 v4.1; was "tombstone", #211).
+/// this device (design 22 v4.1).
 ///
 /// **2 × the longest an invitation can wait in a push provider**, so no
 /// redelivery of a call's invite can outlive its spent record. The island's

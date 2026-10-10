@@ -47,8 +47,7 @@ import org.json.JSONObject
  *   so a late websocket invite never rings as a banner either. Spent means
  *   ONLY "cannot ring again here". It says nothing about whether the call is
  *   alive (an answered call is spent and live) or whether a ring was ever drawn
- *   (an end that beats its invite is spent with no ring). The old name,
- *   "tombstone", read as "the call is dead" and kept producing wrong fixes (#211).
+ *   (an end that beats its invite is spent with no ring).
  * - `live` lives in process memory because the media does: when the process
  *   dies, the call is over, and a persisted `live` would refuse calls forever.
  *
@@ -226,8 +225,7 @@ object CallRing {
       // `ended` ahead of the answer snapshot made Dart record the answered
       // call as system-ended — its invitation then arrived dead, was never
       // admitted, and the cold-start answer timed out. (Fix-interaction pass,
-      // design 22 build: spent-on-answer × replay-on-listen. The bug was
-      // the old name "tombstone" read as "dead"; #211.)
+      // design 22 build: spent-on-answer × replay-on-listen.)
       val held = readAnswerApplied(app)?.callId
       val inProcess = live?.callId
       liveSpent(app)
