@@ -29,6 +29,15 @@
 // own FCM path wake the handset — the END-TO-END test. The 2026-10-08 run was the
 // former and was briefly reported as the latter (island tab, 2026-10-09): enspyr
 // had no FCM credential at the time. Every result line says which one it was.
+// It has one now, so the island wakes the handset for EVERY invite it accepts:
+// the default mode sends a second wake, not the only one, and no mode can hold
+// the island's wake back.
+//
+// STAGING A LATE INVITE. `RING_BACKDATE_MS=N` signs the invite N ms in the past
+// (tool/ring_probe.py). Design 23 judges an invite's age AT THE WAKE, so the two
+// sides of its line are: N=7000 (fresh at the wake, stale by the time Dart reads
+// it, admitted on its wake age, joins) and N=13000 (already stale at the wake,
+// refused, an answer never joins). Both measured on the Pixel, 2026-10-10.
 //
 // And one the bash original had: it sent both halves of `invite` to /dev/null, so
 // a failed signed send or a rejected FCM push still printed "pushed". Here every
