@@ -279,3 +279,15 @@ Tesla: "If you want the secrets of the universe, think in energy, frequency and 
 - Populate the freshness map only from the wake that created a ringing record, TTL the design's own horizon, matching call id. Never copy an 8 h answered UserDefaults zombie into it. Then #220 is not a prerequisite for this gate; say so, and keep #220 from blocking 0.0.6.
 - Strike the sentence "a receipt can only make age smaller." Bound replay by the four remaining clauses. Define one clock: stamp monotonic plus wall, horizon against monotonic delta, age against wall `receivedAt − signedAt`, same reconstruction on both platforms. Name `kNativeReceiptHorizon = 60s` in the tests; stop saying "ring lifetime."
 - Pin the 30 s `disarm` (island end vs app-side pending-answer) in this doc before the budget is a claim. If it is the island ending a call it has not heard joined, write that as the user-visible residual: unlock plus join must beat that lease. Extending it can stay a later decision; pretending the path is specified cannot.
+
+### Flaw 4: PINNED (2026-10-10, after round 2)
+The 30.0 s teardown is **Dart's own join deadline**: `system_call_navigator.dart:298`,
+`_joinDeadline = Timer(kInAppRingDuration /* 30 s */, …)`, armed when the navigator receives
+the `answered` event, released as `AnswerOutcome.neverAdmitted` if no invite is admitted.
+Run 1's timeline only fits if **Dart was running throughout a locked ring and blocked only on
+the keychain**. Answer at :46.886 starts the deadline. Face ID at ~:55 lets the session
+restore. The invite is fetched at :57.4 and refused stale at 16.7 s. The deadline fires at
+05:16.886, exactly +30.0 s, so the release and `disarm` come from Dart, not from the island's
+ceiling (which, from persist at :40.7, would have fired at ~05:10.7). Consequences for v3:
+the budget is Answer → Face ID → restore → fetch → admit < 30 s on Dart's timer, and the
+receipt/invite race (flaw 1) is live in production conditions, not hypothetical.
