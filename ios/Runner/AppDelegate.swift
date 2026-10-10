@@ -483,6 +483,30 @@ final class CallKitRinger: NSObject {
 
   private let provider: CXProvider
 
+  /// One channel's live call. [woke] is when the wake for it arrived, on the
+  /// sleep-inclusive monotonic clock ([Self.monotonicNow]), written ONCE by the
+  /// wake handler and carried through Answer (design 23). Nil on a record
+  /// written before the field existed: no wake to vouch with.
+  typealias LiveEntry = (
+    uuid: String, at: TimeInterval, answered: Bool, call: String?, woke: UInt64?
+  )
+
+  /// CallKit's own view of its calls: the authority on whether a call is still
+  /// ringing or answered (design 23, property 3). Our persisted record is not —
+  /// a leftover row outlives its call (#220). Created once with the ringer, on
+  /// main, so it has been observing since launch rather than being built cold
+  /// at the moment a question needs it.
+  private let callObserver = CXCallObserver()
+
+  /// Nanoseconds on `CLOCK_MONOTONIC`, which on Darwin "will continue to
+  /// increment while the system is asleep" (clock_gettime(3)) — the same species
+  /// as Android's `elapsedRealtime`. NOT `ProcessInfo.systemUptime`, which is
+  /// `mach_absolute_time` and stands still while the phone sleeps: a locked
+  /// phone sleeps between the wake and Face ID, and an awake-only clock would
+  /// under-count exactly that gap (Tesla, design 23 temper round 3). Resets at
+  /// boot, so a stamp greater than now means a reboot since the wake.
+  static func monotonicNow() -> UInt64 { clock_gettime_nsec_np(CLOCK_MONOTONIC) }
+
   /// Channel id → the call currently ringing for it, and when we reported it.
   ///
   /// **DEVICE-LOCAL, because the wire carries no call id.** The island's payload
@@ -931,6 +955,49 @@ final class CallKitRinger: NSObject {
   /// closest member and it is not literally true (nobody remote ended it). There
   /// is no "this app's own UI ended it" case; the Recents entry is the one
   /// place a reader could notice.
+  /// How long ago this device was woken for [call] on [channel], while CallKit
+  /// still holds it as ringing or answered (design 23). Asked by Dart at
+  /// admission.
+  ///
+  /// THREE ANSWERS (v3.1, requirement 1):
+  ///  * `woke` — CallKit holds this call's UUID, not ended, and our record for
+  ///    exactly this call carries its wake stamp from this boot;
+  ///  * `notActionable` — no record for this call, no stamp, a reboot since,
+  ///    or CallKit says the call has ended;
+  ///  * `unknown` — a stamp for this call exists but CallKit does not list it.
+  ///    That is either an observer that has not caught up or a leftover row
+  ///    (#220); Dart asks again rather than judging at `now`. Only within
+  ///    `liveCallTrustWindow` of the wake: past it the record is not believed
+  ///    as a ring by anything here either.
+  ///
+  /// The spent record is NOT consulted. Answering spends a call (it can never
+  /// ring again) at the moment it must vouch; CallKit's `hasEnded` is what
+  /// says a call is over.
+  func wakeAge(channel: String, call: String) -> [String: Any] {
+    let answer = wakeAgeAnswer(channel: channel, call: call)
+    os_log(
+      "[callkit] wakeAge m=%{public}@ → %{public}@", log: aikoCallLog, type: .info, call,
+      answer["ms"].map { "woke \($0)ms ago" } ?? (answer["state"] as? String ?? "?"))
+    return answer
+  }
+
+  private func wakeAgeAnswer(channel: String, call: String) -> [String: Any] {
+    let notActionable: [String: Any] = ["state": "notActionable"]
+    guard
+      let uuid = Self.uuid(fromCallId: call),
+      let entry = stored()[channel],
+      entry.uuid == uuid.uuidString, entry.call == call,
+      let woke = entry.woke
+    else { return notActionable }
+    let now = Self.monotonicNow()
+    guard now >= woke else { return notActionable }  // rebooted since the wake
+    let ageMs = (now - woke) / 1_000_000
+    if let system = callObserver.calls.first(where: { $0.uuid == uuid }) {
+      return system.hasEnded ? notActionable : ["state": "woke", "ms": Int(ageMs)]
+    }
+    return Double(ageMs) < Self.liveCallTrustWindow * 1000 ? ["state": "unknown"] : notActionable
+  }
+
   func endSystemCall(channel: String, call: String) {
     // The call is over for this process, whatever CallKit holds: it is no
     // longer live, and it never rings again here.
@@ -1128,7 +1195,7 @@ final class CallKitRinger: NSObject {
   }
 
   private static func live(
-    _ entry: (uuid: String, at: TimeInterval, answered: Bool, call: String?)
+    _ entry: LiveEntry
   ) -> UUID? {
     guard let uuid = UUID(uuidString: entry.uuid) else { return nil }
     let age = Date().timeIntervalSince1970 - entry.at
@@ -1148,8 +1215,13 @@ final class CallKitRinger: NSObject {
     // design 21 v2): a second v2 call on a channel ENDS the first in
     // reportInvite before this runs, and a v1 second invite is refused there.
     mutateMap { map in
+      // THE ONE WRITER of `woke`: this runs only from the invite path, the
+      // wake handler, for the call it is about to report. Duplicates and
+      // displacement are refused or ended before reaching here, so nothing
+      // re-stamps a live call's wake.
       map[channel] = (
-        uuid: uuid.uuidString, at: Date().timeIntervalSince1970, answered: false, call: call
+        uuid: uuid.uuidString, at: Date().timeIntervalSince1970, answered: false, call: call,
+        woke: Self.monotonicNow()
       )
     }
   }
@@ -1165,7 +1237,9 @@ final class CallKitRinger: NSObject {
       // Only the row the user answered — never a call that has since taken
       // the channel.
       guard let entry = map[channel], entry.uuid == uuid.uuidString else { return }
-      map[channel] = (uuid: entry.uuid, at: entry.at, answered: true, call: entry.call)
+      map[channel] = (
+        uuid: entry.uuid, at: entry.at, answered: true, call: entry.call, woke: entry.woke
+      )
     }
   }
 
@@ -1183,7 +1257,7 @@ final class CallKitRinger: NSObject {
   private static let mapLock = NSLock()
 
   private func mutateMap(
-    _ change: (inout [String: (uuid: String, at: TimeInterval, answered: Bool, call: String?)]) -> Void
+    _ change: (inout [String: LiveEntry]) -> Void
   ) {
     Self.mapLock.lock()
     defer { Self.mapLock.unlock() }
@@ -1206,9 +1280,9 @@ final class CallKitRinger: NSObject {
     }
   }
 
-  private func stored() -> [String: (uuid: String, at: TimeInterval, answered: Bool, call: String?)] {
+  private func stored() -> [String: LiveEntry] {
     let raw = UserDefaults.standard.dictionary(forKey: Self.liveCallsKey) ?? [:]
-    var out: [String: (uuid: String, at: TimeInterval, answered: Bool, call: String?)] = [:]
+    var out: [String: LiveEntry] = [:]
     for (channel, value) in raw {
       guard
         let entry = value as? [String: Any],
@@ -1220,17 +1294,19 @@ final class CallKitRinger: NSObject {
       // mapping on that device as an un-aging one.
       out[channel] = (
         uuid: uuid, at: at, answered: entry["answered"] as? Bool ?? false,
-        call: entry["call"] as? String
+        call: entry["call"] as? String,
+        woke: (entry["woke"] as? NSNumber)?.uint64Value
       )
     }
     return out
   }
 
-  private func write(_ map: [String: (uuid: String, at: TimeInterval, answered: Bool, call: String?)]) {
+  private func write(_ map: [String: LiveEntry]) {
     var raw: [String: Any] = [:]
     for (channel, entry) in map {
       var e: [String: Any] = ["uuid": entry.uuid, "at": entry.at, "answered": entry.answered]
       if let call = entry.call { e["call"] = call }
+      if let woke = entry.woke { e["woke"] = NSNumber(value: woke) }
       raw[channel] = e
     }
     UserDefaults.standard.set(raw, forKey: Self.liveCallsKey)
@@ -1322,6 +1398,14 @@ final class SystemCallChannel: NSObject, FlutterStreamHandler {
           CallKitRinger.shared.endSystemCall(channel: channel, call: callId)
         }
         result(nil)
+      case "wakeAge":
+        // When this device was woken for exactly that call (design 23).
+        guard
+          let args = call.arguments as? [String: Any],
+          let channel = args["channel"] as? String, !channel.isEmpty,
+          let callId = args["call"] as? String
+        else { return result(["state": "notActionable"]) }
+        result(CallKitRinger.shared.wakeAge(channel: channel, call: callId))
       case "callStarted":
         // Dart has a call live in this process (design 22 v4.2).
         if let args = call.arguments as? [String: Any],

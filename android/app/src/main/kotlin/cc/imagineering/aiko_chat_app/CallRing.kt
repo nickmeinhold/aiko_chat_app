@@ -136,7 +136,18 @@ object CallRing {
 
   private data class Ring(val channel: String, val callId: String, val instance: Long)
 
-  private data class Answered(val channel: String, val callId: String, val at: Long)
+  /**
+   * [at] is the answer; [wokeAt] is the wake it answered, the ring's
+   * `instance`, carried through Answer so a locked answer's freshness is judged
+   * from the wake and not from the unlock (design 23 v3.1, requirement 4).
+   * -1 on a cell written before this field existed: no wake to vouch with.
+   */
+  private data class Answered(
+    val channel: String,
+    val callId: String,
+    val at: Long,
+    val wokeAt: Long,
+  )
 
   private data class Live(val channel: String, val callId: String)
 
@@ -252,6 +263,31 @@ object CallRing {
   fun holdsEngine(context: Context): Boolean {
     val app = context.applicationContext
     return ringSlot(app) != null || synchronized(lock) { live != null } || answerSlot(app) != null
+  }
+
+  /**
+   * How long ago this device was woken for [callId] on [channel], while that
+   * call is still actionable here (design 23). Asked by Dart at admission.
+   *
+   * ACTIONABLE means the ring cell or the pending answer names exactly this
+   * call on exactly this channel. An END clears both, so "no END applied" holds
+   * by construction. The spent record is NOT consulted: answering spends a call
+   * (it can never ring again) at the very moment it must vouch, and reading
+   * spent as "not actionable" would refuse every locked answer (Maxwell,
+   * design 23 temper round 3).
+   *
+   * Never `unknown`: both cells are this process's own state, read under
+   * [lock]. `elapsedRealtime` counts deep sleep, and both cells are boot-scoped,
+   * so a reboot reads as no cell.
+   */
+  fun wakeAge(context: Context, channel: String, callId: String): Map<String, Any> {
+    val app = context.applicationContext
+    val woke: Long? = ringSlot(app)?.takeIf { it.callId == callId && it.channel == channel }?.instance
+      ?: answerSlot(app)?.takeIf { it.callId == callId && it.channel == channel }
+        ?.wokeAt?.takeIf { it >= 0 }
+    val age = woke?.let { SystemClock.elapsedRealtime() - it }?.takeIf { it >= 0 }
+    Log.i(TAG, "wakeAge: m=$callId ${age?.let { "woke ${it}ms ago" } ?: "not actionable"}")
+    return if (age == null) mapOf("state" to "notActionable") else mapOf("state" to "woke", "ms" to age)
   }
 
   /** Whether [instance] is the ring that is live right now. */
@@ -420,7 +456,10 @@ object CallRing {
         return@synchronized null
       }
       clearRing(app)
-      writeAnswer(app, Answered(current.channel, current.callId, SystemClock.elapsedRealtime()))
+      writeAnswer(
+        app,
+        Answered(current.channel, current.callId, SystemClock.elapsedRealtime(), current.instance),
+      )
       // The ring is over for this device; it can never ring again.
       markSpent(app, current.callId, current.channel)
       // Posted INSIDE the lock, ahead of any `ended` a racing call_end could
@@ -587,7 +626,7 @@ object CallRing {
     val channel = p.getString("a_channel", null) ?: return null
     val callId = p.getString("a_call", null) ?: return null
     if (p.getInt("a_boot", -1) != bootCount(app)) return null
-    return Answered(channel, callId, p.getLong("a_at", 0L))
+    return Answered(channel, callId, p.getLong("a_at", 0L), p.getLong("a_woke", -1L))
   }
 
   private data class Spent(val channel: String, val at: Long)
@@ -637,7 +676,8 @@ object CallRing {
   private fun writeAnswer(app: Context, a: Answered) {
     prefs(app).edit()
       .putString("a_channel", a.channel).putString("a_call", a.callId)
-      .putLong("a_at", a.at).putInt("a_boot", bootCount(app)).commit()
+      .putLong("a_at", a.at).putLong("a_woke", a.wokeAt)
+      .putInt("a_boot", bootCount(app)).commit()
   }
 
   private fun clearRing(app: Context) {
@@ -645,7 +685,7 @@ object CallRing {
   }
 
   private fun clearAnswer(app: Context) {
-    prefs(app).edit().remove("a_channel").remove("a_call").remove("a_at").remove("a_boot").commit()
+    prefs(app).edit().remove("a_channel").remove("a_call").remove("a_at").remove("a_woke").remove("a_boot").commit()
   }
 
   /** `Settings.Global.BOOT_COUNT` (API 24+, our minSdk). -2 if unreadable. */

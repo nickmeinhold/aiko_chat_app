@@ -86,6 +86,17 @@ object CallChannels {
           }
           result.success(null)
         }
+        "wakeAge" -> {
+          // When this device was woken for exactly that call, while it is still
+          // ringing or answered (design 23).
+          val channel = call.argument<String>("channel")
+          val callId = call.argument<String>("call")
+          if (channel != null && callId != null) {
+            result.success(CallRing.wakeAge(app, channel, callId))
+          } else {
+            result.success(mapOf("state" to "notActionable"))
+          }
+        }
         "canRingFullScreen" -> result.success(IncomingCallNotifier.canRingFullScreen(app))
         "openFullScreenSettings" -> {
           openFullScreenSettings(app)

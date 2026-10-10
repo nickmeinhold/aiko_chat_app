@@ -18,6 +18,9 @@ import '../../moderation/application/moderation_controller.dart';
 import '../data/system_call_bridge.dart' show kCallSpentTtl;
 import '../domain/answer_outcome.dart';
 import '../domain/call_invite.dart';
+import '../domain/ring_consent.dart';
+import '../domain/wake_age.dart';
+import 'system_call_providers.dart';
 import 'ring_telemetry.dart';
 import 'ring_allowlist_provider.dart';
 
@@ -93,6 +96,29 @@ class RingController extends Notifier<CallInvite?> {
 
   /// The user this ring state belongs to; see the identity guard in [build].
   String? _identity;
+
+  /// Every admitted invitation, as it is admitted — whether or not it rings.
+  ///
+  /// The ring STATE cannot carry this. It is the banner, and the banner's
+  /// window runs from the signed start, so an invitation admitted late by its
+  /// wake age (design 23: a locked answer, then Face ID) can be admitted after
+  /// that window is spent. Published only as state, that admission was `null`
+  /// and the answer it exists for never joined. Synchronous, so a listener
+  /// sees an admission at the same moment it would have seen the state.
+  Stream<CallInvite> get admissions => _admissions.stream;
+  final _admissions = StreamController<CallInvite>.broadcast(sync: true);
+
+  /// Admissions waiting on the native wake age, by call (design 23).
+  ///
+  /// The navigator's join deadline asks this before it releases an answer: an
+  /// admission already in flight completes first (v3.1, requirement 3).
+  Future<void>? wakeAdmissionFor(CallRef call) => _awaitingWake[call];
+  final Map<CallRef, Future<void>> _awaitingWake = {};
+
+  /// Arrival order of invitations, so last-wins follows ARRIVAL. An admission
+  /// that waited on native can finish after a newer one that did not.
+  int _arrivals = 0;
+  int _liveArrival = 0;
 
   /// Channel ids the island reported as DMs (`GET /v1/dm`). Refreshed on every
   /// build from the watched provider — see [build].
@@ -251,6 +277,25 @@ class RingController extends Notifier<CallInvite?> {
           _telemetry.endRefused(m.channelId, reason);
         }
     }
+    _admit(m, me: me, consent: consent, now: now, arrival: ++_arrivals);
+  }
+
+  /// The ring gate, then everything that follows an admission.
+  ///
+  /// [receivedAt] is null on the first pass: freshness judged at [now], exactly
+  /// as before design 23. Only an invitation refused `stale` asks the native
+  /// side when it was woken, and that is not an optimisation of the rule but
+  /// the rule itself: `receivedAt ≤ now`, so a wake can only ever rescue an
+  /// invitation that `now` refuses. Everything else stays synchronous.
+  void _admit(
+    Message m, {
+    required String me,
+    required RingConsent consent,
+    required DateTime now,
+    required int arrival,
+    DateTime? receivedAt,
+    WakeAge? wake,
+  }) {
     final decision = admitRing(
       m,
       meUserId: me,
@@ -259,9 +304,16 @@ class RingController extends Notifier<CallInvite?> {
       conversationMuted: _isMuted(m),
       isDm: _isDm(m),
       now: now,
+      receivedAt: receivedAt,
     );
     final CallInvite invite;
     switch (decision) {
+      case RingRefused(reason: RingRefusal.stale)
+          when wake == null && _askWake(m, me: me, arrival: arrival):
+        // Every clause ahead of age has passed, signature first — so the call
+        // the native side is asked about is the SIGNED body's. Not refused
+        // yet: the answer decides.
+        return;
       case RingRefused(:final reason, :final age):
         // THE LINE THAT DID NOT EXIST. Ten distinct refusals used to leave here
         // as one indistinguishable `null`, which is why learning that a real
@@ -322,15 +374,25 @@ class RingController extends Notifier<CallInvite?> {
     // Answer would have joined A's room while the user was looking at B
     // (cage-match #139 R4, Tesla).
     final displaced = _live;
+    if (displaced != null && _liveArrival > arrival) {
+      // A NEWER invitation is already live: this one waited on its wake age
+      // and finished second. Arrival decides, so it does not take the banner —
+      // but it was admitted, and an answer for it may be waiting.
+      _telemetry.ringStarted(invite.channelId, now.difference(invite.startedAt));
+      _admissions.add(invite);
+      return;
+    }
     if (displaced != null) _settle(displaced);
     _expiry?.cancel();
     _expiry = null;
     _live = invite;
+    _liveArrival = arrival;
     // The POSITIVE CONTROL for the refusal lines above. Without an admitted
     // record, an empty report cannot distinguish "no call arrived" from
     // "logging is broken" — and an instrument that reads the same either way is
     // not an instrument.
     _telemetry.ringStarted(invite.channelId, now.difference(invite.startedAt));
+    _admissions.add(invite);
     // ONE equation of motion. Arming an absolute `kInAppRingDuration` here while
     // `_republish` derived the remaining time from `startedAt` meant a ring's
     // length depended on whether a rebuild happened to occur: an invite signed
@@ -338,6 +400,77 @@ class RingController extends Notifier<CallInvite?> {
     // Carnot). Both paths now go through `_republish`, so the deadline is a
     // function of the signed start time and nothing else.
     state = _republish();
+  }
+
+  /// Ask the native side when it was woken for this invitation's call, then
+  /// judge again from that instant. Returns false when there is nothing to ask
+  /// (no bridge, a v1 body), so the `stale` stands.
+  ///
+  /// ONE QUESTION PER CALL: a duplicate delivery while the first is waiting
+  /// joins it rather than asking twice.
+  bool _askWake(Message m, {required String me, required int arrival}) {
+    final call = parseCallBody(m.body)?.call;
+    final bridge = ref.read(systemCallBridgeProvider);
+    if (call == null || bridge == null) return false;
+    if (_awaitingWake.containsKey(call)) return true;
+    late final Future<void> asking;
+    asking = _wakeThenAdmit(m, call, me: me, arrival: arrival).whenComplete(() {
+      if (identical(_awaitingWake[call], asking)) _awaitingWake.remove(call);
+    });
+    _awaitingWake[call] = asking;
+    return true;
+  }
+
+  Future<void> _wakeThenAdmit(
+    Message m,
+    CallRef call, {
+    required String me,
+    required int arrival,
+  }) async {
+    // `unknown` is asked again, never judged at `now` (v3.1, requirement 1):
+    // the oracle that has not synced is not the oracle saying no. Bounded by
+    // the ring window from ARRIVAL: past it there is no answer left for this
+    // admission to serve, since the join deadline is that long from an answer
+    // that cannot precede the wake.
+    final giveUp = DateTime.now().add(kInAppRingDuration);
+    var attempts = 0;
+    WakeAge wake;
+    while (true) {
+      attempts++;
+      final bridge = ref.read(systemCallBridgeProvider);
+      wake = bridge == null
+          ? const WakeNotActionable()
+          : await bridge.wakeAge(m.channelId, call);
+      if (!ref.mounted) return;
+      if (wake is! WakeUnknown || !DateTime.now().isBefore(giveUp)) break;
+      await Future<void>.delayed(kWakeAgeRetry);
+      if (!ref.mounted) return;
+    }
+    _telemetry.ringWakeAge(m.channelId, wake, attempts: attempts);
+    // Identity is not a reversible state variable (see [build]): a logout
+    // while native was answering voids the question.
+    if (ref.read(currentUserProvider)?.userId != me) return;
+    // `now` SAMPLED AT THE ANSWER, after the await, so the age native measured
+    // and the instant it is subtracted from are one moment.
+    final now = DateTime.now().toUtc();
+    _forget(now);
+    _admit(
+      m,
+      me: me,
+      // SLICED AGAIN, on purpose: this is a new decision at a later moment, and
+      // a block, mute or consent change made while the user reached for Face
+      // ID must be honoured, as every clause here is re-read.
+      consent: ref
+          .read(ringConsentByChannelProvider.notifier)
+          .consentIn(m.channelId),
+      now: now,
+      arrival: arrival,
+      receivedAt: switch (wake) {
+        Woke(:final age) => now.subtract(age),
+        _ => null,
+      },
+      wake: wake,
+    );
   }
 
   /// Is this message's channel a DM, per the app's OWN channel model?

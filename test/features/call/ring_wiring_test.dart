@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/features/call/application/ring_allowlist_provider.dart';
+import 'package:aiko_chat_app/features/call/data/system_call_bridge.dart'
+    show kSystemCallControlChannel;
 import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
 import 'package:aiko_chat_app/features/call/domain/call_invite.dart';
 import 'package:aiko_chat_app/features/call/domain/ring_consent.dart';
@@ -16,6 +20,7 @@ import 'package:aiko_chat_app/features/moderation/application/moderation_control
 import 'package:aiko_chat_app/services/sovereign_key_store.dart';
 import 'package:drift/native.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -814,5 +819,183 @@ void main() {
         expect(container.read(incomingRingProvider), isNotNull);
       },
     );
+  });
+
+
+  // Design 23: an invitation that is stale at `now` is judged again from the
+  // instant the native side was woken for its call. Driven through the REAL
+  // control channel, so the decode is the production one; the handler stands
+  // in for Swift and Kotlin.
+  group('design 23: a stale invite is judged from its wake', () {
+    late List<Map<Object?, Object?>> asked;
+    late Future<Object?> Function(Map<Object?, Object?> args) answer;
+
+    setUp(() {
+      asked = [];
+      answer = (_) async => {'state': 'notActionable'};
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel(kSystemCallControlChannel),
+            (call) async {
+              if (call.method != 'wakeAge') return null;
+              final args = call.arguments as Map<Object?, Object?>;
+              asked.add(args);
+              return answer(args);
+            },
+          );
+    });
+
+    Future<List<CallInvite>> listening() async {
+      await warmDms();
+      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+      await pump();
+      final admitted = <CallInvite>[];
+      container
+          .read(incomingRingProvider.notifier)
+          .admissions
+          .listen(admitted.add);
+      return admitted;
+    }
+
+    test('a locked answer (signed 16 s ago, woken at +0.5 s) rings', () async {
+      // Runs 1 and 4: the push reached the phone in under a second, then Face
+      // ID took the rest. Judged at `now` this is 16 s old and refused.
+      answer = (_) async => {'state': 'woke', 'ms': 15500};
+      final admitted = await listening();
+
+      transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
+      await pump();
+
+      expect(container.read(incomingRingProvider)?.call, kTestCall);
+      expect(admitted.map((i) => i.call), [kTestCall]);
+      expect(asked.single, {'channel': dmId, 'call': kTestCallId});
+    });
+
+    test('a wake that was itself late still refuses: transit > 10 s', () async {
+      // Transit is what freshness bounds. Signed 16 s ago, woken 5 s ago:
+      // 11 s from signature to this device.
+      answer = (_) async => {'state': 'woke', 'ms': 5000};
+      final admitted = await listening();
+
+      transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNull);
+      expect(admitted, isEmpty);
+    });
+
+    test('notActionable is judged at now, as before design 23', () async {
+      final admitted = await listening();
+
+      transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNull);
+      expect(admitted, isEmpty);
+      expect(asked, hasLength(1));
+    });
+
+    test('a fresh invite never asks the native side', () async {
+      // `receivedAt <= now`: a wake can only rescue what `now` refuses.
+      await listening();
+
+      transport.emitMessage(await inbound());
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNotNull);
+      expect(asked, isEmpty);
+    });
+
+    test('unknown is asked again, never judged at now (v3.1 req. 1)', () async {
+      var calls = 0;
+      answer = (_) async => ++calls < 3
+          ? {'state': 'unknown'}
+          : {'state': 'woke', 'ms': 15500};
+      final admitted = await listening();
+
+      transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
+      await pump();
+      expect(admitted, isEmpty, reason: 'still asking');
+
+      await Future<void>.delayed(kWakeAgeRetry * 3);
+      await pump();
+
+      expect(admitted.map((i) => i.call), [kTestCall]);
+      expect(calls, 3);
+    });
+
+    test(
+      'an admission after the banner window is still announced (budget edge)',
+      () async {
+        // Answer at ~20 s into the ring, Face ID ~15 s later: admitted at ~35 s,
+        // when the in-app window measured from the signature is spent. The
+        // banner stays down; the navigator must still hear of it, or the
+        // answer it exists for never joins.
+        answer = (_) async => {'state': 'woke', 'ms': 34500};
+        final admitted = await listening();
+
+        transport.emitMessage(await inbound(age: const Duration(seconds: 35)));
+        await pump();
+
+        expect(container.read(incomingRingProvider), isNull);
+        expect(admitted.map((i) => i.call), [kTestCall]);
+      },
+    );
+
+    test('an END that arrived during the question still wins', () async {
+      // END across the split (v3.1 req. 6): a prompt wake must not admit a call
+      // whose hangup reached us by another path.
+      final release = Completer<void>();
+      answer = (_) async {
+        await release.future;
+        return {'state': 'woke', 'ms': 15500};
+      };
+      final admitted = await listening();
+
+      transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
+      await pump();
+      transport.emitMessage(
+        await inbound(
+          body: kTestEndBody,
+          clientMsgId: 'M2',
+          replyTo: islandIdFor('M1'),
+        ),
+      );
+      await pump();
+      release.complete();
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNull);
+      expect(admitted, isEmpty);
+    });
+
+    test('an older invite finishing its question late never displaces a newer '
+        'live one', () async {
+      final release = Completer<void>();
+      answer = (_) async {
+        await release.future;
+        return {'state': 'woke', 'ms': 15500};
+      };
+      final admitted = await listening();
+
+      // A: stale at now, asking native. B: a different call, fresh, rings.
+      transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
+      await pump();
+      transport.emitMessage(
+        await inbound(body: kOtherInviteBody, clientMsgId: 'M9'),
+      );
+      await pump();
+      expect(container.read(incomingRingProvider)?.call, kOtherCall);
+
+      release.complete();
+      await pump();
+
+      expect(
+        container.read(incomingRingProvider)?.call,
+        kOtherCall,
+        reason: 'arrival decides last-wins, not completion',
+      );
+      expect(admitted.map((i) => i.call), [kOtherCall, kTestCall]);
+    });
   });
 }
