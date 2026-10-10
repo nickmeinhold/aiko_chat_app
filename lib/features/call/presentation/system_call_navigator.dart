@@ -237,7 +237,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
         // The system ended THIS call on this device: its invitation must never
         // ring late as a banner (a lock-screen decline before Flutter existed),
         // and its banner stops if it is ringing now. Only this call's.
-        ref.read(incomingRingProvider.notifier).noteSystemEnded(action.call);
+        ref.read(incomingRingProvider.notifier).markSpent(action.call);
         _leaveIfOpen(action.channelId, action.call);
     }
   }

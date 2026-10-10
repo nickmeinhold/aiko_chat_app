@@ -15,7 +15,7 @@ import '../../chat/application/mute_controller.dart';
 import '../../chat/domain/channel.dart';
 import '../../chat/domain/message.dart';
 import '../../moderation/application/moderation_controller.dart';
-import '../data/system_call_bridge.dart' show kCallTombstoneTtl;
+import '../data/system_call_bridge.dart' show kCallSpentTtl;
 import '../domain/answer_outcome.dart';
 import '../domain/call_invite.dart';
 import 'ring_telemetry.dart';
@@ -80,15 +80,16 @@ class RingController extends Notifier<CallInvite?> {
   final Map<CallRef, List<({CallEnd end, DateTime at})>> _ended = {};
 
   /// Calls the SYSTEM call UI has already ended on this device, and when: the
-  /// Dart half of the native tombstones (design 22 v4.2).
+  /// Dart half of the native spent records (design 22 v4.2): such a call
+  /// cannot ring again here, which says nothing about whether it is live.
   ///
   /// A lock-screen decline can happen before Flutter exists. The invitation
   /// then arrives over the websocket a few seconds later, still inside
   /// [kCallInviteFreshness], and without this it rang as a banner for a call
   /// the user had already declined (Tesla, design 22 temper round 3). Fed by
   /// the navigator from every native `ended`, including the ones replayed on
-  /// listen. Lives [kCallTombstoneTtl], the native tombstone's own lifetime.
-  final Map<CallRef, DateTime> _systemEnded = {};
+  /// listen. Lives [kCallSpentTtl], the native record's own lifetime.
+  final Map<CallRef, DateTime> _spent = {};
 
   /// The user this ring state belongs to; see the identity guard in [build].
   String? _identity;
@@ -105,7 +106,7 @@ class RingController extends Notifier<CallInvite?> {
       ends.removeWhere((e) => now.difference(e.at) > kCallInviteFreshness * 2);
     }
     _ended.removeWhere((_, ends) => ends.isEmpty);
-    _systemEnded.removeWhere((_, at) => now.difference(at) > kCallTombstoneTtl);
+    _spent.removeWhere((_, at) => now.difference(at) > kCallSpentTtl);
   }
 
   /// Re-publish the live invitation after a rebuild, re-arming its expiry with
@@ -296,7 +297,7 @@ class RingController extends Notifier<CallInvite?> {
     // Already ended in the system call UI on this device — declined on the
     // lock screen before this invitation reached Dart. Same treatment as an
     // owed hangup: it never rings.
-    if (_systemEnded.containsKey(invite.call)) {
+    if (_spent.containsKey(invite.call)) {
       _telemetry.ringDeadOnArrival(invite.channelId);
       return;
     }
@@ -382,10 +383,10 @@ class RingController extends Notifier<CallInvite?> {
 
   /// The system call UI ended [call] on this device. Remember it so its
   /// invitation never rings late, and stop its banner if it is ringing now.
-  void noteSystemEnded(CallRef call) {
+  void markSpent(CallRef call) {
     final now = DateTime.now().toUtc();
     _forget(now);
-    _systemEnded[call] = now;
+    _spent[call] = now;
     stopRingingFor(call, RingStopCause.endedInSystemUi);
   }
 

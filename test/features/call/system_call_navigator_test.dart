@@ -625,7 +625,7 @@ void main() {
     );
   });
 
-  testWidgets('a system ENDED is remembered as a tombstone for its call', (
+  testWidgets('a system ENDED is remembered as spent for its call', (
     tester,
   ) async {
     // Design 22 v4.2: a lock-screen decline before Flutter existed must never
@@ -805,7 +805,7 @@ class _FakeRing extends RingController {
   final List<CallRef> systemEnded = [];
 
   @override
-  void noteSystemEnded(CallRef call) {
+  void markSpent(CallRef call) {
     systemEnded.add(call);
     stopRingingFor(call, RingStopCause.endedInSystemUi);
   }

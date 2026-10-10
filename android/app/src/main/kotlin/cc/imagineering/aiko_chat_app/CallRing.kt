@@ -35,16 +35,20 @@ import org.json.JSONObject
  *  session     {channel, callId, phase}     answer | Dart start    answered: persisted,
  *              phase = answered | live      → end of that call       crash grace ANSWERED_TRUST_MS
  *                                                                  live: process memory
- *  tombstones  callId → at                  every retire / end     persisted, TOMBSTONE_TTL_MS,
+ *  spent       callId → at                  every retire / end     persisted, SPENT_TTL_MS,
  *                                                                  pruned on every write
  * ```
  *
  * - `instance` is NOT a call identity. It names this ring's notification
  *   artifacts (PendingIntents, the ring activity), so a tap on a replaced ring's
  *   button acts on nothing. Dart never sees it.
- * - The tombstone is what makes a call ring AT MOST ONCE on this device: a
- *   redelivered invite for an ended call is dropped, and Dart is told on listen
- *   so a late websocket invite never rings as a banner either.
+ * - `spent` is what makes a call ring AT MOST ONCE on this device: a
+ *   redelivered invite for a spent call is dropped, and Dart is told on listen
+ *   so a late websocket invite never rings as a banner either. Spent means
+ *   ONLY "cannot ring again here". It says nothing about whether the call is
+ *   alive (an answered call is spent and live) or whether a ring was ever drawn
+ *   (an end that beats its invite is spent with no ring). The old name,
+ *   "tombstone", read as "the call is dead" and kept producing wrong fixes (#211).
  * - `live` lives in process memory because the media does: when the process
  *   dies, the call is over, and a persisted `live` would refuse calls forever.
  *
@@ -109,17 +113,17 @@ object CallRing {
   const val ANSWERED_TRUST_MS = 120_000L
 
   /**
-   * How long an ended call stays ended on this device — the tombstone.
+   * How long a call stays spent (cannot ring again) on this device.
    *
    * **2 × the longest an invitation can wait in a push provider**, so no
-   * redelivery of an invite can outlive its tombstone. The island's invite
+   * redelivery of an invite can outlive its spent record. The island's invite
    * lifetimes (PR #192): FCM and APNs VoIP `push_result.RING_CEILING_SECONDS`
    * (30s), APNs alert `apns._ALERT_EXPIRATION_SECONDS` (60s, the max). So
-   * 2 × 60s. The same number as Dart's `kCallTombstoneTtl` and Swift's, pinned
+   * 2 × 60s. The same number as Dart's `kCallSpentTtl` and Swift's, pinned
    * by `system_call_channel_contract_test.dart`. If the island moves either
    * constant (claude-tasks#4233), this moves.
    */
-  const val TOMBSTONE_TTL_MS = 120_000L
+  const val SPENT_TTL_MS = 120_000L
 
   /**
    * One line per DECISION, never per payload byte. The first hardware run
@@ -214,18 +218,19 @@ object CallRing {
    * as `ended` events, so a call declined before Dart existed never rings as a
    * banner when its invite arrives over the websocket (design 22 v4.2).
    */
-  fun tombstonedCalls(context: Context): List<Pair<String, String>> =
+  fun spentCalls(context: Context): List<Pair<String, String>> =
     synchronized(lock) {
       val app = context.applicationContext
       // NEVER the call this device is holding an answer for. Answering
-      // tombstones the RING (it can never ring again), and replaying that as
+      // spends the RING (it can never ring again), and replaying that as
       // `ended` ahead of the answer snapshot made Dart record the answered
       // call as system-ended — its invitation then arrived dead, was never
       // admitted, and the cold-start answer timed out. (Fix-interaction pass,
-      // design 22 build: tombstone-on-answer × replay-on-listen.)
+      // design 22 build: spent-on-answer × replay-on-listen. The bug was
+      // the old name "tombstone" read as "dead"; #211.)
       val held = readAnswerApplied(app)?.callId
       val inProcess = live?.callId
-      liveTombstones(app)
+      liveSpent(app)
         .filterKeys { it != held && it != inProcess }
         .map { (callId, t) -> t.channel to callId }
     }
@@ -267,7 +272,7 @@ object CallRing {
     val ring: Ring
     synchronized(lock) {
       // REFUSALS FIRST, every one before any side effect (design 22 §2).
-      if (liveTombstones(app).containsKey(callId)) {
+      if (liveSpent(app).containsKey(callId)) {
         Log.i(TAG, "ring: m=$callId already ended on this device, dropped")
         return
       }
@@ -337,9 +342,10 @@ object CallRing {
         val inLive = live?.takeIf { it.callId == callId }
         val stored = answered?.channel ?: inLive?.channel
         if (stored == null) {
-          // Still tombstoned, so a late invite for it never rings.
-          tombstone(app, callId, channel)
-          Log.i(TAG, "end: m=$callId names no call on this device, tombstoned")
+          // Spent anyway, so a late invite for it never rings. FCM does not
+          // order delivery: this end can arrive before its invite.
+          markSpent(app, callId, channel)
+          Log.i(TAG, "end: m=$callId names no call on this device, spent")
           return
         }
         if (!oneChannelPerCall(stored, channel)) {
@@ -352,7 +358,7 @@ object CallRing {
         // lock, so it can never overtake the `answered` it follows.
         clearAnswer(app)
         if (inLive != null) live = null
-        tombstone(app, callId, stored)
+        markSpent(app, callId, stored)
         CallChannels.emit(CallChannels.ACTION_ENDED, stored, callId)
         Log.i(TAG, "end: m=$callId ended after answer")
       }
@@ -418,7 +424,7 @@ object CallRing {
       clearRing(app)
       writeAnswer(app, Answered(current.channel, current.callId, SystemClock.elapsedRealtime()))
       // The ring is over for this device; it can never ring again.
-      tombstone(app, current.callId, current.channel)
+      markSpent(app, current.callId, current.channel)
       // Posted INSIDE the lock, ahead of any `ended` a racing call_end could
       // post for this call (Tesla, PR #210 v2 round 3).
       CallChannels.emit(CallChannels.ACTION_ANSWERED, current.channel, current.callId)
@@ -469,11 +475,11 @@ object CallRing {
   fun mediaGone(context: Context) {
     val app = context.applicationContext
     synchronized(lock) {
-      // An end of a session like any other: tombstoned, so the FCM retry that
+      // An end of a session like any other: spent, so the FCM retry that
       // `live` was holding down cannot ring again over the call the user just
       // left (Tesla, design 22 delta review round 2). Dart cannot be told —
       // its isolate is what is being destroyed.
-      live?.let { tombstone(app, it.callId, it.channel) }
+      live?.let { markSpent(app, it.callId, it.channel) }
       live = null
     }
   }
@@ -486,7 +492,7 @@ object CallRing {
   fun endFromDart(context: Context, channel: String, callId: String) {
     val app = context.applicationContext
     val ring = synchronized(lock) {
-      tombstone(app, callId, channel)
+      markSpent(app, callId, channel)
       if (live?.callId == callId) live = null
       readAnswer(app)?.takeIf { it.callId == callId }?.let { clearAnswer(app) }
       ringSlot(app)?.takeIf { it.callId == callId }?.also {
@@ -520,13 +526,13 @@ object CallRing {
    * by this ring's own tag). CALLED UNDER [lock], so the runnable it posts is
    * queued in transition order with every other emit (design 22 v2.4).
    *
-   * Tombstones the call. When the ring [ended] without being taken, the posted
+   * Spends the call. When the ring [ended] without being taken, the posted
    * runnable either releases the headless engine it started (nobody to tell)
    * or tells Dart which call ended. It decides only WHETHER anyone is
    * listening; what happened is sealed here, now.
    */
   private fun retireLocked(app: Context, ring: Ring, ended: Boolean) {
-    tombstone(app, ring.callId, ring.channel)
+    markSpent(app, ring.callId, ring.channel)
     val listeners = stopListeners.toList()
     main.post {
       listeners.forEach { it.onRingStopped(ring.instance) }
@@ -586,37 +592,37 @@ object CallRing {
     return Answered(channel, callId, p.getLong("a_at", 0L))
   }
 
-  private data class Tomb(val channel: String, val at: Long)
+  private data class Spent(val channel: String, val at: Long)
 
   /**
-   * Tombstones still inside [TOMBSTONE_TTL_MS], this boot. Under [lock]. A
-   * tombstone from another boot is expired by definition (its clock restarted).
+   * Spent records still inside [SPENT_TTL_MS], this boot. Under [lock]. A
+   * record from another boot is expired by definition (its clock restarted).
    */
-  private fun liveTombstones(app: Context): Map<String, Tomb> {
+  private fun liveSpent(app: Context): Map<String, Spent> {
     val p = prefs(app)
     if (p.getInt("t_boot", -1) != bootCount(app)) return emptyMap()
     val json = runCatching { JSONObject(p.getString("t_calls", "{}") ?: "{}") }
       .getOrElse { JSONObject() }
     val now = SystemClock.elapsedRealtime()
-    val out = mutableMapOf<String, Tomb>()
+    val out = mutableMapOf<String, Spent>()
     for (key in json.keys()) {
       val entry = json.optJSONObject(key) ?: continue
-      val tomb = Tomb(entry.optString("c"), entry.optLong("at", -1L))
-      if (tomb.channel.isNotEmpty() && now - tomb.at in 0..TOMBSTONE_TTL_MS) out[key] = tomb
+      val spent = Spent(entry.optString("c"), entry.optLong("at", -1L))
+      if (spent.channel.isNotEmpty() && now - spent.at in 0..SPENT_TTL_MS) out[key] = spent
     }
     return out
   }
 
   /**
-   * Remember [callId] (on [channel]) as ended. PRUNES ON EVERY WRITE, so the
-   * store holds only the last [TOMBSTONE_TTL_MS] of calls and cannot grow
+   * Remember [callId] (on [channel]) as spent. PRUNES ON EVERY WRITE, so the
+   * store holds only the last [SPENT_TTL_MS] of calls and cannot grow
    * without bound (Kelvin, design 22 temper rounds 1 and 3). Under [lock].
    */
-  private fun tombstone(app: Context, callId: String, channel: String) {
-    val kept = liveTombstones(app).toMutableMap()
-    kept[callId] = Tomb(channel, SystemClock.elapsedRealtime())
+  private fun markSpent(app: Context, callId: String, channel: String) {
+    val kept = liveSpent(app).toMutableMap()
+    kept[callId] = Spent(channel, SystemClock.elapsedRealtime())
     val json = JSONObject()
-    kept.forEach { (k, t) -> json.put(k, JSONObject().put("c", t.channel).put("at", t.at)) }
+    kept.forEach { (k, s) -> json.put(k, JSONObject().put("c", s.channel).put("at", s.at)) }
     prefs(app).edit()
       .putString("t_calls", json.toString()).putInt("t_boot", bootCount(app)).commit()
   }
