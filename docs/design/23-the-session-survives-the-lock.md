@@ -1,6 +1,6 @@
 # Design 23: an answered ring is judged by when it rang
 
-**Status:** DRAFT v2, 2026-10-10 · **Issue:** #219 · **Blocks:** iOS half of 0.0.6 (#214)
+**Status:** DRAFT v3, 2026-10-10 (v2 struck RECAST 4/4 in round 2; folded) · **Issue:** #219 · **Blocks:** iOS half of 0.0.6 (#214)
 **Supersedes v1** ("the session survives the lock"), which moved the session tokens to
 `AfterFirstUnlockThisDeviceOnly`. v1 was struck RECAST 4/4 (`-TEMPER.md`, round 1). The
 temper surfaced a product question, and Nick answered it on 2026-10-10: **a call answered
@@ -33,97 +33,102 @@ call at +0.35–0.98 s in every run, whatever the lock state. That instant is th
 freshness window was standing in for: *did this ring reach us promptly?* Everything after it
 (Face ID, session restore, the fetch) is the user's and the app's latency, not the invite's.
 
-## Decision
+## Decision (v3, folding temper round 2)
 
-When `admitRing` judges an invite whose `CallRef` has a **live native ring record on this
-device**, it measures age against **the time that record was created** (the native receipt
-of the VoIP or FCM wake for that call id), not against `now`:
+When `RingController` is about to admit a verified invite whose signed body names a
+`CallRef`, it **asks the native side how long ago the wake for exactly that call arrived**,
+and measures freshness from then:
 
 ```
-receivedAt = nativeRingReceivedAt(callRef)          // null if no live native record
-age        = (receivedAt ?? now) − signedAt
+// RingController, before calling the (still pure) admitRing:
+wakeAge = await native.wakeAge(callRef)     // Duration?, null unless actionable (below)
+receivedAt = wakeAge == null ? null : now - wakeAge
+// admitRing(..., now: now, receivedAt: receivedAt)
+age = (receivedAt ?? now) - signedAt        // clockSkew / stale unchanged
 ```
 
-Everything else in `admitRing` is unchanged and still runs first: signature verified, not
-own, sender kind and consent, DM-only, not blocked, not muted, then age. `clockSkew` (negative
-age) and `stale` (age > 10 s) keep their meaning; only the instant changes.
+`admitRing` order (Carnot): signature verified → not own → parse the signed v2 `CallRef`
+(reject missing or malformed **before** any lookup) → sender kind and consent → DM-only → not
+blocked → not muted → **ended?** → age. The `CallRef` used for the query is the one from
+the *verified body*, so a different call's wake cannot be returned by construction.
 
-The session tokens stay `WhenUnlocked`. Nothing about the keychain changes. Joining needs
-auth, auth needs Face ID, and the user gives Face ID by answering, the same contract Android
-enforces with `requestDismissKeyguard` before it opens the app.
+### Four properties, each removing a round-2 flaw rather than guarding it
+
+1. **Query, don't copy (removes the race).** The wake age is read from native *at the
+   moment of admission*, over the control `MethodChannel`, awaited by `RingController`. Native
+   already holds the record when Dart admits, so there is no event that can arrive late and no
+   map to fill. Run 1's timeline shows the race was live: Dart ran throughout the locked
+   ring and got the `answered` event at Answer, while the invite arrived by fetch after Face ID.
+
+2. **A duration on a monotonic clock, not a timestamp (removes the clock domains).** Native
+   stamps the wake on its monotonic clock (iOS `ProcessInfo.systemUptime`, Android
+   `SystemClock.elapsedRealtime()`, which `Ring.instance` already is) and answers the query
+   with `uptimeNow − wokeUptime`. Dart computes `receivedAt = now − wakeAge` on **its own**
+   clock. Native wall-clock steps drop out, and `receivedAt ≤ now` holds by construction
+   (`wakeAge ≥ 0`). If the stored uptime is greater than the current one, the device rebooted
+   since the wake: the answer is null.
+   The stamp is a dedicated `wokeUptime`, set **once** by the wake handler when it creates
+   the record. Duplicate deliveries, displacement and Dart-initiated reports never write it.
+
+3. **Trusted only while the system says the call is actionable (removes the invented
+   horizon and neutralises #220).** `wakeAge` is null unless:
+   - **iOS:** `CXCallObserver().calls` contains this call's UUID (the lossless
+     ULID → UUID map) with `hasEnded == false`. That is CallKit's own state, not our
+     persisted record, so a leftover record from an ended call (the "displaces 54X7" case in
+     #220) is not actionable however long it lingers;
+   - **Android:** `CallRing` holds this call id as the live `Ring` or the pending `Answered`
+     (not retired, not ended), which is the same state `answer()` and `end()` consult.
+   No horizon constant remains. The lifetime of the trust is exactly the lifetime of the
+   ring or answered call, as each OS defines it. (The iOS 120 s and 8 h trust windows stay
+   as they are, for their own jobs; v3 does not read them.)
+
+4. **Composed with END (Carnot).** If the ring controller's END buffer (`_ended`) or the
+   native retirement record holds this `CallRef`, admission refuses before age is computed,
+   so a prompt wake cannot admit a call whose end already arrived by another path.
 
 ### Why this does not open a replay
 
-The worry is a *stale* invite manufacturing a fresh receipt and vouching for itself.
+- A re-pushed old invite creates a *new* wake, so `wakeAge` is small and
+  `receivedAt − signedAt` is as large as the invite is old: refused `stale`, as today.
+  `signedAt` remains the only input from the caller.
+- An *old* wake for the *same* call can vouch only while that call is still actionable in
+  CallKit or `CallRing`, i.e. while it is genuinely ringing or answered. Replaying an invite
+  for a call that is actually ringing right now admits the call that is actually ringing,
+  which is what admission is for.
+- The wake age is device-local. Nothing on the wire sets it.
 
-- **A receipt cannot launder an old signature.** If an island (hostile or buggy) re-pushes an
-  old signed invite, the native record is created *now*, so `receivedAt − signedAt` is as
-  large as the invite is old, and it is refused exactly as today. The signed `signedAt`
-  remains the only input from the caller. The receipt only stops the gate from also counting
-  *our* latency after the push arrived.
-- **A receipt can only make age smaller.** `receivedAt ≤ now` always, so the rule can only
-  turn a refusal into an admission, never the reverse. That makes the next bound the
-  important one:
-- **The record must be live, and recent.** An *old* record for the *same* call id (for
-  example one that survived its call, see #220) would let a replay of that original invite
-  be admitted later with its original, prompt receipt time. So:
-  - only a record in a **live** state counts (ringing, or answered and not yet joined or
-    ended); a retired or ended record ("tombstone") never does;
-  - and `now − receivedAt` must be within a **receipt horizon this design owns**, not one
-    borrowed from the native trust windows. Those are far too loose for this job: iOS trusts
-    a ringing record for 120 s and an *answered* record for **8 hours**
-    (`liveCallTrustWindow`, `answeredCallTrustWindow` in `AppDelegate.swift`), the latter
-    so that a force-quit cannot strand a call forever. Android's ring ceiling is 30 s
-    (`RING_CEILING_MS`). Proposed horizon: **60 s**. That covers ring (≤ 30 s, the island's
-    ceiling) plus Answer → Face ID → restore, and it is still short enough that a replay of
-    an old invite, matched to an old record, is out of reach.
-  The replay window is therefore bounded by a horizon close to the ring's own lifetime,
-  which is the protection a freshness gate is for in the first place. **#220 (a native ring record that outlives its
-  call) must be fixed first, or bounded by this check**, because it is exactly the stale
-  record this rule must not trust.
-- **The receipt is device-local.** It is not on the wire and nothing remote can set it. Only
-  the wake handler that rings the phone writes it, keyed by the `m` the push carried, and that
-  `m` is checked against the signed body's call id when Dart admits (a mismatch means no
-  record, so `now` is used).
+### The locked-call budget (pinned)
+
+The teardown that killed runs 1 and 4 is **Dart's own join deadline**:
+`system_call_navigator.dart:298`, `Timer(kInAppRingDuration /* 30 s */)`, armed on `answered`,
+released as `neverAdmitted` (pinned after round 2, see `-TEMPER.md`). So the contract is:
+
+| Step | Measured | Counts against |
+|---|---|---|
+| wake → native ring | 0.35–0.98 s | the invite (`receivedAt − signedAt` ≤ 10 s) |
+| ring → Answer | user (island ceiling 30 s) | the island's ceiling |
+| Answer → Face ID | user | **the 30 s join deadline** |
+| Face ID → restore + fetch | ~2–2.5 s (run 1: :55.4 → :57.4) | the 30 s join deadline |
+| admit → join | ~0.3 s | the 30 s join deadline |
+
+So a locked answer joins if the user unlocks within about 27 s of answering. That limit
+comes from the join deadline, which is derived from `kInAppRingDuration` ("joinable as long as
+the invitation would still be ringing"). Changing it is a separate decision. The hardware
+plan below strikes it directly.
+
+The session tokens stay `WhenUnlocked`, so before Face ID a keychain read throws
+`errSecInteractionNotAllowed` (raised as a `FlutterError`). The restore path treats that as
+transient (`token_provider.dart` clears only on `RefreshRejected`; `auth_controller.dart:599`
+documents it). **Invariant: a locked read is never flattened to "absent"**, because
+`SovereignKeyStore._loadOrCreate` treats absent as "mint a new identity".
 
 ### What it costs
-
-- **One field on the native→Dart bridge.** The action events (and the replay of pending ones
-  at `onListen`) carry `receivedAtMs`: wall-clock milliseconds when the native side created
-  the ring record. iOS already stamps it (`entry.at`, seconds since 1970). Android stamps
-  `elapsedRealtime`, so it converts once at emit time
-  (`currentTimeMillis − (elapsedRealtime − instance)`). This is an addition to the
-  method-channel contract, pinned by `system_call_channel_contract_test`.
-- **Dart keeps a short map** `CallRef → receivedAt` from bridge events, consulted by the
-  ring controller when it calls `admitRing`, and dropped when the record ends.
-- **No wire change. No island change.**
-
-## The locked-call path, end to end (iOS, cold, locked)
-
-| Step | Who | Needs keychain? | Budget |
-|---|---|---|---|
-| Wake arrives, ring record created (`receivedAt`) | native | no | ~1 s after persist (measured 0.35–0.98 s) |
-| CallKit rings, user answers | native + user | no | user; the ring ceiling is 30 s |
-| Audio session armed | native | no | measured: the call is torn down **exactly 30.0 s after Answer** if not joined (runs 1 and 4) |
-| User unlocks (Face ID) | user | | user |
-| Dart restores the session, fetches the invite | Dart | **yes** | ~2–3 s after unlock (run 1: 55.4 → 57.4) |
-| `admitRing`: age = `receivedAt − signedAt` (~1 s) → admitted | Dart | no | immediate |
-| Answer matched, video token minted, join | Dart | yes | ~0.3 s (Pixel: 140 ms) |
-
-So the binding constraint becomes **Answer → Face ID → join < 30 s**, not anything about the
-invite. Runs 1 and 4 would have joined at about 12 s after Answer. A user who takes longer
-than ~25 s to unlock loses the call. **Unpinned:** what enforces that 30 s. In both failed
-runs the CallKit call was torn down 30.0 s after Answer (`disarm` in the device log), but
-this draft has not traced whether it is the island's ring ceiling arriving as an end, or an
-app-side expiry of the pending answer. The build must pin it before relying on the budget.
-Extending it is a separate decision.
-
-**Locked-read contract (unchanged, now stated):** before Face ID, a keychain read throws
-`errSecInteractionNotAllowed`, raised by the plugin as a `FlutterError`. Today's restore path
-treats it as transient: `token_provider.dart` clears tokens only on `RefreshRejected`, and
-`auth_controller.dart:599` documents the throw. No change. A rule, written down so no future
-change breaks it: **a locked read must never be flattened to "absent"**, because
-`SovereignKeyStore._loadOrCreate` treats "absent" as "mint a new identity".
+- One control-channel method, `wakeAge(call) → int? (ms)`, both platforms, pinned in
+  `system_call_channel_contract_test`.
+- A `wokeUptime` field on the iOS persisted record (`stored()`), written once by the wake
+  handler. Android already has `Ring.instance`.
+- `admitRing` gains a `receivedAt` parameter (pure; still unit-testable without native).
+- No wire change. No island change. No keychain change.
 
 ## What the v1 temper found, and where it went
 
@@ -146,23 +151,27 @@ the `requestDismissKeyguard` unlock after it no longer do.
 
 ## How we know it worked
 
-1. **Hardware, the failing test:** iPhone locked for 30 s or more, app killed, ring through
+1. **The failing test, on hardware:** iPhone locked for 30 s or more, app killed, ring through
    enspyr (`tool/hw_ring.dart invite --island`, `HW_RING_CHANNEL=01M02Y4QS94QRRQ3658BZAB0PG`),
-   answer, **wait 5 s, then Face ID**. Pass = a video-token mint for `nick`.
-2. **Replay, on hardware:** reuse an old call id. Re-send a signed invite that is more than
-   10 s old (ring_probe with a stored old body), and let it wake the phone. Pass = refused
-   as `stale`, no ring admitted.
-3. **Unit (Dart):** `admitRing` with `receivedAt` set: admitted when receipt − signedAt ≤
-   10 s even though now − signedAt is 16 s; refused when receipt − signedAt > 10 s; refused
-   (falls back to `now`) when the record is not live, is older than the ring lifetime, or
-   names a different call id; `clockSkew` still fires on negative age.
-4. **Contract:** `receivedAtMs` present on answered and replayed events, both platforms;
-   Android's converted value is within 1 s of wall clock.
-5. **Android regression:** a Pixel cold ring still joins (the 2026-10-09 baseline).
+   answer, wait 5 s, Face ID. Pass = a video-token mint for `nick`.
+2. **The budget edge:** answer at ~20 s into the ring, unlock ~25 s after answering. Pass =
+   joins. At ~32 s after answering, pass = released as `neverAdmitted` (the deadline, by design).
+3. **Replay with an old record present:** answer and end call X; re-send X's signed invite
+   (old `signedAt`) so it wakes the phone. Pass = refused (the record is not actionable in
+   CallKit; the new wake gives `receipt − signedAt` > 10 s).
+4. **The race:** with the invite fetch completing before the bridge listener attaches
+   (unit: fake channel answers `wakeAge` while no event has been emitted). Pass = admitted.
+5. **Unit (`admitRing`, pure):** admitted when `receivedAt − signedAt` ≤ 10 s with
+   `now − signedAt` = 16 s; `stale` when `receivedAt − signedAt` > 10 s; falls back to `now`
+   when `receivedAt` is null; `clockSkew` on negative age; refused before age when ended;
+   malformed or missing `CallRef` refused before any lookup.
+6. **Native:** `wakeAge` null after reboot (stored uptime > now), null for an ended CallKit
+   call, null for a different call id; never re-stamped by a duplicate push.
+7. **Android regression:** a Pixel cold ring still joins.
 
 ## Not in scope
 
 - Extending the 30 s CallKit audio lease to cover a slow unlock.
-- #220, except that it is a **prerequisite**: v2 must not trust a native record that outlived
-  its call.
+- #220's leftover records are neutralised for admission by property 3 (CallKit, not the
+  record, decides "actionable"). Fixing the leftover itself remains #220.
 - Connecting before Face ID (v1's goal). Declined by Nick, 2026-10-10.
