@@ -1,4 +1,6 @@
-# TEMPER.md — Design 23, the session survives the lock
+# TEMPER.md — Design 23 (v1: the session survives the lock → v3: an answered ring is judged by when it rang)
+
+**STATUS: converged at the round cap (3 rounds). Build to v3.1, see Round 3.**
 
 **Overall verdict:** RECAST (4 of 4 families, no DISSOLVE)
 **Struck:** dt-1791559532, families seated: Maxwell + Kelvin (gemini-2.5-pro) + Carnot (gpt-5.5, medium) + Tesla (Grok)  (Wu disabled)
@@ -291,3 +293,122 @@ restore. The invite is fetched at :57.4 and refused stale at 16.7 s. The deadlin
 ceiling (which, from persist at :40.7, would have fired at ~05:10.7). Consequences for v3:
 the budget is Answer → Face ID → restore → fetch → admit < 30 s on Dart's timer, and the
 receipt/invite race (flaw 1) is live in production conditions, not hypothetical.
+
+
+---
+
+# Round 3 (final) — v3
+
+**Overall verdict:** CONVERGED AT THE ROUND CAP. Build to v3.1 (below); the build PR gets `/cage-match`.
+Kelvin SOUND; Carnot, Tesla, Maxwell RECAST. **Every family accepts v3's shape** (query the wake age at admission, monotonic duration, OS-defined actionability, END before age, pinned budget).
+**Struck:** dt-1791595635, families seated: Maxwell + Kelvin (gemini-2.5-pro) + Carnot (gpt-5.5) + Tesla (Grok)
+
+**Round-cap reading (Nick's ruling, 2026-08-23: at round 3, ask "is it converging?").** Round 1: the frame was wrong (keychain), replaced. Round 2: mechanism flaws (race, clock domains, invented horizon), replaced. Round 3: contract details only, and one SOUND. Converging, so no round 4. The round-3 findings are **build requirements** in v3.1, verified by the PR's cage-match and hardware plan.
+
+## Round-3 findings → v3.1 build requirements
+1. **Three-valued wake answer, never "fall back to now" on unknown** (Tesla). `wakeAge` returns `Woke(duration)` | `NotActionable` (ended, retired, other call, reboot) | `Unknown` (oracle not ready, e.g. a freshly built `CXCallObserver` whose `.calls` may not have synced). `NotActionable` → age from `now` (today's behaviour). **`Unknown` must not become `now`**: the controller defers admission (await the observer, or retry within the join deadline) instead of issuing a terminal `stale`. Verify on hardware whether a new `CXCallObserver` is populated synchronously.
+2. **One clock species: monotonic including sleep** (Tesla). iOS `ProcessInfo.systemUptime` pauses while asleep; Android `elapsedRealtime` does not. iOS stamps and measures with a sleep-inclusive monotonic clock (`clock_gettime(CLOCK_MONOTONIC)` / `mach_continuous_time`; verify which includes sleep on the target iOS). The reboot check must also catch a clock reset.
+3. **The join deadline under a suspended isolate** (Tesla). `_joinDeadline` is a Dart `Timer`: a suspended isolate does not run it, and an overdue timer can fire on resume before the admission it should wait for. Rule: on resume, the deadline is re-checked against the answer instant on a monotonic clock, and **an admission already in flight (the `wakeAge` query) completes before the deadline releases**. Also confirm when `answered` reaches Dart (at Answer, or queued until resume).
+4. **Android keeps the wake through Answer, and the tombstone is irrelevant** (Maxwell). `Answered(channel, callId, at, wokeAt = Ring.instance)`; Android actionable = "the pending answer names this call and no END has been applied". The tombstone ("must not ring again") is set at Answer and must not be read as "not actionable". Land #211's rename (`ringRetired`) with or before this build.
+5. **The preflight boundary** (Carnot). `RingController` does a minimal preflight: `originCryptoValid == true`, parse the signed v2 `CallRef`, reject missing or malformed, then query `wakeAge`, then call the pure `admitRing(…, receivedAt:)`. `admitRing` still re-runs its full order (verification included), so the preflight is a lookup key, not a second gate.
+6. **END across the split** (Carnot). Native retirement or end folds into `wakeAge = NotActionable`; Dart's `_ended` buffer is checked inside `admitRing` before age (a named refusal). Both are tested.
+7. **Residuals, named** (Carnot). A device wall-clock step between wake and admission still moves `now`, as it does today. And `wakeAge` vouches for *freshness only*: joining still requires the held answer inside its deadline.
+
+## MaxwellMergeSlam's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** v3's mechanism holds on iOS, but on Android the answered state it relies on keeps neither the wake time nor a clean "actionable" signal. `answer()` drops the `Ring` (and its `instance`), records `Answered.at` = *answer* time, and **tombstones** the call, so "not retired" in property 3 reads as false exactly when it must be true.
+
+**Fatal flaws:**
+- **Android: the wake time dies at Answer (missing state).** `CallRing.answer` does `clearRing(app)` and `writeAnswer(Answered(channel, callId, SystemClock.elapsedRealtime()))`. That is the answer instant, and `Ring.instance` (the wake) is discarded. v3 says "Android already has `Ring.instance`", which is true only *before* Answer. The locked path queries *after* Answer (Dart starts from `openAnswered` after `requestDismissKeyguard`), so `wakeAge` would be computed from the answer time, or be null. Android's unlock-then-start latency then counts against the invite exactly as iOS's Face ID did, and the doc's Android claim fails. Fold: `Answered` carries `wokeAt` (the `Ring.instance` it came from), and `wakeAge` reads that.
+- **Android "actionable" collides with the tombstone (fossil name, #211).** The same `answer()` calls `tombstone(app, current.callId, …)` because "it can never ring again". Property 3 says "not retired, not ended". On Android an answered call *is* tombstoned, i.e. retired from ringing, while being exactly the state that must vouch. If the implementer reads "retired" as "tombstoned", every Android locked answer is refused. Fold: define Android actionable precisely as "`readAnswerApplied` / the pending `Answered` names this call id, and no END for it has been applied". The tombstone is irrelevant to actionability. Do #211 (`ringRetired`) first or alongside, so the code says it.
+
+**What holds:**
+- iOS: `CXCallObserver` as the actionability source is the right authority. CallKit's own state, not our persisted record, neutralises #220's leftovers without a horizon constant.
+- The monotonic `wakeAge` converted on Dart's clock genuinely removes the clock-domain flaw, and `receivedAt ≤ now` now holds by construction.
+- Query-at-admission removes the race, and run 1's timeline proves the race was real.
+- END-before-age and the signed-`CallRef`-before-lookup ordering are correct.
+- The pinned 30 s budget makes the product contract explicit and testable.
+
+**If RECAST, what to fold back:**
+- Android: `Answered(channel, callId, at, wokeAt)`, with `wakeAge(call)` = `elapsedRealtime − wokeAt` while the pending answer names the call.
+- State the Android actionability rule in terms of the pending answer and the END state, explicitly excluding the tombstone. Land #211's rename with or before the build.
+- Hardware: an Android locked answer with a deliberately slow unlock (about 15 s), the case that would have failed silently.
+
+
+Ripgrep is not available. Falling back to GrepTool.
+## KelvinBitBrawler's Design Strike
+
+**Verdict:** SOUND
+
+**Summary:** The design has been supercooled to a state of near-perfect crystalline structure, systematically eliminating the thermal noise and race conditions of its previous incarnations.
+
+**Fatal flaws:**
+My strike finds no purchase; the design is a solid state. Every thermal leak identified in the v2 temper has been sealed with a near-perfect vacuum.
+- **Class: Race Condition:** Dissolved. The `Query, don't copy` model (Decision, property 1) makes the admission-time query atomic with respect to the decision, eliminating the race between the REST fetch and the event bridge.
+- **Class: Clock Skew/Domain Mismatch:** Frozen out. The move to a monotonic `Duration` (Decision, property 2) from the native side purges all wall-clock-related entropy between the native and Dart layers.
+- **Class: Unbounded Trust/Stale State:** Neutralized. Tying wake-age trust to the OS's own view of a call's liveness (`CXCallObserver`) instead of an arbitrary time horizon (Decision, property 3) is the correct, fundamentalist approach. It makes the security proof dependent on the OS, not on our ability to perfectly manage persisted state.
+- **Class: Unspecified Constraint:** Pinned. The 30-second join deadline is identified, its source located, and the resulting performance budget explicitly stated (`The locked-call budget`). The design accepts this as a physical law of the current system, which is the only correct action.
+
+**What holds:**
+The entire structure. The re-framing from a keychain trade to a clock-read problem was the correct thermodynamic insight. This v3 design executes on that insight without flaw, specifying a secure, robust, and verifiable mechanism. The documented trade-off (a ~27-second window to unlock) is not a flaw but a correctly measured physical constraint of the resulting engine.
+
+**If RECAST, what to fold back:**
+Not applicable. The design is sound. Proceed to implementation. `The Emperor: "Now, witness the power of this fully ARMED and OPERATIONAL battle station."` Build it.
+
+
+## CarnotCodeCarver's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** no real engine matches the Carnot cycle; a reviewer's job is to say how far short we are. v3 has found the right thermodynamic shape: query native at admission, use monotonic wake age, and bind trust to live system-call actionability. That dissolves the v1 keychain trade and most of v2's entropy leaks. But it still has one reversible-work gap: the design says RingController asks native using the verified CallRef before calling admitRing, while admitRing is the place that verifies and parses the signed body. That split is load-bearing at a trust boundary and not yet specified as an API. Recast narrowly: make the verified-call extraction/admission pipeline explicit, and pin the native actionability contract as a testable interface, not prose.
+
+**Fatal flaws:**
+- The controller/admitRing boundary is internally inconsistent. The design says RingController queries native before calling admitRing, but also says the CallRef used for the query comes from the verified body and that admitRing's order is signature verified -> parse CallRef -> ... -> age. Today, admitRing owns that security order. If the controller now parses CallRef outside admitRing, the design must specify a safe preflight: parse body, require originCryptoValid == true, reject missing/malformed signed v2 CallRef, then query wakeAge, then pass receivedAt into the pure gate. Otherwise the implementation either duplicates security logic or accidentally consults an unverified field. Dijkstra: "Simplicity is prerequisite for reliability."
+- The iOS actionability proof leans on CXCallObserver().calls, but does not state the exact UUID/CallRef lookup contract under displacement, duplicate PushKit delivery, provider reset, and Dart release. 'CallKit contains this UUID and hasEnded == false' is necessary, not sufficient, unless wakeAge also proves the UUID maps to this verified CallRef and the dedicated wokeUptime was created by the wake that reported that same CallRef. This should be a native interface invariant with tests, not a paragraph.
+- The END composition is conceptually right but underspecified across the Dart/native split. The doc says pending END buffer or native retirement refuses before age, but wakeAge only returns null based on CallKit/CallRing actionability. It does not define whether native retirement is queried by admitRing, folded into wakeAge, or represented as a separate refusal reason. A prompt wake must not become the high-pressure reservoir that powers a call already ended on another path.
+- The monotonic-duration move removes native wall-clock drift, but the proof overclaims. Dart still reconstructs receivedAt from Dart wall time at admission, so a device wall-clock step between wake and Face ID can still perturb receivedAt - signedAt. That may be acceptable because today the freshness gate already depends on Dart wall time, but the design should state the residual and test a wall-clock change during the locked interval. Feynman: "What I cannot create, I do not understand."
+- The design removes the invented horizon, which is good, but it replaces it with OS actionability without naming the product residual: an answered system call can remain actionable while the app's 30s join deadline is about to release it. The budget table names this, but the native trust lifetime and Dart join lifetime are now two clocks. The invariant should be: wakeAge may vouch for freshness only; joining still requires the held answer deadline. Hamming: "The purpose of computing is insight, not numbers."
+
+**What holds:**
+- The main reframe holds. Freshness should be measured at handset wake receipt, not when Dart finally authenticates after Face ID. That removes the wasted work of weakening session-token storage.
+- Querying native at admission is the Carnot move. It deletes the bridge event race instead of guarding it with retries and maps.
+- Returning a monotonic wake age rather than a native wall timestamp is the right direction. It removes cross-platform timestamp reconstruction and makes receipt <= now true in the reconstructed Dart clock, modulo Dart wall-clock changes.
+- Binding trust to system-call actionability is much better than a 60s magic horizon. The second law punishes invented constants; this design mostly stops inventing them.
+- Keeping tokens WhenUnlocked, preserving the locked-read-throws invariant, and leaving the keychain migration out are all sound.
+- The test plan is strong: hardware locked-call reproduction, budget edge, old-record replay, race unit, pure admitRing cases, native reboot/ended/different-call cases, and Android regression all strike the right surfaces.
+
+**If RECAST, what to fold back:**
+- Define a small verified preflight API before native lookup, or move the native lookup inside a new admission coordinator that preserves the security order. Name the exact sequence and refusal reasons.
+- Specify wakeAge(callRef) as a native contract: returns a duration only if the stored wokeUptime was set once by the wake handler for exactly this CallRef, the CallKit/CallRing record is currently actionable, and no native retirement/tombstone exists for that CallRef.
+- Make END composition concrete: either wakeAge returns null for retired calls, or RingController queries native retirement separately before age. Add the refusal ordering to the pure gate tests.
+- Add one test or explicit residual for Dart wall-clock changes between wake and admission. If accepted, say the design inherits the existing local-clock trust model.
+- Keep the 30s join deadline as a separate invariant in the implementation notes: native wake freshness can admit, but only the held-answer timer can allow join. Do not let those two clocks blur again.
+
+
+## Tesla, the Arc-Prophet's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The wake is finally the clock, and a single null — a cold CallKit observer, a monotonic clock that sleeps, a Dart timer that freezes — still falls through to `now` and refuses the invite at the moment Face ID hands it over.
+
+Tesla: "If you want the secrets of the universe, think in energy, frequency and vibration."
+
+**Fatal flaws:**
+- **Null is wired to the old gavel (Decision pseudocode; properties 1 and 3; How we know it worked §3).** `wakeAge == null` becomes `receivedAt == null` becomes `age = now − signedAt`, and `now` is the instant that killed runs 1 and 4. `RingController` returns on `stale` and does not re-enter. The oracle that produces that null is written as `CXCallObserver().calls`: a freshly built observer, whose `.calls` fills on a later delegate callback, reads as an empty set while the call is on the glass. Empty is "not actionable," which this equation treats as "judge at `now`," which a 13 s Face ID turns into a terminal `stale`. Jetsam between Answer and Face ID — the ordinary death of a PushKit process — is the process that must decide, with a good `wokeUptime` sitting in `stored()` and an observer that has not synced. Property 3's prose says a non-actionable call is untrusted; the equation admits it whenever `now − signedAt ≤ 10 s`. Test 3 cannot hear the split: an old `signedAt` is refused both by a new wake and by the fallback, so one pass sings two songs and proves neither. Three answers exist — a duration, a call that has ended, an oracle that has not synced — and the design kept two, with the third poured into the first bug.
+- **The two "monotonic" clocks are different species (property 2; Android).** `ProcessInfo.systemUptime` is awake time; it stands still while the device sleeps. `SystemClock.elapsedRealtime()` includes sleep. `receivedAt = now − wakeAge` subtracts the first from a wall-clock `now` and calls the result a receipt. Sleep between the stamp and the query — the brief PushKit wake, suspension, then a new process at Face ID — is added to the invite's age, and a receipt that truly took under a second crosses `kCallInviteFreshness`. The reboot check (stored uptime greater than current) catches a clock that went backwards and misses a clock that paused. The iOS clock of the same species as `elapsedRealtime` is `mach_continuous_time`. Until both platforms stamp that, "one clock on our side" is two clocks, and the locked phone is the one that sleeps.
+- **The 27 s budget is an isolate timer measured on a process that stayed awake (The locked-call budget; How we know it worked §2; Not in scope; `system_call_navigator.dart` `_hold`).** The product claim is that a locked answer joins if Face ID lands within about 27 s of Answer, because `_joinDeadline = Timer(kInAppRingDuration)` is armed on the `answered` event. A suspended isolate does not run that timer. On resume an overdue timer fires as the event loop's first act, releases `neverAdmitted`, and the `wakeAge` query that would have passed never runs. The other hum of the same string: if `answered` itself stays queued until resume, the 30 s starts at unlock, and "32 s after answering ⇒ `neverAdmitted`" passes on a tethered phone and fails open in a pocket. Run 1 pinned the teardown to that line in a process that was alive for the whole ring. Not in scope still calls this oscillator a "CallKit audio lease," so the next change will stretch the wrong one.
+
+**What holds:**
+- The reframe holds. Freshness is transit time, `signedAt` against device receipt, the session stays `WhenUnlocked`, and the v1 keychain migration is gone.
+- A re-pushed old body, when the new wake is actually returned, stays `stale`: a small `wakeAge` cannot launder an old `signedAt`. The stamp is device-local, written once, and `admitRing` stays pure with `receivedAt` passed in.
+- END before age, the verified `CallRef` as the lookup key, and "duplicate, displacement, and Dart reports do not re-stamp" are the right couplings.
+- The locked-read invariant holds: `errSecInteractionNotAllowed` stays a throw, so a locked wake cannot mint a sovereign identity.
+- Runs 3 and 4 still isolate the gate. The hardware shape — lock past the grace period, kill, answer, wait, Face ID, mint — is the right strike.
+
+**If RECAST, what to fold back:**
+- In Decision, replace the null equation with three results. Return a duration only from a long-lived observer whose initial snapshot has arrived, matched to the verified `CallRef`'s UUID, `hasEnded == false`, with one `wokeUptime`. `Ended` refuses and does not fall through to `now`. `Unsynced` holds the invite and queries again; the first `stale` from a cold oracle does not win. `now` remains only when this device has no CallKit call and no Android `Ring` for that `CallRef` (the foreground path, run 2).
+- In property 2, stamp `mach_continuous_time` on iOS and `elapsedRealtime` on Android, and say why `systemUptime` is the wrong species. Sample Dart `now` at the return of the query. Add a unit where the monotonic clock pauses across a sleep and a prompt invite still admits.
+- In the budget and Not in scope, name the 30 s teardown as `_joinDeadline` in `system_call_navigator.dart` and strike "CallKit audio lease." Arm that deadline on the native answer action, on the same continuous clock as the wake, so suspension cannot eat it. Keep hardware test 2, and add a run where the process is actually suspended between Answer and Face ID; until that run exists the 27 s claim is untuned.
+- Split test 3. Re-push while tombstoned, with a young `signedAt`: must refuse without using `now` inside the 10 s window. Re-push that creates a new wake, with an old `signedAt`: must refuse `stale`. One old-signature pass currently satisfies both and proves neither.

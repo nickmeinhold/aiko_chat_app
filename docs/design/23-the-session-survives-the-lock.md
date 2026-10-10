@@ -1,6 +1,6 @@
 # Design 23: an answered ring is judged by when it rang
 
-**Status:** DRAFT v3, 2026-10-10 (v2 struck RECAST 4/4 in round 2; folded) · **Issue:** #219 · **Blocks:** iOS half of 0.0.6 (#214)
+**Status:** v3.1, 2026-10-10. Tempered over 3 rounds and converged at the cap; **build to v3 plus the seven v3.1 requirements in `-TEMPER.md` (Round 3)**: a three-valued wake answer, a sleep-inclusive monotonic clock, the join deadline under suspension, Android keeping the wake through Answer, the preflight boundary, END across the split, and named residuals. The build PR gets `/cage-match`. · **Issue:** #219 · **Blocks:** iOS half of 0.0.6 (#214)
 **Supersedes v1** ("the session survives the lock"), which moved the session tokens to
 `AfterFirstUnlockThisDeviceOnly`. v1 was struck RECAST 4/4 (`-TEMPER.md`, round 1). The
 temper surfaced a product question, and Nick answered it on 2026-10-10: **a call answered
@@ -171,7 +171,7 @@ the `requestDismissKeyguard` unlock after it no longer do.
 
 ## Not in scope
 
-- Extending the 30 s CallKit audio lease to cover a slow unlock.
+- Extending the 30 s join deadline (`kInAppRingDuration`, `system_call_navigator.dart`) to cover a slow unlock. (Earlier drafts called it a "CallKit audio lease"; it is the navigator's timer.)
 - #220's leftover records are neutralised for admission by property 3 (CallKit, not the
   record, decides "actionable"). Fixing the leftover itself remains #220.
 - Connecting before Face ID (v1's goal). Declined by Nick, 2026-10-10.
