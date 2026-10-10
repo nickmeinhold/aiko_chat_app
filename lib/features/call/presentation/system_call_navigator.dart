@@ -114,17 +114,26 @@ import 'call_screen.dart' show CallRouteExtra, isInLiveCall, pushCallOverSpent;
 /// An `AsyncError` restore is deliberately on the holding side of that line: a
 /// failed round trip is "unknown", not "nobody is signed in".
 class SystemCallNavigator extends ConsumerStatefulWidget {
-  const SystemCallNavigator({super.key, required this.child});
+  const SystemCallNavigator({super.key, required this.child, this.now});
 
   final Widget child;
+
+  /// The wall clock the held answer's deadline is re-checked on after a
+  /// suspension. A seam for tests only: a widget test's fake time drives every
+  /// [Timer] but not `DateTime.now()`, so a suspended isolate (wall time moves,
+  /// timers do not) cannot be expressed without it.
+  @visibleForTesting
+  final DateTime Function()? now;
 
   @override
   ConsumerState<SystemCallNavigator> createState() =>
       _SystemCallNavigatorState();
 }
 
-class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
+class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator>
+    with WidgetsBindingObserver {
   StreamSubscription<SystemCallAction>? _sub;
+  StreamSubscription<CallInvite>? _admissionsSub;
 
   /// Read per use rather than cached: this widget outlives provider rebuilds,
   /// and a captured logger would keep writing to a torn-down sink.
@@ -172,6 +181,16 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   /// step with another field IS the coupling; deleting it is the fix.
   Timer? _joinDeadline;
 
+  /// When the held answer was taken, on the WALL clock: the one Dart clock
+  /// that keeps counting while this isolate is suspended. A Dart [Timer] does
+  /// not, so a hold that slept through its deadline is caught on resume by
+  /// [didChangeAppLifecycleState] rather than trusted to the timer
+  /// (design 23 v3.1, requirement 3). A wall-clock step moves it, as it moves
+  /// every freshness judgement here (requirement 7, a named residual).
+  DateTime? _heldAt;
+
+  DateTime _now() => (widget.now ?? DateTime.now)();
+
   @override
   void initState() {
     super.initState();
@@ -179,8 +198,18 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     // native side's held actions, and a subscription created in build would be
     // re-created on every rebuild — re-listening to a broadcast stream that has
     // already been drained.
+    WidgetsBinding.instance.addObserver(this);
     final bridge = ref.read(systemCallBridgeProvider);
     _sub = bridge?.actions.listen(_onAction);
+    // EVERY ADMISSION, including one whose banner window is already spent: an
+    // invitation admitted by its wake age after Face ID is admitted after that
+    // window, and the ring state publishes it as null (design 23). Subscribed
+    // once: the provider is never invalidated, so its notifier is never
+    // replaced.
+    _admissionsSub = ref
+        .read(incomingRingProvider.notifier)
+        .admissions
+        .listen(_recordAdmission);
     // SEED THE LATCH, because `ref.listen` fires on CHANGES only. An invitation
     // already ringing when this mounts — a hot restart, or a rebuild landing
     // mid-ring — would otherwise never be recorded, and the very next answer
@@ -191,7 +220,9 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
+    _admissionsSub?.cancel();
     for (final entry in _admitted.values) {
       entry.expiry.cancel();
     }
@@ -295,13 +326,56 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
     _answered = channelId;
     _answeredCall = call;
     _joinDeadline?.cancel();
-    _joinDeadline = Timer(kInAppRingDuration, () {
-      if (_holds(call)) {
-        _telemetry.answerResolved(channelId, AnswerOutcome.neverAdmitted);
-        _release(channelId, call);
-      }
-    });
+    _heldAt = _now();
+    _joinDeadline = Timer(
+      kInAppRingDuration,
+      () => _deadlineReached(channelId, call),
+    );
     _tryJoin();
+  }
+
+  /// The held answer's deadline has passed. Release it — unless an admission
+  /// for exactly this call is already asking the native side when it was woken
+  /// (design 23): that question completes first, and an admission it produces
+  /// joins (v3.1, requirement 3). Its own bound is the ring window from the
+  /// invitation's arrival, so this cannot wait without end.
+  void _deadlineReached(String channelId, CallRef call) {
+    if (!_holds(call)) return;
+    final inFlight = ref
+        .read(incomingRingProvider.notifier)
+        .wakeAdmissionFor(call);
+    if (inFlight != null) {
+      unawaited(
+        inFlight.whenComplete(() {
+          if (mounted) _deadlineReached(channelId, call);
+        }),
+      );
+      return;
+    }
+    _telemetry.answerResolved(channelId, AnswerOutcome.neverAdmitted);
+    _release(channelId, call);
+  }
+
+  /// A suspended isolate runs no timers, so an overdue deadline is checked
+  /// here, against the answer instant, before anything else can act on resume.
+  ///
+  /// RELEASED OUTRIGHT, never deferred to a question "in flight" (Tesla,
+  /// design 23 build review). A resume past the deadline proves the isolate
+  /// slept, so what looks in flight is a frozen retry delay, not native
+  /// speaking: deferring to it let the thawed loop take a fresh sample after
+  /// the deadline and join on it. Only the timer path, which ran in a live
+  /// process, waits for a question that is genuinely being asked.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final channelId = _answered;
+    final call = _answeredCall;
+    final heldAt = _heldAt;
+    if (channelId == null || call == null || heldAt == null) return;
+    if (_now().difference(heldAt) >= kInAppRingDuration) {
+      _telemetry.answerResolved(channelId, AnswerOutcome.neverAdmitted);
+      _release(channelId, call);
+    }
   }
 
   /// Whether the held answer is exactly this call.
@@ -343,6 +417,7 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator> {
   void _consume() {
     _answered = null;
     _answeredCall = null;
+    _heldAt = null;
     _joinDeadline?.cancel();
     _joinDeadline = null;
   }

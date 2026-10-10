@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:aiko_chat_app/features/call/domain/wake_age.dart';
 import 'package:aiko_chat_app/app/router.dart';
 import 'package:go_router/go_router.dart';
 
@@ -282,6 +283,10 @@ void main() {
 
 /// Records what the app asked the platform call UI to do.
 class _FakeSystemCall implements SystemCallBridge {
+  @override
+  Future<WakeAge> wakeAge(String channelId, CallRef call) async =>
+      const WakeNotActionable();
+
   final List<String> ended = [];
   final List<CallRef> endedCalls = [];
 

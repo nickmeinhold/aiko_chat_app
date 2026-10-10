@@ -87,6 +87,13 @@ const Duration kCallInviteFreshness = Duration(seconds: 10);
 /// does.
 const Duration kInAppRingDuration = Duration(seconds: 30);
 
+/// How soon the ring gate asks again when the native side answers that it
+/// cannot tell yet whether it was woken for a call (design 23, [WakeUnknown]).
+///
+/// A cadence, not a bound: it changes how quickly a late answer is noticed and
+/// nothing about what is admitted. The bound is [kInAppRingDuration].
+const Duration kWakeAgeRetry = Duration(milliseconds: 250);
+
 /// The pinned END body — the caller saying "I hung up". **Signed and durable —
 /// never edit this string.**
 ///
@@ -862,6 +869,13 @@ RingDecision admitRing(
   required bool conversationMuted,
   required bool isDm,
   required DateTime now,
+
+  /// When this device's native side was woken for this call, if it vouches for
+  /// it (design 23): the instant freshness is measured from. Null judges
+  /// freshness at [now], as before. Never after [now] by construction
+  /// (`now − wakeAge`); clamped anyway, so a bad caller cannot make an invite
+  /// younger than it is when Dart reaches it.
+  DateTime? receivedAt,
 }) {
   final body = parseCallBody(message.body);
   if (body == null || body.kind != CallBodyKind.invite) {
@@ -922,9 +936,22 @@ RingDecision admitRing(
   // Negative age (signed in the future by a skewed clock) is not fresh — it is
   // unreadable, and admitting it would let a bad clock ring forever.
   // `!isNegative` is the guard; `> freshness` alone would admit it.
+  //
+  // JUDGED AT [now], NEVER AT [receivedAt]. A wake can land before `signedAt`
+  // on the receiver's clock when the sender's runs a fraction fast — a 0.3 s
+  // push under a 0.5 s skew — and that invite rings today. Skew asks "was this
+  // signed in the future?", which only [now] can answer.
   if (age.isNegative) return RingRefused(RingRefusal.clockSkew, age: age);
-  if (age > kCallInviteFreshness) {
-    return RingRefused(RingRefusal.stale, age: age);
+  // TRANSIT is what freshness bounds: signature to this device's wake. What
+  // follows the wake (Face ID, session restore, the fetch) is the user's and
+  // the app's latency, not the invitation's (design 23). Floored at zero for
+  // the same skew case.
+  final from = receivedAt == null || receivedAt.isAfter(now) ? now : receivedAt;
+  final transit = from.isBefore(signedAt)
+      ? Duration.zero
+      : from.difference(signedAt);
+  if (transit > kCallInviteFreshness) {
+    return RingRefused(RingRefusal.stale, age: transit);
   }
   // The island's id is REFUSED here rather than carried as a null. Unreachable
   // via either production producer (see [CallInvite.islandMsgId]) — so this is

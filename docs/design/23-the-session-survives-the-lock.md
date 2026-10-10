@@ -1,6 +1,6 @@
 # Design 23: an answered ring is judged by when it rang
 
-**Status:** v3.1, 2026-10-10. Tempered over 3 rounds and converged at the cap; **build to v3 plus the seven v3.1 requirements in `-TEMPER.md` (Round 3)**: a three-valued wake answer, a sleep-inclusive monotonic clock, the join deadline under suspension, Android keeping the wake through Answer, the preflight boundary, END across the split, and named residuals. The build PR gets `/cage-match`. · **Issue:** #219 · **Blocks:** iOS half of 0.0.6 (#214)
+**Status:** v3.1, 2026-10-10; **built** (see Build notes). Tempered over 3 rounds and converged at the cap; **build to v3 plus the seven v3.1 requirements in `-TEMPER.md` (Round 3)**: a three-valued wake answer, a sleep-inclusive monotonic clock, the join deadline under suspension, Android keeping the wake through Answer, the preflight boundary, END across the split, and named residuals. The build PR gets `/cage-match`. · **Issue:** #219 · **Blocks:** iOS half of 0.0.6 (#214)
 **Supersedes v1** ("the session survives the lock"), which moved the session tokens to
 `AfterFirstUnlockThisDeviceOnly`. v1 was struck RECAST 4/4 (`-TEMPER.md`, round 1). The
 temper surfaced a product question, and Nick answered it on 2026-10-10: **a call answered
@@ -168,6 +168,36 @@ the `requestDismissKeyguard` unlock after it no longer do.
 6. **Native:** `wakeAge` null after reboot (stored uptime > now), null for an ended CallKit
    call, null for a different call id; never re-stamped by a duplicate push.
 7. **Android regression:** a Pixel cold ring still joins.
+
+## Build notes (2026-10-10, the v3.1 build)
+
+Three things the build found that the tempered design did not say, each folded into the code:
+
+1. **Skew stays judged at `now`; only freshness moves to the wake.** v3's `age = receivedAt − signedAt`
+   refuses `clockSkew` whenever the wake lands before `signedAt` on our clock, which a sender a
+   fraction fast and a quick push produce (0.5 s skew, 0.3 s push). That call rings today. So
+   `admitRing` asks "signed in the future?" at `now` and bounds *transit*
+   (`max(0, receivedAt − signedAt)`) by `kCallInviteFreshness`.
+2. **`wakeAge` is asked only for an invite refused `stale` at `now`.** `receivedAt ≤ now`, so the wake
+   can only rescue what `now` refuses. The first pass is today's synchronous gate. A `stale`
+   refusal means every earlier clause (signature first) has already passed, so the call queried is
+   the signed body's: that is requirement 5's preflight, by construction. The second pass re-reads
+   block, mute and consent at its later moment, and last-wins follows arrival order.
+3. **An admission is announced apart from the banner.** The in-app ring window runs from `signedAt`,
+   so the budget-edge case (answer at ~20 s, Face ID ~15 s later) is admitted after it, and the ring
+   state publishes `null`. `RingController.admissions` carries every admission, and the navigator
+   latches from it, so that answer still joins.
+
+Where the build differs from requirement 6: Dart's `_ended` buffer is still checked straight after
+`admitRing` (`ringDeadOnArrival`), not inside it. The effect is the same (an owed END refuses before
+anything rings or joins), and moving `endsInvite` into the pure gate would widen its inputs for no
+change in what it admits. Pinned by the wiring test "an END that arrived during the question still
+wins".
+
+Residuals, named: a wall-clock step moves `now` and the navigator's resume re-check (requirement 7);
+whether `answered` reaches Dart at Answer or at resume, and whether a fresh `CXCallObserver` lists a
+ringing call at once, are hardware questions (`call.ring.wakeAge` and `[callkit] wakeAge` log
+every answer, `unknown` included, so the runs below settle both).
 
 ## Not in scope
 

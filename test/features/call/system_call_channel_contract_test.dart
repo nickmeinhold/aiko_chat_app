@@ -294,4 +294,68 @@ void main() {
   test('Swift emits the v2 call id under the key Dart decodes', () {
     expect(systemCallChannelSource(), contains('event["call"]'));
   });
+
+  // Design 23. The two traps the temper named, pinned in the source rather than
+  // left to a reader's memory.
+  group('wakeAge (design 23)', () {
+    final swift = File('ios/Runner/AppDelegate.swift').readAsStringSync();
+    final kotlin = File(
+      'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app/CallRing.kt',
+    ).readAsStringSync();
+
+    /// The body of the first function after [signature], up to its closing
+    /// two-space brace. Enough for these files' formatting; fails loudly if the
+    /// function is gone.
+    String body(String source, String signature) {
+      final start = source.indexOf(signature);
+      expect(start, isNonNegative, reason: '$signature is gone');
+      final end = source.indexOf('\n  }\n', start);
+      return source.substring(start, end);
+    }
+
+    test('neither native half reads the spent record as "not actionable"', () {
+      // Answering spends a call at the moment it must vouch, so reading spent
+      // here refuses every locked answer (Maxwell, design 23 temper round 3).
+      final ios = body(swift, 'private func wakeAgeAnswer(');
+      final android = body(kotlin, 'fun wakeAge(');
+      for (final banned in ['isSpent(', 'liveSpent(', 'spentCalls(']) {
+        expect(ios, isNot(contains(banned)), reason: 'Swift: $banned');
+        expect(android, isNot(contains(banned)), reason: 'Kotlin: $banned');
+      }
+      // ...and each reads its OS-defined actionability instead.
+      expect(ios, contains('callObserver.calls'));
+      expect(ios, contains('hasEnded'));
+      expect(android, contains('ringSlot(app)'));
+      expect(android, contains('answerSlot(app)'));
+    });
+
+    test('iOS stamps the wake on the sleep-inclusive clock', () {
+      // `systemUptime` stands still while the phone sleeps (Tesla, round 3).
+      expect(
+        body(swift, 'static func monotonicNow()'),
+        contains('CLOCK_MONOTONIC)'),
+      );
+      // In CODE, not in the comment that explains why it is not used.
+      final code = swift
+          .split('\n')
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(code, isNot(contains('systemUptime')));
+    });
+
+    test('Android carries the wake through Answer', () {
+      expect(kotlin, contains('current.instance),'));
+      expect(kotlin, contains('putLong("a_woke", a.wokeAt)'));
+    });
+
+    test('both halves answer in the states Dart decodes', () {
+      for (final state in ['"woke"', '"notActionable"']) {
+        expect(swift, contains('"state": $state'), reason: 'Swift $state');
+        expect(kotlin, contains('"state" to $state'), reason: 'Kotlin $state');
+      }
+      // Only iOS can be unsure: Android's cells are its own process state.
+      expect(swift, contains('"state": "unknown"'));
+      expect(kotlin, isNot(contains('"unknown"')));
+    });
+  });
 }

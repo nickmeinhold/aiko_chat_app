@@ -27,6 +27,7 @@ import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:aiko_chat_app/features/call/domain/wake_age.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
@@ -46,10 +47,15 @@ void main() {
 
   late _FakeRing ring;
 
+  /// The wall clock the navigator re-checks a held answer on after a
+  /// suspension; advanced by hand, independently of the timers.
+  late DateTime wall;
+
   Widget harness({
     _Session session = _Session.live,
     String? admitted = channel,
   }) {
+    wall = DateTime.utc(2026, 10, 10, 12);
     bridge = _FakeBridge();
     ring = _FakeRing(admitted);
     auth = _TestAuth(session, me);
@@ -81,7 +87,10 @@ void main() {
       child: MaterialApp.router(
         routerConfig: router,
         builder: (context, child) =>
-            SystemCallNavigator(child: child ?? const SizedBox.shrink()),
+            SystemCallNavigator(
+              now: () => wall,
+              child: child ?? const SizedBox.shrink(),
+            ),
       ),
     );
   }
@@ -417,6 +426,113 @@ void main() {
     expect(bridge.ended, ['dm:second:call', channel]);
   });
 
+  // Design 23 v3.1, requirement 3: the join deadline under a wake-age
+  // admission and under a suspended isolate.
+  testWidgets('an admission announced after the banner window still joins', (
+    tester,
+  ) async {
+    // Admitted by its wake age at ~35 s: the ring state stays null (the banner
+    // window is spent), and the answer must still join.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+    expect(find.text('CALL $channel'), findsNothing, reason: 'precondition');
+
+    ring.announce(channel);
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL $channel'), findsOneWidget);
+    expect(bridge.ended, isEmpty);
+  });
+
+  testWidgets('the deadline waits for an admission still asking native', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    final asking = Completer<void>();
+    ring.inFlight = asking.future;
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump(kInAppRingDuration + const Duration(seconds: 1));
+    expect(bridge.ended, isEmpty, reason: 'the question completes first');
+
+    ring.inFlight = null;
+    ring.announce(channel);
+    asking.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('CALL $channel'), findsOneWidget);
+    expect(bridge.ended, isEmpty);
+  });
+
+  testWidgets('...and releases if that question admits nothing', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    final asking = Completer<void>();
+    ring.inFlight = asking.future;
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump(kInAppRingDuration + const Duration(seconds: 1));
+
+    ring.inFlight = null;
+    asking.complete();
+    await tester.pumpAndSettle();
+
+    expect(bridge.ended, [channel]);
+  });
+
+  testWidgets('a hold that slept through its deadline is released on resume', (
+    tester,
+  ) async {
+    // A suspended isolate runs no timers: wall time passes, the deadline does
+    // not fire, and on resume nothing else may act first.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump();
+
+    wall = wall.add(kInAppRingDuration + const Duration(seconds: 5));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    expect(bridge.ended, [channel]);
+  });
+
+  testWidgets('a resume past the deadline releases even with a question '
+      'pending (Tesla)', (tester) async {
+    // The crossed state: the isolate slept with a wake question pending. What
+    // looks in flight is a frozen retry; deferring to it let the thawed loop
+    // sample after the deadline and join.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    ring.inFlight = Completer<void>().future; // never completes
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump();
+
+    wall = wall.add(kInAppRingDuration + const Duration(seconds: 5));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    expect(bridge.ended, [channel]);
+  });
+
+  testWidgets('a resume inside the deadline leaves the hold alone', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump();
+
+    wall = wall.add(kInAppRingDuration - const Duration(seconds: 5));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    expect(bridge.ended, isEmpty);
+  });
+
   testWidgets('a session stuck LOADING still ends the call eventually', (
     tester,
   ) async {
@@ -688,6 +804,10 @@ void main() {
 /// sides of that channel are pinned by `system_call_channel_contract_test.dart`,
 /// because a fake cannot catch a rename it shares.
 class _FakeBridge implements SystemCallBridge {
+  @override
+  Future<WakeAge> wakeAge(String channelId, CallRef call) async =>
+      const WakeNotActionable();
+
   final _controller = StreamController<SystemCallAction>.broadcast();
   final List<String> ended = [];
   final List<CallRef> endedCalls = [];
@@ -793,6 +913,21 @@ class _FakeRing extends RingController {
   @override
   CallInvite? build() =>
       _initialChannel == null ? null : inviteFor(_initialChannel);
+
+  /// Admissions announced without the ring state: an invitation admitted by
+  /// its wake age after the banner window is spent (design 23).
+  final _announced = StreamController<CallInvite>.broadcast(sync: true);
+
+  @override
+  Stream<CallInvite> get admissions => _announced.stream;
+
+  void announce(String channelId) => _announced.add(inviteFor(channelId));
+
+  /// An admission still asking the native side when it was woken.
+  Future<void>? inFlight;
+
+  @override
+  Future<void>? wakeAdmissionFor(CallRef call) => inFlight;
 
   @override
   void stopRinging(RingStopCause cause) => state = null;

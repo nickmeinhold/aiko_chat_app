@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../domain/call_wire.dart' show CallRef;
 import '../domain/system_call_action.dart';
+import '../domain/wake_age.dart';
 
 /// The two-way seam between the platform's call UI and this app's call
 /// (claude-tasks#4420).
@@ -50,6 +51,14 @@ abstract class SystemCallBridge {
   /// lock-screen answer went through under a live call (Tesla + Carnot, design
   /// 22 temper round 3). Ended by [end], like every call.
   Future<void> callStarted(String channelId, CallRef call);
+
+  /// How long ago the native side was woken for [call] on [channelId], while
+  /// the system still holds it as ringing or answered (design 23).
+  ///
+  /// Asked at the moment of admission, never copied ahead of it, so there is no
+  /// event that can arrive late. Only a wake for exactly this call on exactly
+  /// this channel answers [Woke].
+  Future<WakeAge> wakeAge(String channelId, CallRef call);
 }
 
 /// The native implementation, on BOTH platforms: an `EventChannel` fed by the
@@ -122,6 +131,24 @@ class NativeSystemCallBridge implements SystemCallBridge {
   Future<void> callStarted(String channelId, CallRef call) =>
       _invoke('callStarted', channelId, call);
 
+  @override
+  Future<WakeAge> wakeAge(String channelId, CallRef call) async {
+    try {
+      return WakeAge.decode(
+        await _control.invokeMethod<Object?>('wakeAge', {
+          'channel': channelId,
+          'call': call.id,
+        }),
+      );
+    } on MissingPluginException {
+      return const WakeNotActionable();
+    } on PlatformException {
+      // A native error is not the oracle saying "not yet", so it never defers;
+      // it degrades to the judgement admission made before design 23.
+      return const WakeNotActionable();
+    }
+  }
+
   Future<void> _invoke(String method, String channelId, CallRef call) async {
     try {
       await _control.invokeMethod<void>(method, {
@@ -165,7 +192,7 @@ const kSystemCallControlChannel = 'cc.imagineering.aikoChatApp/call/control';
 const Duration kSystemCallRingTrust = Duration(seconds: 120);
 
 /// How long a call the system UI ended stays spent (cannot ring again) on
-/// this device (design 22 v4.1; was "tombstone", #211).
+/// this device (design 22 v4.1).
 ///
 /// **2 × the longest an invitation can wait in a push provider**, so no
 /// redelivery of a call's invite can outlive its spent record. The island's

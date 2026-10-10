@@ -708,6 +708,88 @@ void main() {
     });
   });
 
+  // Design 23: freshness bounds TRANSIT (signature → this device's wake); skew
+  // is judged at `now`. `receivedAt` is the only new input, and it comes from
+  // the device, never the wire.
+  group('design 23: freshness is transit, skew is judged at now', () {
+    RingDecision judge(Message m, {DateTime? receivedAt}) => admitRing(
+      m,
+      meUserId: me,
+      blockedUserIds: const {},
+      consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
+      conversationMuted: false,
+      isDm: true,
+      now: now,
+      receivedAt: receivedAt,
+    );
+
+    test('signed 16 s ago, woken 0.5 s after signing: admitted', () {
+      final m = invite(age: const Duration(seconds: 16));
+      expect(judge(m), isA<RingRefused>(), reason: 'precondition: stale at now');
+      expect(
+        judge(m, receivedAt: now.subtract(const Duration(milliseconds: 15500))),
+        isA<RingAdmitted>(),
+      );
+    });
+
+    test('transit over the window is stale, and carries the transit age', () {
+      final m = invite(age: const Duration(seconds: 16));
+      final got = judge(m, receivedAt: now.subtract(const Duration(seconds: 5)));
+      expect(got, isA<RingRefused>());
+      got as RingRefused;
+      expect(got.reason, RingRefusal.stale);
+      expect(got.age, const Duration(seconds: 11));
+    });
+
+    test('null receivedAt is the pre-design-23 judgement exactly', () {
+      for (final age in const [
+        Duration(seconds: 1),
+        Duration(seconds: 10),
+        Duration(seconds: 11),
+        Duration(seconds: -5),
+      ]) {
+        final m = invite(age: age);
+        expect(
+          judge(m).runtimeType,
+          judge(m, receivedAt: null).runtimeType,
+          reason: 'age $age',
+        );
+      }
+    });
+
+    test('a wake that lands BEFORE signedAt (sender clock a fraction fast) '
+        'rings, as it does today', () {
+      // Sender 0.5 s fast, push 0.3 s: on our clock the wake is 0.2 s before
+      // the signature. Judging skew at the wake refused this call; it rings
+      // today, judged at now.
+      final m = invite(age: const Duration(seconds: 1));
+      final wake = now.subtract(const Duration(milliseconds: 1200));
+      expect(judge(m, receivedAt: wake), isA<RingAdmitted>());
+    });
+
+    test('signed in the future at now is still clockSkew, whatever the wake '
+        'says', () {
+      final m = invite(age: const Duration(seconds: -60));
+      final got = judge(m, receivedAt: now.subtract(const Duration(seconds: 1)));
+      expect(got, isA<RingRefused>());
+      expect((got as RingRefused).reason, RingRefusal.clockSkew);
+    });
+
+    test('a receivedAt after now cannot make an invite younger than it is', () {
+      final m = invite(age: const Duration(seconds: 16));
+      final got = judge(m, receivedAt: now.add(const Duration(hours: 1)));
+      expect((got as RingRefused).reason, RingRefusal.stale);
+      expect(got.age, const Duration(seconds: 16));
+    });
+
+    test('an earlier clause still refuses first: an unverified origin never '
+        'asks for, or benefits from, a wake', () {
+      final m = invite(age: const Duration(seconds: 16), cryptoValid: null);
+      final got = judge(m, receivedAt: now.subtract(const Duration(seconds: 15)));
+      expect((got as RingRefused).reason, RingRefusal.unverifiedOrigin);
+    });
+  });
+
   group('consented ringers — the allowlist widening (claude-tasks#3448)', () {
     // The gate this widens does not mean what its name says on the live island:
     // the gateway reports "human" for ANY account-holding sender, so `kind` only
