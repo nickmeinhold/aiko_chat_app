@@ -52,7 +52,7 @@ class ChatMessagePane extends ConsumerWidget {
     // who is already typing.
     final repoAsync = ref.watch(chatRepositoryProvider);
     final selectedId = ref.watch(selectedChannelIdProvider);
-    // Active over channels ∪ DMs so a selected DM renders (#2798).
+    // Active over channels ∪ DMs so a selected DM renders.
     final active = ChatScreen.resolveActive(
       ref.watch(navigableChannelsProvider),
       selectedId,
@@ -85,7 +85,7 @@ class ChatMessagePane extends ConsumerWidget {
                           // names + switches channels) nor the narrow layout (its
                           // AppBar does). The redundant per-pane bar is gone; the A/V
                           // call affordance lives on the message long-press action
-                          // sheet (message_actions.dart → "Call <name>", #2758).
+                          // sheet (message_actions.dart → "Call <name>").
                           // Key by channel id so a switch gives MessageList a FRESH
                           // State (dispose→recreate) — otherwise the old channel's
                           // ScrollController carries over and lands the new channel at

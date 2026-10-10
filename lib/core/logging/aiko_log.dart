@@ -8,7 +8,7 @@
 /// real handset** — there was no channel by which the app in a user's hand could
 /// say what it did. That is not "under-logged"; it is unobservable by
 /// construction, and it cost a four-hour diagnosis that had to proceed from the
-/// island's access log plus the user's eyes (claude-tasks#3591).
+/// island's access log plus the user's eyes.
 ///
 /// ## The shape, and why it is two layers rather than one
 ///

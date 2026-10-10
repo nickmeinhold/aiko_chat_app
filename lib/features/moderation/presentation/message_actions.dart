@@ -16,7 +16,7 @@
 /// ([Mutes]), not moderation — nothing is sent anywhere and nothing is hidden. It
 /// is presented here because the sheet is where a user decides what to do about a
 /// person, and offering the mild reversible option above Report/Block is what
-/// keeps "too noisy" from having to escalate into a moderation act (#2913 tracks
+/// keeps "too noisy" from having to escalate into a moderation act (#251 tracks
 /// splitting the non-moderation actions out of this file).
 library;
 
@@ -91,7 +91,7 @@ Future<void> showMessageActions(
             // Open (find-or-create) the DM with this sender and go there. Until
             // this existed, `openDm`'s only caller was Call — so a DM could only
             // be born as a side effect of a video call and Inc 1's sidebar section
-            // was unreachable for anyone who had never called (#2798).
+            // was unreachable for anyone who had never called.
             if (!inDm)
               ListTile(
                 leading: const Icon(Icons.chat_bubble_outline),
@@ -100,7 +100,7 @@ Future<void> showMessageActions(
               ),
             // Start a 1:1 A/V call with this sender: the same DM channel, joined
             // as its LiveKit room. `openDm` is idempotent, so both parties tapping
-            // Call resolve to the SAME room (DM handoff #2633).
+            // Call resolve to the SAME room.
             ListTile(
               leading: const Icon(Icons.videocam_outlined),
               title: Text('Call $name'),

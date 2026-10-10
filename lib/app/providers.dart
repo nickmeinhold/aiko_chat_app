@@ -186,7 +186,7 @@ final transportProvider = Provider<ChatTransport>((ref) {
   final config = ref.watch(configProvider);
   final tokens = ref.watch(tokenProviderProvider);
   final restApi = ref.watch(restApiProvider);
-  // Capability gate for sovereign `origin` emit (task #1896). Seeded from the
+  // Capability gate for sovereign `origin` emit. Seeded from the
   // transitional carriage allowlist for this host, then re-resolved from the
   // gateway's `GET /capabilities` on every (re)connect. Rebuilt with this
   // provider when the island URL changes (switchIsland), so the host seed

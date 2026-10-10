@@ -3,7 +3,7 @@ import 'message.dart';
 /// One member of a channel, from `GET /v1/channels/{id}/members`.
 ///
 /// [handle] is the member's CURRENT handle (the island resolves it live from the
-/// user row — it is `username`, the #2631 rename-able alias), NOT a send-time
+/// user row — it is `username`, the rename-able alias), NOT a send-time
 /// snapshot. ADR-0004 dropped the central `/v1/mentions` directory in favour of
 /// this per-island roster, so this endpoint IS the key→current-handle lookup:
 /// it lets a message's sender name render the sender's handle *as it is now*

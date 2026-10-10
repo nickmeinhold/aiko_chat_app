@@ -1,5 +1,5 @@
 /// The join credentials for an A/V call, returned by the island's
-/// `POST /v1/channels/{channel_id}/video-token` endpoint (handoff #2726).
+/// `POST /v1/channels/{channel_id}/video-token` endpoint.
 ///
 /// The [room] is the channel id itself — a call happens *inside* an existing
 /// channel. Participant identity is **server-derived** and baked into [token];

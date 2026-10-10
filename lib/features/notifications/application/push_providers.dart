@@ -74,7 +74,7 @@ final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
 /// answers `TargetPlatform.iOS` and this would construct a PushKit source inside
 /// a renderer that has never heard of PushKit.
 ///
-/// Until 0.0.6 this was gated behind the calling build flag (claude-tasks#4420),
+/// Until 0.0.6 this was gated behind the calling build flag,
 /// so store builds before then registered no `voip` row. They start doing so on
 /// first launch of 0.0.6.
 final voipTokenSourceProvider = Provider<PushTokenSource?>((ref) {
@@ -104,7 +104,7 @@ final voipTokenSourceProvider = Provider<PushTokenSource?>((ref) {
 /// preferences-backed id there is exactly the cloned value this field may never
 /// be — and Android holds one token kind anyway, so it has no duplicate to
 /// suppress. Returning null is not a gap waiting to be filled; filling it
-/// carelessly is the failure mode (see claude-tasks#4384 and the island's
+/// carelessly is the failure mode (see the island's
 /// `plan_deliveries`).
 ///
 /// macOS is null for the reason [pushTokenSourceProvider] already gives: it

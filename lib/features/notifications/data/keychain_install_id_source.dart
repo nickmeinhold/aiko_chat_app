@@ -107,7 +107,7 @@ class KeychainInstallIdSource implements InstallIdSource {
   /// re-registration the moment an id becomes available is real machinery and
   /// is deliberately not built here — but the gap is stated rather than left
   /// for a reader to discover, because the fix above reads as total and is
-  /// not. Deferred with the shape it would take: **claude-tasks#4696**.
+  /// not. Deferred, with the shape it would take recorded separately.
   String? _resolved;
   Future<String?>? _pending;
 

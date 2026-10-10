@@ -279,7 +279,7 @@ class SpyTelemetry extends ChatTelemetry {
   /// = inbound paused at the high-water mark; `false` = resumed at low-water.
   final List<(bool, int)> backpressure = [];
 
-  /// Carried-but-invalid origin probes (#1896): `(senderUserId, channelId,
+  /// Carried-but-invalid origin probes: `(senderUserId, channelId,
   /// islandUlid, clientMsgId)` in arrival order.
   final List<(String?, String, String, String)> originVerificationFailures = [];
 

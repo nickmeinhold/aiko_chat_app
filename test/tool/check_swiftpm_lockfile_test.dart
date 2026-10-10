@@ -1,5 +1,5 @@
-// Unit tests for the SwiftPM lockfile-freshness gate (tool/check_swiftpm_lockfile.dart,
-// task #1909). Targets the pure functions (parsing + drift rules) so every
+// Unit tests for the SwiftPM lockfile-freshness gate (tool/check_swiftpm_lockfile.dart).
+// Targets the pure functions (parsing + drift rules) so every
 // degenerate state is exercised without git or the filesystem.
 //
 // Relative import: the checker lives under tool/, not lib/, so it is not part of

@@ -12,7 +12,7 @@ library;
 // walk can reach it this test goes red.
 //
 // The bug class it exists for is this repo's own recurring one: a route that is
-// registered, built, correct, and unreachable. Before #2798 the entire Direct
+// registered, built, correct, and unreachable. Before navigable DMs the entire Direct
 // Messages section could only be reached by placing a video call — a feature
 // present in the code and absent from the product. That shape is now mechanical
 // to detect rather than waiting for someone to notice.

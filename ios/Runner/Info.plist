@@ -64,7 +64,7 @@
 		     and it is the Info.plist half of the same increment that adds
 		     CallKitRinger. Declaring it WITHOUT something to report to is the
 		     state that costs a per-device VoIP denial, which is why it lands
-		     here and not earlier (#3609, design 16 v2 §1). `audio` is unrelated
+		     here and not earlier (design 16 v2 §1). `audio` is unrelated
 		     and came from c2cc32c, the call teardown fix. -->
 		<string>voip</string>
 	</array>

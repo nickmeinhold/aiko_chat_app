@@ -34,7 +34,7 @@ class GatewayTransport implements ChatTransport {
   final ChannelFactory _channelFactory;
   final void Function(String message)? _log;
 
-  /// The capability gate for sovereign `origin` emit (task #1896). Read
+  /// The capability gate for sovereign `origin` emit. Read
   /// synchronously per-send: when it returns false the `origin` envelope is
   /// stripped and the message is sent unsigned — a non-carriage gateway would
   /// otherwise `bad_origin`-reject the whole message. Defaults to **fail-closed
@@ -197,7 +197,7 @@ class GatewayTransport implements ChatTransport {
   Map<String, dynamic>? _originWire(OutgoingMessage message) {
     final o = message.origin;
     if (o == null) return null;
-    // Capability gate (task #1896): a gateway that does not advertise `origin`
+    // Capability gate: a gateway that does not advertise `origin`
     // carriage would `bad_origin`-reject the whole message, so withhold the
     // envelope and send unsigned rather than risk the drop.
     if (!_carriesOrigin()) return null;

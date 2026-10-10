@@ -32,7 +32,7 @@ class RingConsent {
   ///
   /// Multikeys, never user ids or labels: `signingBytes` covers the public key,
   /// while `sender.userId` and `sender.label` are server-supplied metadata
-  /// outside the signature (#3166). A list keyed on either is a list the island
+  /// outside the signature (#265). A list keyed on either is a list the island
   /// can edit by relabelling a row, which would let it nominate who may wake you.
   final Set<String> keys;
 
@@ -141,19 +141,19 @@ class RingConsentBook {
 /// **whether the covenant moved**. So `true` covered "granted" and "was already
 /// granted", and `false` covered "malformed key", "nobody is signed in" and
 /// "the write failed" — five outcomes flattened onto two values, with the
-/// distinctions a caller needs collapsed on both sides (claude-tasks#3518).
+/// distinctions a caller needs collapsed on both sides.
 ///
-/// THE DEFECT IS A CLASS, NOT AN INSTANCE. #3518 names `revoke` only, because
+/// THE DEFECT IS A CLASS, NOT AN INSTANCE. The original report names `revoke` only, because
 /// that is where it was spotted. `allow` had the identical flattening and a
 /// worse one — three meanings on its `false`. Fixing the named instance and
 /// leaving its twin six lines away is how a second bug of the same shape gets
 /// filed next month.
 ///
 /// WHY AN ENUM AND NOT A RICHER BOOL. This is a closed set of outcomes that a
-/// caller must branch on, and the future consent UI (claude-tasks#3575) branches
+/// caller must branch on, and the future consent UI (#284) branches
 /// on it to decide what to tell the user. A confirmation toast shown on
 /// [unchanged] is a success message for a no-op — which is the precise failure
-/// #3518 predicted would ship the day that UI lands.
+/// the original report predicted would ship the day that UI lands.
 enum ConsentChange {
   /// The covenant moved and the change persisted. The only success.
   changed,

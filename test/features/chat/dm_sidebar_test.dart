@@ -1,4 +1,4 @@
-// Acceptance tests for #2798 Inc 1 — navigable DMs.
+// Acceptance tests for navigable DMs (Inc 1).
 //
 // Locks the non-obvious behaviours of the DM slice:
 //   - the sidebar renders a Direct-messages section whose row label is the peer's
@@ -107,7 +107,7 @@ void main() {
       // Selected through the same mutator as a channel tile...
       expect(container.read(selectedChannelIdProvider), 'dm1');
       // ...and NOT cleared by the self-heal (a DM id is absent from channelsProvider;
-      // healing against channels alone — the pre-#2798 bug — would clear it here).
+      // healing against channels alone — the pre-navigable-DMs bug — would clear it here).
       expect(
         tester
             .widget<ListTile>(find.byKey(const Key('sidebar-dm-dm1')))

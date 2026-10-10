@@ -110,7 +110,7 @@ class CallEndAnnouncer {
     // throw there skips `super.dispose()` — a broken widget teardown, from the
     // one path that exists to make teardown safe. `_identity()` reads two
     // providers off a long-lived `Ref`, and a disposed `Ref` throws (the
-    // fragility already tracked as #3349), so it sits inside the guard rather
+    // fragility already tracked as #272), so it sits inside the guard rather
     // than in front of it. The claim is released on that path too: a claim means
     // "in flight or succeeded", and an announcement that never started is
     // neither (cage-match round 6, Tesla).

@@ -98,8 +98,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               title: const Text('Edit profile'),
               subtitle: const Text('Change your handle or display name.'),
               trailing: const Icon(Icons.chevron_right),
-              // NOTE: raw MaterialPageRoute (not go_router) — deliberate, see
-              // claude-tasks follow-up. A go_router migration must first handle the
+              // NOTE: raw MaterialPageRoute (not go_router) — deliberate. A go_router migration must first handle the
               // auth-refresh-during-open pop interaction (cage-match #114 finding B).
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const EditProfileScreen()),
@@ -187,8 +186,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             // exactly two call sites, both auth screens (login, claim-handle),
             // so a SIGNED-IN user hitting a failure — a call that never rang,
             // say — had no path to it at all. The report was built, correct, one
-            // tap away, and absent at the only moment anyone would want it
-            // (claude-tasks#3591).
+            // tap away, and absent at the only moment anyone would want it.
             //
             // No `error:` here, deliberately. This entry is for the failures
             // that have no exception to attach — the silent ones, which are the
@@ -221,7 +219,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// Link a new passkey to the signed-in account (#1727). Settings is only
+  /// Link a new passkey to the signed-in account. Settings is only
   /// reachable while authenticated, so the controller's live-session precondition
   /// holds. A sheet dismissal returns silently (the controller swallows it); a
   /// real failure surfaces inline via a snackbar without disturbing the session.

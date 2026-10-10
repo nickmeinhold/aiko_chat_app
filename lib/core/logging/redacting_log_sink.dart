@@ -36,7 +36,7 @@ import 'aiko_log.dart';
 /// token). A run is trimmed to its first 12 characters rather than blanked:
 /// 12 hex is 48 bits — useless for reconstructing a 256-bit token, and
 /// empirically enough to correlate a log line against a real row, which is the
-/// trade the island measured while debugging #3386.
+/// trade the island measured while debugging push delivery.
 class RedactingLogSink extends LogSink {
   const RedactingLogSink(this._inner);
 

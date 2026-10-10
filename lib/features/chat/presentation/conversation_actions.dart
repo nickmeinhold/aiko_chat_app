@@ -2,7 +2,7 @@
 /// call them. Both find-or-create the same DM channel (`POST /v1/dm`); they
 /// differ only in where they land you — the message surface, or its LiveKit room.
 ///
-/// Chat-owned on purpose (#2798 Inc 4). These used to live inside
+/// Chat-owned on purpose. These used to live inside
 /// `moderation/message_actions.dart`, which is documented as the *moderation*
 /// sheet (UGC — Apple 1.2 / Google UGC, #7); starting a conversation is the
 /// opposite of moderating one, and the mis-homing is what left `openDm` with a
@@ -31,7 +31,7 @@ import '../domain/channel.dart';
 /// Open (find-or-create) the DM with [userId] and make it the active
 /// conversation. Selection is the SAME mutator a channel tile uses, so the
 /// message pane, the sidebar highlight and the self-heal all treat the DM
-/// exactly like a channel (#2798 Inc 1).
+/// exactly like a channel.
 ///
 /// Failures surface as a SnackBar and never change the selection — landing the
 /// user in a conversation that does not exist is worse than staying put.
@@ -79,7 +79,7 @@ Future<void> startDm(
 
 /// Open (find-or-create) the DM with [userId] and push its call screen. The room
 /// IS the DM channel id; `openDm` idempotency means a re-tap — or the peer
-/// tapping too — resolves to the SAME room (DM handoff #2633; call gating #2726).
+/// tapping too — resolves to the SAME room.
 Future<void> startCall(
   BuildContext context,
   WidgetRef ref,
@@ -210,7 +210,7 @@ bool _callActionInFlight = false;
 @visibleForTesting
 void resetCallActionGuard() => _callActionInFlight = false;
 
-/// Ring the peer: send the signed call invitation into the DM (#2808).
+/// Ring the peer: send the signed call invitation into the DM (#360).
 ///
 /// Deliberately **non-blocking on failure** — the call itself is the capability,
 /// so a failed invite must not stop you entering the room. But it is NOT silent:
@@ -270,7 +270,7 @@ enum _Verb {
 /// refuses nothing and the attempt reaches the island. That is the right
 /// direction for a reversible capability — refusing to open a conversation
 /// because a list has not loaded strands the user over a transient fetch — but
-/// it means the ISLAND is the boundary, not this check (backend-first; #2633
+/// it means the ISLAND is the boundary, not this check (backend-first; the DM handoff's
 /// Decision 5 has the DM *send* block-gated, with the video-token path tracked).
 /// Read this as "do not even ask when we know better", not as enforcement.
 bool _refuseBlocked(

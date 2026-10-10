@@ -929,8 +929,8 @@ class DriftCache extends GeneratedDatabase {
     // messages.islandUlid raw, so the hard-delete could MISS a case-skewed present
     // row — a half-wound coil worse than raw-vs-raw. The complete fix is to
     // canonicalize islandUlid at the INGEST stamp (W2/W3) so the identity string is
-    // canonical system-wide; that is a whole-component change tracked as a follow-up
-    // (claude-tasks), not a retraction-local patch. Under the island's canonical
+    // canonical system-wide; that is a whole-component change tracked as a follow-up,
+    // not a retraction-local patch. Under the island's canonical
     // contract, raw-vs-raw matches exactly and the debug assert guards dev.
     assertCanonicalUlid(r.targetMsgId, context: 'retraction target');
     assertCanonicalUlid(r.id, context: 'retraction id');

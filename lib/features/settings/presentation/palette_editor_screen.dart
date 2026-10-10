@@ -23,8 +23,7 @@ import '../application/theme_preset_controller.dart';
 /// rather than filtering them out keeps the constraint legible instead of
 /// making the palette feel mysteriously sparse.
 ///
-/// Scope: colour only. Nothing here can move, hide or resize a control
-/// (claude-tasks#2715).
+/// Scope: colour only. Nothing here can move, hide or resize a control.
 class PaletteEditorScreen extends ConsumerStatefulWidget {
   const PaletteEditorScreen({super.key});
 

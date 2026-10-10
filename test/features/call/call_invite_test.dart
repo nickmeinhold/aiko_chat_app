@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'call_fixtures.dart';
 
-/// The ring's admission door (#2808). A ring is the highest-privilege message in
+/// The ring's admission door (#360). A ring is the highest-privilege message in
 /// the app — it lights up a device and offers to turn on the camera — so every
 /// refusal it makes gets its own test, and the sentinel that will live in
 /// permanent signed history gets a golden.
@@ -88,7 +88,7 @@ void main() {
     deliveryState: DeliveryState.sent,
   );
 
-  /// Unwraps to the pre-#3591 shape ON PURPOSE. Every assertion below was
+  /// Unwraps to the pre-named-refusals shape ON PURPOSE. Every assertion below was
   /// written against `CallInvite?` and most were won in a cage-match; rewriting
   /// 30 of them to pattern-match would be churn at a trust boundary for no gain.
   /// The reasons get their own dedicated group instead — see
@@ -200,7 +200,7 @@ void main() {
 
     test('an UNSIGNED invite wearing MY OWN id names the SIGNATURE, not the '
         'echo — the forger does not get to pick the quieter reason', () {
-      // Tesla, #3591 cage-match. `sender.userId` is server-supplied and outside
+      // Tesla, refusal-naming cage-match. `sender.userId` is server-supplied and outside
       // the signature, so an island can staple the recipient's own id onto an
       // unsigned invite. With the own-echo clause running first, that refused as
       // `ownInvite` — refusedAnAttempt:false, recorded nowhere — instead of
@@ -228,7 +228,7 @@ void main() {
     });
 
     test('a hangup with NO AUTHOR is a malformed STOP, not ordinary chatter', () {
-      // Maxwell + Carnot + Tesla, independently, #3591 cage-match. The first
+      // Maxwell + Carnot + Tesla, independently, refusal-naming cage-match. The first
       // draft folded this into `notAnEnd(refusedAnAttempt: false)` alongside
       // every "hello" anyone types — so a malformed or hostile stop aimed at the
       // ring subsystem was STRUCTURALLY unloggable. That is this PR's own defect
@@ -296,7 +296,7 @@ void main() {
     });
 
     test('each gate produces EXACTLY its own reasons — driven, not counted', () {
-      // REPLACES a roster with a graph (Tesla, round 2, #3591). The first version
+      // REPLACES a roster with a graph (Tesla, round 2). The first version
       // unioned three hand-maintained sets and asked whether every enum NAME
       // appeared somewhere. That check's outcome was independent of what the
       // gates do: a refactor retargeting a hangup at the wrong reason stayed
@@ -646,7 +646,7 @@ void main() {
 
     test('every NON-HUMAN sender — the refusal a user could not make themselves', () {
       // Bus actors are unblockable by island design (NULL sender_user_id is
-      // always visible; claude-tasks#27). Without this, @@armbot posting the
+      // always visible; #362). Without this, @@armbot posting the
       // sentinel in #general rings every member and no block or mute stops it.
       // Enumerated rather than spot-checked: `!= human` must hold for the WHOLE
       // non-human set, and a new SenderKind added later inherits the refusal.
@@ -667,11 +667,11 @@ void main() {
       // account and Ed25519 key, rang a real handset through this path.
       //
       // The gateway's unreleased source replaces that hardcode with the
-      // account's true kind ("never a hardcoded 'human'", island #3096). On the
+      // account's true kind ("never a hardcoded 'human'"). On the
       // day it deploys, this test stops describing a bus actor and starts
       // refusing a resident Nick asked to be called by — a working capability
       // regressing, in a repo that did not change. If this test is what broke,
-      // read claude-tasks#3448 BEFORE weakening it: the `actor` refusal must
+      // read the allowlist-widening group below BEFORE weakening it: the `actor` refusal must
       // survive; only the account-holding case is in question.
       for (final kind in SenderKind.values.where(
         (k) => k != SenderKind.human,
@@ -794,7 +794,7 @@ void main() {
     // The gate this widens does not mean what its name says on the live island:
     // the gateway reports "human" for ANY account-holding sender, so `kind` only
     // ever refuses `actor`, the accountless bus participant. When the gateway
-    // starts reporting true kinds (island #3096) a resident agent Nick asked to
+    // starts reporting true kinds a resident agent Nick asked to
     // be called by would be refused. These tests pin the widening that has to
     // land first, and — more importantly — pin what it must NOT loosen.
     String mk(Uint8List k) => encodeMultikey(k);

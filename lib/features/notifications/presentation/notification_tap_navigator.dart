@@ -4,8 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/router.dart';
 import '../application/notification_tap_providers.dart';
 
-/// Sends the app to the conversation list when a call notification is tapped
-/// (claude-tasks#3588).
+/// Sends the app to the conversation list when a call notification is tapped.
 ///
 /// Mounted in `MaterialApp.router`'s `builder` beside [RingOverlay], and for the
 /// same reason: a tap must be honoured wherever the app happens to be. The app

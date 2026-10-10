@@ -2,7 +2,7 @@
 ///
 /// ## Why these exist
 ///
-/// `claude-tasks#3591` gave the ring's ten REFUSALS names, and stopped at the
+/// Earlier work gave the ring's ten REFUSALS names, and stopped at the
 /// gate. Everything downstream of admission stayed dark — and on 2026-09-20 a
 /// killed handset woke on a VoIP push, rang through CallKit, verified the
 /// signature and ADMITTED the invitation in 4.9 seconds, then ended its own

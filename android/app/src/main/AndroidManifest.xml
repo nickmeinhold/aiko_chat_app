@@ -6,7 +6,7 @@
          app reports "can't reach the server". Caught on the first release build
          run on a real device (vc7 device-verify). -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- A/V calls (LiveKit / WebRTC, #2726). CAMERA + RECORD_AUDIO gate
+    <!-- A/V calls (LiveKit / WebRTC). CAMERA + RECORD_AUDIO gate
          getUserMedia; the rest are the flutter_webrtc-recommended set for audio
          routing (incl. Bluetooth headsets). Camera/mic are declared not-required
          so the install isn't gated for users who never call. -->
@@ -18,7 +18,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
-    <!-- The incoming-call ring (#3615, design 12 Decision 8). THIS LINE IS NOT
+    <!-- The incoming-call ring (design 12 Decision 8). THIS LINE IS NOT
          THE GRANT, and on the devices that matter it is not even close.
 
          Below API 34 it is an ordinary permission and declaring it is enough.
@@ -30,7 +30,7 @@
          reason it lands ahead of the approval. The Play Console declaration that
          seeks the grant does not appear until a bundle declaring this permission
          has been uploaded — so the form cannot be filled before this line exists,
-         and #3615's "Nick opens the Console" was blocked on a one-line code
+         and opening the Console to fill it was blocked on a one-line code
          change nobody had made. See IncomingCallNotifier.canRingFullScreen for
          the runtime half: the grant can be ABSENT with everything here correct,
          and the failure is silent — the notification posts as a heads-up banner
@@ -67,7 +67,7 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- THE RING (#4421). The plugin's messaging service is REPLACED, not
+        <!-- THE RING. The plugin's messaging service is REPLACED, not
              joined: Android delivers MESSAGING_EVENT to one service, and two
              would race for every push. AikoMessagingService extends the
              plugin's class, so token rotation is unchanged, and the plugin's

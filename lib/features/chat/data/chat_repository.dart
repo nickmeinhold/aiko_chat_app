@@ -69,7 +69,7 @@ abstract class ChatTelemetry {
 
   /// A carried inbound `origin` verified as INVALID (`originCryptoValid == false`
   /// — a well-formed signature envelope whose signature did NOT verify over the
-  /// message content). This is the #1896 verified-sender PROBE: surfaced to
+  /// message content). This is the verified-sender PROBE: surfaced to
   /// MEASURE the base rate of carried-but-invalid BEFORE any user-facing
   /// integrity warning ships. Early in rollout a `false` verdict is far likelier
   /// to be our own signing/verify drift (encoding, `reply_to` normalization,
@@ -202,7 +202,7 @@ class ChatRepository {
   ///
   /// [watchChannel] is per-channel and cache-backed, so it answers "what is in
   /// this conversation" — it cannot answer "something just arrived somewhere",
-  /// which is what a ring needs (#2808): a call invitation must reach you in a
+  /// which is what a ring needs (#360): a call invitation must reach you in a
   /// DM you are not currently looking at.
   ///
   /// Announced **after** a successful cache write and never on failure, so a
@@ -619,7 +619,7 @@ class ChatRepository {
   /// exactly once. A malformed origin was already dropped at parse (fromView);
   /// an unverifiable-but-well-formed origin persists with originCryptoValid=false
   /// (carried-but-invalid), which is DATA — no affirmative UI ships from it
-  /// (wire-half T5; the ✓ is held until key-continuity exists, #1896).
+  /// (wire-half T5; the ✓ is held until key-continuity exists).
   ///
   /// A `false` verdict is PROBED (never yet alarmed) via
   /// [ChatTelemetry.originVerificationFailed] so we can measure its base rate
@@ -842,8 +842,8 @@ class ChatRepository {
         // regressed that (a fence over rows hidden from the viewer), this would
         // refetch the same watermark every reconnect forever — a permanent
         // reconnect-cycle retry rather than a hot loop. Repeated gaps across
-        // reconnects should therefore be treated as a sync FAULT, not noise
-        // (claude-tasks #16). Not advancing the watermark means we never claim
+        // reconnects should therefore be treated as a sync FAULT, not noise.
+        // Not advancing the watermark means we never claim
         // coverage we don't have — a genuine gap re-attempts rather than being
         // masked (it is now telemetried, not asserted).
         // #16 — distinguish a benign one-off visibility shrink from a GENUINELY

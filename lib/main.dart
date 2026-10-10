@@ -88,7 +88,7 @@ class AikoChatApp extends ConsumerWidget {
       themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
       // ABOVE the Navigator, so an incoming call reaches you on any route
-      // (#2808). `child` is null only before the first route builds.
+      // (#360). `child` is null only before the first route builds.
       builder: (context, child) => NotificationTapNavigator(
         // OUTSIDE the ring overlay: a tapped notification must be honoured even
         // when nothing is ringing — the ring is long over by the time a human
@@ -97,7 +97,7 @@ class AikoChatApp extends ConsumerWidget {
         // The system-call navigator sits OUTSIDE the ring overlay too, and for a
         // stronger version of the same reason: an answer from the lock screen
         // arrives when this app has no ring of its own at all — the process was
-        // dead and CallKit did the ringing (claude-tasks#4420).
+        // dead and CallKit did the ringing.
         child: SystemCallNavigator(
           child: RingOverlay(child: child ?? const SizedBox.shrink()),
         ),

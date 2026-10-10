@@ -18,8 +18,8 @@ import '../domain/push_token_source.dart';
 /// to work. There is no failing test for "we quietly added a second
 /// intermediary", so the assertion is the alarm.
 ///
-/// See [DevicePlatform] for the reasoning and claude-tasks#3267 for the island
-/// half that consumes these tokens.
+/// See [DevicePlatform] for the reasoning; the island half
+/// consumes these tokens.
 class FcmTokenSource implements PushTokenSource {
   FcmTokenSource({TargetPlatform? platformOverride})
     : assert(

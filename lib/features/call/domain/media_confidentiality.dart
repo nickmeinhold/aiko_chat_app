@@ -21,11 +21,11 @@
 // enabling media E2EE goes red rather than silently making this file lie.
 //
 // The island manifest is NOT consulted. Design 13 calls the `island_mode` split
-// (#3426 Q1) "a precondition for the disclosure"; it is a precondition for the
+// "a precondition for the disclosure"; it is a precondition for the
 // POSITIVE case only, and the unconditional negative is what fail-closed
 // produces anyway. When that changes it needs its OWN trust root:
 // `island_manifest_provider.dart` caches `GET /v1/island` unverified and says so
-// itself (claude-tasks#3730). Do not reach for that cache here.
+// itself (#290). Do not reach for that cache here.
 library;
 
 import 'package:flutter/foundation.dart';
@@ -111,7 +111,7 @@ class MediaRouting {
   // CALLEE's island — one the caller never chose — and this would name the wrong
   // operator while the claim stayed true. That is the case 9d says the
   // disclosure bites hardest on, so it must not be discovered there. Gated on
-  // claude-tasks#3697 rather than modelled now.
+  // #369 rather than modelled now.
 }
 
 /// The disclosure's single source of truth.

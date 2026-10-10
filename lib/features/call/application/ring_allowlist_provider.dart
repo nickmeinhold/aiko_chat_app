@@ -73,8 +73,8 @@ class RingAllowlist extends Notifier<RingConsentBook> {
   /// rather than optimistically updated, so what callers observe is what
   /// actually persisted.
   ///
-  /// RETURNS THE OUTCOME, NOT A BOOL (claude-tasks#3518). This notifier is the
-  /// single door the consent UI (claude-tasks#3575) will mutate through, so it
+  /// RETURNS THE OUTCOME, NOT A BOOL. This notifier is the
+  /// single door the consent UI (#284) will mutate through, so it
   /// is the layer that must be able to say *"already granted"* differently from
   /// *"granted"* — a confirmation toast shown on [ConsentChange.unchanged] is a
   /// success message for a no-op.

@@ -2,7 +2,7 @@
 //
 // The first sweep of 50 walks found nothing, and the coverage probe showed why:
 // with the default fakes there are no DM channels and no message bubbles, so the
-// largest features in the 0.0.4 release — navigable DMs (#2798) and everything
+// largest features in the 0.0.4 release — navigable DMs and everything
 // hanging off a message long-press (Message, Mute, Report, Block) — rendered
 // nothing for the walker to find. It was walking an empty app and reporting the
 // empty app was fine.

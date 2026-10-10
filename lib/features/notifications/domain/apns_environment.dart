@@ -19,8 +19,7 @@
 ///
 /// The island resolves an OMITTED value from its own `APNS_USE_SANDBOX` (`true`
 /// on both boxes), so until we declare it a TestFlight handset registers a
-/// production token against a sandbox-defaulted island and simply never rings
-/// (claude-tasks#3450, island #3386).
+/// production token against a sandbox-defaulted island and simply never rings.
 enum ApnsEnvironment {
   /// `api.sandbox.push.apple.com` — tokens from a locally-signed development
   /// build. Apple calls this environment `development`.

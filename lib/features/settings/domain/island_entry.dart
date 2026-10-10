@@ -39,7 +39,7 @@ class IslandEntry {
     this.region,
   });
 
-  /// Tolerantly parse one directory entry. The cross-tab contract (#1548) is
+  /// Tolerantly parse one directory entry. The cross-tab contract is
   /// `{ id, name/display name, base URL, description?, region? }`, but the wire
   /// casing isn't pinned yet (the island is Python/SQLite → likely snake_case),
   /// so we accept the common spellings of each field. An entry with no usable

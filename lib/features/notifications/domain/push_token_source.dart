@@ -12,8 +12,7 @@ import 'apns_environment.dart';
 ///
 /// It also keeps the transport decision reversible. Adding a self-hosted
 /// Android transport later is a new implementation of this interface plus a new
-/// [DevicePlatform] value — no change to the lifecycle that is hard to get right
-/// (claude-tasks#3267).
+/// [DevicePlatform] value — no change to the lifecycle that is hard to get right.
 abstract class PushTokenSource {
   /// Ask the OS for permission to show notifications, returning whether it was
   /// granted. Idempotent, and safe to call when already granted.

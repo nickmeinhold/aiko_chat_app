@@ -6,7 +6,7 @@ import '../../chat/data/chat_rest_api.dart';
 
 /// Edit the mutable identity labels — handle + display name. Identity is the
 /// key; these are labels on top of it (handle unique-at-a-time + change
-/// cooldown; display name free). Wire: `PATCH /v1/me` (island #2631). Only
+/// cooldown; display name free). Wire: `PATCH /v1/me`. Only
 /// changed fields are sent, so opening + saving without edits is a no-op.
 class EditProfileScreen extends ConsumerStatefulWidget {
   const EditProfileScreen({super.key});

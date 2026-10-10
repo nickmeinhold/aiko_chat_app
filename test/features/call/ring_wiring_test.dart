@@ -28,7 +28,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../support/test_helpers.dart';
 import 'call_fixtures.dart';
 
-/// The ring WIRING (#2808) — the seam the pure `admitRing` tests cannot reach:
+/// The ring WIRING (#360) — the seam the pure `admitRing` tests cannot reach:
 /// does an invitation actually travel transport → repository → cross-channel
 /// announcement → ring state?
 ///

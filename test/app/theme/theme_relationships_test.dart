@@ -16,7 +16,7 @@
 //
 // This is the enforcement half of "the palette supplies hue, the builder owns
 // relationships": the builder is what makes the guarantee POSSIBLE, and this
-// file is what makes it TRUE. Scope: colour and contrast only (claude-tasks#2715).
+// file is what makes it TRUE. Scope: colour and contrast only.
 import 'package:aiko_chat_app/app/theme/theme_presets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

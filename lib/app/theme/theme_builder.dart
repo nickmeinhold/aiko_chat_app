@@ -29,7 +29,6 @@ import 'app_fonts.dart';
 /// Scope note: that guarantee covers COLOUR AND CONTRAST ONLY. It says nothing
 /// about layout (which controls are shown, where, at what density) — a skin that
 /// could express layout could hide things a skin that can only recolour cannot.
-/// See claude-tasks#2715.
 
 /// The irreducible set. Everything else in a [ThemeData] is derived from these
 /// by [buildTheme] — which is what makes any two palettes comparable, and what a

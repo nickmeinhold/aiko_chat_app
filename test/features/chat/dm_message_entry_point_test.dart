@@ -1,4 +1,4 @@
-// Acceptance tests for the DM *Message* entry point (#2798).
+// Acceptance tests for the DM *Message* entry point.
 //
 // Before this slice `openDm` had exactly ONE caller — the Call action — so a DM
 // could only come into existence as a side effect of placing a video call, and

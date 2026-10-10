@@ -11,7 +11,7 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<!-- A/V calls (LiveKit, #2726). Sandboxed macOS gives a black frame / silent
+	<!-- A/V calls (LiveKit). Sandboxed macOS gives a black frame / silent
 	     mic with NO error if these are missing — verify on a Release build. -->
 	<key>com.apple.security.device.camera</key>
 	<true/>

@@ -240,7 +240,7 @@ void main() {
     // A disclosure must not let its subject choose the words describing it: an
     // island calling itself "Secure Private Chat" would otherwise print that
     // inside the warning about it. The host is the one identifier in the
-    // sentence the user supplied. See the domain header on claude-tasks#3730 —
+    // sentence the user supplied. See the domain header on #290 —
     // the existing manifest cache is unverified BY DESIGN and must not be the
     // trust root for this.
     const routing = MediaRouting(

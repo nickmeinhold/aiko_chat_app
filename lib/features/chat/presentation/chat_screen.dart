@@ -33,7 +33,7 @@ const double kSidebarWidth = 268;
 ///
 /// "Navigable conversation", never "channel": the island excludes DMs from
 /// `GET /v1/channels`, so anything scoped to [channelsProvider] here silently
-/// strands DMs on a phone (#2798 task #12).
+/// strands DMs on a phone.
 ///
 /// Switching is a pure DISPLAY change — the repository subscribes to EVERY
 /// channel at construction and syncs each one's history on connect
@@ -58,8 +58,8 @@ class ChatScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final selectedId = ref.watch(selectedChannelIdProvider);
     // Resolve the active conversation over channels ∪ DMs so a selected DM stays
-    // active (a DM id is never in channelsProvider — DMs are a separate source,
-    // #2798). The narrow app-bar switcher below lists the SAME combined list, so
+    // active (a DM id is never in channelsProvider — DMs are a separate source).
+    // The narrow app-bar switcher below lists the SAME combined list, so
     // "what can be active" and "what can be picked" are one set, not two.
     final navigable = ref.watch(navigableChannelsProvider);
     final active = resolveActive(navigable, selectedId);
@@ -83,7 +83,7 @@ class ChatScreen extends ConsumerWidget {
     // Heal over channels ∪ DMs, and ONLY once BOTH sources have settled: a DM id
     // is absent from channelsProvider, so healing against channels alone would
     // clear every DM pick, and healing against the combined list mid-load (channels
-    // resolved, DMs still arriving) would clear a valid DM in the gap (#2798 — the
+    // resolved, DMs still arriving) would clear a valid DM in the gap (the
     // self-heal must know about DMs, first-arrival-before-init included).
     ref.listen(navigableChannelsProvider, (_, next) {
       final sel = ref.read(selectedChannelIdProvider);
@@ -99,7 +99,7 @@ class ChatScreen extends ConsumerWidget {
       // ever loaded", not "is this settled" — and the gap between those two is a
       // real ejection: opening a DM seeds it and invalidates [dmsProvider], and
       // the pre-refresh list does NOT contain the DM you just opened, so healing
-      // there clears the selection the user made a frame ago (#2798). The same
+      // there clears the selection the user made a frame ago. The same
       // window sits under the call path's seed; it only hides there because Call
       // navigates by route rather than by selection.
       if (channelsState.isLoading || dmsState.isLoading) return;
@@ -109,7 +109,7 @@ class ChatScreen extends ConsumerWidget {
     });
 
     // A tapped call notification names a CHANNEL, and this is where that pick
-    // can actually stick (claude-tasks#3588). Two listeners, because the tap and
+    // can actually stick. Two listeners, because the tap and
     // the readiness can arrive in either order: a cold start launched BY the tap
     // holds it for seconds while both sources load, and a tap on an app already
     // running finds them already settled.
@@ -659,7 +659,7 @@ class MessageTile extends ConsumerWidget {
     }
 
     // Sender-action affordance: long-press ANOTHER human's message for the
-    // action sheet — call them (#2758), report, or block (#7). Gated to a
+    // action sheet — call them, report, or block (#7). Gated to a
     // non-mine message with a real account behind it — you can't call/block
     // yourself or an external actor (LLM/robot have no userId).
     final canActOnSender = !isMine && message.sender.userId != null;
@@ -791,9 +791,9 @@ class _SenderBadge extends StatelessWidget {
   static String _label(SenderKind kind) {
     switch (kind) {
       // UNREACHABLE TODAY. Neither island can emit `llm` or `robot`: the only
-      // producer keys off a channel kind that has no writer (island
-      // claude-tasks#3144). Kept rather than deleted because the fork on that
-      // issue has an outcome — "the missing writer is its own bug" — that makes
+      // producer keys off a channel kind that has no writer (an island-side
+      // finding). Kept rather than deleted because the fork on that
+      // finding has an outcome — "the missing writer is its own bug" — that makes
       // them live again. See `SenderKind` for the full reasoning; the point of
       // this marker is that the two dead arms used to be indistinguishable from
       // the live ones.

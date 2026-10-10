@@ -1,4 +1,4 @@
-// Acceptance tests for #2798 task #12 — narrow-layout DM navigation.
+// Acceptance tests for narrow-layout DM navigation.
 //
 // The narrow layout reaches the shared conversation rail through the app-bar
 // drawer. Before the rail covered phones, `openDm` could drop you into a
