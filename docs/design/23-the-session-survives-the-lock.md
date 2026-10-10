@@ -1,151 +1,168 @@
-# Design 23 — The session survives the lock
+# Design 23: an answered ring is judged by when it rang
 
-**Status:** DRAFT v1, 2026-10-09 · **Issue:** #219 · **Blocks:** iOS half of 0.0.6 (#214)
-**Touches a trust boundary:** at-rest protection of the session credentials. Needs
-`/design-temper` before build, `/cage-match` on the PR.
+**Status:** DRAFT v2, 2026-10-10 · **Issue:** #219 · **Blocks:** iOS half of 0.0.6 (#214)
+**Supersedes v1** ("the session survives the lock"), which moved the session tokens to
+`AfterFirstUnlockThisDeviceOnly`. v1 was struck RECAST 4/4 (`-TEMPER.md`, round 1). The
+temper surfaced a product question, and Nick answered it on 2026-10-10: **a call answered
+on a locked iPhone connects after Face ID, as Android already does.** With that answer the
+keychain trade and its migration are no longer needed. v2 is the alternative v1 had filed as
+"out of scope".
+**Touches a trust boundary:** call admission (the freshness gate). `/design-temper` round 2,
+then `/cage-match` on the PR.
 
 ## The defect, measured
 
-On a locked iPhone with the app not running, a call rings, but **answering it never
-joins.** Four rings on 2026-10-09 (iOS 26.6.2, 0.0.6 ad-hoc build, enspyr) isolated why:
+On a locked iPhone with the app not running, the call rings and can be answered, but it
+**never joins.** Four rings on 2026-10-09 (iOS 26.6.2, 0.0.6 ad-hoc build, enspyr):
 
-| Run | Phone state | Push → first Dart request | Joined |
-|---|---|---|---|
-| 1 | locked a while | +13.7 s, after Face ID | no |
-| 2 | app in foreground | invite admitted over the websocket at ~1 s | yes |
-| 3 | just locked (inside iOS's post-lock grace period) | **+1.1 s**, before Answer | yes |
-| 4 | locked 2 h; answer, wait 5 s, then Face ID | +13.7 s, ~7 s after Answer | no |
+| Run | Phone state | Push → native ring | Push → first Dart request | Joined |
+|---|---|---|---|---|
+| 1 | locked a while | +0.4 s | +13.7 s, after Face ID | no |
+| 2 | app in foreground | n/a | invite admitted over the websocket at ~1 s | yes |
+| 3 | just locked (inside iOS's post-lock grace period) | +0.5 s | **+1.1 s**, before Answer | yes |
+| 4 | locked 2 h; answer, wait 5 s, then Face ID | +0.35 s | +13.7 s, ~7 s after Answer | no |
 
-Runs 3 and 4 differ only in whether the keychain could be read. `SecureTokenStore` uses
-`FlutterSecureStorage()` with no iOS options, and in the locked plugin
-(flutter_secure_storage 10.3.1 / darwin 0.3.2) the default is
-`KeychainAccessibility.unlocked`, which is `kSecAttrAccessibleWhenUnlocked`. While the
-phone is locked, Dart cannot read its access or refresh token, so it cannot restore the
-session, fetch the invite, or admit it. It waits for Face ID. By then the invite is older
-than `kCallInviteFreshness` (10 s) and is refused. The native half (PushKit, CallKit,
-the audio session) needs no keychain and works.
+The session tokens are `kSecAttrAccessibleWhenUnlocked`, so on a locked phone Dart cannot
+authenticate until Face ID. It then fetches the invite and `admitRing` computes
+`age = now − signedAt` using **now, the moment Dart got there**. After a Face ID that is
+about 16 s, past `kCallInviteFreshness` (10 s), so the invite is refused and the answer has
+nothing to join.
 
-The wait is the user's unlock latency. It is unbounded, so no tuning of the freshness
-window fixes it on its own.
+**The clock is read at the wrong instant.** The native side received the push for this exact
+call at +0.35–0.98 s in every run, whatever the lock state. That instant is the event the
+freshness window was standing in for: *did this ring reach us promptly?* Everything after it
+(Face ID, session restore, the fetch) is the user's and the app's latency, not the invite's.
 
 ## Decision
 
-Store the **session tokens** (`aiko_access_token`, `aiko_refresh_token`) with
-`KeychainAccessibility.first_unlock_this_device`
-(`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`), on iOS only.
-
-- **Why `first_unlock`:** after the first unlock since boot, the item stays readable
-  while the device is locked. That is exactly the state a PushKit-woken app runs in.
-  Run 3 shows the result: auth 1.1 s after the push, invite admitted at about 3 s, joined.
-- **Why `_this_device`:** the default `unlocked` is backup-eligible (the key-backup
-  crucible noted this for the signing key). A refresh token restored onto another phone
-  from an encrypted backup is a session that moved without a sign-in. Device-bound is
-  the honest scope for a bearer credential. Cost: restoring a backup to a new phone
-  means signing in again, which is already the case for passkey re-binding.
-- **Not the sovereign signing key.** `SovereignKeyStore` stays `unlocked`. Admitting and
-  joining a call need *auth*, not our private key: verifying the caller's signature
-  uses *their* public key. Signing happens on send, which needs the user present
-  anyway. The identity key keeps the stronger class. This split is the point: the
-  credential the island can revoke gets the weaker class, and the one nobody can revoke
-  keeps the stronger one.
-- **Not macOS, not Android.** macOS has no cold-start ring (no PushKit/CallKit path),
-  and `MacOsOptions` is a separate parameter. Android's credential storage is already
-  readable after the first unlock, which is why the Pixel joins in 4.2 s.
-
-## What this trades
-
-A seized iPhone that has been unlocked once since boot and is now locked ("AFU",
-after first unlock) exposes the session tokens to an attacker who can run code as the
-app or extract the keychain in that state. Before this change, those items were
-protected by the class-A key, which is discarded about 10 s after lock.
-
-What an extracted token is worth:
-- the **access token** is short-lived (the run 1 and run 4 logs show it expired and
-  was refreshed);
-- the **refresh token** is a standing session until revoked. The island can revoke it,
-  and the user can sign out other sessions. It **cannot sign messages**: messages and
-  reactions are signed at birth with the sovereign key, which keeps class-A protection.
-  A stolen session can read the account's messages. **Assumption, for the temper to
-  check:** traffic it sends without the sovereign key shows as unverified to
-  signed-at-birth peers. That is the intent of message signing, but this note has not
-  verified every surface that renders a message.
-
-So the trade is confidentiality of the session (read access) in the AFU-locked seizure
-case, against calls that can be answered at all. Apple documents `AfterFirstUnlock` as
-the class for items that background apps need. The system default is `WhenUnlocked`, so
-this is an explicit choice to step down, not a return to a default.
-
-## Migration: the trap in the plugin
-
-`flutter_secure_storage_darwin` 0.3.2 puts `kSecAttrAccessible` **into the lookup
-query** (`baseQuery`, FlutterSecureStorage.swift:219), and accessibility is a matchable
-attribute. Item identity (service + account) does not include it. Consequences if the
-options are simply switched:
-
-1. **Read with new options misses the old item.** The user looks signed out.
-2. **Write with new options:** `containsKey` misses, so it calls `SecItemAdd`, which
-   collides with the old item on service and account: `errSecDuplicateItem`. **The write
-   fails.** If this happens inside a token refresh, the island has already rotated the
-   refresh token and the app fails to persist the new one, which logs the user out.
-
-So the store must migrate explicitly:
+When `admitRing` judges an invite whose `CallRef` has a **live native ring record on this
+device**, it measures age against **the time that record was created** (the native receipt
+of the VoIP or FCM wake for that call id), not against `now`:
 
 ```
-read():
-  t = read(new options)
-  if t: return t
-  t = read(legacy options)          # fails while locked; that's fine (see below)
-  if t:
-    delete(legacy options)
-    write(new options, t)           # now a clean add
-  return t
-
-write(tokens):
-  delete(legacy options)            # best effort; removes any unmigrated item first
-  write(new options, tokens)
-
-clear():
-  delete(new options); delete(legacy options)
+receivedAt = nativeRingReceivedAt(callRef)          // null if no live native record
+age        = (receivedAt ?? now) − signedAt
 ```
 
-- **Migration only completes while unlocked**, because the legacy item cannot be read
-  while locked. The first cold call after the update can therefore still fail if the
-  user has not opened the app unlocked since updating. Opening the app after an update
-  is the normal path, so this is a one-time window, not a steady state.
-- **Unknown, to measure on hardware before merge:** can `SecItemDelete` remove a
-  `WhenUnlocked` item while the device is locked? If not, `write()` while locked with
-  an unmigrated legacy item still collides. A refresh while locked can only happen
-  after a cold wake. **The order is what makes it safe:** `read()` runs (and migrates)
-  before any refresh can be needed, and on a locked phone with an unmigrated item
-  `read()` returns null, so there is no session to refresh. The app is signed out for
-  that ring, not corrupted. That must be verified, not assumed.
-- **Delete-then-add is not atomic.** A crash between the two loses the session (the
-  user signs in again). The alternative, `SecItemUpdate` of `kSecAttrAccessible` on the
-  existing item, avoids the gap, but the plugin does not expose it. A small native
-  shim would be needed. Recommendation: accept the gap for v1. It is a one-time
-  migration that needs a crash in a microsecond window, and its failure mode is a
-  sign-in, not data loss.
+Everything else in `admitRing` is unchanged and still runs first: signature verified, not
+own, sender kind and consent, DM-only, not blocked, not muted, then age. `clockSkew` (negative
+age) and `stale` (age > 10 s) keep their meaning; only the instant changes.
+
+The session tokens stay `WhenUnlocked`. Nothing about the keychain changes. Joining needs
+auth, auth needs Face ID, and the user gives Face ID by answering, the same contract Android
+enforces with `requestDismissKeyguard` before it opens the app.
+
+### Why this does not open a replay
+
+The worry is a *stale* invite manufacturing a fresh receipt and vouching for itself.
+
+- **A receipt cannot launder an old signature.** If an island (hostile or buggy) re-pushes an
+  old signed invite, the native record is created *now*, so `receivedAt − signedAt` is as
+  large as the invite is old, and it is refused exactly as today. The signed `signedAt`
+  remains the only input from the caller. The receipt only stops the gate from also counting
+  *our* latency after the push arrived.
+- **A receipt can only make age smaller.** `receivedAt ≤ now` always, so the rule can only
+  turn a refusal into an admission, never the reverse. That makes the next bound the
+  important one:
+- **The record must be live, and recent.** An *old* record for the *same* call id (for
+  example one that survived its call, see #220) would let a replay of that original invite
+  be admitted later with its original, prompt receipt time. So:
+  - only a record in a **live** state counts (ringing, or answered and not yet joined or
+    ended); a retired or ended record ("tombstone") never does;
+  - and `now − receivedAt` must be within a **receipt horizon this design owns**, not one
+    borrowed from the native trust windows. Those are far too loose for this job: iOS trusts
+    a ringing record for 120 s and an *answered* record for **8 hours**
+    (`liveCallTrustWindow`, `answeredCallTrustWindow` in `AppDelegate.swift`), the latter
+    so that a force-quit cannot strand a call forever. Android's ring ceiling is 30 s
+    (`RING_CEILING_MS`). Proposed horizon: **60 s**. That covers ring (≤ 30 s, the island's
+    ceiling) plus Answer → Face ID → restore, and it is still short enough that a replay of
+    an old invite, matched to an old record, is out of reach.
+  The replay window is therefore bounded by a horizon close to the ring's own lifetime,
+  which is the protection a freshness gate is for in the first place. **#220 (a native ring record that outlives its
+  call) must be fixed first, or bounded by this check**, because it is exactly the stale
+  record this rule must not trust.
+- **The receipt is device-local.** It is not on the wire and nothing remote can set it. Only
+  the wake handler that rings the phone writes it, keyed by the `m` the push carried, and that
+  `m` is checked against the signed body's call id when Dart admits (a mismatch means no
+  record, so `now` is used).
+
+### What it costs
+
+- **One field on the native→Dart bridge.** The action events (and the replay of pending ones
+  at `onListen`) carry `receivedAtMs`: wall-clock milliseconds when the native side created
+  the ring record. iOS already stamps it (`entry.at`, seconds since 1970). Android stamps
+  `elapsedRealtime`, so it converts once at emit time
+  (`currentTimeMillis − (elapsedRealtime − instance)`). This is an addition to the
+  method-channel contract, pinned by `system_call_channel_contract_test`.
+- **Dart keeps a short map** `CallRef → receivedAt` from bridge events, consulted by the
+  ring controller when it calls `admitRing`, and dropped when the record ends.
+- **No wire change. No island change.**
+
+## The locked-call path, end to end (iOS, cold, locked)
+
+| Step | Who | Needs keychain? | Budget |
+|---|---|---|---|
+| Wake arrives, ring record created (`receivedAt`) | native | no | ~1 s after persist (measured 0.35–0.98 s) |
+| CallKit rings, user answers | native + user | no | user; the ring ceiling is 30 s |
+| Audio session armed | native | no | measured: the call is torn down **exactly 30.0 s after Answer** if not joined (runs 1 and 4) |
+| User unlocks (Face ID) | user | | user |
+| Dart restores the session, fetches the invite | Dart | **yes** | ~2–3 s after unlock (run 1: 55.4 → 57.4) |
+| `admitRing`: age = `receivedAt − signedAt` (~1 s) → admitted | Dart | no | immediate |
+| Answer matched, video token minted, join | Dart | yes | ~0.3 s (Pixel: 140 ms) |
+
+So the binding constraint becomes **Answer → Face ID → join < 30 s**, not anything about the
+invite. Runs 1 and 4 would have joined at about 12 s after Answer. A user who takes longer
+than ~25 s to unlock loses the call. **Unpinned:** what enforces that 30 s. In both failed
+runs the CallKit call was torn down 30.0 s after Answer (`disarm` in the device log), but
+this draft has not traced whether it is the island's ring ceiling arriving as an end, or an
+app-side expiry of the pending answer. The build must pin it before relying on the budget.
+Extending it is a separate decision.
+
+**Locked-read contract (unchanged, now stated):** before Face ID, a keychain read throws
+`errSecInteractionNotAllowed`, raised by the plugin as a `FlutterError`. Today's restore path
+treats it as transient: `token_provider.dart` clears tokens only on `RefreshRejected`, and
+`auth_controller.dart:599` documents the throw. No change. A rule, written down so no future
+change breaks it: **a locked read must never be flattened to "absent"**, because
+`SovereignKeyStore._loadOrCreate` treats "absent" as "mint a new identity".
+
+## What the v1 temper found, and where it went
+
+| Round-1 finding | Under v2 |
+|---|---|
+| delete ignores accessibility, so every save becomes a non-atomic delete-then-add (Tesla, Carnot, Kelvin) | **Gone.** No keychain migration. |
+| the bearer token's power is unaudited (all four) | **Gone as a trade.** The token's protection is unchanged. (The audit is still worth doing on its own; not this design.) |
+| the locked read throws, not returns null (Maxwell, Tesla) | **Stated** above as a contract. |
+| first call after update fails until an unlocked open (Carnot) | **Gone.** Nothing to migrate. |
+| no rollback (Carnot) | Reverting is: drop the field, use `now`. No persisted state. |
+| state machine, timing budget, CallKit lease (Carnot, Maxwell) | **Folded** (table above). |
+| the wrong frame: the clock at the wrong instant (Maxwell); a call-scoped admission credential (Carnot) | **This is v2.** |
+
+## Android
+
+Same rule, same field. Android's cold path measured 4.2 s and joins today, but it is exposed
+to the same class through FCM tail latency (one observation of 14 s, claude-tasks#4233). With
+v2, a slow wake still counts against the invite (receipt − signedAt), but the cold start and
+the `requestDismissKeyguard` unlock after it no longer do.
 
 ## How we know it worked
 
-1. **Hardware, the test that failed:** lock the iPhone for 30 s or more (past the grace
-   period), kill the app, ring through enspyr (`tool/hw_ring.dart invite --island`,
-   `HW_RING_CHANNEL=01M02Y4QS94QRRQ3658BZAB0PG`), answer, **wait 5 s, then Face ID**.
-   Pass = `/v1/me` on enspyr within about 2 s of the push (before Answer) and a
-   video-token mint for `nick`.
-2. **Migration on hardware:** install over the current 0.0.6 ad-hoc build (legacy
-   items present), open unlocked once, then repeat test 1.
-3. **Locked write:** with an unmigrated legacy item, lock, cold-wake, and confirm the
-   app reads as signed out rather than corrupting state (the unknown above).
-4. **Unit:** a fake `FlutterSecureStorage` that models accessibility as part of the
-   query (so the duplicate-item collision is reproducible), covering read-migrate,
-   write-over-legacy, clear-both, and locked-legacy (read returns null and nothing is
-   deleted).
+1. **Hardware, the failing test:** iPhone locked for 30 s or more, app killed, ring through
+   enspyr (`tool/hw_ring.dart invite --island`, `HW_RING_CHANNEL=01M02Y4QS94QRRQ3658BZAB0PG`),
+   answer, **wait 5 s, then Face ID**. Pass = a video-token mint for `nick`.
+2. **Replay, on hardware:** reuse an old call id. Re-send a signed invite that is more than
+   10 s old (ring_probe with a stored old body), and let it wake the phone. Pass = refused
+   as `stale`, no ring admitted.
+3. **Unit (Dart):** `admitRing` with `receivedAt` set: admitted when receipt − signedAt ≤
+   10 s even though now − signedAt is 16 s; refused when receipt − signedAt > 10 s; refused
+   (falls back to `now`) when the record is not live, is older than the ring lifetime, or
+   names a different call id; `clockSkew` still fires on negative age.
+4. **Contract:** `receivedAtMs` present on answered and replayed events, both platforms;
+   Android's converted value is within 1 s of wall clock.
+5. **Android regression:** a Pixel cold ring still joins (the 2026-10-09 baseline).
 
 ## Not in scope
 
-- The freshness window itself (claude-tasks#4233). With this fix the iOS cold path
-  admits in about 1–2 s, so the window is no longer the binding constraint on iOS. The
-  "answered native session proves timeliness" idea stays as the safety net for real
-  push latency.
-- #220 (stale native ring state across calls).
+- Extending the 30 s CallKit audio lease to cover a slow unlock.
+- #220, except that it is a **prerequisite**: v2 must not trust a native record that outlived
+  its call.
+- Connecting before Face ID (v1's goal). Declined by Nick, 2026-10-10.
