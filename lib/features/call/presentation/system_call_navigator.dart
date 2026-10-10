@@ -358,6 +358,13 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator>
 
   /// A suspended isolate runs no timers, so an overdue deadline is checked
   /// here, against the answer instant, before anything else can act on resume.
+  ///
+  /// RELEASED OUTRIGHT, never deferred to a question "in flight" (Tesla,
+  /// design 23 build review). A resume past the deadline proves the isolate
+  /// slept, so what looks in flight is a frozen retry delay, not native
+  /// speaking: deferring to it let the thawed loop take a fresh sample after
+  /// the deadline and join on it. Only the timer path, which ran in a live
+  /// process, waits for a question that is genuinely being asked.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
@@ -366,7 +373,8 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator>
     final heldAt = _heldAt;
     if (channelId == null || call == null || heldAt == null) return;
     if (_now().difference(heldAt) >= kInAppRingDuration) {
-      _deadlineReached(channelId, call);
+      _telemetry.answerResolved(channelId, AnswerOutcome.neverAdmitted);
+      _release(channelId, call);
     }
   }
 

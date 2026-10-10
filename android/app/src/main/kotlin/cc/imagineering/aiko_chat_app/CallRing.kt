@@ -277,7 +277,15 @@ object CallRing {
    * design 23 temper round 3).
    *
    * Never `unknown`: both cells are this process's own state, read under
-   * [lock]. `elapsedRealtime` counts deep sleep, and both cells are boot-scoped,
+   * [lock].
+   *
+   * Two reads, not one critical section, and safe BECAUSE OF THEIR ORDER:
+   * `answer()` moves a call from the ring cell to the answer cell inside one
+   * critical section, and this reads ring first, answer second — the direction
+   * the state moves. Before the move the ring read finds it; after, the answer
+   * read does; between the two reads the ring read already found it. Reading
+   * answer first would tear: a move between the reads finds neither (Tesla's
+   * question, design 23 build review). `elapsedRealtime` counts deep sleep, and both cells are boot-scoped,
    * so a reboot reads as no cell.
    */
   fun wakeAge(context: Context, channel: String, callId: String): Map<String, Any> {

@@ -500,6 +500,24 @@ void main() {
     expect(bridge.ended, [channel]);
   });
 
+  testWidgets('a resume past the deadline releases even with a question '
+      'pending (Tesla)', (tester) async {
+    // The crossed state: the isolate slept with a wake question pending. What
+    // looks in flight is a frozen retry; deferring to it let the thawed loop
+    // sample after the deadline and join.
+    await tester.pumpWidget(harness(admitted: null));
+    await tester.pumpAndSettle();
+    ring.inFlight = Completer<void>().future; // never completes
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pump();
+
+    wall = wall.add(kInAppRingDuration + const Duration(seconds: 5));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    expect(bridge.ended, [channel]);
+  });
+
   testWidgets('a resume inside the deadline leaves the hold alone', (
     tester,
   ) async {
