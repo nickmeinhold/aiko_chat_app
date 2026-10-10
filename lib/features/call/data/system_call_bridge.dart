@@ -164,14 +164,14 @@ const kSystemCallControlChannel = 'cc.imagineering.aikoChatApp/call/control';
 /// `system_call_channel_contract_test.dart` rather than by this comment.
 const Duration kSystemCallRingTrust = Duration(seconds: 120);
 
-/// How long a call the system UI ended stays ended on this device — the
-/// tombstone (design 22 v4.1).
+/// How long a call the system UI ended stays spent (cannot ring again) on
+/// this device (design 22 v4.1; was "tombstone", #211).
 ///
 /// **2 × the longest an invitation can wait in a push provider**, so no
-/// redelivery of a call's invite can outlive its tombstone. The island's
+/// redelivery of a call's invite can outlive its spent record. The island's
 /// invite lifetimes (PR #192): FCM and APNs VoIP both
 /// `push_result.RING_CEILING_SECONDS` (30s), APNs alert
 /// `apns._ALERT_EXPIRATION_SECONDS` (60s, the max). So 2 × 60s. Pinned
 /// across Dart, Kotlin and Swift by `system_call_channel_contract_test.dart`.
 /// If the island moves either constant (claude-tasks#4233), this moves.
-const Duration kCallTombstoneTtl = Duration(seconds: 120);
+const Duration kCallSpentTtl = Duration(seconds: 120);

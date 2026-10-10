@@ -678,9 +678,9 @@ final class CallKitRinger: NSObject {
     // design 22 temper round 3: the cross-channel refusal used to run AFTER
     // displacement had already ended the live call).
     //
-    // 1. Already ended on this device: a call rings at most once (the
-    //    tombstone, design 22 v3.2). Redelivery of an ended call's invite.
-    if isTombstoned(callId) {
+    // 1. Already spent on this device: a call rings at most once (design 22
+    //    v3.2; was "tombstone", #211). Redelivery of a spent call's invite.
+    if isSpent(callId) {
       os_log("[callkit] invite for a call already ended on this device; reporting and ending", log: aikoCallLog, type: .info)
       reportAndEndImmediately(reason: .remoteEnded, completion: completion)
       return
@@ -726,7 +726,7 @@ final class CallKitRinger: NSObject {
         if let old = live.call {
           SystemCallChannel.shared.emit(
             action: .ended, channel: channel, origin: "displaced", call: old)
-          tombstone(old)
+          markSpent(old)
           // A native end of a call kills its session too, or the displaced
           // call's ghost refuses the call that displaced it (Carnot + Tesla,
           // design 22 delta review).
@@ -827,8 +827,8 @@ final class CallKitRinger: NSObject {
     channel: String?, callId: String, completion: @escaping () -> Void
   ) {
     // Remembered whatever happens below, so a late invite for this call never
-    // rings (the tombstone gates invites only; design 22 v4.1).
-    tombstone(callId)
+    // rings (spent gates invites only; design 22 v4.1).
+    markSpent(callId)
     // THE SESSION DIES WITH ITS CALL — through the same door. Matched on the
     // session's OWN stored channel (oneChannelPerCall), not the id alone: an
     // outgoing call has no CallKit row for the guard below to find (delta
@@ -935,7 +935,7 @@ final class CallKitRinger: NSObject {
     // The call is over for this process, whatever CallKit holds: it is no
     // longer live, and it never rings again here.
     if liveSession?.call == call { liveSession = nil }
-    tombstone(call)
+    markSpent(call)
     // EXACT: the live entry on the channel must be the call Dart names. A
     // mismatch ends nothing — the call Dart is tearing down is already gone,
     // and the one on the channel now is somebody else's.
@@ -971,7 +971,7 @@ final class CallKitRinger: NSObject {
     liveSession = (channel: channel, call: call)
   }
 
-  // MARK: The session, the lease and the tombstones (design 22 v4)
+  // MARK: The session, the lease and the spent calls (design 22 v4)
 
   /// The call Dart has live in THIS process. Process memory on purpose: the
   /// media dies with the process, and a persisted "live" would refuse every
@@ -1007,36 +1007,39 @@ final class CallKitRinger: NSObject {
     if armed.isEmpty { CallAudioSession.disarm() }
   }
 
-  /// How long an ended call stays ended on this device — the tombstone.
+  /// How long a call stays spent (cannot ring again) on this device. Spent
+  /// means only that: an answered call is spent and live (#211).
   /// 2 × the longest an invitation can wait in a push provider: the island's
   /// `push_result.RING_CEILING_SECONDS` (30s, FCM and APNs VoIP) and
   /// `apns._ALERT_EXPIRATION_SECONDS` (60s, the max). The same number as
-  /// Dart's `kCallTombstoneTtl` and Kotlin's `TOMBSTONE_TTL_MS`, pinned by
+  /// Dart's `kCallSpentTtl` and Kotlin's `SPENT_TTL_MS`, pinned by
   /// `system_call_channel_contract_test.dart`.
-  static let tombstoneTtl: TimeInterval = 120
+  static let spentTtl: TimeInterval = 120
 
-  private static let tombstonesKey = "callkit.tombstones"
+  // The stored key keeps the old name on purpose: renaming it would forget
+  // every spent call across an upgrade, and #211 changes no behaviour.
+  private static let spentKey = "callkit.tombstones"
 
-  private func liveTombstones() -> [String: TimeInterval] {
-    let raw = UserDefaults.standard.dictionary(forKey: Self.tombstonesKey) as? [String: TimeInterval] ?? [:]
+  private func liveSpent() -> [String: TimeInterval] {
+    let raw = UserDefaults.standard.dictionary(forKey: Self.spentKey) as? [String: TimeInterval] ?? [:]
     let now = Date().timeIntervalSince1970
     // NO LOWER BOUND: this is the wall clock, and a step backward made every
     // age negative, so the filter dropped every row and the next prune-on-
     // write persisted the amnesia (Tesla, design 22 delta review). Keeping a
     // row too long only refuses a re-ring of a call id that is unique and
     // already over, so erring long is harmless.
-    return raw.filter { now - $0.value <= Self.tombstoneTtl }
+    return raw.filter { now - $0.value <= Self.spentTtl }
   }
 
-  /// Remember [call] as ended. PRUNES ON EVERY WRITE, so the store holds only
-  /// the last `tombstoneTtl` of calls (Kelvin, design 22 temper).
-  private func tombstone(_ call: String) {
-    var kept = liveTombstones()
+  /// Remember [call] as spent. PRUNES ON EVERY WRITE, so the store holds only
+  /// the last `spentTtl` of calls (Kelvin, design 22 temper).
+  private func markSpent(_ call: String) {
+    var kept = liveSpent()
     kept[call] = Date().timeIntervalSince1970
-    UserDefaults.standard.set(kept, forKey: Self.tombstonesKey)
+    UserDefaults.standard.set(kept, forKey: Self.spentKey)
   }
 
-  private func isTombstoned(_ call: String) -> Bool { liveTombstones()[call] != nil }
+  private func isSpent(_ call: String) -> Bool { liveSpent()[call] != nil }
 
   /// THE door policy for a call's channel: a call is one DM today. The single
   /// seam a cross-channel gathering (island #3196) would change; Dart's and
@@ -1385,7 +1388,7 @@ extension CallKitRinger: CXProviderDelegate {
     for (channel, entry) in stored() {
       told.append((channel, entry.uuid))
       guard let call = entry.call else { continue }  // a v1 row: never a call
-      tombstone(call)
+      markSpent(call)
       SystemCallChannel.shared.emit(
         action: .ended, channel: channel, origin: "providerReset", call: call)
     }
@@ -1430,7 +1433,7 @@ extension CallKitRinger: CXProviderDelegate {
     if let busy = callInSession(), busy != answeredCall {
       os_log("[callkit] answer refused: another call is in session", log: aikoCallLog, type: .info)
       forgetLiveCall(for: channel, onlyIf: action.callUUID)
-      tombstone(answeredCall)
+      markSpent(answeredCall)
       SystemCallChannel.shared.emit(
         action: .ended, channel: channel, origin: "answerRefused", call: answeredCall)
       action.fail()
@@ -1484,7 +1487,7 @@ extension CallKitRinger: CXProviderDelegate {
     }
     armed.insert(action.callUUID)
     // The ring is over for this device; this call never rings again here.
-    tombstone(answeredCall)
+    markSpent(answeredCall)
     SystemCallChannel.shared.emit(
       action: .answered, channel: channel, origin: "answerAction",
       call: answeredCall)
@@ -1515,7 +1518,7 @@ extension CallKitRinger: CXProviderDelegate {
     // forgotten, because the channel is what identifies the call to Dart.
     for (channel, entry) in stored() where entry.uuid == action.callUUID.uuidString {
       guard let call = entry.call else { continue }  // a v1 row: never a call
-      tombstone(call)
+      markSpent(call)
       if liveSession?.call == call { liveSession = nil }
       SystemCallChannel.shared.emit(
         action: .ended, channel: channel, origin: "endAction", call: call)

@@ -246,13 +246,13 @@ void main() {
     () async {
       // Design 22 v4.2, Tesla (temper round 3): a lock-screen decline before
       // Flutter existed, then the invitation over the websocket inside its
-      // 10s freshness. Without the tombstone it rang as a banner for a call
+      // 10s freshness. Without the spent record it rang as a banner for a call
       // the user had already declined.
       await warmDms();
       container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
       await pump();
 
-      container.read(incomingRingProvider.notifier).noteSystemEnded(kTestCall);
+      container.read(incomingRingProvider.notifier).markSpent(kTestCall);
       transport.emitMessage(await inbound());
       await pump();
 
@@ -267,10 +267,10 @@ void main() {
     transport.emitMessage(await inbound());
     await pump();
 
-    container.read(incomingRingProvider.notifier).noteSystemEnded(kOtherCall);
+    container.read(incomingRingProvider.notifier).markSpent(kOtherCall);
     expect(container.read(incomingRingProvider)?.call, kTestCall);
 
-    container.read(incomingRingProvider.notifier).noteSystemEnded(kTestCall);
+    container.read(incomingRingProvider.notifier).markSpent(kTestCall);
     expect(container.read(incomingRingProvider), isNull, reason: 'control');
   });
 

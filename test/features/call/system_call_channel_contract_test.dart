@@ -269,7 +269,7 @@ void main() {
     expect(swift, contains(r'#"\A' + grammar + r'\z"#'), reason: 'Swift');
   });
 
-  test('the tombstone lifetime is ONE quantity in Dart, Kotlin and Swift', () {
+  test('the spent lifetime is ONE quantity in Dart, Kotlin and Swift', () {
     // How long an ended call stays ended on a device (design 22 v4.1). Dart's
     // half refuses a late banner; Kotlin's refuses a late native ring. If they
     // drift, one door rings a call the other already buried.
@@ -277,18 +277,18 @@ void main() {
       'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app/CallRing.kt',
     ).readAsStringSync();
     final ms = RegExp(
-      r'const val TOMBSTONE_TTL_MS = ([0-9_]+)L',
+      r'const val SPENT_TTL_MS = ([0-9_]+)L',
     ).firstMatch(kotlin)?.group(1);
     expect(ms, isNotNull, reason: 'the Kotlin constant did not parse');
     expect(
       int.parse(ms!.replaceAll('_', '')),
-      kCallTombstoneTtl.inMilliseconds,
+      kCallSpentTtl.inMilliseconds,
     );
     final swiftTtl = RegExp(
-      r'static let tombstoneTtl: TimeInterval = (\d+)',
+      r'static let spentTtl: TimeInterval = (\d+)',
     ).firstMatch(swift)?.group(1);
     expect(swiftTtl, isNotNull, reason: 'the Swift constant did not parse');
-    expect(int.parse(swiftTtl!), kCallTombstoneTtl.inSeconds);
+    expect(int.parse(swiftTtl!), kCallSpentTtl.inSeconds);
   });
 
   test('Swift emits the v2 call id under the key Dart decodes', () {

@@ -52,7 +52,7 @@ object CallChannels {
           //     (design 22 v4.2).
           //  2. the answer this device is holding — the cold-start Answer,
           //     given while Dart was still booting.
-          CallRing.tombstonedCalls(app).forEach { (channel, callId) ->
+          CallRing.spentCalls(app).forEach { (channel, callId) ->
             events.success(event(ACTION_ENDED, channel, callId))
           }
           CallRing.heldAnswer(app)?.let { (channel, callId) ->
