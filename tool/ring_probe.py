@@ -245,7 +245,10 @@ async def send_signed(body: str, reply_to: str | None) -> str:
     key = SigningKey(seed.ljust(32, b"\0")[:32])
 
     client_msg_id = f"probe-{int(time.time() * 1000):x}"
-    signed_at_ms = int(time.time() * 1000)
+    # RING_BACKDATE_MS stages a late wake: the invite is signed in the past, so
+    # it reaches the callee already stale while the wake and the socket are both
+    # prompt — the delayed-FCM case design 23 rescues, with no network trickery.
+    signed_at_ms = int(time.time() * 1000) - int(os.environ.get("RING_BACKDATE_MS", "0"))
     payload = signing_bytes(
         raw_public_key=bytes(key.verify_key),
         channel_id=channel_id,
