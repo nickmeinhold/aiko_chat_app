@@ -11,6 +11,13 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- WebRTC binds local UDP sockets for ICE before it sends a packet; the
+	     sandbox calls that a SERVER act. Without this every call signals fine
+	     and then never connects media ("deny(1) network-bind local:*:0", Mac
+	     smoke test 2026-10-10). DebugProfile always had it, so only a Release
+	     build ever showed the failure. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
 	<!-- A/V calls (LiveKit, #2726). Sandboxed macOS gives a black frame / silent
 	     mic with NO error if these are missing — verify on a Release build. -->
 	<key>com.apple.security.device.camera</key>
