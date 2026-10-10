@@ -44,7 +44,7 @@ enum CallBodyKind { invite, end }
 ///
 /// **Equality is the id alone.** The channel a call rings on is stored beside
 /// the ref and checked at the door by [oneChannelPerCall], so the rule that a
-/// call is one DM lives in one function, which island #3196 may one day
+/// call is one DM lives in one function, which a proposed cross-channel gathering may one day
 /// change, and not inside `==`.
 final class CallRef {
   /// [id] must be a canonical call id — see [isCallId].
@@ -73,7 +73,7 @@ final class CallRef {
 ///
 /// [stored] is the channel the call was first seen on; [seen] is the channel
 /// an event for the same [CallRef] names now. The single seam a cross-channel
-/// gathering (island #3196, design 12 Decision 1b) would change. Nothing else
+/// gathering (design 12 Decision 1b) would change. Nothing else
 /// encodes this rule.
 bool oneChannelPerCall(String stored, String seen) => stored == seen;
 

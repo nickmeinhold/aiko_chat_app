@@ -19,7 +19,7 @@ void main() {
       expect(SenderKind.fromWire('actor'), SenderKind.unknown);
       expect(SenderKind.fromWire('unknown'), SenderKind.unknown);
       // The island's vocabulary for this field is FIVE values; this one used to
-      // fall through to the default arm (claude-tasks#4661).
+      // fall through to the default arm (#381).
       expect(SenderKind.fromWire('agent'), SenderKind.agent);
     });
     test('unknown/null -> actor (forward-compat, never throws)', () {

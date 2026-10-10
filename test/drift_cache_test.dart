@@ -453,7 +453,7 @@ void main() {
 
     test('an UNrelated message is unaffected by a dead id', () async {
       await cache.applyRetraction(retract('01A', '01Z'));
-      // (upsertInbound's bool is the #1896 invalid-origin probe, not an
+      // (upsertInbound's bool is the invalid-origin probe, not an
       // insert flag — for a plain message it is false either way; the row's
       // PRESENCE is the real proof the dead id didn't suppress it.)
       await cache.upsertInbound(fromIsland('01B', 'chan', 'fine'));

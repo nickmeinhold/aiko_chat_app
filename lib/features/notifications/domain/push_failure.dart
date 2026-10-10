@@ -56,8 +56,7 @@ enum PushFailure {
   /// that says a retry can never work without re-authenticating, which is
   /// exactly the discrimination the unregister-debt path needs: a debt that
   /// failed transiently is owed and payable, and a debt that failed with a dead
-  /// credential is owed and NOT payable by this client at all
-  /// (claude-tasks#3723).
+  /// credential is owed and NOT payable by this client at all.
   credentialRejected(transient: false, credentialIsDead: true),
 
   /// 403 — the credential is LIVE and the island refuses the OPERATION.
@@ -70,7 +69,7 @@ enum PushFailure {
   /// solders the part it is meant to check (Tesla, round 3).
   ///
   /// The distinction is the one [rejected] already documents: re-authenticating
-  /// fixes a 401 and cannot fix a 403. Once claude-tasks#3723 branches on
+  /// fixes a 401 and cannot fix a 403. Once the push-debt consumer branches on
   /// [credentialIsDead] it would drive a sovereign-key DELETE, or abandon a debt,
   /// for a session that is perfectly alive.
   forbidden(transient: false),
@@ -80,7 +79,7 @@ enum PushFailure {
   /// A retryable 4xx, and the reason this member exists separately: an earlier
   /// version of the ladder classified EVERY non-401/403 4xx as permanent, so a
   /// rate-limited island read as `reason=rejected retry=false` and a reader
-  /// would close the diagnosis wrong. Worse downstream: once claude-tasks#3723
+  /// would close the diagnosis wrong. Worse downstream: once the push-debt consumer
   /// reads `!transient` to declare a debt unpayable, a throttled island would
   /// mint an orphaned routable row this client never clears. Found by two
   /// reviewer families independently, which is what a real defect looks like.
@@ -122,7 +121,7 @@ enum PushFailure {
   /// PR description because "we DISTINGUISH a dead credential" is one careless
   /// sentence away from "we HANDLE a dead credential", and the second is false.
   ///
-  /// The consumer is claude-tasks#3723: paying a debt owed to an island whose
+  /// The consumer is the push-debt payer: paying a debt owed to an island whose
   /// credential is gone needs an island-side contract change (a DELETE signed by
   /// the sovereign key), so the branch that reads this cannot be written on this
   /// side of the wire yet. Raised independently by Carnot and by the author's

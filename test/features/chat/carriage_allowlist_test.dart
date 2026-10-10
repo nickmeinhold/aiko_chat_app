@@ -22,7 +22,7 @@
 // and this goes red at once, which is the whole point.
 //
 // DELETE THIS FILE when `/capabilities` is live on every island and
-// `kKnownCarriageHosts` is deleted with it (task #1896). Until then the list is
+// `kKnownCarriageHosts` is deleted with it. Until then the list is
 // a deploy-time promise that nothing else verifies.
 import 'package:aiko_chat_app/features/chat/data/carriage_capability.dart';
 import 'package:aiko_chat_app/features/chat/domain/gateway_capabilities.dart';

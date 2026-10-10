@@ -67,7 +67,7 @@ final currentUserProvider = Provider<AppUser?>(
 /// 5-6 seconds of background life and must have a websocket up inside it,
 /// because that is how a call invitation arrives — and the duplicate round does
 /// not merely cost its own round trips, it rebuilds [chatRepositoryProvider],
-/// which is what the socket waits on. Bangkok → this island, RTT ~125ms,
+/// which is what the socket waits on. On a high-latency link, RTT ~125ms,
 /// 2026-09-20:
 ///
 ///     18.288  GET /v1/dm          19.047  GET /v1/dm        ← again
@@ -303,7 +303,7 @@ final _lastKnownDmsProvider =
 /// taken BEFORE it started. This is where the read-your-write assumption on the
 /// island's find-or-create lives, stated instead of implied — we trust a fetch
 /// that began after our write to reflect it, and we never trust one that began
-/// before (task #2947 covers verifying the island half).
+/// before (verifying the island half is tracked separately).
 class _SeededDms
     extends Notifier<({String userId, List<({Channel dm, int gen})> items})?> {
   @override
@@ -628,7 +628,7 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((
   // means opening a brand-new DM (which invalidates [dmsProvider]) rebuilds the
   // repo through the SAME path a reconnect already uses — subscribe + history for
   // the new id — rather than an internal mutable-set path racing the backpressure
-  // valve and reconnect epochs (approach A, #2798). Fails soft to [] offline.
+  // valve and reconnect epochs (approach A). Fails soft to [] offline.
   //
   // The two lists are also awaited TOGETHER rather than in series: they are
   // independent fetches, and the old sequential form paid both round-trips

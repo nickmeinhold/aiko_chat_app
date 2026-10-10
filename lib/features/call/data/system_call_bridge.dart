@@ -7,8 +7,7 @@ import '../domain/call_wire.dart' show CallRef;
 import '../domain/system_call_action.dart';
 import '../domain/wake_age.dart';
 
-/// The two-way seam between the platform's call UI and this app's call
-/// (claude-tasks#4420).
+/// The two-way seam between the platform's call UI and this app's call.
 ///
 /// **The ring and the call live on opposite sides of this.** `CallKitRinger` in
 /// `ios/Runner/AppDelegate.swift` can make a locked, force-quit handset ring
@@ -67,8 +66,7 @@ abstract class SystemCallBridge {
 ///  * **iOS** — `SystemCallChannel` in `ios/Runner/AppDelegate.swift`, fed by
 ///    CallKit.
 ///  * **Android** — `CallChannels` in `android/app/src/main/kotlin/…`, fed by
-///    the FCM ring's notification and lock-screen ring screen
-///    (claude-tasks#4421).
+///    the FCM ring's notification and lock-screen ring screen.
 ///
 /// ONE CLASS, NOT TWO, because the two native halves were built to the same
 /// channel names, method names and payload keys — pinned on all three sides by
@@ -200,5 +198,5 @@ const Duration kSystemCallRingTrust = Duration(seconds: 120);
 /// `push_result.RING_CEILING_SECONDS` (30s), APNs alert
 /// `apns._ALERT_EXPIRATION_SECONDS` (60s, the max). So 2 × 60s. Pinned
 /// across Dart, Kotlin and Swift by `system_call_channel_contract_test.dart`.
-/// If the island moves either constant (claude-tasks#4233), this moves.
+/// If the island moves either constant (#375), this moves.
 const Duration kCallSpentTtl = Duration(seconds: 120);

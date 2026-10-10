@@ -297,7 +297,7 @@ void main() {
   ) async {
     // Carnot round-4 HIGH. Retiring a seed because a fetch merely STARTED after
     // the mint assumes the island lists a DM the instant `POST /v1/dm` returns —
-    // an assumption this PR has never verified (#2947 owns the island half). If
+    // an assumption this PR has never verified (the island half is tracked separately). If
     // it lags by one request, the retiring fetch omits the DM and the user is
     // ejected from the conversation they just opened, through eventual
     // consistency rather than a stale refresh. So the seed waits to be NAMED.

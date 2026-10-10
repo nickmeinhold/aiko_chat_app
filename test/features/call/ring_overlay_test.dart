@@ -19,7 +19,7 @@ import 'package:go_router/go_router.dart';
 
 import 'call_fixtures.dart';
 
-/// The ring OVERLAY (#2808) — mounted in `MaterialApp.router`'s `builder`, which
+/// The ring OVERLAY (#360) — mounted in `MaterialApp.router`'s `builder`, which
 /// is a genuinely load-bearing placement choice: the banner must sit ABOVE the
 /// Navigator (so a call reaches any route) while still being INSIDE go_router's
 /// scope (so `context.push` resolves). Those two pull in opposite directions and

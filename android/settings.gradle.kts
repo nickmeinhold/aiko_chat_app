@@ -24,7 +24,7 @@ plugins {
     // Reads android/app/google-services.json at build time and generates the FCM
     // sender id into resources. ANDROID ONLY — there is deliberately no iOS
     // counterpart and no GoogleService-Info.plist; Apple platforms take their
-    // APNs token natively (claude-tasks#3267).
+    // APNs token natively.
     id("com.google.gms.google-services") version "4.4.3" apply false
 }
 

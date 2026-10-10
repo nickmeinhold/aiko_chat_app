@@ -1,4 +1,4 @@
-// Answering a CallKit ring JOINS THE ROOM (claude-tasks#4420).
+// Answering a CallKit ring JOINS THE ROOM.
 //
 // Until this existed the handset rang full-screen from a dead process, the user
 // swiped, and `CXAnswerCallAction` fulfilled into nothing — a doorbell on an

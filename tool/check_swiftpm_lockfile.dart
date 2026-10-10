@@ -1,4 +1,4 @@
-// Zero-cost SwiftPM lockfile-freshness gate (task #1909).
+// Zero-cost SwiftPM lockfile-freshness gate.
 //
 // WHY THIS EXISTS
 // PR #69 removed the GoogleSignIn / AppAuth / app-check SwiftPM packages but left

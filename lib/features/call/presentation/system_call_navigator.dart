@@ -16,7 +16,7 @@ import '../application/ring_telemetry.dart';
 import '../domain/answer_outcome.dart';
 import 'call_screen.dart' show CallRouteExtra, isInLiveCall, pushCallOverSpent;
 
-/// Turns an answered system call into a joined room (claude-tasks#4420).
+/// Turns an answered system call into a joined room.
 ///
 /// **This is the half of the ring that makes it a call.** Until it existed the
 /// handset rang full-screen from a dead process, the user swiped, and
@@ -100,7 +100,7 @@ import 'call_screen.dart' show CallRouteExtra, isInLiveCall, pushCallOverSpent;
 /// island will mint a room token against. The answer reliably arrives first. So
 /// it waits here and is re-attempted on the sign-in edge.
 ///
-/// **The hold ends on a CONDITION, not a clock** (claude-tasks#4440). A restore
+/// **The hold ends on a CONDITION, not a clock** (#317). A restore
 /// that RESOLVES with no user — expired credentials, a session signed out on
 /// another device — is a definite answer that this call can never be joined, and
 /// the system call is ended there. That is the real event; a timeout would be a

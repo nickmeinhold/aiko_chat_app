@@ -6,7 +6,7 @@ question under test is whether THE HANDSET rings, and routing through the
 island would add its ring lease, conduct gate, wake budget and (today) a
 transport that does not exist — `transport_not_built` on main, by design 14's
 ruling that the sender ships with its receiver. This sends exactly the envelope
-the app-side contract names (claude-tasks#4421) and nothing else, so the
+the app-side contract names and nothing else, so the
 receiver can be proven before the island's sender is revived.
 
 THE ENVELOPE IS THE CONTRACT. Data-only, no `notification` block (a display

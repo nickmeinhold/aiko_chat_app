@@ -1,6 +1,6 @@
 // Why does the island screen's app-bar title draw as a solid block?
 //
-// claude-tasks#3958. The blind playtester's sweep captured `/settings/island`
+// The blind playtester's sweep captured `/settings/island`
 // with a ~123px filled rectangle where the word "Island" belongs, while the
 // chat screen's app-bar title rendered real glyphs in the same run, same theme,
 // neither setting a `fontFamily`.

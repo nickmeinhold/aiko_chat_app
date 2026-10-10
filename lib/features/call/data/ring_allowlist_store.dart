@@ -36,7 +36,7 @@ import '../domain/ring_consent.dart';
 ///
 /// KEYED ON THE MULTIKEY, never on a user id or a display name. `signingBytes`
 /// covers the public key; `sender.userId` and `sender.label` are server-supplied
-/// metadata OUTSIDE the signature (#3166). A list keyed on either is a list the
+/// metadata OUTSIDE the signature (#265). A list keyed on either is a list the
 /// island can edit by relabelling a row, which would let it nominate who may
 /// wake you. The key cannot be forged without the private half.
 class RingAllowlistStore {
@@ -230,7 +230,7 @@ class RingAllowlistStore {
     }
     return _serialize(() async {
       final all = {...readAll()};
-      // NOTHING TO WITHDRAW IS NOT A WITHDRAWAL (claude-tasks#3518). The old
+      // NOTHING TO WITHDRAW IS NOT A WITHDRAWAL. The old
       // code returned the preferences write's result, so revoking a key that was
       // never granted — or a room that never existed — reported success. A
       // confirmation toast on that value is a success message for a no-op.

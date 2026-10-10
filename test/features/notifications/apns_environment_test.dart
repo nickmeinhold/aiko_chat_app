@@ -5,7 +5,7 @@
 // sends a TestFlight handset's production token to the sandbox APNs host, which
 // answers a bare 400 and never rings; a present-but-null key is out-of-set at
 // the island's boundary and 422s the whole registration. Neither surfaces
-// anywhere in the app (claude-tasks#3450, island #3386).
+// anywhere in the app.
 
 import 'dart:async';
 import 'dart:convert';

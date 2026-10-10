@@ -84,7 +84,7 @@ class IslandDirectoryClient {
   /// availability (same SPOF-avoidance ethos as bundling multiple seeds). If no
   /// present key yields a usable entry, the result is an empty directory — the
   /// correct "recognised but genuinely empty" outcome. Dual-key MISMATCH semantics
-  /// (two populated lists that DISAGREE) ultimately belong to the island (#1760);
+  /// (two populated lists that DISAGREE) ultimately belong to the island;
   /// until then this fail-soft default — unusable never shadows usable, priority
   /// breaks a genuine tie — is the safe pick.
   static List<IslandEntry> _firstUsableEnvelope(Map<String, dynamic> m) {

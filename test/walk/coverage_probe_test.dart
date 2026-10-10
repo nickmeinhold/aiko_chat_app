@@ -14,7 +14,7 @@ library;
 //
 // KNOWN BLIND SPOTS (each is a real feature the walker cannot currently reach):
 //   - DMs — the fakes seed no DM channels, so the whole navigable-DM surface
-//     (#2798) is invisible here.
+//     is invisible here.
 //   - Mute / Report / Block / Message — reachable only by LONG-PRESS, and the
 //     walker only taps.
 //   - Search, the palette editor's interior, the typeface list.

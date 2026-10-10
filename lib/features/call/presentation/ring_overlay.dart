@@ -1,4 +1,4 @@
-/// The incoming-call ring (#2808) — an app-wide banner above every route.
+/// The incoming-call ring (#360) — an app-wide banner above every route.
 ///
 /// Mounted in `MaterialApp.router`'s `builder`, ABOVE the Navigator, because a
 /// call must reach you wherever you are: reading another conversation, in
@@ -91,8 +91,8 @@ class _RingBanner extends ConsumerWidget {
                     ),
                   ),
                   // "Ignore", NOT "Decline". The caller is never told — there is no
-                  // signal back to them until the island's occupancy endpoint lands
-                  // (claude-tasks#3159). "Decline" implies they hear about it; the
+                  // signal back to them until the island's occupancy endpoint lands.
+                  // "Decline" implies they hear about it; the
                   // word would be the lie, so the honest word does the work instead
                   // of a disclaimer.
                   TextButton(
@@ -128,8 +128,7 @@ class _RingBanner extends ConsumerWidget {
     );
   }
 
-  /// The user is done with this call, so the SYSTEM call is done with it too
-  /// (claude-tasks#4420).
+  /// The user is done with this call, so the SYSTEM call is done with it too.
   ///
   /// **The island cannot know this app is foregrounded**, so it sends the VoIP
   /// push on every invite and a foregrounded handset gets BOTH: CallKit's

@@ -1,4 +1,4 @@
-/// "Is this device ringing right now" — one app-wide fact, one owner (#2808).
+/// "Is this device ringing right now" — one app-wide fact, one owner (#360).
 ///
 /// The ring listens to [ChatRepository.inboundMessages] (cross-channel, because
 /// a call must reach you in a DM you are not looking at), funnels every message
@@ -343,7 +343,7 @@ class RingController extends Notifier<CallInvite?> {
         // THE LINE THAT DID NOT EXIST. Ten distinct refusals used to leave here
         // as one indistinguishable `null`, which is why learning that a real
         // push-woken ring had been refused for staleness took four hours and a
-        // throwaway instrumentation branch (claude-tasks#3588, #3591).
+        // throwaway instrumentation branch.
         if (reason.refusedAnAttempt) {
           _telemetry.ringRefused(m.channelId, reason, age: age);
         }
@@ -367,7 +367,7 @@ class RingController extends Notifier<CallInvite?> {
       //
       // ANNOUNCED rather than silent: the gate said YES and the handset stays
       // quiet, which is the one shape this whole change exists to make
-      // impossible to mistake for "nobody called" (Tesla, #3591 cage-match).
+      // impossible to mistake for "nobody called" (Tesla, in the refusal-naming cage-match).
       _telemetry.ringDeadOnArrival(invite.channelId);
       return;
     }

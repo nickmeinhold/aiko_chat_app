@@ -37,7 +37,7 @@
 /// A future self-hosted transport (UnifiedPush on Android, which would take
 /// Google out of that path entirely) is a new value here plus a new value in
 /// the island's enum and its migration — deliberately cheap, because the
-/// discriminator already exists. See claude-tasks#3267.
+/// discriminator already exists.
 enum DevicePlatform {
   apns('apns'),
   fcm('fcm');

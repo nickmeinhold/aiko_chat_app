@@ -594,7 +594,7 @@ class IslandPainter extends CustomPainter {
   /// A single warm light on the land after dark. Somebody is awake.
   ///
   /// **CLOCK-DERIVED, NOT PRESENCE.** It says nothing about whether anyone is
-  /// actually there — presence was declined on shape (claude-tasks#3885: an
+  /// actually there — presence was declined on shape (an
   /// ambient signal is safe when it is act-caused and self-expiring, and
   /// presence is neither, leaking by accumulation until it is a sleep diary).
   /// This is a drawing of a place at night, not a report about a person, and it

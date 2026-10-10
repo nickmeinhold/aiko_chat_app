@@ -406,7 +406,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
     return _applyOutcome(outcome, prior);
   });
 
-  /// Add a passkey to the CURRENTLY signed-in account (link-to-existing, #1727).
+  /// Add a passkey to the CURRENTLY signed-in account (link-to-existing).
   /// This is the recovery path for a user who ALREADY has an account and wants a
   /// second passkey (e.g. a new device): routing them through
   /// [registerWithPasskey] would try to mint a SECOND account and — on a handle

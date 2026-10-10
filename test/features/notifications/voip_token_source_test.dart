@@ -1,7 +1,7 @@
 // iOS takes a PushKit (VoIP) token — the door into being CALLED.
 //
-// This was a gate test while calling shipped behind a build flag (claude-tasks
-// #4420: the token was the one door the flag did not close). The flag is gone
+// This was a gate test while calling shipped behind a build flag (the
+// token was the one door the flag did not close). The flag is gone
 // since 0.0.6, so what remains is the positive arm: an iOS build registers a
 // `voip` row, or a closed app can never ring.
 import 'package:aiko_chat_app/features/notifications/application/push_providers.dart';

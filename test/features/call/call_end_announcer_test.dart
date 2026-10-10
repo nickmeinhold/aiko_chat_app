@@ -327,7 +327,7 @@ void main() {
     // calls this BEFORE `super.dispose()`. So a throw here does not merely lose
     // a hangup — it breaks the widget teardown, from the one path that exists to
     // make teardown safe. `_identity()` reads two providers off a long-lived
-    // `Ref`, and a disposed `Ref` throws (#3349), which is precisely the
+    // `Ref`, and a disposed `Ref` throws (#272), which is precisely the
     // fragility this class carries by design.
     final c = ProviderContainer(
       overrides: [

@@ -1,4 +1,4 @@
-/// A call invitation — the "ring" (#2808).
+/// A call invitation — the "ring" (#360).
 ///
 /// **The invitation is an ordinary signed message.** Not a new `MessageKind`,
 /// not a new WS frame. Three reasons, in the order they'd survive a cage-match:
@@ -11,7 +11,7 @@
 ///    island (or anything between) could forge, while the body it rides on stays
 ///    sound. In the body, the signature covers the ring itself.
 /// 2. **Every parameter is already inside the signed envelope.** The room IS the
-///    channel id (island handoff #2726), the caller IS the signing key, the start
+///    channel id, the caller IS the signing key, the start
 ///    time IS `signedAtMs`. So the body carries NO parameters — there is nothing
 ///    to forge because nothing is passed. [kCallInviteBody] is a pure sentinel.
 /// 3. **It inherits the whole authz/moderation stack through the door that
@@ -120,7 +120,7 @@ const Duration kWakeAgeRetry = Duration(milliseconds: 250);
 /// for a corpse"*).
 ///
 /// So this is **no longer an app-side change**. The island tab is adding
-/// `WakeKind.CALL_END` against this exact byte string (claude-tasks#4254 §4b).
+/// `WakeKind.CALL_END` against this exact byte string.
 /// Struck rather than rewritten because the *reasoning* is the useful part: a
 /// statement about what a peer must know can be true of one delivery path and
 /// false of the next, without either repo editing a line.
@@ -132,7 +132,7 @@ const Duration kWakeAgeRetry = Duration(milliseconds: 250);
 /// it, hanging up would put `aiko:call/1 · 📞 ended the call` back on screen as
 /// a raw bubble — the exact thing the invite's render arm exists to prevent.
 /// Confirmed by Nick 2026-08-22 — AFTER first transmission, not before, and that
-/// order is recorded rather than tidied. #3198 asked for the same hand-check the
+/// order is recorded rather than tidied. A follow-up asked for the same hand-check the
 /// invite body got; the live two-party runs that verified this feature had
 /// already written the string into signed history by the time it was asked. The
 /// cost happened to be nil (a handful of rows from test accounts, no users on
@@ -333,7 +333,7 @@ CallEndDecision admitCallEnd(
   // clause below it could never fire. Two doors, one fault, two voices; the same
   // start/stop divergence this file has now been struck over three times.
   //
-  // Found by Tesla in round 2 of the #3591 cage-match, which is the tell that
+  // Found by Tesla in round 2 of the refusal-naming cage-match, which is the tell that
   // round 1 fixed an INSTANCE (`_isCallEndShape`) and not the CLASS. The class is
   // "a compound predicate in an admission path hides which invariant broke", and
   // it is now closed: the shape gate, the freshness clause, the permission gate
@@ -444,7 +444,7 @@ class CallInvite {
   /// occur. Refusing the null at the door deletes all three.
   final String islandMsgId;
 
-  /// The channel whose LiveKit room this invitation is for (#2726).
+  /// The channel whose LiveKit room this invitation is for.
   ///
   /// **The room is NOT the bare channel id** — measured against the live island
   /// 2026-09-16, the SFU room is `<island>:<channelId>` (`enspyr:01KZR8…`).
@@ -512,7 +512,7 @@ class CallInvite {
 ///   Channel-wide calls are a real future feature; they need their own consent
 ///   model, not this door.
 /// - **a bot sender** — bots are UNBLOCKABLE by island design (a bus actor has
-///   no account to action; `moderation_service.py`, and claude-tasks#27 is open
+///   no account to action; `moderation_service.py`, and #362 is open
 ///   for exactly this). Every other refusal here is something the user can
 ///   choose; a bot ring is one they could not switch off, in any channel they
 ///   are a member of. Refused until actor-scoped suppression exists — a
@@ -553,16 +553,16 @@ class CallInvite {
 /// participant. Measured, not inferred: a resident agent holding its own account
 /// and key rang a real handset through this path on 2026-08-26, and the gateway
 /// labelled it `human`. The island's unreleased source starts reporting true
-/// kinds (island #3096), at which point that same resident would be refused —
+/// kinds, at which point that same resident would be refused —
 /// a capability regressing with no change here. This is the widening that has to
-/// land first (claude-tasks#3448).
+/// land first.
 ///
 /// Three properties, each chosen against a specific way this could go wrong:
 ///
 /// 1. **Keyed on the KEY, never the account or the label.** `signingBytes`
 ///    covers the pubkey; `sender.userId` and `sender.label` are server-supplied
 ///    and NOT covered, so an island in the middle can rewrite them (the app-wide
-///    key→account gap, #3166). An allowlist keyed on anything the island can
+///    key→account gap, #265). An allowlist keyed on anything the island can
 ///    rewrite is an allowlist the island controls.
 ///
 /// 2. **Consulted only AFTER the signature verifies** — enforced by call order
@@ -588,7 +588,7 @@ class CallInvite {
 ///    That is not a hole this gate opens, and the reason matters: `kind` is
 ///    unsigned too, so a hostile island already bypasses the allowlist entirely
 ///    by reporting `human`. Against that adversary nothing here helps, and the
-///    honest answer is the app-wide key→account trust root (#3166), not another
+///    honest answer is the app-wide key→account trust root (#265), not another
 ///    clause. What this check DOES buy is real and worth keeping: it closes the
 ///    island's own `actor` arm, where `userId` is genuinely null, and it holds
 ///    for every sender rather than only allowlisted ones.
@@ -603,7 +603,7 @@ class CallInvite {
 /// indistinguishable `null`. That is unobservable by construction: on
 /// 2026-08-29, learning which gate had refused a real ring required hand-
 /// patching nine `debugPrint`s into this pure function on a throwaway branch,
-/// and the answer still had to be inferred (claude-tasks#3591, #3588).
+/// and the answer still had to be inferred.
 ///
 /// Naming the reason in the RETURN TYPE rather than injecting a logger keeps
 /// [admitRing] pure — it stays a total function of its arguments, trivially
@@ -703,7 +703,7 @@ enum RingRefusal {
   ///
   /// THE ONE TO WATCH. A push-woken invite necessarily includes APNs delivery,
   /// a human noticing, a cold start and a handshake in its measured age, so this
-  /// firing on a real push wake is the confirmation #3588 has been waiting for.
+  /// firing on a real push wake is the confirmation the notification-tap work has been waiting for.
   /// It was previously indistinguishable from every other refusal.
   stale(refusedAnAttempt: true, startGate: true, stopGate: false),
 
@@ -726,7 +726,7 @@ enum RingRefusal {
 
   /// Whether [admitRing] can produce this reason.
   ///
-  /// Carnot (round 2, #3591) correctly observed that ONE shared enum across two
+  /// Carnot (round 2) correctly observed that ONE shared enum across two
   /// gates leaves impossible states representable: `CallEndRefused(stale)` type-
   /// checks and nothing can produce it. Its proposed fix was to split into two
   /// enums — which is right in principle and disproportionate here: the shared
@@ -902,7 +902,7 @@ RingDecision admitRing(
   //
   // `admitCallEnd` already verified before ITS own-echo check, so the two gates
   // disagreed: the start/stop divergence class this file has been struck over
-  // twice. Found by Tesla in the #3591 cage-match.
+  // twice. Found by Tesla in the refusal-naming cage-match.
   if (message.originCryptoValid != true) {
     return const RingRefused(RingRefusal.unverifiedOrigin);
   }

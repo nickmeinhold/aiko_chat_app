@@ -1,7 +1,7 @@
 // Every theme slot that installs a bare `TextStyle` — does the reader's face
 // survive it?
 //
-// This is the CLASS behind claude-tasks#3958. That bug was found in one slot,
+// This is the CLASS behind the blank-title-glyphs bug. That bug was found in one slot,
 // `appBarTheme.titleTextStyle`, and fixed in 654bbdf. The fix was correct and
 // the class was never swept: `theme_builder.dart` hands a bare `TextStyle` to
 // five more slots, and two frames already sitting in the blind playtester's
@@ -25,7 +25,7 @@
 //
 // So the discriminator is not the source, it is the RENDER TREE — what family
 // did the span that actually paints this text resolve to? That is the question
-// that settled #3958 after three hypotheses had died to reasoning about it, and
+// that settled the blank-title-glyphs bug after three hypotheses had died to reasoning about it, and
 // it is the only question asked here.
 //
 // THE FIXTURE MUST BE ABLE TO FAIL. Every case first asserts that the chosen

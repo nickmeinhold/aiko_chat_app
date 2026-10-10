@@ -20,7 +20,7 @@ import 'theme_builder.dart';
 ///
 /// SCOPE, restated because it is easy to over-claim: these are COLOUR AND
 /// CONTRAST laws. They guarantee that no palette can make a control invisible
-/// against what it sits on. They say nothing about layout (claude-tasks#2715).
+/// against what it sits on. They say nothing about layout.
 
 /// The twelve slots a palette fills. Named so the editor can point at the one
 /// that broke a law instead of saying "this palette is invalid".

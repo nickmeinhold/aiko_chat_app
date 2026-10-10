@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/ui_fakes.dart';
 
-/// The participant badge (#2414): a non-human `sender_kind` must render a
+/// The participant badge: a non-human `sender_kind` must render a
 /// visible "who/what" chip so an agent/bot message is distinguishable from a
 /// person's — the UX half of "handle non-human sender_kind gracefully". Humans
 /// get no badge; any UNKNOWN island sender_kind degrades to `actor` → "Bot"
@@ -90,7 +90,7 @@ void main() {
     tester,
   ) async {
     // The half of the old decode that was ALREADY RIGHT, pinned so the fix above
-    // cannot quietly undo it. This is what island #3096 existed to fix: an agent
+    // cannot quietly undo it. This is what an island fix existed for: an agent
     // must never wear a human's unbadged label. Changing WHICH badge it wears
     // must not change WHETHER it wears one.
     expect(SenderKind.agent.isExternalActor, isTrue);

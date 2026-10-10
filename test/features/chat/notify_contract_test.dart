@@ -1,4 +1,4 @@
-// Contract tests for the MANUAL-notify invariant (claude-tasks#2905).
+// Contract tests for the MANUAL-notify invariant.
 //
 // PR #130 made `notifyUpdates` manual on every writer (`allTables => []`, so drift
 // no longer infers table-dirtiness from raw SQL). That bought a footgun: a future
@@ -10,7 +10,7 @@
 //      `islandUlid IS NULL` guard matches zero rows (already-sent) — the "finish
 //      the octave" consistency fix that gates their notify on rows-changed.
 //
-// Chosen over a `_mutate()` choke-point wrapper (the other option in #2905): a test
+// Chosen over a `_mutate()` choke-point wrapper (the other option considered): a test
 // encodes the same invariant without threading a `(result, wrote)` tuple through
 // eight writers on the signed-at-birth trust boundary. Failure-visible > convenient.
 import 'package:aiko_chat_app/features/chat/data/cache/drift_cache.dart';

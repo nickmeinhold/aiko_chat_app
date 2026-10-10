@@ -28,7 +28,7 @@ import '../domain/wake_age.dart';
 /// worth spending on the APNs wire (`push_service._payload`) after weighing the
 /// same trade, so this is consistent with the recorded decision rather than a
 /// fresh one. `RedactingLogSink` deliberately preserves ULIDs for this reason.
-/// (Raised by Carnot, #3591 cage-match: the docstring argued only that bodies,
+/// (Raised by Carnot in the refusal-naming cage-match: the docstring argued only that bodies,
 /// keys and signatures cannot reach the log, and said nothing about ids.)
 ///
 /// ## Why the refusal is the whole feature
@@ -194,7 +194,7 @@ class RingTelemetry {
   /// they would ask "the gate said yes, so where did it go?" and find nothing.
   /// The out-of-order path is first-class here (delivery is at-least-once and
   /// locally unordered, and push makes an end-before-invite LIKELIER), so this
-  /// is a routine event, not an exotic one. (Tesla, #3591 cage-match.)
+  /// is a routine event, not an exotic one. (Tesla, refusal-naming cage-match.)
   void ringDeadOnArrival(String channelId) =>
       _log.info('call.ring.dead_on_arrival', fields: {'channel': channelId});
 

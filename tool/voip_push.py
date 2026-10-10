@@ -2,7 +2,7 @@
 """Send a VoIP push to one device, directly, with no island in the loop.
 
 THE MISSING INSTRUMENT. The 2026-09-09 and 2026-09-11 must-report runs
-(claude-tasks#4178) both needed a way to put a chosen payload on a chosen
+both needed a way to put a chosen payload on a chosen
 handset, and both used a sender that lived only in a shell history. The Dart and
 Swift halves of that harness are committed; the thing that actually pushed the
 bytes was not, so the experiment reads as reproducible and is not. An instrument
@@ -160,7 +160,7 @@ def cmd_send(args) -> int:
     print(f"[{args.tag}] {what} -> HTTP {status} {label} {reason}".rstrip())
     # A 200 is APNs accepting the push for delivery. It is NOT evidence the
     # device received it, and under per-device VoIP denial it is exactly what a
-    # blackout looks like — claude-tasks#4178 measured 200s into a deaf handset.
+    # blackout looks like — a run measured 200s into a deaf handset.
     if status == 200:
         print("       (200 = accepted for delivery. Read the CONTAINER LOG, not this.)")
     return 0 if status == 200 else 1

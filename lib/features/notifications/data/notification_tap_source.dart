@@ -4,7 +4,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// The channel ids of TAPPED call notifications (claude-tasks#3588).
+/// The channel ids of TAPPED call notifications.
 ///
 /// Two platforms, two mechanisms, one stream — and the split is forced, not
 /// stylistic. See [ApnsNotificationTapSource] and [FcmNotificationTapSource].

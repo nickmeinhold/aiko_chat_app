@@ -252,7 +252,7 @@ void main() {
       await expectLater(api.getHistory('c1'), throwsA(isA<FormatException>()));
     });
 
-    // task #1896 — the HTTP path of getCapabilities, the branch prod is in TODAY
+    // The HTTP path of getCapabilities, the branch prod is in TODAY
     // (/capabilities 404s). Cage-match Maxwell + Tesla + Carnot all flagged it
     // untested. Three-state at the wire: explicit bool → value; every "can't
     // determine" path (404, non-Map, missing field) → null.
@@ -578,7 +578,7 @@ void main() {
       expect(sent.contains('"body":"hello"'), isTrue);
     });
 
-    // task #1896: a gateway that does NOT advertise `origin` carriage would
+    // Capability gate: a gateway that does NOT advertise `origin` carriage would
     // `bad_origin`-reject the whole message. The capability gate WITHHOLDS a
     // perfectly valid origin and sends the message unsigned instead.
     test('sendMessage WITHHOLDS a well-formed origin when the gateway does '
@@ -646,7 +646,7 @@ void main() {
     });
 
     // The transport TRIGGERS a capability re-resolve on each connect so the gate
-    // reads a value that tracks the live (possibly switched) gateway (#1896).
+    // reads a value that tracks the live (possibly switched) gateway.
     test('onConnected fires when the socket reaches connected', () async {
       var refreshed = 0;
       final t = GatewayTransport(

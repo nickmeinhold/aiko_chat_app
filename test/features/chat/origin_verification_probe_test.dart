@@ -1,4 +1,4 @@
-// #1896 verified-sender PROBE. Pins that ChatRepository._persistInbound surfaces
+// Verified-sender PROBE. Pins that ChatRepository._persistInbound surfaces
 // a carried-but-invalid origin (originCryptoValid == false) via
 // ChatTelemetry.originVerificationFailed — and ONLY then — so we can measure the
 // base rate of `false` before any user-facing integrity warning ships. Drives the

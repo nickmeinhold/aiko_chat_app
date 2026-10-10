@@ -20,7 +20,7 @@ import 'origin_envelope.dart';
 /// It survived because it looked right: @@armbot genuinely IS an aiko Actor and produced
 /// 76% of the rows carrying the value. The other 18 rows were messages a PERSON typed
 /// that came back from the bus with no username — and for those, the word asserted a
-/// registered bus service had spoken (island claude-tasks#4665).
+/// registered bus service had spoken.
 ///
 /// The island is renaming `actor` → `unknown` with a DB CHECK and a migration that
 /// rewrites the 78 existing rows. `fromWire` accepts BOTH spellings so this client is
@@ -42,11 +42,11 @@ import 'origin_envelope.dart';
 /// permanently: a robot could never earn standing of its own", and showing one the
 /// unknown-participant badge is that lesser standing arriving through the render.
 /// Half of the decode was already right — `isExternalActor` kept an agent out of
-/// the human badge, which is what island #3096 existed to fix — but "not a human"
+/// the human badge, which is what an island fix existed for — but "not a human"
 /// and "an unrecognised thing on the bus" are different claims.
 ///
 /// Found by the island tab grounding its own change against this repo's record
-/// (claude-tasks#4661). LATENT, not live: `users.kind` is live on both islands,
+/// (#381). LATENT, not live: `users.kind` is live on both islands,
 /// nothing mints an agent account yet, and both production DBs read `human` +
 /// `actor` only. The trigger is island PR#136 merging.
 /// **`llm` AND `robot` ARE DEAD BY CONSTRUCTION, NOT MERELY UNOBSERVED** — and
@@ -58,7 +58,7 @@ import 'origin_envelope.dart';
 ///
 /// **NOT DELETED, DELIBERATELY.** "There is no writer" is equally consistent with
 /// *decided against* and *never built*, and no record distinguishes them — the
-/// island tab looked and said so rather than guessing. claude-tasks#3144 carries
+/// island tab looked and said so rather than guessing. That finding carries
 /// a three-way fork (pin the set to `human | agent | actor`; pin all five anyway;
 /// or treat the missing writer as its own bug), and the third outcome would make
 /// these live again. Removing them on the strength of a silence would be the same
@@ -124,7 +124,7 @@ enum SenderKind {
   ///
   /// Agent stays in: it is the half of the old decode that was already correct.
   /// An agent is not a human and must never wear a human's label — that is what
-  /// island #3096 fixed and it survives unchanged here. What changes is only
+  /// island fixed and it survives unchanged here. What changes is only
   /// WHICH badge it wears, not whether it wears one.
   bool get isExternalActor => this != SenderKind.human;
 }

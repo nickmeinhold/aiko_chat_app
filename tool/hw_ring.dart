@@ -17,7 +17,7 @@
 //      `admitRing` (10s freshness) correctly refused. The real island wakes in the
 //      same second it persists, so `invite` starts the signed send and fires the
 //      wake 1.5s later. A refused-stale ring here is a harness artifact; the same
-//      failure in the field is claude-tasks#4233.
+//      failure in the field is #375.
 //   3. HOME, THEN `am kill`. On a foreground app `am kill` is a silent no-op and
 //      the "cold start" was warm. `cold` fails if a pid survives.
 //   4. EXPAND THE SHADE BEFORE `uiautomator dump`. Notification actions are absent

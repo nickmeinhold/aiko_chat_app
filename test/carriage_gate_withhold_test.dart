@@ -1,4 +1,4 @@
-// THE AFFIRMING INSTRUMENT for the carriage emit gate (claude-tasks#4759).
+// THE AFFIRMING INSTRUMENT for the carriage emit gate.
 //
 // Every existing test of this gate checks a PART: `getCapabilities` parsing, the
 // allowlist seed, and the strip path with the gate OPEN. None asserts the thing

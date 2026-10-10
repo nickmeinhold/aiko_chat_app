@@ -6,7 +6,7 @@
 /// `dmsProvider` each fetched twice on every cold start — the second time to
 /// learn the network was still as online as it had been.
 ///
-/// On a fast link that is invisible. On a VoIP wake from Bangkok it is not: the
+/// On a fast link that is invisible. On a VoIP wake over a high-latency link it is not: the
 /// app has ~5-6 seconds of background life to get a websocket up, because that
 /// is how the call invitation arrives, and the duplicate round also REBUILDS
 /// `chatRepositoryProvider` — which is the thing the socket waits on. Measured

@@ -50,7 +50,7 @@ void main() {
 
     test('revoking from an EMPTY store does not throw either', () async {
       final s = await storeFor(alice);
-      // UNCHANGED, and this line is the #3518 fix visible from the oldest test
+      // UNCHANGED, and this line is the consent-outcome fix visible from the oldest test
       // in the file: there was nothing to withdraw, and the store used to call
       // that success because the preferences write succeeded.
       expect(await s.revoke(chan, resident), ConsentChange.unchanged);
@@ -114,7 +114,7 @@ void main() {
       expect(s.read(chan).keys, isEmpty);
       // NOSUBJECT, not a generic falsehood: there is no signed-in user whose
       // consent this would be, which is a different fact from a bad key or a
-      // failed write (claude-tasks#3518).
+      // failed write.
       expect(await s.allow(chan, resident), ConsentChange.noSubject);
       expect(await s.revoke(chan, resident), ConsentChange.noSubject);
     });
@@ -393,7 +393,7 @@ void main() {
     });
   });
 
-  // claude-tasks#3518. The old `bool` reported whether BYTES LANDED, never
+  // The old `bool` reported whether BYTES LANDED, never
   // whether the COVENANT MOVED — so `true` covered "granted" and "was already
   // granted", and `false` covered "malformed key", "signed out" and "the write
   // failed". Five outcomes on two values.
@@ -436,7 +436,7 @@ void main() {
       expect(s.read(chan).keys, isEmpty);
     });
 
-    // The twin defect #3518 does not name. `allow` had the same flattening and
+    // The twin defect the original report does not name. `allow` had the same flattening and
     // a worse one — three meanings on its `false` — and fixing only the
     // reported instance is how the same bug gets filed again next month.
     test('granting a key that is ALREADY granted is UNCHANGED', () async {
@@ -477,7 +477,7 @@ void main() {
     // removes the LITERAL, "so a store corrupted by hand can still be cleaned up
     // through the front door". Refusing it would close the only exit from a
     // corrupt store — amputating a capability to make the new enum tidy, which
-    // is the opposite of the fix #3518 asked for.
+    // is the opposite of the fix the original report asked for.
     //
     // So a malformed revoke is not an input error; it is a cleanup that either
     // found something or did not.

@@ -15,7 +15,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../support/ui_fakes.dart';
 
-/// The call-only DM path (#2758): long-press another human's message → "Call
+/// The call-only DM path: long-press another human's message → "Call
 /// {name}" opens (find-or-creates) the DM with THAT sender and pushes the call
 /// route for the returned channel. These tests pin the two things a regression
 /// would silently break: the target threaded to `openDm` is the sender's opaque

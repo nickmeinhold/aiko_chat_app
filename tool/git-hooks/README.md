@@ -23,7 +23,7 @@ which is why the SwiftPM check below is text-only). This hook runs the **same**
 even before CI weighs in — defense-in-depth for this solo-author repo, not a
 stand-in for absent CI.
 
-- The SwiftPM lockfile gate (task #1909) catches a committed `Package.resolved` left
+- The SwiftPM lockfile gate catches a committed `Package.resolved` left
   pinning a removed package — a "false green" where tests pass on a stale artifact
   (PR #69). Text-only, so it runs identically on the ubuntu CI runner and here.
 - Errors + warnings are fatal; the intentional `prefer_initializing_formals` infos are not.

@@ -7,7 +7,7 @@
 /// This is deliberately HALF a ledger. It proves *authorship* — "these are the
 /// messages I can cryptographically prove are mine". It says nothing about
 /// *judgment* (signed conduct events about you), which is island-gated and out
-/// of scope here (#2506). The copy on this screen must never imply a full
+/// of scope here. The copy on this screen must never imply a full
 /// reputation system.
 library;
 

@@ -16,7 +16,7 @@ import '../domain/gateway_capabilities.dart';
 /// Both islands answer explicitly, so on both of them this constant is dead
 /// code on the live path. Its own stated exit condition — "once `/capabilities`
 /// is live on every island this list becomes dead code and should be deleted" —
-/// is satisfied. Deleting it is claude-tasks#4753 and is a real change rather
+/// is satisfied. Deleting it is #378 and is a real change rather
 /// than a tidy-up, because of the seed note below.
 ///
 /// **THE "IT STILL 404s" LINE WAS TRUE WHEN IT WAS WRITTEN.** An earlier

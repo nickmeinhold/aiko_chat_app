@@ -529,7 +529,7 @@ class _SidebarChannelTile extends ConsumerWidget {
 /// self-DM (notes-to-self) shows "Notes to self"; an unresolved roster falls back
 /// to a neutral label rather than leaking the opaque key. Unread reads the SAME
 /// [channelUnreadCountProvider] a channel row does — a DM sits in the repo's
-/// subscription set (#2798 Inc 1), so its messages are cached and its history
+/// subscription set (navigable DMs, Inc 1), so its messages are cached and its history
 /// fence settles identically; nothing in the unread accounting is DM-specific.
 ///
 /// Named tradeoff: this watches one roster per visible DM (a `GET /members` each),
@@ -600,7 +600,7 @@ class _SidebarDmTile extends ConsumerWidget {
 /// now (Nick picked it in the same breath). It is not built because the island
 /// has none to give — 57 paths on the live schema, no presence among them, only
 /// a note in `realtime/envelopes.py` that typing/presence "extend it later".
-/// Tracked as claude-tasks#3885; this column is where those marks land.
+/// This column is where those marks land.
 class _IslandCrown extends ConsumerWidget {
   const _IslandCrown();
 

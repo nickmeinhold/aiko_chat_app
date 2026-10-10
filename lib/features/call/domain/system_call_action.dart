@@ -1,4 +1,4 @@
-/// What the platform's own call UI did (claude-tasks#4420).
+/// What the platform's own call UI did.
 ///
 /// "System call" rather than "CallKit": the same two transitions are what
 /// Android's ConnectionService / full-screen intent will report (design 12
@@ -19,7 +19,7 @@ enum SystemCallActionKind {
   /// The call is over — the user pressed the red button in the system UI, or the
   /// OS tore the call down. **NOT necessarily the user**, and the distinction is
   /// one this layer cannot make: `CXEndCallAction` says a call ended and never
-  /// says who ended it (claude-tasks#4278, where a label asserting an actor the
+  /// says who ended it (a handset run showed it: a label asserting an actor the
   /// callback cannot observe produced a confident wrong reading).
   ended;
 

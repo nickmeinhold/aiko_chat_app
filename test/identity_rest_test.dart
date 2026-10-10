@@ -238,7 +238,7 @@ void main() {
   });
 
   // The island's per-island BAN — `403 {"detail":"account suspended"}` at every
-  // ingress (handoff 2026-07-27, island #1914). Must map to the AccountSuspended
+  // ingress (handoff 2026-07-27). Must map to the AccountSuspended
   // REFINEMENT of Unauthorized so the UI says "suspended," not "session expired"
   // (which loops: re-auth 403s again). Keyed on the BODY, not the bare 403. An
   // unrelated (non-ban) forbidden is door-dependent (A3): on the authed door it

@@ -137,7 +137,7 @@ class Unauthorized implements Exception {
 }
 
 /// The island BANNED this account — the gateway's `403 {"detail":"account
-/// suspended"}`, emitted at every ingress (handoff 2026-07-27, island #1914).
+/// suspended"}`, emitted at every ingress (handoff 2026-07-27).
 /// A *refinement* of [Unauthorized]: it IS a terminal-auth rejection (so it
 /// reuses every existing router — reconcile's `_isAuthError`, the WS
 /// `unauthenticated` path — that already treats a 403 as terminal), but it is
@@ -208,8 +208,8 @@ class NetworkUnavailable implements Exception {
 }
 
 /// Video calling is not enabled on this deployment — the island's `503` on
-/// `POST /v1/channels/{id}/video-token` (LiveKit creds not configured, handoff
-/// #2726). NOT a failure to apologise for: it's a capability the deployment
+/// `POST /v1/channels/{id}/video-token` (LiveKit creds not configured).
+/// NOT a failure to apologise for: it's a capability the deployment
 /// lacks, so the UI hides/disables the call affordance and shows "video calling
 /// isn't available here" rather than an error. Branched BEFORE the generic
 /// [Unauthorized]/`5xx` mapping so a reachable-but-video-less server never reads
@@ -317,8 +317,8 @@ abstract interface class ChatRestApi {
     String credentialJson,
   );
 
-  /// Link a NEW passkey to the CURRENTLY authenticated account (add-to-existing,
-  /// #1727). Unlike [finishPasskeyRegistration] — which MINTS a new account and
+  /// Link a NEW passkey to the CURRENTLY authenticated account (add-to-existing).
+  /// Unlike [finishPasskeyRegistration] — which MINTS a new account and
   /// then needs a handle claim — this runs against the live session's bearer: the
   /// gateway reads the caller's identity from the token and stores the fresh
   /// credential against THAT user (no new account, no claim). It reuses
@@ -348,7 +348,7 @@ abstract interface class ChatRestApi {
   Future<String> refresh(String refreshToken);
 
   /// Fetch the gateway's advertised capabilities from the public `GET
-  /// /capabilities` endpoint (task #1896). Returns `null` when the endpoint is
+  /// /capabilities` endpoint. Returns `null` when the endpoint is
   /// absent (404) or unreachable — the caller treats null as "unknown" and falls
   /// back to the transitional carriage allowlist, never flipping a known host
   /// off. Token-less: capability discovery must work before/without a session.
@@ -362,7 +362,7 @@ abstract interface class ChatRestApi {
   /// name free). Sends `handle` / `display_name`; returns the updated [AppUser]
   /// (the handle reads back as `username`, matching `GET /v1/me`). Throws
   /// [HandleTaken] on 409, [HandleChangeOnCooldown] on 429, and [Unauthorized]
-  /// on terminal auth rejection. (Island contract: PATCH /v1/me, #2631.)
+  /// on terminal auth rejection. (Island contract: PATCH /v1/me.)
   Future<AppUser> updateProfile({String? handle, String? displayName});
 
   /// Permanently delete the authenticated user's account (Apple 5.1.1(v)).
@@ -382,7 +382,7 @@ abstract interface class ChatRestApi {
   /// `APNS_USE_SANDBOX` — the behaviour that predates the field. Declaring it is
   /// what makes a TestFlight build reachable: its production token registered
   /// against a sandbox-defaulted island draws a bare `400 BadDeviceToken` from
-  /// APNs and the handset simply never rings (claude-tasks#3450, island #3386).
+  /// APNs and the handset simply never rings.
   ///
   /// [kind] declares which DELIVERY SEMANTICS [token] carries. OPTIONAL on the
   /// wire and OMITTED for [TokenKind.alert], because absent means alert
@@ -462,7 +462,7 @@ abstract interface class ChatRestApi {
   Future<List<ChannelMember>> listMembers(String channelId);
 
   /// Find-or-create the 1:1 DM channel with [targetUserId] (`POST /v1/dm`, DM
-  /// handoff #2633). Idempotent: the unordered pair {me, target} always resolves
+  /// handoff). Idempotent: the unordered pair {me, target} always resolves
   /// to the same channel, so a double-tap yields one channel, not two (the island
   /// mints a deterministic `dm:<lo>:<hi>` key, atomic on the existing UNIQUE
   /// constraint). A self-target (`target == me`) is allowed and returns the
@@ -472,7 +472,7 @@ abstract interface class ChatRestApi {
   /// auth rejection, and [NetworkUnavailable] when the island is unreachable.
   Future<Channel> openDm(String targetUserId);
 
-  /// My DM channels (`GET /v1/dm`, DM handoff #2633) — the SEPARATE source for
+  /// My DM channels (`GET /v1/dm`) — the SEPARATE source for
   /// the sidebar's DM section, since DMs are EXCLUDED from [listChannels] by
   /// island design. Each returned [Channel] has `kind == dm` and an empty `name`
   /// (a DM's title is the peer, resolved from the roster). Throws [Unauthorized]
@@ -482,7 +482,7 @@ abstract interface class ChatRestApi {
   /// so a transient hiccup never ejects a live DM selection nor breaks channel chat.
   Future<List<Channel>> listDms();
 
-  /// Mint a LiveKit join token for an A/V call in [channelId] (handoff #2726).
+  /// Mint a LiveKit join token for an A/V call in [channelId].
   /// The room is derived from the channel by the ISLAND and named in the minted
   /// token — `<island>:<channelId>` as of 2026-09-16, not the bare channel id.
   /// Participant identity is server-derived. Throws

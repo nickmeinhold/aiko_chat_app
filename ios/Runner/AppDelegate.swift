@@ -368,7 +368,7 @@ final class ApnsTokenChannel: NSObject, FlutterStreamHandler {
 }
 
 /// The channel id from a TAPPED call notification, handed to Dart so the app can
-/// open the conversation the call is in (claude-tasks#3588).
+/// open the conversation the call is in.
 ///
 /// Until this existed the push landed, the handset lit up, and tapping it opened
 /// the app on whatever screen it was last on — indistinguishable to the user
@@ -457,7 +457,7 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
 ///
 /// **THIS OBJECT IS WHAT MAKES ARMING VoIP SAFE.** `PushKitTokenChannel.start`
 /// takes one as a parameter, so a registry armed with nothing to report to is
-/// unconstructable rather than merely unwise (#3609, design 16 v2 §1).
+/// unconstructable rather than merely unwise (design 16 v2 §1).
 ///
 /// ## The obligation, and why every path below reports
 ///
@@ -466,7 +466,7 @@ final class NotificationTapChannel: NSObject, FlutterStreamHandler {
 /// make the system stop delivering VoIP pushes to this app **on this device** —
 /// a per-device denial APNs never reports, because it keeps answering `200`.
 ///
-/// Measured on a handset 2026-09-12 (claude-tasks#4278), which is what lets the
+/// Measured on a handset 2026-09-12, which is what lets the
 /// end path below be a decision rather than a guess:
 ///
 /// - **Enforcement is a CONSECUTIVE-violation counter that any successful report
@@ -525,7 +525,7 @@ final class CallKitRinger: NSObject {
   /// How long a mapping may be trusted.
   ///
   /// **The island owns the ring ceiling** (Nick, 2026-09-09, reversing design
-  /// 12's Decision 1c) and **that lease is not on the wire** — claude-tasks#4233,
+  /// 12's Decision 1c) and **that lease is not on the wire** — #375,
   /// the third clock. So this cannot be derived, only bounded: past this, assume
   /// the ring is gone and take the safe path below. Deliberately LONGER than any
   /// plausible lease, because the cost of over-trusting is one extra buzz and
@@ -549,7 +549,7 @@ final class CallKitRinger: NSObject {
   /// Eight hours is past any call a person actually has and bounds the stranded
   /// case to a day rather than to forever. It is a bound, not a measurement, and
   /// it is deliberately NOT derived from anything — the call's real lease is not
-  /// on the wire (claude-tasks#4233, the third clock), same as the ring's.
+  /// on the wire (#375, the third clock), same as the ring's.
   private static let answeredCallTrustWindow: TimeInterval = 8 * 60 * 60
 
   private override init() {
@@ -845,7 +845,7 @@ final class CallKitRinger: NSObject {
   /// nothing, is four consecutive violations with no good report between — the
   /// one production path to per-device denial. And the island MANUFACTURES that
   /// shape under load, because the per-recipient wake budget throttles invites
-  /// while ends still go out (claude-tasks#4233/#4265). So the safe arm is bound
+  /// while ends still go out (#375). So the safe arm is bound
   /// to exactly the input that produces it, rather than to a preference.
   private func reportEnd(
     channel: String?, callId: String, completion: @escaping () -> Void
@@ -1109,7 +1109,7 @@ final class CallKitRinger: NSObject {
   private func isSpent(_ call: String) -> Bool { liveSpent()[call] != nil }
 
   /// THE door policy for a call's channel: a call is one DM today. The single
-  /// seam a cross-channel gathering (island #3196) would change; Dart's and
+  /// seam a cross-channel gathering would change; Dart's and
   /// Kotlin's `oneChannelPerCall` are its twins.
   static func oneChannelPerCall(_ stored: String, _ seen: String) -> Bool { stored == seen }
 
@@ -1314,7 +1314,7 @@ final class CallKitRinger: NSObject {
 }
 
 /// What the SYSTEM CALL UI did, handed to Dart — and the one thing Dart can ask
-/// of it back (claude-tasks#4420).
+/// of it back.
 ///
 /// **THE RING WITHOUT THIS IS A DOORBELL ON AN EMPTY HOUSE.** `CallKitRinger`
 /// makes a locked handset ring; every part of actually *being on a call* — the
@@ -1593,7 +1593,7 @@ extension CallKitRinger: CXProviderDelegate {
     // Says the call ENDED. It does NOT say who ended it — user, system timeout,
     // or our own reportCall. An earlier spike logged this as "ended by user" and
     // that label, inherited verbatim, produced a confident wrong reading that
-    // survived a night of self-corroboration (claude-tasks#4278). Record what
+    // survived a night of self-corroboration. Record what
     // happened; leave why to whoever has the timestamps.
     //
     // WHOEVER ended it, Dart has to hear about it: this is the hangup button on

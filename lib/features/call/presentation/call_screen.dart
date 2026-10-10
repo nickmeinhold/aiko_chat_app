@@ -134,7 +134,7 @@ void debugMarkMountedCallEnded() => _mountedCallEnded = true;
 String? callRouteRedirect(Object? extra) =>
     extra is CallRouteExtra ? null : '/';
 
-/// Full-screen A/V call for a channel (handoff #2726). Owns a [CallSession] for
+/// Full-screen A/V call for a channel. Owns a [CallSession] for
 /// its lifetime; the room is whatever the island's minted token names (it is
 /// derived from the channel, but is NOT the bare channel id). Renders the first remote
 /// participant full-screen with a mirrored local PiP overlay.
@@ -245,7 +245,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       _endAnnouncer.announce(channelId: widget.channelId, call: widget.call);
     }
     // TELL THE OS THE CALL IS OVER — unconditionally, from the one place every
-    // exit already lands in (claude-tasks#4420).
+    // exit already lands in.
     //
     // Unconditional is what makes it correct rather than what makes it lazy:
     // the native side ends a system call for this channel only if one exists,

@@ -28,7 +28,7 @@ class MainActivity : FlutterActivity() {
     // ring is current this engine is the one that admitted its invitation, and
     // destroying it with the activity (back on the root route, or a reclaim of
     // a stopped MainActivity behind the ring screen) lost that admission — the
-    // Answer then found only history, the #3588 trap again. So the activity
+    // Answer then found only history, the late-Answer trap again. So the activity
     // hands the engine back to the ring instead, and the ring's own close path
     // ([AikoEngine.releaseIfHeadless], run by CallRing.stop) stays the single
     // closer. (Tesla, PR #210 round 1.)

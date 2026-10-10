@@ -95,7 +95,7 @@ object CallRing {
    *
    * A BACKSTOP, NOT THE CEILING. The island owns the ring's lifetime and ends
    * it with `call_end` (design 16 v2 §3). This exists because that end can be
-   * lost — the invite/end pair is not atomic (#4325) — and an insistent
+   * lost — the invite/end pair is not atomic — and an insistent
    * notification with no end would ring until the battery dies.
    *
    * **30s = the island's `RING_CEILING_SECONDS`** — the product ceiling (Nick,
@@ -120,7 +120,7 @@ object CallRing {
    * (30s), APNs alert `apns._ALERT_EXPIRATION_SECONDS` (60s, the max). So
    * 2 × 60s. The same number as Dart's `kCallSpentTtl` and Swift's, pinned
    * by `system_call_channel_contract_test.dart`. If the island moves either
-   * constant (claude-tasks#4233), this moves.
+   * constant (#375), this moves.
    */
   const val SPENT_TTL_MS = 120_000L
 
@@ -211,7 +211,7 @@ object CallRing {
 
   /**
    * THE door policy for a call's channel: a call is one DM today. The single
-   * seam a cross-channel gathering (island #3196) would change — Dart's
+   * seam a cross-channel gathering would change — Dart's
    * `oneChannelPerCall` and Swift's are its twins.
    */
   private fun oneChannelPerCall(stored: String, seen: String) = stored == seen
@@ -356,7 +356,7 @@ object CallRing {
     // Start Dart NOW, while the phone rings, exactly as a VoIP push starts the
     // Flutter engine on iOS: the signed invitation is admitted inside its 10s
     // freshness window while ringing, and held for kSystemCallRingTrust — so a
-    // late Answer finds it admitted (the #3588 trap). Main-thread only.
+    // late Answer finds it admitted (the late-Answer trap). Main-thread only.
     main.post { AikoEngine.warm(app) }
     main.postDelayed({ deadline(app, ring.instance) }, RING_CEILING_MS)
   }

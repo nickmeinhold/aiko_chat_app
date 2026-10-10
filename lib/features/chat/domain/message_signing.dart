@@ -9,7 +9,7 @@
 /// SCOPE (Temper bright line): this produces + self-verifies signatures for
 /// LOCAL verifiable history. It does NOT emit anything on the wire and makes NO
 /// authorship claim beyond "the holder of this key signed these bytes" — binding
-/// the key to a human/account is federation's job (#1760), explicitly deferred.
+/// the key to a human/account is federation's job, explicitly deferred.
 library;
 
 import 'dart:convert';

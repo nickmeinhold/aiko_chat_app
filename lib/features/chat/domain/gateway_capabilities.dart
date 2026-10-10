@@ -1,5 +1,5 @@
 /// The subset of a gateway's advertised `GET /capabilities` document this app
-/// acts on (task #1896 — capability-gated sovereign `origin` emit).
+/// acts on (capability-gated sovereign `origin` emit).
 ///
 /// Wire shape (island `/capabilities`, a public/token-less endpoint sibling of
 /// `/health`):

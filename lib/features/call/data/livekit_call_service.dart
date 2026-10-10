@@ -15,7 +15,7 @@ import '../domain/video_token.dart';
 /// **This reasoning describes the SFU path, which is what exists today.** It is
 /// not a general fact about `.relay`, and it stops applying the moment a direct
 /// `PeerConnection` exists — see the note at the end, because that may be where
-/// 1:1 calls are going (claude-tasks#3740).
+/// 1:1 calls are going.
 ///
 /// The reason printed here until 2026-08-31 said `.all` leaks peer IPs. That is
 /// a mesh/P2P rationale applied to an SFU, and it does not survive that
@@ -40,14 +40,14 @@ import '../domain/video_token.dart';
 ///
 /// Still not flippable and not per-island adaptive, and this still rejects the
 /// island tab's "default ICE / don't force relay" Correction 2 on
-/// claude-tasks#2726 — now on the reachability grounds, not the privacy ones.
+/// the A/V calling work — now on the reachability grounds, not the privacy ones.
 /// The cost is real and unpriced: 100% of media egress crosses the operator
-/// (claude-tasks#3699, #3716).
+/// (#288).
 ///
 /// Consequence, unchanged: force-relay makes **TURN a hard dependency of any
 /// video-enabled island**. An island without TURN cannot connect a call at all
 /// and must fail CLOSED server-side (503 video-not-enabled), never mint a token
-/// that can't connect. See claude-tasks#2726 and the ADR-0005 grounding note.
+/// that can't connect. See the ADR-0005 grounding note.
 ///
 /// ## The reason above INVERTS on a direct path, and that path is being designed
 ///
@@ -57,7 +57,7 @@ import '../domain/video_token.dart';
 /// trade host and srflx ICE candidates with each other, so `.all` would expose
 /// peer IPs exactly as the old docstring claimed. The retired rationale is not
 /// wrong in general — it was **premature**, describing a topology the system
-/// does not have yet and may grow into (claude-tasks#3740: 1:1 media over a
+/// does not have yet and may grow into (1:1 media over a
 /// registrar/bus rendezvous instead of the SFU).
 ///
 /// So the next reader gets the trap named rather than sprung: **do not carry
@@ -218,12 +218,12 @@ class LiveKitCallService {
             params: VideoParametersPresets.h540_169,
           ),
           // `vp8` IS LOAD-BEARING, not a rendering preference — do not
-          // "modernise" it to AV1 without reading claude-tasks#3426 first.
+          // "modernise" it to AV1 without reading the media-E2EE note below first.
           //
           // LiveKit REFUSES AV1 outright under end-to-end encryption
           // (`av1 is not yet supported for end to end encryption`, thrown from
           // the frame cryptor), and H.264/H.265 need NALU-aware handling with a
-          // fallback. So if #3426 rules media E2EE on, an AV1 pin here is a
+          // fallback. So if the media-E2EE decision turns it on, an AV1 pin here is a
           // hard throw at connect time.
           //
           // It is also WHY that decision's cost column came out empty
