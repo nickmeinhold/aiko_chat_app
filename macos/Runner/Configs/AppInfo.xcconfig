@@ -4,14 +4,17 @@
 // future. If not, the values below would default to using the project name when this becomes a
 // 'flutter create' template.
 
-// The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = aiko_chat_app
+// The application's name: the .app bundle (Finder, Launchpad, /Applications) and
+// CFBundleName (menu bar, About, Cmd-Tab, Dock). CFBundleDisplayName alone never
+// reached those, so the shipped Mac app read "aiko_chat_app" everywhere but its
+// window title. Only the bundle ID keys the keychain group, not this.
+PRODUCT_NAME = Aiko Chat
 
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = cc.imagineering.aikoChatApp
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 cc.imagineering. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 Enspyr Pty Ltd. All rights reserved.
 
 // Signing team (Enspyr Pty Ltd). Required for the data-protection keychain:
 // flutter_secure_storage on macOS needs a real AppIdentifierPrefix (from a signing
