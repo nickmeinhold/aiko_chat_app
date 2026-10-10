@@ -108,11 +108,33 @@ final secureTokenStoreProvider = Provider<SecureTokenStore>(
   (ref) => SecureTokenStore(),
 );
 
-/// The device's sovereign Ed25519 signing-key store (sovereign-message-signing).
-/// Distinct from the JWT store: this proves authorship; the JWT asserts identity.
-final sovereignKeyStoreProvider = Provider<SovereignKeyStore>(
-  (ref) => SovereignKeyStore(),
-);
+/// This ACCOUNT's sovereign Ed25519 signing-key store
+/// (sovereign-message-signing). Distinct from the JWT store: this proves
+/// authorship; the JWT asserts identity.
+///
+/// BOUND TO THE USER ID, exactly as [cacheProvider] below binds the chat DB —
+/// same `.select` on the same field, for the same reason, and that symmetry is
+/// the point. Until #4831 the store was an unscoped singleton, so a sign-out
+/// followed by a different sign-in reused one seed and both accounts signed
+/// with one pubkey. `origin.sender_pubkey` is on the wire to every recipient,
+/// so that was a PUBLIC cross-account link. Binding here rather than passing a
+/// user id into `loadOrCreate()` is what makes it unconstructable instead of
+/// merely fixed: no call site can ask for a key that is not this session's.
+///
+/// **NOT `autoDispose`, and the difference is a closed bug.** [SovereignKeyStore]
+/// memoises its in-flight load as the process-wide first-use gate — two
+/// concurrent first-use calls minting two keypairs would ORPHAN one (cage-match:
+/// Tesla). That gate is the SINGLE INSTANCE. `autoDispose` would drop the store
+/// whenever nothing listened and let a later pair of callers race a fresh mint,
+/// re-opening the bug through a keyword copied off the neighbour. A plain
+/// `Provider` still rebuilds when the watched user id changes — which is all
+/// the scoping needs — while keeping exactly one live instance per session.
+final sovereignKeyStoreProvider = Provider<SovereignKeyStore>((ref) {
+  final userId = ref.watch(
+    authControllerProvider.select((s) => s.value?.userId),
+  );
+  return SovereignKeyStore(userId: userId);
+});
 
 /// The last-known [AppUser] store — enables offline-first session restore (a
 /// returning user with valid tokens lands in cached chat even with no network,

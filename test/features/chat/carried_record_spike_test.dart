@@ -77,7 +77,7 @@ void main() {
 
   setUp(() async {
     installSecureStorageMock();
-    key = await SovereignKeyStore().loadOrCreate();
+    key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
   });
 
   test('renders + independently re-verifies a subject\'s signed local history '

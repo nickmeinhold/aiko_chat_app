@@ -23,7 +23,7 @@ void main() {
   setUp(() async {
     installSecureStorageMock();
     cache = DriftCache(NativeDatabase.memory());
-    signer = await SovereignKeyStore().loadOrCreate();
+    signer = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
   });
   tearDown(() => cache.close());
 

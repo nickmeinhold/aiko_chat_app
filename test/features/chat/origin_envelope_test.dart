@@ -132,7 +132,7 @@ void main() {
     // gateway's golden-vector-interop test.
     test('carriage is verifier-sufficient end-to-end', () async {
       installSecureStorageMock();
-      final key = await SovereignKeyStore().loadOrCreate();
+      final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
       final payload = _fixture(key.rawPublicKey);
       final signature = await sign(key, payload);
 

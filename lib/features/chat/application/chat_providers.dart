@@ -663,6 +663,36 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((
   final channels = lists[0];
   final dms = lists[1];
   final signingKey = await keyStore.loadOrCreate();
+  // NO OWNERSHIP ASSERT HERE, and this comment is the second attempt to make that
+  // true — which is the finding, not a footnote.
+  //
+  // Round 2 added `if (signingKey.userId != user.userId) throw`. Kelvin and Carnot
+  // both filed it under The Good; Tesla read the data flow and showed it was
+  // unreachable: `user` and `keyStore` are both `ref.watch`-ed BEFORE any await in
+  // this build, so they come from one consistent `authControllerProvider` state and
+  // the stamped id always matches. A check whose success value equals its disabled
+  // value — the exact class this repo hunts, added by the fix for another one.
+  //
+  // Round 3 then found the assert STILL HERE, directly above a comment claiming it
+  // had been removed. Two independent seats reported it as present while the commit
+  // message and the review summary both said it was gone. A correction that does
+  // not land is worse than the defect it targets, because its own documentation
+  // asserts it landed and nobody re-checks a correction.
+  //
+  // THE CONTROL, and its first form was itself wrong. A plain grep for the
+  // comparison matches THIS COMMENT, so it reported two hits where the old head
+  // reported one — a check that fails on its own documentation. The working form
+  // excludes comment lines and is verified both ways:
+  //
+  //   grep -nE '^[[:space:]]*[^/[:space:]].*signingKey\.userId != user\.userId'
+  //     this file          -> no match  (the guard is gone)
+  //     at commit 1b851f3  -> line 666  (proves the pattern can find it)
+  //
+  // What actually keeps a stale key off a started repo is the `disposed` flag
+  // checked before `repo.start()` below, which is synchronous with the dependency
+  // change. Do not delete that believing a stamp replaced it.
+  // `SovereignKey.userId` stays a WITNESS — evidence at a boundary that can see two
+  // builds — never a guard here.
 
   final repo = ChatRepository(
     cache: cache,
