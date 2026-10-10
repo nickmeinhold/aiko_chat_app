@@ -171,10 +171,18 @@ class RingTelemetry {
         },
       );
 
-  void ringStarted(String channelId, Duration age) => _log.info(
-    'call.ring.started',
-    fields: {'channel': channelId, 'ageMs': age.inMilliseconds},
-  );
+  /// [transit] is present when the invitation was admitted by its wake age
+  /// (design 23): signature to this device's wake. Without it, a wake
+  /// admission reads `ageMs=16000` — an instrument saying a stale invite rang.
+  void ringStarted(String channelId, Duration age, {Duration? transit}) =>
+      _log.info(
+        'call.ring.started',
+        fields: {
+          'channel': channelId,
+          'ageMs': age.inMilliseconds,
+          if (transit != null) 'transitMs': transit.inMilliseconds,
+        },
+      );
 
   /// ADMITTED by every trust clause and then suppressed anyway, because the
   /// caller's hangup was already remembered. Not a gate refusal — the call was

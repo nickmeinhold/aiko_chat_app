@@ -159,6 +159,28 @@ void main() {
 
   late SharedPreferences prefs;
 
+  /// The harness's overrides, as a function so a group can rebuild the
+  /// container with more (design 23: a ring controller on a test clock).
+  overrides() => [
+    chatRepositoryProvider.overrideWith((ref) async => repo),
+    currentUserProvider.overrideWithValue(me),
+    // The consent store's backing. Additive: before the allowlist existed
+    // nothing in this harness read it, and the ring path is written so that
+    // an unreadable store means NO CONSENT rather than no ring.
+    sharedPreferencesProvider.overrideWithValue(prefs),
+    blockedUserIdsProvider.overrideWithValue(const <String>{}),
+    mutedChannelIdsProvider.overrideWithValue(const <String>{}),
+    mutedUserIdsProvider.overrideWithValue(const <String>{}),
+    // The ring resolves DM-ness from the app's OWN channel model, never from
+    // the id's shape — a real DM channel id is a bare ULID (live-verified),
+    // and the `dm:` prefix lives on a column the app never receives.
+    dmsProvider.overrideWith(
+      (ref) async => [
+        const Channel(id: dmId, name: 'Ring Test', kind: ChannelKind.dm),
+      ],
+    ),
+  ];
+
   setUp(() async {
     installSecureStorageMock(); // the sovereign key store needs a backing store
     SharedPreferences.setMockInitialValues({});
@@ -174,27 +196,7 @@ void main() {
       newTempId: () => 'tmp',
     );
     repo.start();
-    container = ProviderContainer(
-      overrides: [
-        chatRepositoryProvider.overrideWith((ref) async => repo),
-        currentUserProvider.overrideWithValue(me),
-        // The consent store's backing. Additive: before the allowlist existed
-        // nothing in this harness read it, and the ring path is written so that
-        // an unreadable store means NO CONSENT rather than no ring.
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        blockedUserIdsProvider.overrideWithValue(const <String>{}),
-        mutedChannelIdsProvider.overrideWithValue(const <String>{}),
-        mutedUserIdsProvider.overrideWithValue(const <String>{}),
-        // The ring resolves DM-ness from the app's OWN channel model, never from
-        // the id's shape — a real DM channel id is a bare ULID (live-verified),
-        // and the `dm:` prefix lives on a column the app never receives.
-        dmsProvider.overrideWith(
-          (ref) async => [
-            const Channel(id: dmId, name: 'Ring Test', kind: ChannelKind.dm),
-          ],
-        ),
-      ],
-    );
+    container = ProviderContainer(overrides: overrides());
   });
 
   tearDown(() async {
@@ -821,7 +823,6 @@ void main() {
     );
   });
 
-
   // Design 23: an invitation that is stale at `now` is judged again from the
   // instant the native side was woken for its call. Driven through the REAL
   // control channel, so the decode is the production one; the handler stands
@@ -830,7 +831,26 @@ void main() {
     late List<Map<Object?, Object?>> asked;
     late Future<Object?> Function(Map<Object?, Object?> args) answer;
 
+    /// The controller's clock runs this far ahead of the real one, so a test
+    /// can age an END or a question without waiting it out.
+    var skew = Duration.zero;
+    var budget = kInAppRingDuration;
+
     setUp(() {
+      skew = Duration.zero;
+      budget = kInAppRingDuration;
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [
+          ...overrides(),
+          incomingRingProvider.overrideWith(
+            () => RingController(
+              now: () => DateTime.now().add(skew),
+              wakeBudget: budget,
+            ),
+          ),
+        ],
+      );
       asked = [];
       answer = (_) async => {'state': 'notActionable'};
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -908,9 +928,8 @@ void main() {
 
     test('unknown is asked again, never judged at now (v3.1 req. 1)', () async {
       var calls = 0;
-      answer = (_) async => ++calls < 3
-          ? {'state': 'unknown'}
-          : {'state': 'woke', 'ms': 15500};
+      answer = (_) async =>
+          ++calls < 3 ? {'state': 'unknown'} : {'state': 'woke', 'ms': 15500};
       final admitted = await listening();
 
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
@@ -967,6 +986,71 @@ void main() {
 
       expect(container.read(incomingRingProvider), isNull);
       expect(admitted, isEmpty);
+    });
+
+    test('an END older than the freshness window still refuses a wake '
+        'admission (caller hung up, Face ID came 25 s later)', () async {
+      // The END reached Dart over the websocket; native's call_end push did
+      // not, so the system still holds the answered call. Pruning ends at the
+      // old 20 s bound forgot it, and the answer joined a room the caller had
+      // left.
+      final release = Completer<void>();
+      answer = (_) async {
+        await release.future;
+        return {'state': 'woke', 'ms': 40500};
+      };
+      final admitted = await listening();
+
+      transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
+      await pump();
+      transport.emitMessage(
+        await inbound(
+          body: kTestEndBody,
+          clientMsgId: 'M2',
+          replyTo: islandIdFor('M1'),
+        ),
+      );
+      await pump();
+      skew = const Duration(seconds: 25);
+      release.complete();
+      await pump();
+
+      expect(admitted, isEmpty);
+      expect(container.read(incomingRingProvider), isNull);
+    });
+
+    test('a native side that never answers cannot hold the question open '
+        '(Carnot)', () async {
+      budget = const Duration(milliseconds: 200);
+      // Rebuild with the short budget: the controller reads it at
+      // construction.
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [
+          ...overrides(),
+          incomingRingProvider.overrideWith(
+            () => RingController(wakeBudget: budget),
+          ),
+        ],
+      );
+      answer = (_) => Completer<Object?>().future; // never completes
+      final admitted = await listening();
+
+      transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
+      await pump();
+      final inFlight = container
+          .read(incomingRingProvider.notifier)
+          .wakeAdmissionFor(kTestCall);
+      expect(inFlight, isNotNull, reason: 'precondition: asking');
+
+      await inFlight!.timeout(const Duration(seconds: 2));
+      expect(
+        container
+            .read(incomingRingProvider.notifier)
+            .wakeAdmissionFor(kTestCall),
+        isNull,
+      );
+      expect(admitted, isEmpty, reason: 'judged at now: stale');
     });
 
     test('an older invite finishing its question late never displaces a newer '
