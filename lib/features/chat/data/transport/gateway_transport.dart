@@ -21,13 +21,24 @@ typedef ChannelFactory = WebSocketChannel Function(Uri url);
 WebSocketChannel _defaultChannelFactory(Uri url) =>
     IOWebSocketChannel.connect(url, pingInterval: const Duration(seconds: 25));
 
+/// How recently a refresh must have SUCCEEDED for a connect failure to skip
+/// it. This is the rate limit that "once per disconnect-burst" used to be, minus
+/// that rule's defect: a burst's one refresh could run while Doze blocked the
+/// network, fail transiently, and never be retried. The access token then
+/// expired mid-burst and every reconnect drew a 403 until the app restarted
+/// (#392, measured on a Pixel 2026-10-19). Counting only SUCCESSES means a
+/// failed refresh is retried on the next failure, and a long outage can't
+/// strand a token that expired during it.
+const kRefreshFloor = Duration(seconds: 60);
+
 /// WSS implementation of [ChatTransport].
 ///
 /// Key properties (all from design 02's review):
 /// - broadcast controllers are created ONCE and outlive reconnects;
 /// - auth is decided via the REST refresh path, NOT the (unreadable) WS close
 ///   code — any connect failure/drop triggers a refresh-classified reconnect;
-/// - refresh is attempted at most once per disconnect-burst;
+/// - refresh is attempted on a failure unless one SUCCEEDED within
+///   [kRefreshFloor] — a refresh that failed transiently is retried (#392);
 /// - a transient (network) refresh failure does NOT log out.
 class GatewayTransport implements ChatTransport {
   final String _wsBaseUrl; // e.g. ws://localhost:8095 (no trailing slash)
@@ -95,6 +106,11 @@ class GatewayTransport implements ChatTransport {
   bool _connecting = false;
   int _backoffAttempt = 0;
   Timer? _reconnectTimer;
+  final DateTime Function() _clock;
+
+  /// When a refresh last RETURNED A TOKEN. Null until one has. See
+  /// [kRefreshFloor].
+  DateTime? _lastRefreshOk;
 
   GatewayTransport({
     required String wsBaseUrl,
@@ -104,7 +120,9 @@ class GatewayTransport implements ChatTransport {
     AikoLogger? logger,
     bool Function()? carriesOrigin,
     Future<void> Function()? onConnected,
-  }) : _wsBaseUrl = wsBaseUrl,
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now,
+       _wsBaseUrl = wsBaseUrl,
        _tokens = tokens,
        _channelFactory = channelFactory ?? _defaultChannelFactory,
        _log = log,
@@ -139,6 +157,35 @@ class GatewayTransport implements ChatTransport {
   Future<void> connect() async {
     _wantConnected = true;
     await _openSocket();
+  }
+
+  /// Connect NOW instead of waiting out the backoff: the caller knows the
+  /// network just became usable (a ring was answered, the app resumed, the
+  /// device came back online). Backoff exists to spare a dead island, and it
+  /// only knows time — so in Doze, where every attempt is refused instantly, it
+  /// climbs to its 30s ceiling and then sleeps through the moment a push lifts
+  /// the block (11.6s of a 30s answer window on the Pixel, 2026-10-19; #384).
+  ///
+  /// A no-op unless a connection is wanted and none is live or in flight, so a
+  /// kick can never stack a second socket or abort a connect in progress.
+  @override
+  void reconnectNow(String reason) {
+    if (!_wantConnected || _connecting || _channel != null) {
+      _obs?.info(
+        'kick.ignored',
+        fields: {
+          'reason': reason,
+          'want': _wantConnected,
+          'connecting': _connecting,
+          'channel': _channel != null,
+        },
+      );
+      return;
+    }
+    _obs?.info('kick', fields: {'reason': reason});
+    _reconnectTimer?.cancel();
+    _backoffAttempt = 0;
+    unawaited(_openSocket());
   }
 
   @override
@@ -303,11 +350,13 @@ class GatewayTransport implements ChatTransport {
   }
 
   /// A connect attempt failed, or a live socket dropped. The WS close code is
-  /// not a reliable auth signal, so classify via REST: try a refresh ONCE per
-  /// disconnect-burst. RT rejected -> unauthenticated; new token or transient
-  /// -> reconnect with backoff.
+  /// not a reliable auth signal (an expired token's 403 arrives as an opaque
+  /// WebSocketChannelException), so classify via REST: refresh unless one
+  /// succeeded within [kRefreshFloor]. RT rejected -> unauthenticated; new
+  /// token or transient -> reconnect with backoff.
   Future<void> _onConnectFailure() async {
-    if (_backoffAttempt == 0) {
+    final last = _lastRefreshOk;
+    if (last == null || _clock().difference(last) >= kRefreshFloor) {
       _obs?.info('failure.refresh.start');
       try {
         final refreshed = await _tokens.refreshAccessToken();
@@ -319,6 +368,7 @@ class GatewayTransport implements ChatTransport {
           _setUnauthenticated();
           return;
         }
+        _lastRefreshOk = _clock();
       } catch (e) {
         // transient (network) refresh failure -> fall through to reconnect
         _obs?.info(

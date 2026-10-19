@@ -11,6 +11,7 @@
 //    the only control the user has.
 import 'dart:async';
 
+import 'package:aiko_chat_app/app/providers.dart' show transportProvider;
 import 'package:aiko_chat_app/app/router.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
@@ -30,6 +31,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aiko_chat_app/features/call/domain/wake_age.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../support/fake_chat_transport.dart';
+
 void main() {
   setUp(resetCallLaunchGuard);
 
@@ -46,6 +49,7 @@ void main() {
   late GoRouter router;
 
   late _FakeRing ring;
+  late FakeChatTransport transport;
 
   /// The wall clock the navigator re-checks a held answer on after a
   /// suspension; advanced by hand, independently of the timers.
@@ -58,6 +62,7 @@ void main() {
     wall = DateTime.utc(2026, 10, 10, 12);
     bridge = _FakeBridge();
     ring = _FakeRing(admitted);
+    transport = FakeChatTransport();
     auth = _TestAuth(session, me);
     router = GoRouter(
       routes: [
@@ -76,6 +81,7 @@ void main() {
       overrides: [
         // The bridge is the seam under test; the real one needs CallKit.
         systemCallBridgeProvider.overrideWithValue(bridge),
+        transportProvider.overrideWithValue(transport),
         authControllerProvider.overrideWith(() => auth),
         // The navigator lives ABOVE the Router (it wraps `MaterialApp.router`'s
         // child), so it reaches the router through the provider — the same
@@ -86,14 +92,32 @@ void main() {
       ],
       child: MaterialApp.router(
         routerConfig: router,
-        builder: (context, child) =>
-            SystemCallNavigator(
-              now: () => wall,
-              child: child ?? const SizedBox.shrink(),
-            ),
+        builder: (context, child) => SystemCallNavigator(
+          now: () => wall,
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
     );
   }
+
+  testWidgets('an answer kicks the island socket BEFORE it waits (#392)', (
+    tester,
+  ) async {
+    await tester.pumpWidget(harness());
+    await tester.pumpAndSettle();
+    expect(transport.reconnectReasons, isEmpty);
+
+    bridge.emit(SystemCallActionKind.answered, channel);
+    await tester.pumpAndSettle();
+
+    expect(
+      transport.reconnectReasons,
+      ['answered'],
+      reason:
+          'a held answer waits on an admission only the socket delivers; '
+          'woken from Doze, that socket sleeps in its backoff unless kicked',
+    );
+  });
 
   testWidgets('answering joins the room', (tester) async {
     await tester.pumpWidget(harness());

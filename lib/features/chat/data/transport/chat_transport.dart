@@ -83,6 +83,11 @@ abstract interface class ChatTransport {
   /// Close the socket and stop reconnecting (until [connect] is called again).
   Future<void> disconnect();
 
+  /// Connect now, skipping any pending backoff, because the caller knows the
+  /// network just became usable. No-op when connected, connecting, or not
+  /// wanted. [reason] is a short stable label for telemetry.
+  void reconnectNow(String reason);
+
   /// (Re)subscribe to channels and await the server's subscription-ack. Returns
   /// the per-channel **fence** map (channelId -> newest persisted ULID at
   /// subscription-effective time; `""` for an empty channel). The reconcile

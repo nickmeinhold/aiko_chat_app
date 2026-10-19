@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/providers.dart' show transportProvider;
 import '../../../app/router.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
@@ -250,6 +251,11 @@ class _SystemCallNavigatorState extends ConsumerState<SystemCallNavigator>
     );
     switch (action.kind) {
       case SystemCallActionKind.answered:
+        // The answer is about to wait for an admission that only the island
+        // socket can deliver, and on a phone woken from Doze that socket is
+        // asleep in its backoff. Kick it FIRST (#392). Here rather than on a
+        // second subscription: this stream must have exactly one listener.
+        ref.read(transportProvider).reconnectNow('answered');
         _hold(action.channelId, action.call);
       case SystemCallActionKind.ended:
         // The native side has ALREADY ended this call, so the hold is dropped
