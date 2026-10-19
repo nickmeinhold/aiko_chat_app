@@ -103,24 +103,25 @@ void main() {
     );
   }
 
-  testWidgets('an answer kicks the island socket BEFORE it waits (#392)', (
-    tester,
-  ) async {
-    await tester.pumpWidget(harness());
-    await tester.pumpAndSettle();
-    expect(transport.reconnectReasons, isEmpty);
+  testWidgets(
+    'an answer kicks the island socket so the held answer is not left waiting on the backoff (#392)',
+    (tester) async {
+      await tester.pumpWidget(harness());
+      await tester.pumpAndSettle();
+      expect(transport.reconnectReasons, isEmpty);
 
-    bridge.emit(SystemCallActionKind.answered, channel);
-    await tester.pumpAndSettle();
+      bridge.emit(SystemCallActionKind.answered, channel);
+      await tester.pumpAndSettle();
 
-    expect(
-      transport.reconnectReasons,
-      [TransportWakeReason.answered],
-      reason:
-          'a held answer waits on an admission only the socket delivers; '
-          'woken from Doze, that socket sleeps in its backoff unless kicked',
-    );
-  });
+      expect(
+        transport.reconnectReasons,
+        [TransportWakeReason.answered],
+        reason:
+            'a held answer waits on an admission only the socket delivers; '
+            'woken from Doze, that socket sleeps in its backoff unless kicked',
+      );
+    },
+  );
 
   testWidgets('answering joins the room', (tester) async {
     await tester.pumpWidget(harness());

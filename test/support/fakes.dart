@@ -183,12 +183,17 @@ class FakeWebSocketSink implements WebSocketSink {
   final List<dynamic> sent = [];
   bool closed = false;
 
+  /// If set, `close()` does not complete until this does — a close handshake
+  /// on a dead network.
+  Future<void>? closeGate;
+
   @override
   void add(dynamic data) => sent.add(data);
 
   @override
   Future<void> close([int? closeCode, String? closeReason]) async {
     closed = true;
+    await closeGate;
   }
 
   @override

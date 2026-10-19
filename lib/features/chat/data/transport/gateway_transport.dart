@@ -322,19 +322,22 @@ class GatewayTransport implements ChatTransport {
     _connecting = true;
     _setConn(ConnectionState.connecting);
 
-    _obs?.info('connect.token.read');
-    String? token = await _tokens.currentAccessToken();
-    if (token == null) _obs?.info('connect.token.refresh');
-    if (epoch == _epoch) token ??= await _safeRefresh();
-    if (epoch != _epoch) return _abandoned('token');
-    _obs?.info('connect.token.done', fields: {'has': token != null});
-    if (token == null) {
-      _connecting = false;
-      _setUnauthenticated();
-      return;
-    }
-
     try {
+      // Inside the try: a throwing token read (secure storage, platform
+      // channel) used to leave `_connecting` set forever, and every later
+      // connect, kick and timer returned at the guard above (Noether, round 2).
+      _obs?.info('connect.token.read');
+      String? token = await _tokens.currentAccessToken();
+      if (token == null) _obs?.info('connect.token.refresh');
+      if (epoch == _epoch) token ??= await _safeRefresh();
+      if (epoch != _epoch) return _abandoned('token');
+      _obs?.info('connect.token.done', fields: {'has': token != null});
+      if (token == null) {
+        _connecting = false;
+        _setUnauthenticated();
+        return;
+      }
+
       final ch = _channelFactory(Uri.parse('$_wsBaseUrl/v1/ws?token=$token'));
       await ch.ready; // throws on connect failure
       if (epoch != _epoch) {
@@ -383,12 +386,20 @@ class GatewayTransport implements ChatTransport {
   /// succeeded within [kRefreshFloor]. RT rejected -> unauthenticated; new
   /// token or transient -> reconnect with backoff.
   Future<void> _onConnectFailure() async {
+    final epoch = _epoch;
     final last = _lastRefreshOk;
     if (last == null || _clock().difference(last) >= kRefreshFloor) {
       _obs?.info('failure.refresh.start');
       try {
         final refreshed = await _tokens.refreshAccessToken();
+        // A success is stamped even when stale: the token is stored either way.
         if (refreshed != null) _lastRefreshOk = _clock();
+        // Then stand down if a newer attempt owns the transport — whatever the
+        // outcome. A stale `rejected` would tear down the newer live socket, and
+        // after dispose it would publish into closed controllers (Carnot,
+        // Noether, Tesla, cage-match round 2: round 1's mutation run covered
+        // only the `token` outcome and wrongly called this check redundant).
+        if (epoch != _epoch) return _abandoned('refresh');
         _obs?.info(
           'failure.refresh.done',
           fields: {'outcome': refreshed == null ? 'rejected' : 'token'},
@@ -398,6 +409,7 @@ class GatewayTransport implements ChatTransport {
           return;
         }
       } catch (e) {
+        if (epoch != _epoch) return _abandoned('refresh');
         // transient (network) refresh failure -> fall through to reconnect
         _obs?.info(
           'failure.refresh.done',
@@ -436,6 +448,14 @@ class GatewayTransport implements ChatTransport {
   /// Returns a fresh token on success, null on definitive auth failure; a
   /// transient refresh error is swallowed to null here ONLY at initial connect
   /// (we have no token at all, so we can't proceed regardless).
+  ///
+  /// Reached only when [TokenProvider.currentAccessToken] is null, which with
+  /// [DefaultTokenProvider] means NO stored tokens (`AuthTokens.accessToken` is
+  /// non-null): its refresh then finds no refresh token and returns null
+  /// without throwing. So the transient-swallow and a missed `_lastRefreshOk`
+  /// stamp here are unreachable today; raised and rejected in cage-match rounds
+  /// 1-2. A TokenProvider that can hold a refresh token without an access token
+  /// must revisit this.
   Future<String?> _safeRefresh() async {
     try {
       return await _tokens.refreshAccessToken();
@@ -512,12 +532,21 @@ class GatewayTransport implements ChatTransport {
     _setConn(ConnectionState.unauthenticated);
   }
 
+  /// Detach FIRST, close after. The fields are cleared synchronously so a dying
+  /// socket never occupies [_channel] while its close handshake runs — on the
+  /// dead network #392 is about, that can outlast the first backoff delays, and
+  /// a stale `_channel` makes [_openSocket] and [reconnectNow] skip, with
+  /// nothing left to retry (Tesla, cage-match round 2). Closing the detached
+  /// locals also means a slow close can never null out a NEWER channel. This is
+  /// what the old timer body's `_channel = null` was papering over.
   Future<void> _cleanupChannel() async {
-    await _sub?.cancel();
+    final sub = _sub;
+    final ch = _channel;
     _sub = null;
-    await _channel?.sink.close();
     _channel = null;
     _failPendingSubacks();
+    await sub?.cancel();
+    await ch?.sink.close();
   }
 
   /// Resolve the oldest pending `subscribe()` whose requested channels are ALL

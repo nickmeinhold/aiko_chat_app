@@ -375,6 +375,161 @@ void main() {
       expect(refreshCalls, 0);
     },
   );
+
+  test('ROUND-2 CLASS: a stale REJECTED refresh does not tear down the '
+      'socket a kick connected meanwhile', () async {
+    final island = _Island();
+    final gate = Completer<String>();
+    final states = <ConnectionState>[];
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: InMemoryTokenStore(
+          const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+        ),
+        remoteRefresh: (_) => gate.future,
+      ),
+      channelFactory: island.connect,
+    );
+    addTearDown(t.disconnect);
+    t.connectionState.listen(states.add);
+
+    await t.connect();
+    island.sockets.last.closeFromGateway(); // drop → refresh awaits the gate
+    await pumpEventQueue();
+    t.reconnectNow(TransportWakeReason.answered);
+    await pumpEventQueue();
+    final live = island.sockets.last;
+
+    gate.completeError(
+      RefreshRejected(),
+    ); // the OLD refresh comes back rejected
+    await pumpEventQueue();
+
+    expect((live.sink as FakeWebSocketSink).closed, isFalse);
+    expect(states.last, ConnectionState.connected);
+  });
+
+  test('ROUND-2 CLASS: dispose while a failure refresh is in flight — the '
+      'late result publishes nothing into closed controllers', () async {
+    final island = _Island();
+    final gate = Completer<String>();
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: InMemoryTokenStore(
+          const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+        ),
+        remoteRefresh: (_) => gate.future,
+      ),
+      channelFactory: island.connect,
+    );
+
+    await t.connect();
+    island.sockets.last.closeFromGateway();
+    await pumpEventQueue();
+    await t.dispose();
+
+    // flutter_test fails the test on any uncaught async error, so a
+    // `Bad state: Cannot add new events after calling close` fails it here.
+    gate.completeError(RefreshRejected());
+    await pumpEventQueue();
+  });
+
+  test('ROUND-2 CLASS: a dying socket whose close handshake hangs does not '
+      'occupy the channel — a kick right after the drop connects', () async {
+    final island = _Island();
+    final rec = _Recorder();
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: InMemoryTokenStore(
+          const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+        ),
+        remoteRefresh: (_) async => 'access0',
+      ),
+      channelFactory: island.connect,
+      logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
+    );
+    addTearDown(t.disconnect);
+
+    await t.connect();
+    final dying = island.sockets.last;
+    (dying.sink as FakeWebSocketSink).closeGate = Completer<void>().future;
+    dying.closeFromGateway(); // its close() will never complete
+    await pumpEventQueue();
+
+    t.reconnectNow(TransportWakeReason.resume);
+    await pumpEventQueue();
+
+    expect(rec.events, isNot(contains('kick.ignored')));
+    expect(island.attempts, 2);
+  });
+
+  test('ROUND-2 CLASS: a token read that THROWS does not wedge the transport '
+      'in connecting', () async {
+    final island = _Island();
+    final store = _FlakyStore();
+    final states = <ConnectionState>[];
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: store,
+        remoteRefresh: (_) async => 'access0',
+      ),
+      channelFactory: island.connect,
+    );
+    addTearDown(t.disconnect);
+    t.connectionState.listen(states.add);
+
+    await t.connect(); // the store read throws
+    await pumpEventQueue();
+    t.reconnectNow(TransportWakeReason.resume); // must not be ignored
+    await _until(() => states.contains(ConnectionState.connected));
+  });
+
+  test('ROUND-2 CLASS: a stale TRANSIENT refresh arms no timer and leaves the '
+      'backoff alone once a kick has connected', () async {
+    final island = _Island();
+    final gate = Completer<String>();
+    final rec = _Recorder();
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: InMemoryTokenStore(
+          const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+        ),
+        remoteRefresh: (_) => gate.future,
+      ),
+      channelFactory: island.connect,
+      logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
+    );
+    addTearDown(t.disconnect);
+
+    await t.connect();
+    island.sockets.last.closeFromGateway();
+    await pumpEventQueue();
+    t.reconnectNow(TransportWakeReason.answered);
+    await pumpEventQueue();
+    rec.records.clear();
+
+    gate.completeError(Exception('network blocked')); // stale, transient
+    await pumpEventQueue();
+
+    expect(rec.events, isNot(contains('reconnect.scheduled')));
+    expect(rec.events, contains('attempt.abandoned'));
+  });
+}
+
+class _FlakyStore extends InMemoryTokenStore {
+  _FlakyStore()
+    : super(const AuthTokens(accessToken: 'access0', refreshToken: 'r0'));
+  var _reads = 0;
+  @override
+  Future<AuthTokens?> read() async {
+    if (_reads++ == 0) throw StateError('keystore unavailable');
+    return super.read();
+  }
 }
 
 class _GatedStore extends InMemoryTokenStore {
