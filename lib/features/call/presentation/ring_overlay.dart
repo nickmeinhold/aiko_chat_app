@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/router.dart';
+import '../application/desktop_ring.dart';
 import '../application/ring_controller.dart';
 import '../application/system_call_providers.dart';
 import '../domain/call_invite.dart';
@@ -29,6 +30,10 @@ class RingOverlay extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final invite = ref.watch(incomingRingProvider);
+    // The Mac's sound, notification and Dock bounce: the parts a phone's OS
+    // supplies itself. Mounted here because this widget is the one thing that
+    // is always present and already follows the ring.
+    ref.watch(desktopRingDriverProvider);
     return Stack(
       children: [
         child,
