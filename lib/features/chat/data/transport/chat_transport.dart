@@ -57,6 +57,19 @@ class TransportError {
 /// typing/presence/reactions are later phases. All streams are broadcast and
 /// **outlive reconnects** (a single `.listen` by the repository survives a
 /// dropped socket — review finding 3).
+/// Why a caller believes the network just became usable — the closed set of
+/// moments that kick a reconnect past its backoff (#392). Logged by [name].
+enum TransportWakeReason {
+  /// A native call Answer: a held answer is waiting on the socket.
+  answered,
+
+  /// The app came to the foreground (unlocking after an Answer is one).
+  resume,
+
+  /// The device went from offline to online.
+  online,
+}
+
 abstract interface class ChatTransport {
   /// The connection lifecycle as STATE, not an event log: every new subscriber
   /// is immediately seeded with the CURRENT state, then receives live changes.
@@ -83,10 +96,10 @@ abstract interface class ChatTransport {
   /// Close the socket and stop reconnecting (until [connect] is called again).
   Future<void> disconnect();
 
-  /// Connect now, skipping any pending backoff, because the caller knows the
-  /// network just became usable. No-op when connected, connecting, or not
-  /// wanted. [reason] is a short stable label for telemetry.
-  void reconnectNow(String reason);
+  /// Connect now, skipping any pending backoff wait, because the caller knows
+  /// the network just became usable. No-op when connected, connecting, or not
+  /// wanted.
+  void reconnectNow(TransportWakeReason reason);
 
   /// (Re)subscribe to channels and await the server's subscription-ack. Returns
   /// the per-channel **fence** map (channelId -> newest persisted ULID at

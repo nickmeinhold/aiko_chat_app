@@ -113,12 +113,12 @@ void main() {
     expect(refreshCalls, 1, reason: 'the first failure refreshes');
 
     now = now.add(const Duration(seconds: 10));
-    t.reconnectNow('test');
+    t.reconnectNow(TransportWakeReason.online);
     await pumpEventQueue();
     expect(refreshCalls, 1, reason: 'a fresh token is not refreshed again');
 
     now = now.add(kRefreshFloor);
-    t.reconnectNow('test');
+    t.reconnectNow(TransportWakeReason.online);
     await pumpEventQueue();
     expect(
       refreshCalls,
@@ -154,7 +154,7 @@ void main() {
       final before = island.attempts;
 
       island.down = false; // the push lifts Doze's block
-      t.reconnectNow('answered');
+      t.reconnectNow(TransportWakeReason.answered);
       await pumpEventQueue();
 
       expect(island.attempts, before + 1, reason: 'no backoff wait');
@@ -184,7 +184,7 @@ void main() {
       addTearDown(t.disconnect);
 
       await t.connect();
-      t.reconnectNow('resume');
+      t.reconnectNow(TransportWakeReason.resume);
       await pumpEventQueue();
 
       expect(island.attempts, 1);
@@ -206,8 +206,180 @@ void main() {
       ),
       channelFactory: island.connect,
     );
-    t.reconnectNow('online');
+    t.reconnectNow(TransportWakeReason.online);
     await pumpEventQueue();
     expect(island.attempts, 0);
   });
+
+  test(
+    'ROUND-1 RACE: a kick that connects while a failure\'s refresh is in '
+    'flight is not orphaned by the timer that refresh would have armed',
+    () async {
+      final island = _Island();
+      final gate = Completer<String>();
+      var refreshCalls = 0;
+      final states = <ConnectionState>[];
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: DefaultTokenProvider(
+          store: InMemoryTokenStore(
+            const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+          ),
+          remoteRefresh: (_) {
+            refreshCalls++;
+            return gate.future; // the drop's refresh hangs until released
+          },
+        ),
+        channelFactory: island.connect,
+      );
+      addTearDown(t.disconnect);
+      t.connectionState.listen(states.add);
+
+      await t.connect();
+      island.sockets.last.closeFromGateway(); // drop → refresh awaits the gate
+      await pumpEventQueue();
+      expect(refreshCalls, 1);
+
+      t.reconnectNow(TransportWakeReason.answered); // connects meanwhile
+      await pumpEventQueue();
+      expect(island.attempts, 2);
+      final live = island.sockets.last;
+
+      gate.complete('access0'); // the stale refresh returns
+      // The old timer fired after 1s; give it ample time to misbehave.
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+
+      expect(island.attempts, 2, reason: 'no second socket over the live one');
+      expect(
+        (live.sink as FakeWebSocketSink).closed,
+        isFalse,
+        reason: 'the live socket survives',
+      );
+      expect(states.last, ConnectionState.connected);
+    },
+    timeout: const Timeout(Duration(seconds: 10)),
+  );
+
+  test('disconnect while a connect awaits its token: the late continuation '
+      'opens nothing and never reports connected', () async {
+    final island = _Island();
+    final read = Completer<AuthTokens?>();
+    final states = <ConnectionState>[];
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: _GatedStore(read.future),
+        remoteRefresh: (_) async => 'access0',
+      ),
+      channelFactory: island.connect,
+    );
+    t.connectionState.listen(states.add);
+
+    unawaited(t.connect());
+    await pumpEventQueue();
+    await t.disconnect(); // logout mid-connect
+    read.complete(const AuthTokens(accessToken: 'access0', refreshToken: 'r0'));
+    await pumpEventQueue();
+
+    expect(island.attempts, 0, reason: 'no socket after logout');
+    expect(states, isNot(contains(ConnectionState.connected)));
+  });
+
+  test('a kick does not reset the backoff counter — flapping cannot turn '
+      'backoff into a once-a-second storm against a down island', () async {
+    final island = _Island()..down = true;
+    final rec = _Recorder();
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: InMemoryTokenStore(
+          const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+        ),
+        remoteRefresh: (_) async => 'access0',
+      ),
+      channelFactory: island.connect,
+      logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
+    );
+    addTearDown(t.disconnect);
+
+    await t.connect(); // fails: attempt 1 scheduled at 1s
+    await pumpEventQueue();
+    t.reconnectNow(TransportWakeReason.resume); // fails: next is attempt 2
+    await pumpEventQueue();
+    t.reconnectNow(TransportWakeReason.resume);
+    await pumpEventQueue();
+
+    final scheduled = [
+      for (final r in rec.records)
+        if (r.event == 'reconnect.scheduled') r.fields['seconds'],
+    ];
+    expect(scheduled, [1, 2, 4], reason: 'backoff keeps climbing across kicks');
+  });
+
+  test('disconnect during the handshake: the socket that completes late is '
+      'closed, never installed', () async {
+    final handshake = Completer<void>();
+    late FakeWebSocketChannel ch;
+    final states = <ConnectionState>[];
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: InMemoryTokenStore(
+          const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+        ),
+        remoteRefresh: (_) async => 'access0',
+      ),
+      channelFactory: (_) =>
+          ch = FakeWebSocketChannel(readyGate: handshake.future),
+    );
+    t.connectionState.listen(states.add);
+
+    unawaited(t.connect());
+    await pumpEventQueue(); // now awaiting ch.ready
+    await t.disconnect();
+    handshake.complete();
+    await pumpEventQueue();
+
+    expect((ch.sink as FakeWebSocketSink).closed, isTrue);
+    expect(states, isNot(contains(ConnectionState.connected)));
+  });
+
+  test(
+    'a handshake that FAILS after logout does not refresh — a dead '
+    'attempt never calls the auth endpoint on a signed-out session',
+    () async {
+      final handshake = Completer<void>();
+      var refreshCalls = 0;
+      final t = GatewayTransport(
+        wsBaseUrl: 'ws://host',
+        tokens: DefaultTokenProvider(
+          store: InMemoryTokenStore(
+            const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+          ),
+          remoteRefresh: (_) async {
+            refreshCalls++;
+            return 'access1';
+          },
+        ),
+        channelFactory: (_) => FakeWebSocketChannel(
+          readyGate: handshake.future.then((_) => throw StateError('403')),
+        ),
+      );
+
+      unawaited(t.connect());
+      await pumpEventQueue();
+      await t.disconnect();
+      handshake.complete();
+      await pumpEventQueue();
+
+      expect(refreshCalls, 0);
+    },
+  );
+}
+
+class _GatedStore extends InMemoryTokenStore {
+  _GatedStore(this._read);
+  final Future<AuthTokens?> _read;
+  @override
+  Future<AuthTokens?> read() => _read;
 }

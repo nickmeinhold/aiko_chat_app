@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../../core/network/network_status.dart';
+import '../data/transport/chat_transport.dart';
 
 /// Tells the transport the moment the network has probably just become usable,
 /// so it connects now instead of sleeping out its backoff (#384, #392).
@@ -21,14 +22,18 @@ import '../../../core/network/network_status.dart';
 ///
 /// Watched at the root (main.dart) so its lifetime is the app's.
 final transportWakeProvider = Provider<void>((ref) {
-  void kick(String reason) => ref.read(transportProvider).reconnectNow(reason);
+  void kick(TransportWakeReason reason) =>
+      ref.read(transportProvider).reconnectNow(reason);
 
-  final lifecycle = AppLifecycleListener(onResume: () => kick('resume'));
+  final lifecycle = AppLifecycleListener(
+    onResume: () => kick(TransportWakeReason.resume),
+  );
   ref.onDispose(lifecycle.dispose);
 
   // Only the offline → online EDGE. The seed value (null → anything) is not a
   // transition, and online → online never reaches here (`.distinct()`).
   ref.listen<AsyncValue<bool>>(deviceOnlineProvider, (prev, next) {
-    if (prev?.value == false && next.value == true) kick('online');
+    if (prev?.value == false && next.value == true)
+      kick(TransportWakeReason.online);
   });
 });

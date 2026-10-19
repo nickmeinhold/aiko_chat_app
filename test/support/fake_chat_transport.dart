@@ -78,10 +78,10 @@ class FakeChatTransport implements ChatTransport {
   Future<void> connect() async {}
 
   /// Every [reconnectNow] reason, in order.
-  final reconnectReasons = <String>[];
+  final reconnectReasons = <TransportWakeReason>[];
 
   @override
-  void reconnectNow(String reason) => reconnectReasons.add(reason);
+  void reconnectNow(TransportWakeReason reason) => reconnectReasons.add(reason);
 
   @override
   Future<void> disconnect() async {

@@ -31,6 +31,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aiko_chat_app/features/call/domain/wake_age.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart'
+    show TransportWakeReason;
+
 import '../../support/fake_chat_transport.dart';
 
 void main() {
@@ -112,7 +115,7 @@ void main() {
 
     expect(
       transport.reconnectReasons,
-      ['answered'],
+      [TransportWakeReason.answered],
       reason:
           'a held answer waits on an admission only the socket delivers; '
           'woken from Doze, that socket sleeps in its backoff unless kicked',

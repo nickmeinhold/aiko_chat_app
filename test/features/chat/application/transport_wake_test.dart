@@ -3,6 +3,7 @@ import 'dart:ui' show AppLifecycleState;
 
 import 'package:aiko_chat_app/app/providers.dart' show transportProvider;
 import 'package:aiko_chat_app/core/network/network_status.dart';
+import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/application/transport_wake.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -57,9 +58,19 @@ void main() {
       conn.changes.add(true); // a wifi↔cellular swap that stays online
       await pumpEventQueue();
 
-      expect(transport.reconnectReasons, ['online']);
+      expect(transport.reconnectReasons, [TransportWakeReason.online]);
     },
   );
+
+  test('a seed of ONLINE is not an edge — nothing came back', () async {
+    // The edge guard is the only thing that stops this kick: the seed arrives
+    // as loading → online, and `next.value == true` alone would fire on it.
+    // (Noether, cage-match round 1: the stays-online case cannot test the
+    // guard, because `.distinct()` upstream swallows the repeat first.)
+    final (_, transport, _) = mount(online: true);
+    await pumpEventQueue();
+    expect(transport.reconnectReasons, isEmpty);
+  });
 
   test('going offline does not kick', () async {
     final (_, transport, conn) = mount();
@@ -82,6 +93,6 @@ void main() {
     ]) {
       binding.handleAppLifecycleStateChanged(s);
     }
-    expect(transport.reconnectReasons, ['resume']);
+    expect(transport.reconnectReasons, [TransportWakeReason.resume]);
   });
 }

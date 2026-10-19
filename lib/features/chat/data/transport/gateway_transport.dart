@@ -108,6 +108,19 @@ class GatewayTransport implements ChatTransport {
   Timer? _reconnectTimer;
   final DateTime Function() _clock;
 
+  /// Which connect attempt owns the transport. Bumped by every new attempt and
+  /// by every disconnect/dispose/sign-out; [_openSocket] captures it before
+  /// each await and stands down if it has moved on — so a connect pending
+  /// across a logout cannot install a socket afterwards (Carnot, cage-match
+  /// round 1).
+  ///
+  /// It is NOT what stops a stale backoff timer orphaning a kicked socket (all
+  /// four families, round 1). That was the timer body's `_channel = null`,
+  /// which bypassed [_openSocket]'s own live-channel guard; with the bypass
+  /// deleted, that guard holds by itself. Mutation-checked: an epoch check in
+  /// the failure path as well was a second guard on the same invariant.
+  int _epoch = 0;
+
   /// When a refresh last RETURNED A TOKEN. Null until one has. See
   /// [kRefreshFloor].
   DateTime? _lastRefreshOk;
@@ -168,13 +181,18 @@ class GatewayTransport implements ChatTransport {
   ///
   /// A no-op unless a connection is wanted and none is live or in flight, so a
   /// kick can never stack a second socket or abort a connect in progress.
+  ///
+  /// The backoff COUNTER is left alone: a kick buys one attempt now, not a
+  /// reset. Resetting it let a phone that resumes or flaps networks while the
+  /// island is down retry every second instead of backing off (Noether,
+  /// cage-match round 1).
   @override
-  void reconnectNow(String reason) {
+  void reconnectNow(TransportWakeReason reason) {
     if (!_wantConnected || _connecting || _channel != null) {
       _obs?.info(
         'kick.ignored',
         fields: {
-          'reason': reason,
+          'reason': reason.name,
           'want': _wantConnected,
           'connecting': _connecting,
           'channel': _channel != null,
@@ -182,15 +200,16 @@ class GatewayTransport implements ChatTransport {
       );
       return;
     }
-    _obs?.info('kick', fields: {'reason': reason});
+    _obs?.info('kick', fields: {'reason': reason.name});
     _reconnectTimer?.cancel();
-    _backoffAttempt = 0;
     unawaited(_openSocket());
   }
 
   @override
   Future<void> disconnect() async {
     _wantConnected = false;
+    _epoch++; // any attempt still in flight now belongs to no one
+    _connecting = false;
     _reconnectTimer?.cancel();
     await _cleanupChannel();
     _setConn(ConnectionState.disconnected);
@@ -299,13 +318,15 @@ class GatewayTransport implements ChatTransport {
       );
       return;
     }
+    final epoch = ++_epoch;
     _connecting = true;
     _setConn(ConnectionState.connecting);
 
     _obs?.info('connect.token.read');
     String? token = await _tokens.currentAccessToken();
     if (token == null) _obs?.info('connect.token.refresh');
-    token ??= await _safeRefresh();
+    if (epoch == _epoch) token ??= await _safeRefresh();
+    if (epoch != _epoch) return _abandoned('token');
     _obs?.info('connect.token.done', fields: {'has': token != null});
     if (token == null) {
       _connecting = false;
@@ -316,6 +337,11 @@ class GatewayTransport implements ChatTransport {
     try {
       final ch = _channelFactory(Uri.parse('$_wsBaseUrl/v1/ws?token=$token'));
       await ch.ready; // throws on connect failure
+      if (epoch != _epoch) {
+        // Disconnected while connecting: this socket belongs to no one.
+        unawaited(ch.sink.close());
+        return _abandoned('ready');
+      }
       _channel = ch;
       _sub = ch.stream.listen(
         _onFrame,
@@ -325,6 +351,7 @@ class GatewayTransport implements ChatTransport {
       );
       _connecting = false;
       _backoffAttempt = 0;
+      _reconnectTimer?.cancel();
       _setConn(ConnectionState.connected);
       _resubscribe();
       // Re-resolve carriage capability against the (possibly changed) gateway.
@@ -342,6 +369,7 @@ class GatewayTransport implements ChatTransport {
       // lands — never a regression for a host that actually carries.
       _fireOnConnected();
     } catch (e) {
+      if (epoch != _epoch) return _abandoned('failed');
       _connecting = false;
       _obs?.warning('connect.failed', error: e);
       _log?.call('ws connect failed: $e');
@@ -360,6 +388,7 @@ class GatewayTransport implements ChatTransport {
       _obs?.info('failure.refresh.start');
       try {
         final refreshed = await _tokens.refreshAccessToken();
+        if (refreshed != null) _lastRefreshOk = _clock();
         _obs?.info(
           'failure.refresh.done',
           fields: {'outcome': refreshed == null ? 'rejected' : 'token'},
@@ -368,7 +397,6 @@ class GatewayTransport implements ChatTransport {
           _setUnauthenticated();
           return;
         }
-        _lastRefreshOk = _clock();
       } catch (e) {
         // transient (network) refresh failure -> fall through to reconnect
         _obs?.info(
@@ -398,10 +426,11 @@ class GatewayTransport implements ChatTransport {
       'reconnect.scheduled',
       fields: {'seconds': seconds, 'attempt': _backoffAttempt},
     );
-    _reconnectTimer = Timer(Duration(seconds: seconds), () {
-      _channel = null;
-      _openSocket();
-    });
+    // No `_channel = null` here: that once nulled a LIVE channel to slip past
+    // _openSocket's own guard, orphaning a socket. A timer can no longer
+    // outlive its owner — kicks, success and disconnect cancel it, and a stale
+    // failure abandons before arming one — so the guard needs no bypass.
+    _reconnectTimer = Timer(Duration(seconds: seconds), _openSocket);
   }
 
   /// Returns a fresh token on success, null on definitive auth failure; a
@@ -469,8 +498,15 @@ class GatewayTransport implements ChatTransport {
     }
   }
 
+  /// A continuation found a newer owner and stood down. Logged so a stood-down
+  /// attempt is distinguishable from one that silently never resumed.
+  void _abandoned(String at) =>
+      _obs?.info('attempt.abandoned', fields: {'at': at});
+
   void _setUnauthenticated() {
     _wantConnected = false;
+    _epoch++;
+    _connecting = false;
     _reconnectTimer?.cancel();
     _cleanupChannel();
     _setConn(ConnectionState.unauthenticated);
@@ -521,6 +557,8 @@ class GatewayTransport implements ChatTransport {
   /// Release all resources. Call when the transport is permanently disposed.
   Future<void> dispose() async {
     _wantConnected = false;
+    _epoch++;
+    _connecting = false;
     _reconnectTimer?.cancel();
     await _cleanupChannel();
     await _messages.close();
