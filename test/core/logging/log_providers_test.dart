@@ -267,4 +267,13 @@ void main() {
       expect(report(dropped: 3), contains('3 older lines dropped'));
     });
   });
+
+  test('the console allowlist covers the ring, call and transport (#223)', () {
+    // The release-visible channel. If `aiko.transport` drops out, a silent
+    // transport death (#392) is unreadable again on a shipped build.
+    expect(
+      kConsoleSubsystems,
+      containsAll(['aiko.call', 'aiko.push', 'aiko.transport']),
+    );
+  });
 }
