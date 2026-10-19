@@ -5,6 +5,7 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../../../core/auth/token_provider.dart';
+import '../../../../core/logging/aiko_logger.dart';
 import '../../domain/message.dart';
 import '../../domain/origin_envelope.dart';
 import '../../domain/retraction.dart';
@@ -33,6 +34,12 @@ class GatewayTransport implements ChatTransport {
   final TokenProvider _tokens;
   final ChannelFactory _channelFactory;
   final void Function(String message)? _log;
+
+  /// Structured, release-visible observation (#223): state changes, connect
+  /// stages, refresh, and reconnect scheduling — the points a silent transport
+  /// death (#392) passes through. Scalars only: never the token, never an
+  /// error's string (the redacting sink projects errors to their type name).
+  final AikoLogger? _obs;
 
   /// The capability gate for sovereign `origin` emit (task #1896). Read
   /// synchronously per-send: when it returns false the `origin` envelope is
@@ -66,6 +73,7 @@ class GatewayTransport implements ChatTransport {
   ConnectionState _lastConn = ConnectionState.idle;
 
   void _setConn(ConnectionState s) {
+    if (s != _lastConn) _obs?.info('state', fields: {'to': s.name});
     _lastConn = s;
     _connState.add(s);
   }
@@ -93,12 +101,14 @@ class GatewayTransport implements ChatTransport {
     required TokenProvider tokens,
     ChannelFactory? channelFactory,
     void Function(String message)? log,
+    AikoLogger? logger,
     bool Function()? carriesOrigin,
     Future<void> Function()? onConnected,
   }) : _wsBaseUrl = wsBaseUrl,
        _tokens = tokens,
        _channelFactory = channelFactory ?? _defaultChannelFactory,
        _log = log,
+       _obs = logger,
        _carriesOrigin = carriesOrigin ?? (() => false),
        _onConnected = onConnected;
 
@@ -231,12 +241,25 @@ class GatewayTransport implements ChatTransport {
   }
 
   Future<void> _openSocket() async {
-    if (!_wantConnected || _connecting || _channel != null) return;
+    if (!_wantConnected || _connecting || _channel != null) {
+      _obs?.info(
+        'connect.skipped',
+        fields: {
+          'want': _wantConnected,
+          'connecting': _connecting,
+          'channel': _channel != null,
+        },
+      );
+      return;
+    }
     _connecting = true;
     _setConn(ConnectionState.connecting);
 
+    _obs?.info('connect.token.read');
     String? token = await _tokens.currentAccessToken();
+    if (token == null) _obs?.info('connect.token.refresh');
     token ??= await _safeRefresh();
+    _obs?.info('connect.token.done', fields: {'has': token != null});
     if (token == null) {
       _connecting = false;
       _setUnauthenticated();
@@ -273,6 +296,7 @@ class GatewayTransport implements ChatTransport {
       _fireOnConnected();
     } catch (e) {
       _connecting = false;
+      _obs?.warning('connect.failed', error: e);
       _log?.call('ws connect failed: $e');
       await _onConnectFailure();
     }
@@ -284,20 +308,31 @@ class GatewayTransport implements ChatTransport {
   /// -> reconnect with backoff.
   Future<void> _onConnectFailure() async {
     if (_backoffAttempt == 0) {
+      _obs?.info('failure.refresh.start');
       try {
         final refreshed = await _tokens.refreshAccessToken();
+        _obs?.info(
+          'failure.refresh.done',
+          fields: {'outcome': refreshed == null ? 'rejected' : 'token'},
+        );
         if (refreshed == null) {
           _setUnauthenticated();
           return;
         }
-      } catch (_) {
+      } catch (e) {
         // transient (network) refresh failure -> fall through to reconnect
+        _obs?.info(
+          'failure.refresh.done',
+          fields: {'outcome': 'transient'},
+          error: e,
+        );
       }
     }
     _scheduleReconnect();
   }
 
   void _handleDrop() {
+    _obs?.info('drop', fields: {'want': _wantConnected});
     _cleanupChannel();
     if (!_wantConnected) return;
     _setConn(ConnectionState.disconnected);
@@ -309,6 +344,10 @@ class GatewayTransport implements ChatTransport {
     _reconnectTimer?.cancel();
     final seconds = (1 << _backoffAttempt).clamp(1, 30);
     _backoffAttempt = (_backoffAttempt + 1).clamp(0, 5);
+    _obs?.info(
+      'reconnect.scheduled',
+      fields: {'seconds': seconds, 'attempt': _backoffAttempt},
+    );
     _reconnectTimer = Timer(Duration(seconds: seconds), () {
       _channel = null;
       _openSocket();
