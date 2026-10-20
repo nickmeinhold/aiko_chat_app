@@ -137,9 +137,13 @@ class FakeWebSocketChannel implements WebSocketChannel {
   final Completer<void> _ready = Completer<void>();
 
   /// If set, `ready` completes with this error (simulates connect failure).
-  FakeWebSocketChannel({Object? readyError}) {
+  /// If [readyGate] is set, `ready` settles as it does (a slow handshake that
+  /// may still fail).
+  FakeWebSocketChannel({Object? readyError, Future<void>? readyGate}) {
     if (readyError != null) {
       _ready.completeError(readyError);
+    } else if (readyGate != null) {
+      readyGate.then((_) => _ready.complete(), onError: _ready.completeError);
     } else {
       _ready.complete();
     }
@@ -179,12 +183,17 @@ class FakeWebSocketSink implements WebSocketSink {
   final List<dynamic> sent = [];
   bool closed = false;
 
+  /// If set, `close()` does not complete until this does — a close handshake
+  /// on a dead network.
+  Future<void>? closeGate;
+
   @override
   void add(dynamic data) => sent.add(data);
 
   @override
   Future<void> close([int? closeCode, String? closeReason]) async {
     closed = true;
+    await closeGate;
   }
 
   @override

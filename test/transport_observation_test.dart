@@ -51,12 +51,14 @@ void main() {
     rec.records.clear();
     fakes.single.closeFromGateway();
     await pumpEventQueue();
-    expect(rec.events, [
+    // A fresh token retries NOW (round 3), so the trail continues straight
+    // into the next connect; pin the stretch this test is about.
+    expect(rec.events.take(5), [
       'drop',
       'state',
       'failure.refresh.start',
       'failure.refresh.done',
-      'reconnect.scheduled',
+      'reconnect.now',
     ]);
     expect(rec.records[3].fields, {'outcome': 'token'});
 
