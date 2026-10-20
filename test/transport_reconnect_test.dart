@@ -446,7 +446,8 @@ void main() {
         store: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
-        remoteRefresh: (_) async => 'access0',
+        remoteRefresh: (_) =>
+            Completer<String>().future, // isolate the corpse case
       ),
       channelFactory: island.connect,
       logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
@@ -518,6 +519,81 @@ void main() {
 
     expect(rec.events, isNot(contains('reconnect.scheduled')));
     expect(rec.events, contains('attempt.abandoned'));
+  });
+
+  test('ROUND-3: an answer at the 30s backoff cap with an EXPIRED token joins '
+      'at once — a fresh token retries now, not after the backoff', () async {
+    final island = _Island()..down = true;
+    var now = DateTime.utc(2026, 10, 20, 12);
+    var refreshCalls = 0;
+    final states = <ConnectionState>[];
+    final rec = _Recorder();
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: InMemoryTokenStore(
+          const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+        ),
+        remoteRefresh: (_) async => 'access${++refreshCalls}',
+      ),
+      channelFactory: island.connect,
+      clock: () => now,
+      logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
+    );
+    addTearDown(t.disconnect);
+    t.connectionState.listen(states.add);
+
+    // Climb to the cap: every attempt fails while the island is down.
+    await t.connect();
+    await pumpEventQueue();
+    for (var i = 0; i < 6; i++) {
+      t.reconnectNow(TransportWakeReason.resume);
+      await pumpEventQueue();
+    }
+    final scheduled = [
+      for (final r in rec.records)
+        if (r.event == 'reconnect.scheduled') r.fields['seconds'],
+    ];
+    expect(scheduled.last, 30, reason: 'precondition: backoff is at the cap');
+
+    // The token expires while asleep; the island comes back.
+    island
+      ..down = false
+      ..valid = 'access${refreshCalls + 1}';
+    now = now.add(kRefreshFloor); // past the floor: a refresh is allowed
+
+    final sw = Stopwatch()..start();
+    t.reconnectNow(TransportWakeReason.answered); // 403 → refresh → retry now
+    await _until(() => states.last == ConnectionState.connected, seconds: 5);
+    expect(
+      sw.elapsed,
+      lessThan(const Duration(seconds: 2)),
+      reason: 'the fresh-token attempt must not wait out the 30s backoff',
+    );
+  }, timeout: const Timeout(Duration(seconds: 15)));
+
+  test('ROUND-3: disconnect publishes at once and returns while the close '
+      'handshake hangs', () async {
+    final island = _Island();
+    final states = <ConnectionState>[];
+    final t = GatewayTransport(
+      wsBaseUrl: 'ws://host',
+      tokens: DefaultTokenProvider(
+        store: InMemoryTokenStore(
+          const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
+        ),
+        remoteRefresh: (_) async => 'access0',
+      ),
+      channelFactory: island.connect,
+    );
+    t.connectionState.listen(states.add);
+    await t.connect();
+    (island.sockets.last.sink as FakeWebSocketSink).closeGate =
+        Completer<void>().future; // the close never completes
+
+    await t.disconnect().timeout(const Duration(seconds: 2));
+    await pumpEventQueue();
+    expect(states.last, ConnectionState.disconnected);
   });
 }
 

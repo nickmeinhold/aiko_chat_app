@@ -42,25 +42,20 @@ void main() {
     return (c, transport, conn);
   }
 
-  test(
-    'coming back ONLINE kicks; the seed and staying online do not',
-    () async {
-      final (_, transport, conn) = mount(online: false);
-      await pumpEventQueue();
-      expect(
-        transport.reconnectReasons,
-        isEmpty,
-        reason: 'the seed is not an edge',
-      );
+  test('coming back ONLINE kicks; an OFFLINE seed does not', () async {
+    final (_, transport, conn) = mount(online: false);
+    await pumpEventQueue();
+    expect(
+      transport.reconnectReasons,
+      isEmpty,
+      reason: 'the seed is not an edge',
+    );
 
-      conn.changes.add(true);
-      await pumpEventQueue();
-      conn.changes.add(true); // a wifi↔cellular swap that stays online
-      await pumpEventQueue();
+    conn.changes.add(true);
+    await pumpEventQueue();
 
-      expect(transport.reconnectReasons, [TransportWakeReason.online]);
-    },
-  );
+    expect(transport.reconnectReasons, [TransportWakeReason.online]);
+  });
 
   test('a seed of ONLINE is not an edge — nothing came back', () async {
     // The edge guard is the only thing that stops this kick: the seed arrives

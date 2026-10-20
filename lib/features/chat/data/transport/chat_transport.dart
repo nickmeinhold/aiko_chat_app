@@ -52,11 +52,6 @@ class TransportError {
   });
 }
 
-/// The realtime seam (plan §B1). Riverpod + the repository depend on THIS, never
-/// on `web_socket_channel`. The Phase-1 inbound surface is messages/acks/errors;
-/// typing/presence/reactions are later phases. All streams are broadcast and
-/// **outlive reconnects** (a single `.listen` by the repository survives a
-/// dropped socket — review finding 3).
 /// Why a caller believes the network just became usable — the closed set of
 /// moments that kick a reconnect past its backoff (#392). Logged by [name].
 enum TransportWakeReason {
@@ -70,6 +65,11 @@ enum TransportWakeReason {
   online,
 }
 
+/// The realtime seam (plan §B1). Riverpod + the repository depend on THIS, never
+/// on `web_socket_channel`. The Phase-1 inbound surface is messages/acks/errors;
+/// typing/presence/reactions are later phases. All streams are broadcast and
+/// **outlive reconnects** (a single `.listen` by the repository survives a
+/// dropped socket — review finding 3).
 abstract interface class ChatTransport {
   /// The connection lifecycle as STATE, not an event log: every new subscriber
   /// is immediately seeded with the CURRENT state, then receives live changes.

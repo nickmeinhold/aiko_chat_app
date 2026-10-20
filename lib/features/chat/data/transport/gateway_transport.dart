@@ -211,8 +211,13 @@ class GatewayTransport implements ChatTransport {
     _epoch++; // any attempt still in flight now belongs to no one
     _connecting = false;
     _reconnectTimer?.cancel();
-    await _cleanupChannel();
+    // Publish FIRST, then close without waiting. Awaiting the close and then
+    // publishing let a slow handshake land `disconnected` over a newer
+    // connection's `connected` (Carnot), and on the dead network #392 is about
+    // a close handshake can hang, so `disconnect()` never returned (Noether,
+    // round 3). The fields are detached synchronously inside _cleanupChannel.
     _setConn(ConnectionState.disconnected);
+    unawaited(_cleanupChannel());
   }
 
   @override
@@ -408,6 +413,17 @@ class GatewayTransport implements ChatTransport {
           _setUnauthenticated();
           return;
         }
+        // A FRESH token is new information, so retry now rather than after the
+        // backoff: backoff exists to spare an island that keeps failing, and
+        // this attempt differs from the one that failed. Without this, a kick at
+        // the 30s cap met the expired token, refreshed, then waited 30s more —
+        // past a held answer's deadline (Carnot + Tesla, cage-match round 3).
+        // The backoff counter is untouched, so a failure with the fresh token
+        // still backs off.
+        _obs?.info('reconnect.now', fields: {'why': 'fresh_token'});
+        _reconnectTimer?.cancel();
+        _reconnectTimer = Timer(Duration.zero, _openSocket);
+        return;
       } catch (e) {
         if (epoch != _epoch) return _abandoned('refresh');
         // transient (network) refresh failure -> fall through to reconnect
@@ -589,7 +605,7 @@ class GatewayTransport implements ChatTransport {
     _epoch++;
     _connecting = false;
     _reconnectTimer?.cancel();
-    await _cleanupChannel();
+    unawaited(_cleanupChannel()); // detached synchronously; never await a close
     await _messages.close();
     await _acks.close();
     await _errors.close();
