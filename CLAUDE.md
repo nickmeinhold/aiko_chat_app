@@ -36,6 +36,11 @@ reactions are **signed-at-birth**. Stack: `dio` + `freezed` +
     drift.
 
 - **Conventional Commits.** Branch off `main`; commit + push proactively.
+- **Releases go through `dart run tool/ship.dart <android|ios|macos>`.** It builds
+  with `prod.json`, checks the artifact, uploads, and tags `<platform>/v<name>+<build>`.
+  Tags are per platform because each store ships from its own commit; `git log
+  android/v0.0.7+18..main` is what Android hasn't got yet. `ship.dart android` IS the
+  submission (this Play account auto-submits on commit).
 - **Signed-at-birth is a trust boundary.** Anything touching message/reaction
   signing, identity keys, or the wire contract gets an adversarial different-family
   review (`/cage-match`), not solo self-review.

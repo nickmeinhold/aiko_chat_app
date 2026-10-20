@@ -18,16 +18,18 @@
 set -euo pipefail
 
 # pre-push gets "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin.
-# A push that only DELETES remote branches has the zero-sha for every local sha —
-# nothing to test, so let it through.
+# Nothing to test when every ref is a deletion (zero local sha) or a tag: a tag
+# names a commit that was already gated when its branch was pushed, and
+# tool/ship.dart pushes a release tag right after the upload.
 ZERO="0000000000000000000000000000000000000000"
-only_deletes=true
-while read -r _local_ref local_sha _remote_ref _remote_sha; do
+nothing_to_test=true
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in refs/tags/*) continue ;; esac
   if [ "$local_sha" != "$ZERO" ]; then
-    only_deletes=false
+    nothing_to_test=false
   fi
 done
-if $only_deletes; then
+if $nothing_to_test; then
   exit 0
 fi
 

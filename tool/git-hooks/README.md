@@ -29,7 +29,7 @@ stand-in for absent CI.
 - Errors + warnings are fatal; the intentional `prefer_initializing_formals` infos are not.
 - `flutter test` runs `test/` only (fast, device-free). `integration_test/` needs a
   real device and is exercised separately as on-device e2e.
-- Branch-deletion pushes are skipped (nothing to test).
+- Branch-deletion and tag-only pushes are skipped (nothing new to test).
 - Emergency bypass: `git push --no-verify`.
 
 If automated CI is ever restored cheaply (self-hosted runner / free tier), `ci.yml`
