@@ -164,3 +164,168 @@ Tesla: "If you want the secrets of the universe, think in energy, frequency and 
 - **Q4 decide:** Design 20 still exists for a hostile island ringing CallKit. This design does not drop that urgency; it drops the socket from join.
 - **State the independence invariant and test it:** REST 401 → `AuthInterceptor` refresh succeeds when the socket’s refresh is the #395 corpse. If they share a try-once `TokenProvider`, this design does not move the call off the corpse.
 - **Correct the trilemma sentence:** we declined “bytes on device at wake”; we kept island stateless and the envelope sealed; locked join waits on the user’s session, as Design 23.
+
+
+---
+---
+
+# ROUND 2 — design 24 v2, "the answer looks up its own invite"
+
+**Overall verdict: RECAST** (4/4 seated, **4/4 RECAST, zero DISSOLVE**), round 2 of ≤3
+**Struck:** dt-1792455092, 2026-10-20 · Bundle: v2 + this TEMPER (round 1) + code excerpt (`chat_repository.dart`, `ring_controller.dart`) + app designs 23 and 20 + island `19-TEMPER.md` (106KB).
+
+| Family | Verdict | One-line |
+|---|---|---|
+| Maxwell (Claude) | RECAST | An unexamined simpler alternative (forward sync with a REST bound); double consideration; the cache-hit verification field unnamed. |
+| Noether (DeepSeek) | RECAST | "A fetched page is inert" is false: the filter sits on the wrong side of the announce door; one answer becomes two admissions. |
+| Carnot (GPT) | RECAST | A cache hit proves presence, not completeness; the applicator still announces unrelated invites; ownership never reaches the write. |
+| Tesla (Grok) | RECAST | "The siren is still wired": a redial's older invite announces first and takes the chair; the age cutoff fuses the clocks design 23 split. |
+
+## Fatal flaws (deduped, most severe first)
+
+**The convergence (4/4).** v2 changed the *admission* object to a lookup but kept *writing* through `_persistInbound`, whose contract is to announce every first insert to `RingController`, which admits any admissible invite. So:
+
+1. **Fetched pages still ring** (Noether, Carnot, Tesla, Maxwell). Another fresh invite on a page (a redial, a second call) is announced and can be admitted, or displace the answered call; ascending application announces the older invite first. Round 1's flaw 4 was folded as a sentence, not a mechanism.
+2. **One answer, two admissions** (Noether, Maxwell). The miss path admits through the announce AND through `considerAnswered`; dedup is on the write, not on admission.
+3. **Write ownership never reaches the write** (Noether, Carnot, Tesla). `_persistInbound` awaits `verifyOrigin` and writes with no hold predicate. Two applicators share no fence, so the per-page retraction-first guarantee breaks across writers. Extracting "the applicator" is not one object either: its progress guard requires a strictly increasing `after`, which a `before` walk violates.
+
+**→ The structural fold, which dissolves 1-3 rather than guarding them: THE LOOKUP READS; IT NEVER WRITES.** Fetched pages are examined in memory: apply that page's retractions in memory, find the message whose *verified* body names the answered `CallRef`, verify its origin with the same verifier, and hand exactly that one result to admission. Nothing is persisted, so nothing is announced, there is no second applicator, no ghost, and no write to fence. History gets the rows later through the ordinary reconnect sync, which already dedups them. (This also answers Maxwell's forward-sync alternative: that one must write, and writing is what keeps failing.)
+
+4. **A cache hit is presence, not completeness** (Carnot, Tesla). The object is a PAIR (invite, END). A cached invite with no cached END may be a call the caller already ended while the socket was dead. **Fold:** the cache can short-circuit only the *invite*; the terminal state is always asked of the island (one newest-page read is enough for an END sent after the invite). A cache hit must check the row's stored verification verdict (`drift_cache.dart:695`), by name.
+5. **Terminal state before admission** (Carnot). Returning both messages is not an ordering. **Fold:** the lookup resolves a call-level result (`ended` beats `invited`) and only then offers admission.
+6. **`notFound` re-keys the defect, and the age cutoff fuses clock domains** (Noether, Carnot, Tesla). A 200 with no `m` (read-your-writes or federation lag) is not an absence. Stopping on "oldest item older than wake − window" compares a server ULID wall clock with a monotonic wake duration, before the page is scanned. **Fold:** scan each page fully before any stop test; stop on the SIGNED timestamp of scanned invites, not on cursor time; treat `notFound` as "hunt again" until the answer deadline; report `outOfBound` distinct from `absent`.
+7. **The second-device gap is not bounded by this design** (Noether, Carnot, Tesla). "LiveKit occupancy shows it" has no reader; `displaced` waits for the socket. Blast radius: two open mics in one room. **Fold, choose one:** a named reader (on join, a REST occupancy/answered check that resolves `displaced`), or state it as a known gap gated on #395's kick, with a product owner, not the word "bounded".
+8. **The owner dies with the repository** (Tesla). Design 23's pinned survival: a rebuild disposes the repository and the ring lives on. A lookup owned by a repository-scoped hold dies with it and nobody re-homes it. **Fold:** the lookup lives at the ring/answer layer (with `RingController` / the navigator's hold), not inside `ChatRepository`, which follows directly from "reads, never writes".
+9. **The cache-hit verification field was unnamed** (Maxwell). Covered in 4.
+
+## Disposition
+
+**RECAST, round 2 of ≤3.** The two rounds converged on the same lesson from opposite ends: round 1 said *don't deliver, look up*; round 2 says *a lookup that writes is still a delivery*. v3's object: **a read-only, call-scoped lookup owned at the ring layer, returning one resolved call state (ended | invited(verified) | unknown) to admission.** One round remains under the cap.
+
+---
+
+## MaxwellMergeSlam's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** v2 fixes v1's wrong object (lookup, not delivery), but builds a bespoke backward search without examining the alternative already sitting in the code: run the existing forward delta sync without waiting for the socket.
+
+**Fatal flaws:**
+- **Wrong option-frame: an unexamined simpler alternative (§3.3).** `_fetchDeltaHistory` already pages forward from the bookmark, in order, two-pass, and advances the bookmark correctly. It is gated on the socket only because its *upper bound* is the `suback` fence. Give it a REST-derived bound (the newest page's `next_after`) and history sync runs without a socket at all — for chat as well as calls. That dissolves the page budget, the clock-skew stop rule and the "bookmark must not move" carve-out, and gives one history applicator instead of a second caller of an extracted one. Its cost is real (a device offline for days pages forward through everything before reaching the invite, on the answer clock), and that may be why backward search wins. But v2 must weigh it, not omit it.
+- **Missing failure mode: double consideration (§3.4).** Pages the lookup applies go through `_persistInbound`, so a first-time insert of the invite is ALSO announced through `inboundMessages` → `_consider`. Then `considerAnswered` runs `_consider` again on the same message. `CallInvite ==` compares `inviteId`, so the ring state may not churn, but `_arrivals` advances twice and refusal telemetry is emitted twice. That corrupts exactly the evidence #223 made readable. Either the lookup's writes must not announce, or `considerAnswered` must be a no-op for a `CallRef` already considered.
+- **Unstated assumption: cached rows are as trustworthy as fresh ones (§3.2).** "Scanning recent rows for a verified invite" assumes the cache records the verification outcome per row. `upsertInbound` returns `newlyInvalid`, which suggests invalid rows are stored with a flag, but the design never names the column or shows a cache hit re-checks it. A cache hit must carry the same verified-origin guarantee `_persistInbound` enforced at insert, by a named field.
+
+**What holds:**
+- The change of object, from delivery to a lookup of one `CallRef`, answers temper flaws 1, 2 and 4 at the root rather than patching them.
+- The race-not-fallback framing, the `answer.lookup` outcomes distinct from `neverAdmitted`, and the hold owning the lookup are the right shapes.
+- §4's signals table is honest, including the second-device gap it does not fix, and it keeps the #395 kick as a co-requirement for a stated reason.
+- §0 now states the urgency truthfully: defence in depth, after #395.
+
+**If RECAST, what to fold back:**
+- Add §3.3a: forward sync with a REST-derived upper bound vs targeted backward search. Price both on the answer clock (worst case: days offline). Choose with reasons.
+- §3.4: name the dedup — the lookup's applied pages do not announce, or `considerAnswered` keys on `CallRef` and ignores a repeat.
+- §3.2: name the cache field that records verification, and require a cache hit to check it.
+
+T-800: "I'll be back."
+
+
+---
+
+## NoetherNullPointer's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The invariant at stake is *"a fetched history page is inert — it is persisted, never rung"* (equivalently, *"exactly one admission per answered `CallRef`"*); design 24 routes the lookup's pages through `_persistInbound` — the door whose contract is *announce on every first insert* — so the fetched page is not inert, and the filter meant to keep it so (`considerAnswered`, §3.4) sits on the wrong side of the announce door.
+
+**Fatal flaws:**
+
+- **The fetched page rings, and §3.4's filter never reaches the path that rings it.** *Class: filter on the wrong side of the door / broken inertness invariant.* §3.3 applies each page "through `_persistInbound`." The code excerpt is explicit: `_persistInbound` calls `_announceInbound` on `inserted`, and `_announceInbound` → `_inboundMessages` → `RingController._consider` → `admitRing`. So the answered invite rings through the announce path, **and so does any other admissible fresh invite on the fetched page** — another call in the same channel, a DM, a group invite — because `_consider` admits *any* admissible invite and knows nothing of the answered `CallRef`. §3.4 and §5 assert "other rows on fetched pages persist as history and never ring" and "a page that contains other fresh invites | persisted as history only; never admitted." That is false by the mechanism the design chose. This is temper round 1's flaw 4 (*"a page is a burst into admitRing"*) re-derived one door deeper, not folded — the fold added `considerAnswered` without closing the announce path, which the design keeps live because the lookup *races* live fanout.
+
+- **The answered `CallRef` is admitted twice on the miss path.** *Class: broken conservation (one answer → one admission).* On a miss the page applicator inserts the invite → `_announceInbound` → `_consider` → admitted. Then §3.4 hands the same found invite to `considerAnswered` → admitted again. §3.6's "the first arrival … wins; the other is a no-op through dedup" does not hold: dedup is on the *write* (`inserted`, computed inside the cache transaction), not on *admission*. Nothing in `_consider`/`_admit` dedups by `CallRef`. The symmetry "an answer is a single act" has a conserved quantity — exactly one admission — and the design has added a second feeder into admission without conserving it.
+
+- **The hold's fence does not reach the writer.** *Class: broken fencing invariant / named-but-unmechanized.* §3.5 promises writes from a stood-down lookup are "dropped before they reach the cache" and "every await is followed by an ownership check." But the page applicator writes through `_persistInbound` → `_cache.upsertInbound`, which carries no ownership predicate, and the shared applicator is fenced by `_runEpoch` (delta loop), not by the hold. Either the extraction parameterizes the fence — the delta loop passes `_aborted(epoch)`, the lookup passes the hold predicate — which the design never says, or the lookup re-implements page application without the shared door and re-opens the same-page retraction ghost §3.3 exists to close. This is round 1's Noether flaw 2, claimed folded but left as an assertion.
+
+- **The second-device gap is bounded by #395, not by this design.** *Class: over-claimed bound / missing failure mode.* §4 and §7 Q4 punt displacement to "the existing `displaced` outcome handles it when the socket returns" and "LiveKit occupancy shows it." Both rest on the socket returning — i.e. on #395, a *co-requirement*. In the exact case this design exists for (dead socket that does not recover), two devices sit in the call and nothing here resolves it: "shows it" is not "acts on it," and no LiveKit-occupancy handler is specified. Calling it "bounded" launders a co-requirement into a property of this document.
+
+- **`notFound` re-keys the defect it was built to fix.** *Class: telemetry conflation / under-specified terminal.* §3.3's stop conditions (page budget 4×50, or "oldest item older than wake − (freshness window + skew)") can fire before the invite on a same-channel burst inside the window. The outcome is `notFound` → `neverAdmitted` — the *same terminal* as "the invite was never there." The user answered; the invite exists; the bounded search missed it. The bound is a judgment call, and §3.6's five-valued telemetry still cannot distinguish "out of bound" from "absent."
+
+**What holds:**
+
+- **The diagnosis is the ore.** Every path to admission waits on a socket connect (`_fetchDeltaHistory`'s only caller is `_runReconnect`, which runs on `connected` and needs the subacks) — verified against the excerpt. *Why does a dead socket mean a failed answer?* It must not.
+- **The reframe is correct.** "One call, not a page" (`CallRef` = `c`+`m`) dissolves v1's *"persistence is not delivery"* hole: cache-first, then fetch, then hand *one* verified object to admission. The direction survives.
+- **Cache-first is right** for the announce-once rule (§3.2): an already-cached invite fires no announce, so a cache read is the only way to reach it.
+- **The bookmark is genuinely untouched.** `advanceHistoryContiguous` is called only by the delta loop; a non-advancing read cannot paper over a gap. Verified by the excerpt.
+- **The auth split is verified** (REST 401-on-expiry vs WS 403-for-everything) and the design keeps the pin test.
+- **The scope is honest now** — iOS unchanged, trilemma declined not held, defence-in-depth labelled. That is the correct posture.
+
+**If RECAST, what to fold back:**
+
+- **Make the fetched page inert by construction.** Give the extracted page applicator a suppression parameter: the delta loop keeps announce (history-via-stream must ring); the lookup's page application persists *without* announce, and `considerAnswered` is the *sole* admission for the answered `CallRef`. This closes both the burst and the double-admission in one move — the filter must live at the door, not beside it.
+- **Conserve "exactly one admission."** If any announce can still fire for the answered `CallRef`, make `_admit` idempotent by `CallRef` (a `_live`/`_admitted` guard), and state it as the invariant, not as a dedup side effect.
+- **Fence the writer explicitly.** The shared applicator takes a cancellation predicate; the delta loop passes `_aborted(epoch)`, the lookup passes the hold predicate; checked before every `_persistInbound`/`upsertInbound`. Resolve §3.5 in the design; do not defer it to code.
+- **Name the second-device resolution or drop the word "bounded."** Specify the LiveKit-occupancy action (leave / notify) for the socket-dead window, or state plainly that a REST-joined call is blind to displacement until the socket returns and accept it as a named residual that does *not* stand without #395.
+- **Split the telemetry terminal.** `notFound` (budget/window miss) must be distinguishable from "no such invite ever," so an out-of-bound search is never reported as a dead invite.
+
+---
+
+## CarnotCodeCarver's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The change of object is right; the retrieval and side-effect contracts still contradict it. A cached invite is not complete call state, and the proposed history applicator still announces unrelated invites. No real engine matches the Carnot cycle; a reviewer's job is to say how far short we are. The remaining entropy comes from coupling an answer lookup to general history ingestion.
+
+**Fatal flaws:**
+- §3.2: A cache hit proves presence, not completeness. Cache the invite, miss the caller's later END while the socket is dead, then Answer: the lookup skips history and admits from an incomplete snapshot. Native call_end is another delivery path, not proof that cancellation arrived. Define whether this is deliberately best-effort admission or require a current terminal-state check; 'cacheHit' cannot imply the call remains actionable.
+- §3.3–3.4 contradict the supplied persist-door contract. Applying every page through _persistInbound calls _announceInbound for every first insertion; RingController subscribes directly to that stream. Filtering considerAnswered does not filter those announcements. An unrelated fresh invite on the page can still ring or displace the answered call. The claimed isolation requires an explicit change to publication semantics, not merely a new admission entry.
+- §3.3 still has no complete retrieval contract. Put 201 newer visible events ahead of an admissible invite: four pages of fifty miss it. No traffic bound justifies the cap. The age cutoff also needs proof: history orders server cursor IDs, whereas admission judges the signed timestamp against native wake time. An old signed message arriving late can cross the proposed cutoff while the wanted invite remains on an older page. Neither ordering equivalence nor a conservative cutoff is established.
+- §3.1 and §3.4 leave terminal-state reconciliation ambiguous. 'The CallRef is found' could mean an END is found before its invite; returning both messages does not specify processing all accepted ENDs before offering the invite. Running the existing _consider once per message in ascending order can publish an admission for the invite before processing its later END. A call-level result must resolve terminal evidence before emitting an admission, including on cache reads.
+- §3.5 names the owner but does not establish write fencing through the shared applicator. The supplied _persistInbound awaits verifyOrigin and then writes without consulting the hold. Checking ownership after awaiting _persistInbound is too late: logout or displacement during verification can already have produced a cache write. The proposed guarantee requires ownership to reach the actual write boundary, with account-scoped cache authority; an outer-loop check is insufficient.
+- §3.6 specifies retries for failed requests but leaves successful visibility misses unresolved. A target-free 200 response can precede federation visibility; exhausting a page budget can also leave the call unfound. If either stops REST acquisition while the socket remains dead, the original 'tried once' defect survives. Separately, §4 calls second-device arbitration 'bounded' without a time bound or an authoritative winner: observing LiveKit occupancy does not itself prevent or resolve concurrent answers.
+
+**What holds:**
+- Removing socket recovery from invite acquisition addresses a demonstrated dependency.
+- Explicit delivery of an already-cached verified invite fixes the announce-once hole.
+- Keeping the signed invite in-band preserves one authoritative artifact and the federation route.
+- Leaving the contiguous history bookmark under delta-sync ownership avoids claiming coverage from a partial read.
+- The revised Android scope, defence-in-depth priority, and separation from design 20 are honest and supported by the bundle.
+
+**If RECAST, what to fold back:**
+- Define a call-scoped lookup result containing verified invite evidence, terminal evidence, and explicit coverage limits. State what cache presence can establish and what requires a fresh read.
+- Remove the accidental publication coupling. Prefer a lookup that returns verified call evidence without ingesting and announcing an entire page. If history persistence is retained, specify how lookup-origin ingestion avoids unrelated ring announcements while preserving later legitimate delivery.
+- Replace the arbitrary page cap's implied completeness with an honest deadline-bounded search contract. Prove any age cutoff against actual ordering semantics. If exact retrieval requires an endpoint change, price that option against repeated general-history work; 'no wire change' is a constraint to evaluate, not an efficiency law.
+- Reconcile accepted ENDs and retraction suppression before publishing the call-level admission. Specify behavior for END-only results and terminal evidence arriving during asynchronous admission.
+- Carry cancellation and identity authority through verification to each cache mutation and admission publication. Describe the commit boundary explicitly.
+- Retry successful visibility misses within the answer deadline, coalesce duplicate answer triggers, and distinguish search-budget exhaustion from authoritative absence in telemetry.
+- Specify second-device winner enforcement, or explicitly accept concurrent answers as a residual product behavior without calling it bounded.
+- Dijkstra: "Simplicity is prerequisite for reliability." Delete the page-to-ring coupling before adding more guards around it.
+
+
+---
+
+The brief is truncated. I'll read the offloaded remainder, then strike only that bundle.## Tesla, the Arc-Prophet's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The lookup is the true note, and then you welded it to a persist door that sings — the future input that powders the plate is a second fresh invite on the same page, applied ascending, announced first.
+
+Tesla: "If you want the secrets of the universe, think in energy, frequency and vibration."
+
+**Fatal flaws:**
+- **The siren is still wired (§3.3–§3.4, excerpt `_announceInbound` / `_persistInbound`).** `considerAnswered` is a filtered hand of one pair. The page applicator you extracted calls `_persistInbound`, and that door announces on every first insert — the #139 fix that made history ring on purpose. "Other rows persist as history and never ring" has no mechanism. At 3am the DM holds two fresh invites (double-tap, two ULIDs, user answered the second). Ascending application announces the older one first. `admitRing` seats the call that was not answered. The explicit hand arrives second and finds the chair taken. Hostile-island replay inside the 10 s freshness window rides the same wire. Flaw 4 of round 1 was folded as a sentence and left live in the door.
+- **`notFound` is a terminal on a success, and the age stop fuses the clocks Design 23 split (§3.3 stop conditions, §3.6 outcomes).** Retries cover a failed request. A 200 whose page does not yet contain `m` — push ahead of read-your-writes, federation lag onto the island that actually serves history — is `notFound`, and nothing in §3.6 says that outcome hunts again. The socket is the corpse this design exists for, so the race cannot save you. The same paragraph stops the walk when the page's oldest item is "older than wake − (freshness + skew)". Wake is a monotonic duration (`wokeUptime`); the page item is a server ULID wall clock; admissibility is `receivedAt − signedAt`, computed later, at admit time. A quiet DM's newest page always has an old neighbour sitting under a brand-new invite. Evaluate the bound on the page before the scan, and you throw away the page that holds `m`. Client clock a few seconds ahead of the island, and you stop one page early on an invite Design 23 would still admit. This is the original `neverAdmitted`, re-keyed and retimed.
+- **The object is a pair; the cache hit is a single bit (§3.1 vs §3.2).** The lookup owes the invite and any END naming `m`. A cache hit "costs no network", so an invite already cached (fanout before the controller subscribed — the round-1 case you correctly refused to trust to announce) never goes to the server to look for the END that landed after the row. You hand `admitRing` a live invite for a caller who already hung up. §4's FCM `call_end` is a second radio with its own delay, and Design 20 still has the end-sentinel as the island's unpaid first piece. The short-circuit is tuned to presence of the start. The call is the pair.
+- **Two applicators, zero shared fence (§3.3, §3.5, §5 row 1, excerpt two-pass).** The two-pass is a caller convention over N transactions. It is safe when one epoch owns the page. Answer-during-`_runReconnect` is the row your table calls idempotent. Dedup is per message. The retraction race is per page, across writers: the delta loop's pass 2 can insert and announce before the lookup's pass 1 has recorded the same-page retraction. You also cannot extract "the applicator" as one object — its progress guard demands a strictly increasing exclusive `after`. A backward `before` walk that inherits that guard asserts and returns on the first page. And the hold stands down on repository dispose. Design 23's pinned survival is that a rebuild disposes the repo and the ring lives. The lookup dies with the old writer and nobody re-homes it onto the new one. Question 3 is that defect, left open. A named open question on the owner is an owner that does not exist yet.
+- **§0's promise and §4's second device are out of phase (§0 "stops depending on the socket's lifecycle at all", §4, question 4).** After a REST mint the handset publishes media. The other device's answer is "socket only", with LiveKit occupancy said to "show" it. Showing is not a reader. `displaced` fires when the socket returns — the event this whole design treats as the one that may never come. The blast radius is two open mics in one room until morning. "Bounded" is the word that hides an unbound interval. Question 4 asks the temper to close a product decision the design already spent.
+
+**What holds:**
+- The change of object holds under load. One `CallRef`, cache before network, explicit admission, a race against live fanout, `fetchFailed` kept off the terminal enum. That is the ore round 1 heard, and v2 actually moved it.
+- The bookmark stays the delta loop's. An out-of-band read must not advance `historyContiguousThrough`. Keep that sentence where it is.
+- No wire change, invite stays on the history bus, 401-on-expiry is verified and pinned, scope is Android warm-sleep, iOS is honestly unchanged, the trilemma horn stays declined, Design 20 stays urgent, #395 stays first. The frame is finally the same size as the evidence.
+- Trigger on native `answered` matches the measured Pixel: 3 s to unlock, 30 s of hold, a socket that never became the call.
+
+**If RECAST, what to fold back:**
+- **Split the lookup from the writer in §3.3.** The answer path reads pages in memory, verifies, applies the two-pass to the pair in memory, and calls `considerAnswered` with only that pair — END first, synchronously, before any media mint. It does not call `_persistInbound`. The delta loop remains the only applicator, the only announcer, the only bookmark writer. Round 1's "reuse the door" coupling is the coupling to remove.
+- **Close the retrieval contract in §3.3 and §3.6.** `notFound` and a target-free 200 retry until the answer deadline, same as `fetchFailed`. Scan the page for the verified `CallRef` before any age stop. Drop the fused "wake minus window" cutoff; the deadline and the page budget are the bounds. A neighbour's age is not evidence about `m`.
+- **Define a cache hit as the pair, in §3.2.** Invite present and end-state known (a cached END, or a server read that confirms none). A bare invite is a miss and still fetches, until the deadline.
+- **Answer question 3 in §3.5.** Same-identity repository rebuild re-homes the lookup onto the new repo. Dispose of the old one drops its writes. Logout and identity change stand down for good. If any write remains, the ownership check happens before the call that announces.
+- **Answer question 4 in §4 by naming a consumer.** An occupancy read that maps "someone else already answered" onto `displaced` without a socket, or media publish held until that check returns singleton. Delete "bounded" until that consumer exists. The transport kick stays a co-requirement for everything else that still rides it.
