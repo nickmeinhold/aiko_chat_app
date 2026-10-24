@@ -775,6 +775,9 @@ final class CallKitRinger: NSObject {
     // landed (an awake app), so the ring can carry the name from its first frame.
     if let channel, let name = takeVerifiedName(channel: channel, call: callId) {
       update.localizedCallerName = name
+      os_log(
+        "[callkit] identify: held name applied on %{public}@", log: aikoCallLog, type: .info,
+        channel)
     }
     update.hasVideo = true
 
@@ -1059,7 +1062,15 @@ final class CallKitRinger: NSObject {
   ///
   /// The NAME, not the handle: `remoteHandle` stays the "Aiko" placeholder, so
   /// nothing here becomes a dialable identity in Recents.
-  func identifySystemCall(channel: String, call: String, name: String) -> String {
+  /// What `identifySystemCall` did. A closed set whose raw values ARE the wire
+  /// words Dart decodes (`SystemRingIdentify.fromWire`), so a typo is a compile
+  /// error here rather than a silent "unavailable" there (Carnot, PR #404).
+  enum IdentifyOutcome: String {
+    case named
+    case held
+  }
+
+  func identifySystemCall(channel: String, call: String, name: String) -> IdentifyOutcome {
     guard let entry = liveEntry(for: channel), entry.call == call else {
       // NOT YET, rather than never. With the app awake, the invite reaches Dart
       // over the socket in milliseconds while the VoIP push that raises this
@@ -1068,10 +1079,12 @@ final class CallKitRinger: NSObject {
       // rang as "Aiko" whenever the socket won. Kept for exactly this call, and
       // applied by `reportInvite` when its ring is reported (Maxwell, PR #404).
       rememberVerifiedName(name, channel: channel, call: call)
+      // "for THIS call", not "yet": the guard also fails when a DIFFERENT call
+      // is live on the channel (Noether, PR #404).
       os_log(
-        "[callkit] identify: no live ring yet on %{public}@, name held for its report",
+        "[callkit] identify: no live ring for this call on %{public}@, name held for its report",
         log: aikoCallLog, type: .info, channel)
-      return "held"
+      return .held
     }
     let update = CXCallUpdate()
     update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
@@ -1079,7 +1092,7 @@ final class CallKitRinger: NSObject {
     update.localizedCallerName = name
     provider.reportCall(with: entry.uuid, updated: update)
     os_log("[callkit] identify: caller named on %{public}@", log: aikoCallLog, type: .info, channel)
-    return "named"
+    return .named
   }
 
   /// Names Dart verified before the ring they belong to was reported, keyed by
@@ -1087,24 +1100,42 @@ final class CallKitRinger: NSObject {
   /// running Dart, and a ring reported by a different process (a cold wake) had
   /// no Dart to verify anything, so it has nothing to find. Bounded by the
   /// ring-trust window: a held name older than any ring could be is dropped.
-  private var verifiedNames: [String: (channel: String, name: String, at: Date)] = [:]
+  ///
+  /// READ, NEVER CONSUMED. A first version removed the name as it was read, so
+  /// a report CallKit then refused, or a push naming the right call on the wrong
+  /// channel, spent it, and the real ring found nothing (Tesla, PR #404 round 2).
+  /// A call id names one call, so reading it again for a redelivered report of
+  /// that same call is correct; expiry is the only thing that clears it.
+  private var verifiedNames:
+    [String: (channel: String, name: String, at: Date, applied: Bool)] = [:]
 
   private func rememberVerifiedName(_ name: String, channel: String, call: String) {
     let now = Date()
-    verifiedNames = verifiedNames.filter {
-      now.timeIntervalSince($0.value.at) < Self.liveCallTrustWindow
+    // A held name that ages out was never shown, so it SAYS so: `held` in Dart's
+    // telemetry is only half the story without this (Noether, PR #404).
+    for (expired, held) in verifiedNames
+    where now.timeIntervalSince(held.at) >= Self.liveCallTrustWindow {
+      verifiedNames.removeValue(forKey: expired)
+      if !held.applied {
+        os_log(
+          "[callkit] identify: held name expired unshown on %{public}@", log: aikoCallLog,
+          type: .info, held.channel)
+      }
     }
-    verifiedNames[call] = (channel: channel, name: name, at: now)
+    verifiedNames[call] = (channel: channel, name: name, at: now, applied: false)
   }
 
-  /// The held name for exactly this call on exactly this channel, consumed.
-  /// Both must match: the channel comes from the push, the name from the
-  /// verified invite, and a name never crosses to a call it was not verified for.
+  /// The held name for exactly this call on exactly this channel. Both must
+  /// match: the channel comes from the push, the name from the verified invite,
+  /// and a name never crosses to a call it was not verified for. A mismatch
+  /// leaves the hold untouched for the report that does match.
   private func takeVerifiedName(channel: String, call: String) -> String? {
-    guard let held = verifiedNames.removeValue(forKey: call),
+    guard var held = verifiedNames[call],
       held.channel == channel,
       Date().timeIntervalSince(held.at) < Self.liveCallTrustWindow
     else { return nil }
+    held.applied = true
+    verifiedNames[call] = held
     return held.name
   }
 
@@ -1488,7 +1519,8 @@ final class SystemCallChannel: NSObject, FlutterStreamHandler {
           let name = (args["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
           !name.isEmpty
         else { return result(nil) }
-        result(CallKitRinger.shared.identifySystemCall(channel: channel, call: callId, name: name))
+        result(
+          CallKitRinger.shared.identifySystemCall(channel: channel, call: callId, name: name).rawValue)
       case "callStarted":
         // Dart has a call live in this process (design 22 v4.2).
         if let args = call.arguments as? [String: Any],

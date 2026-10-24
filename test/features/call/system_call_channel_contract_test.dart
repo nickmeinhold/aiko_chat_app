@@ -302,16 +302,41 @@ void main() {
       contains('rememberVerifiedName(name, channel: channel, call: call)'),
       reason: 'identifySystemCall must HOLD a name that beats its ring',
     );
+    // The CALL and the ASSIGNMENT together: a pin on the call alone stayed green
+    // with `update.localizedCallerName = name` deleted (Noether, PR #404).
     expect(
       swift,
-      contains('takeVerifiedName(channel: channel, call: callId)'),
+      matches(
+        RegExp(
+          r'let name = takeVerifiedName\(channel: channel, call: callId\) \{\s*'
+          r'update\.localizedCallerName = name',
+        ),
+      ),
       reason: 'the invite report must APPLY a held name to the first frame',
     );
   });
 
+  test('#377: reading a held name never spends it (Tesla, PR #404 r2)', () {
+    // A consuming read lost the name to a refused report, or to a push naming
+    // the right call on the wrong channel. Only expiry may remove a hold.
+    final start = swift.indexOf('private func takeVerifiedName(');
+    expect(start, isNot(-1), reason: 'takeVerifiedName must exist');
+    final body = swift.substring(start, swift.indexOf('\n  }\n', start));
+    expect(body, isNot(contains('removeValue')));
+  });
+
   test('#377: both native halves answer identify in words Dart decodes', () {
-    for (final word in ['named', 'held']) {
-      expect(swift, contains('return "$word"'), reason: 'Swift answers $word');
+    // Swift's raw values ARE the wire words: an enum case added there without
+    // a Dart twin, or renamed on one side, fails here.
+    final cases = RegExp(
+      r'enum IdentifyOutcome: String \{([^}]*)\}',
+    ).firstMatch(swift)?.group(1);
+    expect(cases, isNotNull, reason: 'Swift must declare IdentifyOutcome');
+    final words = RegExp(
+      r'case (\w+)',
+    ).allMatches(cases!).map((m) => m.group(1)!);
+    expect(words.toSet(), {'named', 'held'});
+    for (final word in words) {
       expect(SystemRingIdentify.fromWire(word).name, word);
     }
     final kotlin = File(

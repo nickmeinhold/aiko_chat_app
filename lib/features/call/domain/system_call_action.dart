@@ -106,6 +106,8 @@ enum SystemRingIdentify {
 
   /// No ring yet for this call. The name is held for exactly this call and
   /// applied when its ring is reported (the awake-app order: socket, then push).
+  /// NOT yet shown: whether it was is logged natively ("held name applied" or
+  /// "held name expired unshown"), because Dart is not told twice.
   held,
 
   /// This platform does not rename its ring (Android today).
