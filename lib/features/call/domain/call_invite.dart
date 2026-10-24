@@ -70,6 +70,24 @@ const String kCallInviteBody = kCallInviteBodyV1;
 /// scrollback) and must stay silent.
 const Duration kCallInviteFreshness = Duration(seconds: 10);
 
+/// How far in the FUTURE an invitation's signature may be and still ring.
+///
+/// Two clocks are compared here: the sender's (it signed `signedAt`) and ours
+/// (`now`). A sender whose clock runs a little fast signs in our future, and an
+/// app that is OPEN reads the invite over its live socket within milliseconds,
+/// so its age comes out negative. With zero tolerance that refused every ring
+/// to a foreground app from a slightly fast sender. The native ring rang anyway,
+/// and the answer waited 30 s for an admission that never came (#393, measured
+/// on a Pixel 2026-10-24: `clockSkew ageMs=-820`). A cold app read the same
+/// invite seconds later, by which time its age was positive, which is why only
+/// the open app failed.
+///
+/// BOUNDED, not removed: a clock further ahead than this is still unreadable and
+/// refused, so a bad clock can't ring forever. An admitted future invite rings
+/// at most this much longer, because the ring window runs from `signedAt`. The
+/// island's `is_fresh()` has the same shape: `-skew <= age <= max_age`.
+const Duration kCallInviteClockSkewTolerance = Duration(seconds: 5);
+
 /// How long the IN-APP ring rings once admitted — a human-reaction clock. After
 /// this it stops ringing; the invitation remains in history as the record that
 /// it happened.
@@ -695,8 +713,8 @@ enum RingRefusal {
   /// The conversation is muted.
   conversationMuted(refusedAnAttempt: true, startGate: true, stopGate: false),
 
-  /// Signed in the future by a skewed clock. Refused rather than admitted: a
-  /// bad clock would otherwise ring forever.
+  /// Signed further in the future than [kCallInviteClockSkewTolerance].
+  /// Refused rather than admitted: a bad clock would otherwise ring forever.
   clockSkew(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// Older than [kCallInviteFreshness].
@@ -933,15 +951,20 @@ RingDecision admitRing(
     isUtc: true,
   );
   final age = now.difference(signedAt);
-  // Negative age (signed in the future by a skewed clock) is not fresh — it is
-  // unreadable, and admitting it would let a bad clock ring forever.
-  // `!isNegative` is the guard; `> freshness` alone would admit it.
+  // Signed further in the future than [kCallInviteClockSkewTolerance] is not
+  // fresh — it is unreadable, and admitting it would let a bad clock ring
+  // forever. This bound is the guard; `> freshness` alone would admit it.
+  // Within the tolerance it is ordinary skew between two honest clocks, and an
+  // open app meets it on every invite from a sender running a little fast
+  // (#393).
   //
   // JUDGED AT [now], NEVER AT [receivedAt]. A wake can land before `signedAt`
   // on the receiver's clock when the sender's runs a fraction fast — a 0.3 s
   // push under a 0.5 s skew — and that invite rings today. Skew asks "was this
   // signed in the future?", which only [now] can answer.
-  if (age.isNegative) return RingRefused(RingRefusal.clockSkew, age: age);
+  if (age < -kCallInviteClockSkewTolerance) {
+    return RingRefused(RingRefusal.clockSkew, age: age);
+  }
   // TRANSIT is what freshness bounds: signature to this device's wake. What
   // follows the wake (Face ID, session restore, the fetch) is the user's and
   // the app's latency, not the invitation's (design 23). Floored at zero for

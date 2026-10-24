@@ -179,9 +179,9 @@ void main() {
       expect(refusal(invite(), muted: true), RingRefusal.conversationMuted);
     });
 
-    test('signed in the FUTURE by a skewed clock', () {
+    test('signed further in the FUTURE than the skew tolerance', () {
       expect(
-        refusal(invite(age: const Duration(seconds: -5))),
+        refusal(invite(age: const Duration(seconds: -6))),
         RingRefusal.clockSkew,
       );
     });
@@ -333,7 +333,7 @@ void main() {
           }
         }
       }
-      producedByStart.add(refusal(invite(age: const Duration(seconds: -5)))!);
+      producedByStart.add(refusal(invite(age: const Duration(seconds: -6)))!);
       // A signed, permitted invite carrying NO SERVER ID. Built by hand because
       // the `invite` fixture always mints one — which is precisely why the first
       // roster version could file `noIslandId` as "deliberately unreachable" and
@@ -498,7 +498,7 @@ void main() {
       // reading ageMs=12000 argues the window is wrong for the push path, and
       // one reading ageMs=300000 argues nothing about the window at all.
       const overdue = Duration(seconds: 47);
-      const fromTheFuture = Duration(seconds: -5);
+      const fromTheFuture = Duration(seconds: -6);
       final stale = refuse(invite(age: overdue));
       expect(stale.reason, RingRefusal.stale);
       expect(stale.age, overdue);
@@ -702,8 +702,9 @@ void main() {
     });
 
     test('an invite stamped in the FUTURE by a skewed clock', () {
-      // Negative age is not "very fresh" — it is unreadable, and admitting it
-      // would let a bad clock ring forever. `age > freshness` alone admits this.
+      // An age further negative than the skew tolerance is not "very fresh" —
+      // it is unreadable, and admitting it would let a bad clock ring forever.
+      // `age > freshness` alone admits this.
       expect(admit(invite(age: const Duration(seconds: -60))), isNull);
     });
   });
@@ -725,7 +726,11 @@ void main() {
 
     test('signed 16 s ago, woken 0.5 s after signing: admitted', () {
       final m = invite(age: const Duration(seconds: 16));
-      expect(judge(m), isA<RingRefused>(), reason: 'precondition: stale at now');
+      expect(
+        judge(m),
+        isA<RingRefused>(),
+        reason: 'precondition: stale at now',
+      );
       expect(
         judge(m, receivedAt: now.subtract(const Duration(milliseconds: 15500))),
         isA<RingAdmitted>(),
@@ -734,7 +739,10 @@ void main() {
 
     test('transit over the window is stale, and carries the transit age', () {
       final m = invite(age: const Duration(seconds: 16));
-      final got = judge(m, receivedAt: now.subtract(const Duration(seconds: 5)));
+      final got = judge(
+        m,
+        receivedAt: now.subtract(const Duration(seconds: 5)),
+      );
       expect(got, isA<RingRefused>());
       got as RingRefused;
       expect(got.reason, RingRefusal.stale);
@@ -742,18 +750,29 @@ void main() {
     });
 
     test('null receivedAt is the pre-design-23 judgement exactly', () {
-      for (final age in const [
-        Duration(seconds: 1),
-        Duration(seconds: 10),
-        Duration(seconds: 11),
-        Duration(seconds: -5),
-      ]) {
+      // Concrete outcomes, not judge(m) against itself: `receivedAt` defaults
+      // to null, so comparing judge(m) with judge(m, receivedAt: null) was one
+      // call compared with itself and could never fail (Noether + Tesla,
+      // PR #399). Null must mean "judge at now": the same verdict as a wake AT
+      // now, and the verdict the age alone predicts.
+      const cases = <(Duration, RingRefusal?)>[
+        (Duration(seconds: 1), null),
+        (Duration(seconds: 10), null),
+        (Duration(seconds: 11), RingRefusal.stale),
+        (Duration(seconds: -5), null),
+        (Duration(seconds: -6), RingRefusal.clockSkew),
+      ];
+      for (final (age, refusal) in cases) {
         final m = invite(age: age);
-        expect(
-          judge(m).runtimeType,
-          judge(m, receivedAt: null).runtimeType,
-          reason: 'age $age',
-        );
+        final atNull = judge(m);
+        final atNow = judge(m, receivedAt: now);
+        if (refusal == null) {
+          expect(atNull, isA<RingAdmitted>(), reason: 'age $age');
+          expect(atNow, isA<RingAdmitted>(), reason: 'age $age');
+        } else {
+          expect((atNull as RingRefused).reason, refusal, reason: 'age $age');
+          expect((atNow as RingRefused).reason, refusal, reason: 'age $age');
+        }
       }
     });
 
@@ -770,7 +789,10 @@ void main() {
     test('signed in the future at now is still clockSkew, whatever the wake '
         'says', () {
       final m = invite(age: const Duration(seconds: -60));
-      final got = judge(m, receivedAt: now.subtract(const Duration(seconds: 1)));
+      final got = judge(
+        m,
+        receivedAt: now.subtract(const Duration(seconds: 1)),
+      );
       expect(got, isA<RingRefused>());
       expect((got as RingRefused).reason, RingRefusal.clockSkew);
     });
@@ -785,8 +807,61 @@ void main() {
     test('an earlier clause still refuses first: an unverified origin never '
         'asks for, or benefits from, a wake', () {
       final m = invite(age: const Duration(seconds: 16), cryptoValid: null);
-      final got = judge(m, receivedAt: now.subtract(const Duration(seconds: 15)));
+      final got = judge(
+        m,
+        receivedAt: now.subtract(const Duration(seconds: 15)),
+      );
       expect((got as RingRefused).reason, RingRefusal.unverifiedOrigin);
+    });
+  });
+
+  // #393: an OPEN app reads an invite over its live socket within
+  // milliseconds of the signature, so a sender whose clock runs a little fast
+  // produces a negative age on every ring. Ordinary skew between honest clocks
+  // is admitted; a clock further ahead than the tolerance is still refused.
+  group('#393: bounded clock skew', () {
+    RingDecision judge(Message m) => admitRing(
+      m,
+      meUserId: me,
+      blockedUserIds: const {},
+      consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
+      conversationMuted: false,
+      isDm: true,
+      now: now,
+    );
+
+    test('the measured case: signed 0.82 s in our future, read at once, '
+        'rings', () {
+      final got = judge(invite(age: const Duration(milliseconds: -820)));
+      expect(got, isA<RingAdmitted>());
+    });
+
+    test('exactly the tolerance in the future rings (inclusive, as the '
+        "island's is_fresh)", () {
+      final got = judge(invite(age: -kCallInviteClockSkewTolerance));
+      expect(got, isA<RingAdmitted>());
+    });
+
+    test(
+      'one millisecond past the tolerance is clockSkew, carrying its age',
+      () {
+        final past =
+            -kCallInviteClockSkewTolerance - const Duration(milliseconds: 1);
+        final got = judge(invite(age: past));
+        expect(got, isA<RingRefused>());
+        got as RingRefused;
+        expect(got.reason, RingRefusal.clockSkew);
+        expect(got.age, past);
+      },
+    );
+
+    test('the tolerance is a few seconds, never a window a bad clock could '
+        'ring through', () {
+      // A future invite rings this much longer (the window runs from
+      // signedAt). Pin it below the freshness window so "skew" can never grow
+      // into a second, unbounded freshness gate.
+      expect(kCallInviteClockSkewTolerance, lessThan(kCallInviteFreshness));
+      expect(kCallInviteClockSkewTolerance, greaterThan(Duration.zero));
     });
   });
 

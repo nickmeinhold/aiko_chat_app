@@ -915,6 +915,62 @@ void main() {
       expect(asked, hasLength(1));
     });
 
+    test('#393: an open app rings an invite signed in its future, '
+        'without asking the native side', () async {
+      // Measured on a Pixel 2026-10-24: the invite arrived over the live socket
+      // from a sender 0.82 s fast and was refused clockSkew, so the native ring
+      // rang and the answer waited 30 s for an admission that never came.
+      // -3 s, not the measured -0.82 s: this fixture signs on the wall clock
+      // and the controller judges later, so a slow machine could age -0.82 s
+      // past zero and pass on the ordinary fresh path (Maxwell, PR #399). The
+      // exact measured value is pinned in call_invite_test, at a fixed `now`.
+      final admitted = await listening();
+      // The controller's clock AT ADMISSION, captured in the admissions
+      // listener itself, so a pause after a correct admission cannot fail
+      // this test (Carnot, PR #399 round 3).
+      DateTime? admittedAt;
+      container
+          .read(incomingRingProvider.notifier)
+          .admissions
+          .listen((_) => admittedAt ??= DateTime.now().add(skew));
+
+      transport.emitMessage(await inbound(age: const Duration(seconds: -3)));
+      await pump();
+
+      expect(container.read(incomingRingProvider)?.call, kTestCall);
+      expect(admitted.map((i) => i.call), [kTestCall]);
+      expect(asked, isEmpty);
+      // The case this test is NAMED for: the invite was still in the
+      // controller's future when it was admitted. A stall past 3 s BEFORE
+      // admission would have admitted it on the ordinary fresh path, and
+      // without this line that loss of coverage would pass in silence
+      // (Noether, PR #399 round 2).
+      expect(
+        admitted.single.startedAt.isAfter(admittedAt!),
+        isTrue,
+        reason:
+            'the fixture aged past zero before admission; this run no '
+            'longer exercises a future signature',
+      );
+    });
+
+    test(
+      '#393: a clock further ahead than the tolerance stays silent',
+      () async {
+        final admitted = await listening();
+
+        // 60 s ahead, far past the 5 s tolerance: the fixture signs on the wall
+        // clock and the controller judges later, so a 1 s margin failed a
+        // stalled runner with no defect present (Noether, PR #399 round 2).
+        transport.emitMessage(await inbound(age: const Duration(seconds: -60)));
+        await pump();
+
+        expect(container.read(incomingRingProvider), isNull);
+        expect(admitted, isEmpty);
+        expect(asked, isEmpty);
+      },
+    );
+
     test('a fresh invite never asks the native side', () async {
       // `receivedAt <= now`: a wake can only rescue what `now` refuses.
       await listening();
