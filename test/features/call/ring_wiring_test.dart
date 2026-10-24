@@ -167,6 +167,10 @@ void main() {
 
   late SharedPreferences prefs;
 
+  /// Server ids of the messages the repository announced; see [watchRing].
+  var seen = <String>{};
+  StreamSubscription<Message>? seenSub;
+
   /// The harness's overrides, as a function so a group can rebuild the
   /// container with more (design 23: a ring controller on a test clock).
   overrides() => [
@@ -208,6 +212,8 @@ void main() {
   });
 
   tearDown(() async {
+    await seenSub?.cancel();
+    seenSub = null;
     container.dispose();
     await repo.dispose();
     await transport.dispose();
@@ -215,8 +221,29 @@ void main() {
   });
 
   /// Let the transport listener, the repo's inbound FIFO, the drift write and
-  /// the announcement all drain.
+  /// the announcement all drain. Only where there is nothing to wait FOR: a
+  /// delivery the repository swallows (a re-delivery, a retraction) never
+  /// reaches [seen]. Everything else waits on a condition ([pumpUntil],
+  /// [considered], [settled]): under a loaded suite 30 ms was too short, and a
+  /// correct build failed "the invite should have rung" (claude-tasks#5191).
   Future<void> pump() => Future<void>.delayed(const Duration(milliseconds: 30));
+
+  /// Pump until [condition] holds, giving up after [timeout]. It gives up
+  /// quietly, so the caller's own `expect` fails with its own reason; the
+  /// result says whether it held.
+  Future<bool> pumpUntil(
+    bool Function() condition, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (!condition()) {
+      if (!DateTime.now().isBefore(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    return true;
+  }
+
+  bool ringing() => container.read(incomingRingProvider) != null;
 
   /// Warm `dmsProvider` before the ring reads it. In production the repository
   /// itself watches it (the subscription set is built from it), so it is always
@@ -228,16 +255,58 @@ void main() {
     await container.read(dmsProvider.future);
   }
 
+  /// Watch the ring, and return only once its controller is SUBSCRIBED to the
+  /// repository. `inboundMessages` is a broadcast stream, so a message emitted
+  /// before `build()` subscribes is dropped. A fixed pump raced that: under
+  /// load an END was dropped, and the invite it should have stopped rang
+  /// (claude-tasks#5191). The repository resolving marks the ring for rebuild,
+  /// and a read flushes that rebuild, which subscribes.
+  Future<void> watchRing() async {
+    await warmDms();
+    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+    await container.read(chatRepositoryProvider.future);
+    container.read(incomingRingProvider);
+    // Subscribed AFTER the ring, so a broadcast stream hands each message to
+    // the ring first: by the time it lands in [seen], `_consider` has run.
+    await seenSub?.cancel();
+    seen = {};
+    seenSub = repo.inboundMessages.listen((m) => seen.add(m.id!));
+  }
+
+  /// The ring has received message [id]: a refusal checked now is a decision,
+  /// not a race. Fails LOUDLY if it never arrives, or "does not ring" would
+  /// pass on a message the ring never saw.
+  Future<void> considered(String id) async => expect(
+    await pumpUntil(() => seen.contains(id)),
+    isTrue,
+    reason: 'the repository never announced $id to the ring',
+  );
+
+  /// [considered], and any wake question it raised has been answered and
+  /// judged (`wakeAdmissionFor` holds a question only while it is open).
+  Future<void> settled(String id) async {
+    await considered(id);
+    expect(
+      await pumpUntil(
+        () =>
+            container
+                .read(incomingRingProvider.notifier)
+                .wakeAdmissionFor(kTestCall) ==
+            null,
+      ),
+      isTrue,
+      reason: 'the wake question for $id never closed',
+    );
+  }
+
   test('a fresh invite from a peer rings this device', () async {
     // Subscribe so the controller builds and wires its listener BEFORE the
     // message arrives — a ring that only works if someone was already watching
     // is not a ring.
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
 
     transport.emitMessage(await inbound());
-    await pump();
+    await pumpUntil(ringing);
 
     final ring = container.read(incomingRingProvider);
     expect(ring, isNotNull, reason: 'the invite should have rung');
@@ -246,12 +315,10 @@ void main() {
   });
 
   test('a v1 invite over the wire never rings (design 22 v2.0)', () async {
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
 
     transport.emitMessage(await inbound(body: kCallInviteBodyV1));
-    await pump();
+    await settled(islandIdFor('M1'));
 
     expect(container.read(incomingRingProvider), isNull);
   });
@@ -263,24 +330,20 @@ void main() {
       // Flutter existed, then the invitation over the websocket inside its
       // 10s freshness. Without the spent record it rang as a banner for a call
       // the user had already declined.
-      await warmDms();
-      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-      await pump();
+      await watchRing();
 
       container.read(incomingRingProvider.notifier).markSpent(kTestCall);
       transport.emitMessage(await inbound());
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(container.read(incomingRingProvider), isNull);
     },
   );
 
   test('a system end of ANOTHER call leaves this ring alone', () async {
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
     transport.emitMessage(await inbound());
-    await pump();
+    await pumpUntil(ringing);
 
     container.read(incomingRingProvider.notifier).markSpent(kOtherCall);
     expect(container.read(incomingRingProvider)?.call, kTestCall);
@@ -290,37 +353,31 @@ void main() {
   });
 
   test('an ordinary message does not ring', () async {
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
 
     transport.emitMessage(await inbound(body: 'hey are you up'));
-    await pump();
+    await settled(islandIdFor('M1'));
 
     expect(container.read(incomingRingProvider), isNull);
   });
 
   test('my own invite echoing back does not ring me', () async {
     // The caller's own send returns down this same inbound path.
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
 
     transport.emitMessage(await inbound(from: meId));
-    await pump();
+    await settled(islandIdFor('M1'));
 
     expect(container.read(incomingRingProvider), isNull);
   });
 
   test('a stale invite (history replay) does not ring', () async {
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
 
     transport.emitMessage(
       await inbound(age: kCallInviteFreshness + const Duration(seconds: 5)),
     );
-    await pump();
+    await settled(islandIdFor('M1'));
 
     expect(container.read(incomingRingProvider), isNull);
   });
@@ -340,13 +397,11 @@ void main() {
     // It passes today because `ChatRepository` announces only on a first insert
     // of a server ULID (measured, with a positive control). If that ever stops
     // being true, this fails HERE, in the feature that cares.
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
     final invitation = await inbound();
 
     transport.emitMessage(invitation);
-    await pump();
+    await pumpUntil(ringing);
     expect(
       container.read(incomingRingProvider),
       isNotNull,
@@ -378,9 +433,7 @@ void main() {
     // reader could find; a history page carrying an invite AND its retraction
     // produces exactly this, since the pager applies retractions first
     // (cage-match #139 R3, Carnot).
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
     final msg = await inbound();
 
     // Retraction FIRST — presence-independent dead id, the ordering the pager
@@ -403,11 +456,9 @@ void main() {
     // which invalidates dmsProvider, which rebuilds chatRepositoryProvider —
     // while the ring is live. Nothing in the suite invalidated the repo mid-ring
     // until now (cage-match #139 R4, Tesla).
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
     transport.emitMessage(await inbound());
-    await pump();
+    await pumpUntil(ringing);
     expect(container.read(incomingRingProvider), isNotNull);
 
     container.invalidate(chatRepositoryProvider);
@@ -429,9 +480,7 @@ void main() {
       // (cage-match #139 R5, Carnot). An invitation already older than the ring
       // window must not ring at all — even though it is inside the 10s freshness
       // gate, admission and duration are different clocks.
-      await warmDms();
-      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-      await pump();
+      await watchRing();
 
       // Freshness gate is 10s and ring duration is 30s, so this cannot arise from
       // a real signature; drive it directly to pin the arithmetic.
@@ -447,11 +496,9 @@ void main() {
   );
 
   test('stopRinging clears it', () async {
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
     transport.emitMessage(await inbound());
-    await pump();
+    await pumpUntil(ringing);
     expect(container.read(incomingRingProvider), isNotNull);
 
     container
@@ -466,11 +513,9 @@ void main() {
       // Without this the callee rings for the rest of kInAppRingDuration for a call
       // that is already over, and answering it joins an empty room. The ring
       // self-terminating at 30s bounds the damage; this makes the stop PROMPT.
-      await warmDms();
-      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-      await pump();
+      await watchRing();
       transport.emitMessage(await inbound());
-      await pump();
+      await pumpUntil(ringing);
       expect(
         container.read(incomingRingProvider),
         isNotNull,
@@ -484,7 +529,7 @@ void main() {
           replyTo: islandIdFor('M1'),
         ),
       );
-      await pump();
+      await pumpUntil(() => !ringing());
 
       expect(container.read(incomingRingProvider), isNull);
     },
@@ -494,16 +539,14 @@ void main() {
     // Hang up, ring again immediately, and the first end must not reach through
     // and kill the second ring. The call id in the signed body is what scopes
     // it to ONE call (call/2).
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
     transport.emitMessage(await inbound());
-    await pump();
+    await pumpUntil(ringing);
 
     transport.emitMessage(
       await inbound(body: kOtherEndBody, clientMsgId: 'M2'),
     );
-    await pump();
+    await considered(islandIdFor('M2'));
 
     expect(container.read(incomingRingProvider), isNotNull);
   });
@@ -520,9 +563,7 @@ void main() {
     // invitation's ULID. It is reachable the moment calls are channel-wide —
     // which is the future `isDmChannelId` was deleted to make room for, and the
     // reason a single slot for a contested key does not get to stay.
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
 
     // The caller's genuine hangup, overtaking its own invitation.
     transport.emitMessage(
@@ -532,7 +573,7 @@ void main() {
         replyTo: islandIdFor('M1'),
       ),
     );
-    await pump();
+    await considered(islandIdFor('M2'));
     // ...then somebody else's stop, naming the SAME call.
     transport.emitMessage(
       await inbound(
@@ -542,10 +583,10 @@ void main() {
         replyTo: islandIdFor('M1'),
       ),
     );
-    await pump();
+    await considered(islandIdFor('M9'));
 
     transport.emitMessage(await inbound()); // ...and now the invitation
-    await pump();
+    await settled(islandIdFor('M1'));
 
     expect(
       container.read(incomingRingProvider),
@@ -567,9 +608,7 @@ void main() {
     // Push makes this likelier rather than rarer: the island wakes a handset on
     // the INVITE body only, so a cold start processes the invitation first by
     // construction and the end is an ordinary afterthought.
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
 
     // The hangup lands FIRST, naming an invitation this client has not seen.
     transport.emitMessage(
@@ -579,7 +618,7 @@ void main() {
         replyTo: islandIdFor('M1'),
       ),
     );
-    await pump();
+    await considered(islandIdFor('M2'));
     expect(
       container.read(incomingRingProvider),
       isNull,
@@ -587,7 +626,7 @@ void main() {
     );
 
     transport.emitMessage(await inbound()); // ...and now the invitation
-    await pump();
+    await settled(islandIdFor('M1'));
 
     expect(
       container.read(incomingRingProvider),
@@ -607,9 +646,7 @@ void main() {
     // name the invitation's server id. `isDmChannelId` was deleted partly
     // BECAUSE channel-wide calls are a real future feature, and that feature
     // makes those ids visible in the room.
-    await warmDms();
-    container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-    await pump();
+    await watchRing();
 
     // Someone who is not the caller sends a signed stop naming the invitation.
     transport.emitMessage(
@@ -620,10 +657,10 @@ void main() {
         replyTo: islandIdFor('M1'),
       ),
     );
-    await pump();
+    await considered(islandIdFor('M9'));
 
     transport.emitMessage(await inbound()); // the genuine invitation
-    await pump();
+    await pumpUntil(ringing);
 
     expect(
       container.read(incomingRingProvider),
@@ -654,16 +691,14 @@ void main() {
     );
 
     Future<void> watch() async {
-      await warmDms();
-      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-      await pump();
+      await watchRing();
     }
 
     test('an UNCONSENTED non-human does not ring — the precondition', () async {
       await watch();
 
       transport.emitMessage(await inbound(kind: SenderKind.llm));
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(container.read(incomingRingProvider), isNull);
     });
@@ -686,7 +721,7 @@ void main() {
         );
 
         transport.emitMessage(await inbound(kind: SenderKind.llm));
-        await pump();
+        await pumpUntil(ringing);
 
         expect(
           container.read(incomingRingProvider),
@@ -708,7 +743,7 @@ void main() {
             .allow(otherDm, await myMultikey());
 
         transport.emitMessage(await inbound(kind: SenderKind.llm));
-        await pump();
+        await settled(islandIdFor('M1'));
 
         expect(container.read(incomingRingProvider), isNull);
       },
@@ -723,7 +758,7 @@ void main() {
       await notifier.revoke(dmId, key);
 
       transport.emitMessage(await inbound(kind: SenderKind.llm));
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(container.read(incomingRingProvider), isNull);
     });
@@ -758,9 +793,7 @@ void main() {
     const otherRoom = '01M0GS7FDWBVQ31950B1PTV3BB';
 
     test('a message signed for ANOTHER channel does not ring here', () async {
-      await warmDms();
-      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-      await pump();
+      await watchRing();
       final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
       await container
           .read(ringConsentByChannelProvider.notifier)
@@ -796,7 +829,7 @@ void main() {
           deliveryState: DeliveryState.sent,
         ),
       );
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(
         container.read(incomingRingProvider),
@@ -814,20 +847,14 @@ void main() {
         // Without this the test above passes for any reason at all — a broken
         // fixture, a dead transport, a consent that never landed. This proves the
         // only difference is the signed channel.
-        await warmDms();
-        container.listen(
-          incomingRingProvider,
-          (_, _) {},
-          fireImmediately: true,
-        );
-        await pump();
+        await watchRing();
         final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
         await container
             .read(ringConsentByChannelProvider.notifier)
             .allow(dmId, encodeMultikey(key.rawPublicKey));
 
         transport.emitMessage(await inbound(kind: SenderKind.llm));
-        await pump();
+        await pumpUntil(ringing);
 
         expect(container.read(incomingRingProvider), isNotNull);
       },
@@ -877,9 +904,7 @@ void main() {
     });
 
     Future<List<CallInvite>> listening() async {
-      await warmDms();
-      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-      await pump();
+      await watchRing();
       final admitted = <CallInvite>[];
       container
           .read(incomingRingProvider.notifier)
@@ -895,7 +920,7 @@ void main() {
       final admitted = await listening();
 
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
-      await pump();
+      await pumpUntil(() => admitted.isNotEmpty && ringing());
 
       expect(container.read(incomingRingProvider)?.call, kTestCall);
       expect(admitted.map((i) => i.call), [kTestCall]);
@@ -909,7 +934,7 @@ void main() {
       final admitted = await listening();
 
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(container.read(incomingRingProvider), isNull);
       expect(admitted, isEmpty);
@@ -919,7 +944,7 @@ void main() {
       final admitted = await listening();
 
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(container.read(incomingRingProvider), isNull);
       expect(admitted, isEmpty);
@@ -946,7 +971,7 @@ void main() {
           .listen((_) => admittedAt ??= DateTime.now().add(skew));
 
       transport.emitMessage(await inbound(age: const Duration(seconds: -3)));
-      await pump();
+      await pumpUntil(() => admitted.isNotEmpty && ringing());
 
       expect(container.read(incomingRingProvider)?.call, kTestCall);
       expect(admitted.map((i) => i.call), [kTestCall]);
@@ -974,7 +999,7 @@ void main() {
         // clock and the controller judges later, so a 1 s margin failed a
         // stalled runner with no defect present (Noether, PR #399 round 2).
         transport.emitMessage(await inbound(age: const Duration(seconds: -60)));
-        await pump();
+        await settled(islandIdFor('M1'));
 
         expect(container.read(incomingRingProvider), isNull);
         expect(admitted, isEmpty);
@@ -987,7 +1012,7 @@ void main() {
       await listening();
 
       transport.emitMessage(await inbound());
-      await pump();
+      await pumpUntil(ringing);
 
       expect(container.read(incomingRingProvider), isNotNull);
       expect(asked, isEmpty);
@@ -1000,11 +1025,10 @@ void main() {
       final admitted = await listening();
 
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
-      await pump();
+      await pumpUntil(() => asked.isNotEmpty);
       expect(admitted, isEmpty, reason: 'still asking');
 
-      await Future<void>.delayed(kWakeAgeRetry * 3);
-      await pump();
+      await pumpUntil(() => admitted.isNotEmpty);
 
       expect(admitted.map((i) => i.call), [kTestCall]);
       expect(calls, 3);
@@ -1021,7 +1045,7 @@ void main() {
         final admitted = await listening();
 
         transport.emitMessage(await inbound(age: const Duration(seconds: 35)));
-        await pump();
+        await pumpUntil(() => admitted.isNotEmpty);
 
         expect(container.read(incomingRingProvider), isNull);
         expect(admitted.map((i) => i.call), [kTestCall]);
@@ -1039,7 +1063,7 @@ void main() {
       final admitted = await listening();
 
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
-      await pump();
+      await pumpUntil(() => asked.isNotEmpty);
       transport.emitMessage(
         await inbound(
           body: kTestEndBody,
@@ -1047,9 +1071,9 @@ void main() {
           replyTo: islandIdFor('M1'),
         ),
       );
-      await pump();
+      await considered(islandIdFor('M2'));
       release.complete();
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(container.read(incomingRingProvider), isNull);
       expect(admitted, isEmpty);
@@ -1069,7 +1093,7 @@ void main() {
       final admitted = await listening();
 
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
-      await pump();
+      await pumpUntil(() => asked.isNotEmpty);
       transport.emitMessage(
         await inbound(
           body: kTestEndBody,
@@ -1077,10 +1101,10 @@ void main() {
           replyTo: islandIdFor('M1'),
         ),
       );
-      await pump();
+      await considered(islandIdFor('M2'));
       skew = const Duration(seconds: 25);
       release.complete();
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(admitted, isEmpty);
       expect(container.read(incomingRingProvider), isNull);
@@ -1104,7 +1128,13 @@ void main() {
       final admitted = await listening();
 
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
-      await pump();
+      await pumpUntil(
+        () =>
+            container
+                .read(incomingRingProvider.notifier)
+                .wakeAdmissionFor(kTestCall) !=
+            null,
+      );
       final inFlight = container
           .read(incomingRingProvider.notifier)
           .wakeAdmissionFor(kTestCall);
@@ -1131,15 +1161,17 @@ void main() {
 
       // A: stale at now, asking native. B: a different call, fresh, rings.
       transport.emitMessage(await inbound(age: const Duration(seconds: 16)));
-      await pump();
+      await pumpUntil(() => asked.isNotEmpty);
       transport.emitMessage(
         await inbound(body: kOtherInviteBody, clientMsgId: 'M9'),
       );
-      await pump();
+      await pumpUntil(
+        () => container.read(incomingRingProvider)?.call == kOtherCall,
+      );
       expect(container.read(incomingRingProvider)?.call, kOtherCall);
 
       release.complete();
-      await pump();
+      await pumpUntil(() => admitted.length == 2);
 
       expect(
         container.read(incomingRingProvider)?.call,
@@ -1192,9 +1224,7 @@ void main() {
     });
 
     Future<void> listening() async {
-      await warmDms();
-      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
-      await pump();
+      await watchRing();
     }
 
     test(
@@ -1203,7 +1233,9 @@ void main() {
         await listening();
 
         transport.emitMessage(await inbound());
-        await pump();
+        // The identify line is written after native REPLIES, later than the
+        // call is recorded in `identified`, so wait for the line itself.
+        await pumpUntil(() => ringing() && identifyLines().isNotEmpty);
 
         expect(container.read(incomingRingProvider)?.call, kTestCall);
         expect(identified, hasLength(1));
@@ -1226,7 +1258,7 @@ void main() {
       transport.emitMessage(
         await inbound(age: kCallInviteFreshness + const Duration(seconds: 5)),
       );
-      await pump();
+      await settled(islandIdFor('M1'));
 
       expect(container.read(incomingRingProvider), isNull);
       expect(identified, isEmpty);
@@ -1247,7 +1279,7 @@ void main() {
         await listening();
 
         transport.emitMessage(await inbound(label: label));
-        await pump();
+        await pumpUntil(() => ringing() && identifyLines().isNotEmpty);
 
         expect(
           container.read(incomingRingProvider)?.call,
@@ -1275,7 +1307,7 @@ void main() {
       await listening();
 
       transport.emitMessage(await inbound());
-      await pump();
+      await pumpUntil(() => ringing() && identifyLines().isNotEmpty);
 
       expect(container.read(incomingRingProvider)?.call, kTestCall);
       expect(identified, isEmpty);
