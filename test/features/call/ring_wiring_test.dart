@@ -932,6 +932,18 @@ void main() {
       expect(container.read(incomingRingProvider)?.call, kTestCall);
       expect(admitted.map((i) => i.call), [kTestCall]);
       expect(asked, isEmpty);
+      // The case this test is NAMED for: the invite must still be in the
+      // controller's future now, so it was in the future when admitted. A stall
+      // past 3 s would have admitted it on the ordinary fresh path instead, and
+      // without this line that loss of coverage would pass in silence
+      // (Noether, PR #399 round 2).
+      expect(
+        admitted.single.startedAt.isAfter(DateTime.now().add(skew)),
+        isTrue,
+        reason:
+            'the fixture aged past zero before admission; this run no '
+            'longer exercises a future signature',
+      );
     });
 
     test(
@@ -939,11 +951,10 @@ void main() {
       () async {
         final admitted = await listening();
 
-        transport.emitMessage(
-          await inbound(
-            age: -kCallInviteClockSkewTolerance - const Duration(seconds: 1),
-          ),
-        );
+        // 60 s ahead, far past the 5 s tolerance: the fixture signs on the wall
+        // clock and the controller judges later, so a 1 s margin failed a
+        // stalled runner with no defect present (Noether, PR #399 round 2).
+        transport.emitMessage(await inbound(age: const Duration(seconds: -60)));
         await pump();
 
         expect(container.read(incomingRingProvider), isNull);
