@@ -44,6 +44,8 @@ ADR-0004 said: *"On any island you are the same person because the same key sign
 
 ## Consequences
 
+- **Existing data already violates this, and #208 is the migration.** The island tab measured one pubkey held across islands by Nick's accounts (2026-09-26, #4855; not re-measured since). #208 retires and mints for every account and never adopts: on next launch each account mints its own key, and the shared key simply stops signing. History already signed under it stays as it is (signed bytes can't be re-signed). Adopting the shared key into one account would forge an author. Re-joining the accounts afterwards is the link's job.
+- **The link is the island's first proof of possession.** Each key signs "A ↔ B" with its own private half, so an island that accepts link documents can verify both signatures at POST time. That is its first signature check, and the trigger `SigningKey`'s docstring names for revisiting global key uniqueness. (Island tab's observation, 2026-10-24.)
 - **PR #208's identity question is answered.** It stops being blocked on the ADR fork. Its code still needs its own review and a rebase onto `main`.
 - **#3166 / #265 (key→account binding):** unchanged in kind, smaller in scope. The binding to establish is "this key ↔ this island's account". A hostile island can still lie about it, and key continuity (#236) remains the defence.
 - **Authorship history (the Carried Record) is per island account** until linked. A link retroactively joins the histories it names, which is the point of consenting to it.
@@ -52,7 +54,7 @@ ADR-0004 said: *"On any island you are the same person because the same key sign
 ## Unresolved questions
 
 1. **Multi-device within one account.** N devices: one key synced (as passkeys are), or N keys cross-signed (Matrix, Keybase)? Deferred; it's what #236 is really blocked on.
-2. **Where links live and who serves them.** In each home's IdentityDoc, the islands' `/v1/keys`, or carried by the client? Island tab's view needed.
+2. **Where links live and who serves them.** The island tab's lean (2026-10-24, not decided): the island stores and serves signed link documents next to `/v1/keys` / the IdentityDoc as opaque, self-verifying blobs, so recipients on other islands can fetch them while the linking client is offline.
 3. **Linking UX.** How a person proves control of both keys at once: both accounts signed in on one device is the obvious path, and possibly the only one at first.
 
 ## Rejected ideas
