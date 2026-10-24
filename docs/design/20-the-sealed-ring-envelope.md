@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **PROPOSAL — arm C ACCEPTED IN PRINCIPLE by the island tab 2026-09-11 15:55, with three conditions (§8). Un-tempered.** §4a's key-reuse route was answered AGAINST by an external review on 2026-09-15 (#316: use two keys; the binding is the real blocker). **§9 (2026-10-24) proposed that ring consent carry the second key; the island tab's read (2026-10-25) broke it, because the island can read DMs. §10 recasts: the key is announced to every DM peer, and consent stays on the device.** |
+| **Status** | **PROPOSAL — arm C ACCEPTED IN PRINCIPLE by the island tab 2026-09-11 15:55, with three conditions (§8). Un-tempered.** §4a's key-reuse route was answered AGAINST by an external review on 2026-09-15 (#316: use two keys; the binding is the real blocker). **§9 (2026-10-24) proposed that ring consent carry the second key; the island tab's read (2026-10-25) broke it, because the island can read DMs. §10 recasts: one published account key, used only for peers pinned from real speech; consent stays on the device. Tempered 4/4 RECAST (`temper-20-s10/TEMPER.md`), folded; one product decision open (§10.5).** |
 | **Owner** | Claude (app tab), 2026-09-11 |
 | **Answers** | claude-tasks#4254 question 3 — *what does Swift verify before reporting to CallKit, and where do the bytes come from?* |
 | **Provoked by** | Nick, 2026-09-11 15:38: *"it feels like there could be a better solution… how does Signal do it?"* That was a pointer at prior art, and it was right. |
@@ -353,75 +353,109 @@ Not 0.0.8. In order: the island tab's read of §9 (it changes nothing on the wir
 invite), and **tier 1 (an unverified native name cache) is rejected in favour of this
 section**, because it would paint a name on an unverified push.
 
-## 10. v3 (2026-10-25): the key is announced; consent stays on the device
+## 10. v3.1 (2026-10-25): one published key, used only for peers who have spoken
 
-**Status: a direction, not a design.** It answers the island tab's read of §9. Nothing is built,
-and the certificate format still waits for a specialist (`docs/design/crypto-review-queue.md`).
+**Status: a direction, tempered once.** v3 (a key statement posted into every DM) was struck
+4/4 RECAST, with no DISSOLVE (`temper-20-s10/TEMPER.md`). This is the fold. Nothing is built.
+One product decision is open (§10.5), and the formats wait for the specialist
+(`docs/design/crypto-review-queue.md`).
 
 ### 10.0 The move
 
-§9 tied two things together: **handing out the encryption key** and **consenting to be rung**.
-Only the second is sensitive. The island tab's read showed that the tie is what leaks: on an
-island that reads DMs, any message sent *because* you consented reveals the consent.
+§9 tied **handing out the encryption key** to **consenting to be rung**, and on an island that
+reads DMs, that tie leaked the consent. Sealing the certificate can't fix it (sealing needs the
+peer's key, which is what the certificate delivers). So we cut the tie.
 
-Sealing the certificate cannot fix that, because sealing it to the peer needs the peer's
-encryption key, which is what the certificate exists to distribute. **So we cut the tie
-instead of hiding it.**
+v3 then posted the key into every DM, and the strike showed that the post itself was the
+problem. Each post made its sender "have spoken", which satisfied wake gate 7 for everyone, the
+only filter that stops a wake. It also bumped unread counts, fired notifications, and gave every
+DM its own copy of a key that rotates as one. **The key belongs to the account, so it lives with
+the account.**
 
-1. **Announce.** Every account sends a key statement into every DM it is in, whether or not
-   anyone has consented to anything: *"my X25519 encryption key is K"*, signed by its Ed25519
-   key under its own domain tag (§10.2). One statement per DM per key, re-sent when the key
-   rotates. All DMs get it, so its presence says nothing about consent.
-2. **Pin.** The peer verifies the statement against the signing key it already talks to in
-   that DM, and pins (signing key, K). This is TOFU, exactly as §9.3 described, and it is the
-   pin key continuity (#236) wants.
-3. **Seal.** A caller in a DM seals the signed invite to the callee's pinned K (§4, arm C).
-   The caller does not know, and does not need to know, whether the callee allows them.
-4. **Decide on the device.** The callee's handset opens the envelope natively, verifies the
-   inner signature against the pinned signing key, and only then consults its **device-local**
-   ring consent (`ring_allowlist_store.dart`, unchanged). Allowed: CallKit gets a verified
-   name. Not allowed: no ring, as today.
-5. **Withdraw by doing nothing.** Revoking consent is a local edit. Nothing is sent, so the
-   island never learns who withdrew.
+1. **Publish once.** The account's Ed25519 key signs *"my X25519 ring-sealing key is K, epoch
+   n"* under its own domain tag (§10.2), and the statement goes into the account's IdentityDoc
+   `verificationMethod[]`, the socket ADR-0009 opened for the link. It's public account
+   material, in the same class as the signing key. The island serves it and cannot forge it.
+2. **Pin from speech, not from the statement.** A peer's signing key is pinned from a **real
+   message that person sent** (TOFU, as today, and the pin #236 wants). The statement is
+   accepted **only for a signing key already pinned that way**. So "can be sealed to" and "has
+   spoken" coincide. That's the island's gate-7 condition (PR #403 issuecomment-6390837964), it
+   needs no island change, and a verified name is never minted on a pin no human produced.
+3. **Fetch when a DM opens, never at ring time.** The caller's app fetches a pinned peer's
+   statement when it opens or syncs a conversation with them, and caches it. The island already
+   sees those reads; a fetch at ring time would reveal an intent to call.
+4. **Seal.** A caller seals the signed invite to the callee's cached K (§4, arm C).
+5. **Admit on the device**, from one native-readable view (§10.3). The outcome for each case,
+   including refusal, is §10.5's decision.
+6. **Withdraw by doing nothing.** Revoking consent is a local edit. Nothing is sent.
 
-### 10.1 What the island learns
+### 10.1 Rotation
 
-"B's encryption key is K", which is public information, of the same kind as a roster entry.
-It cannot forge a statement, because it holds no signing key. It can drop one, which degrades
-to tier 3 (`"Aiko"`) and fails safe. It also cannot tell an allowed ring from a refused one
-any better than it can today. The ring's wake path is unchanged, and that is §8's business, not
-this section's.
+One document per account, so a rotation is one atomic change. The rules:
+- The successor carries epoch n+1 and is signed by the current signing key. A peer accepts only
+  a higher epoch and **rejects a superseded statement**, so a replay by the island can't roll it
+  back to a dead K.
+- A change of the **signing** key is a key change #236 must surface. It is not silently accepted.
+- A lost phone holds the old K until the account rotates (ADR-0009 ref. 4: one key, copied).
+  Its old statements carry a lower epoch, so it can't fork the pin.
+
+The bytes (epoch encoding, expiry) are the specialist's (queue item 1).
 
 ### 10.2 The statement format (island tab's Q3, accepted)
 
-One length-prefixed layout with a leading domain tag per statement type. It extends the
-existing `aikochat:msg:v1:EdDSA` / `aikochat:react:v1:EdDSA` pattern rather than inventing an
-envelope. Two rules from the island's read:
+One length-prefixed layout with a leading domain tag per statement type. It extends
+`aikochat:msg:v1:EdDSA` / `aikochat:react:v1:EdDSA`. The key statement has **its own tag**,
+never a chat-message signature, and **the signer structure lives in the tag**, not in the number
+of signatures (the link is mutual, while this statement is one key vouching for its sibling).
 
-- **The key statement has its own inner tag, signed separately from the DM that carries it.**
-  Otherwise its signature is under `aikochat:msg:v1` and it *is* a chat message.
-- **The signer structure lives in the tag, not in the number of signatures.** ADR-0009's link
-  is mutual (two keys sign) and the key statement is one key vouching for its sibling. A
-  verifier that infers the type from the signature count can be fed a one-signature link.
+### 10.3 One native-readable admission view
 
-### 10.3 What it costs
+The decision runs before Dart (§0), but today its inputs live in Dart's stores: consent in
+SharedPreferences (`ring_allowlist_store.dart`), the private K and pins in Dart-owned storage.
+So this design **withdraws v3's "`ring_allowlist_store.dart`, unchanged"**. The push handler
+needs one store it owns, holding:
+- the active account;
+- per-conversation consent;
+- the pinned signing keys and their cached Ks;
+- the device's private K.
 
-- **§9's "one act, three jobs" is gone.** Consent and key exchange are separate acts again.
-  That separation is the point.
-- **K reaches every DM peer, not just the people allowed to ring you.** K is a public key, so
-  this costs nothing in secrecy. It does mean anyone in a DM can send you a sealed ring that
-  your device then refuses locally. That is the same refusal as today, one layer later.
-- **The island shape-checks nothing new** (its Q2: no). The key statement is just a signed DM.
+Dart writes it and native reads it, and both treat it as untrusted until verified. The update
+ordering has to be defined: a revocation lands before the next push can read stale consent,
+and on sign-out or an account switch the view is cleared before the next push. A view that's
+missing or unreadable is treated as "not admitted", never as "allowed".
 
-### 10.4 Still open
+### 10.4 Scope
 
-1. **First-contact substitution** (§9.4.1): unchanged; an in-person QR check is the later fix.
-2. **The wake gate couples to the announcement.** The island tab notes that posting into a DM
-   makes the poster "have spoken" (`push_service.py:41-44`, gate 7). Under §10 every account
-   posts a key statement into every DM, so gate 7 would be satisfied for everyone. **That needs
-   the island tab's eye:** either key statements are excluded from "has spoken", or gate 7
-   stops meaning anything.
-3. **Groups.** §10 is DM-only, as §9 was.
-4. **The specialist:** the statement format, the seal construction, and whether TOFU on the
-   DM's signing key is enough of the binding the 2026-09-15 review asked for.
+The key is per account, so channels get it for free: the same pin serves every conversation
+with that person. Whether a **channel** ring seals is then a wake-gate question
+(per-conversation consent defaults OFF for groups, decided 2026-09-01), not a key question.
 
+### 10.5 OPEN, for Nick: what a refusal does (the consent trilemma)
+
+All four families, and the island, found the same hole. A ring reaches the handset as a VoIP
+push, and **iOS requires every VoIP push to be reported to CallKit**: four consecutive
+unreported pushes and the app is terminated (measured, #4278). The 2026-09-01 wake-gate record
+says Swift verifies "before reporting to CallKit", but that's verification, not a silent
+refusal. A refusal still has to report. Pick one:
+
+- **(a) The island learns who may ring**, and gates the wake. That's §9's corpse. Rejected.
+- **(b) The device discards a push without reporting.** That needs the notification-filtering
+  entitlement, which was measured closed (Apple refused it twice, 2026-09-11).
+- **(c) Anyone who passes the island's gates can wake the handset, and the device decides what
+  the wake becomes.** A peer you allowed gets a verified ring. Anyone else gets report-then-end:
+  CallKit shows the call and ends it immediately, which counts as a report and resets the
+  counter. That wake is bounded by gate 7 (only DM peers who have spoken), the island's ring
+  ceiling, and `block`.
+
+**(c) is what the code already does**, so the honest move is to choose it by name, and to stop
+the allowlist header claiming "may this agent wake me at 3am" when what it decides is **how the
+wake presents**. The tier-3 question rides with it. With no pin, the caller has no K, and an
+unsealed ring is one the island fully controls. Does it still ring at tier 3 (`"Aiko"`), or does
+"no pin" mean no system ring at all, and the call surfaces in-app instead?
+
+### 10.6 Still open, unchanged
+1. **First-contact substitution** (§9.4.1): an in-person QR check is the later fix.
+2. **The specialist:** the statement format, the seal construction, and whether "pinned from
+   real speech" is the binding the 2026-09-15 review asked for.
+3. **The island's edge:** an in-app invite to a connected callee who hasn't spoken has no key to
+   seal to. That's acceptable: an open app takes the ring through Dart, which needs no seal.
