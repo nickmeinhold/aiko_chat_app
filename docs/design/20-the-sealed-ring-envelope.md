@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **PROPOSAL — arm C ACCEPTED IN PRINCIPLE by the island tab 2026-09-11 15:55, with three conditions (§8). Un-tempered; no cryptographer has seen §4a.** |
+| **Status** | **PROPOSAL — arm C ACCEPTED IN PRINCIPLE by the island tab 2026-09-11 15:55, with three conditions (§8). Un-tempered.** §4a's key-reuse route was answered AGAINST by an external review on 2026-09-15 (#316: use two keys; the binding is the real blocker). **§9 (2026-10-24) proposes where the second key comes from: ring consent carries it.** |
 | **Owner** | Claude (app tab), 2026-09-11 |
 | **Answers** | claude-tasks#4254 question 3 — *what does Swift verify before reporting to CallKit, and where do the bytes come from?* |
 | **Provoked by** | Nick, 2026-09-11 15:38: *"it feels like there could be a better solution… how does Signal do it?"* That was a pointer at prior art, and it was right. |
@@ -263,3 +263,85 @@ rather than truthiness *because a second member is anticipated* — so the code 
 
 That is the correct order: **the thing that actually blocks the ring goes first, and the thing
 that needs a cryptographer waits for one.**
+
+## 9. v2 direction (2026-10-24): ring consent carries the second key
+
+**Status: a direction, not a design.** Written so the island tab and a later temper have
+something concrete to attack. Nothing here is built, and §8.3 still holds: the certificate
+format waits for a specialist.
+
+### 9.0 What changed since §4a
+
+An applied-cryptography review (2026-09-15, recorded on #316) answered §4a: **don't reuse the
+signing key for encryption; use two keys, and encode each key's permitted use in a
+certificate.** It would accept a published roster of encryption keys only if users already
+trust it *and* it binds users to their encryption keys. That binding does not exist (the island
+is a carrier, not a verifier). So §4a was never blocked on key reuse. **It was blocked on where
+a trusted second key comes from.**
+
+### 9.1 The proposal
+
+**The moment you allow someone to ring you is the moment you hand them your encryption key.**
+
+1. **Grant.** Allowing a peer to ring you in a DM (per-conversation consent, Nick's ruling of
+   2026-08-26, `ring_allowlist_store.dart`) also sends a **key certificate** into that DM as an
+   ordinary signed message: *"my X25519 encryption key is K, for sealing ring invites to me"*,
+   signed with your Ed25519 signing key.
+2. **Pin.** The peer's app verifies the certificate against the signing key it already talks to
+   in that DM, and pins the pair (signing key, K) for that conversation.
+3. **Seal.** When that peer rings you, their app seals the signed invite to K (§4's arm C). Your
+   handset opens it natively, verifies the inner signature against the pinned signing key, and
+   reports to CallKit with a **verified** caller name.
+4. **Fallback.** No pinned certificate (never granted, revoked, or the certificate was
+   dropped) means no sealed envelope, so the ring stays tier 3 (`"Aiko"`). It fails safe.
+
+### 9.2 Why consent, and not "friends"
+
+Design 19 (the friends edge) was dissolved unanimously on 2026-09-11. `block` already does
+the un-reply, and a friends edge would mint an island-side relationship history ("who
+withdrew"), a sensitive table that exists nowhere today. Ring consent avoids both:
+
+- **It already exists**, per conversation, keyed on the peer's signing key, never on a name
+  the island can relabel.
+- **It stores nothing new on the island.** The certificate is an ordinary signed message the
+  island carries and cannot read the meaning of. It can **drop** one (always its prerogative),
+  but cannot **forge** one (it holds no signing key).
+- **It is exactly the right audience.** The people allowed to ring you are exactly the people
+  who will ever need to seal a ring to you.
+
+### 9.3 How this meets the review
+
+- **Two keys, with a certificate for each key's use.** The signing key certifies the encryption
+  key; neither is reused for the other's job.
+- **A binding users already trust.** "The key I have been talking to in this DM". This is
+  trust-on-first-use, the same footing as Signal before a safety-number check. The island never
+  has to vouch for anyone.
+- **One act, three jobs.** The grant is consent, key exchange, and the pin that key continuity
+  (#236) needs, in one gesture.
+
+### 9.4 Where it is weak (named, not hidden)
+
+1. **First-contact substitution.** If the island swapped the signing key at the very first
+   contact, every later pin trusts the impostor. Same weakness as Signal without verifying
+   safety numbers. Mitigation for later: an optional in-person QR check of the pair.
+2. **Multi-device** (ADR-0009 open question 1). With two handsets on one account, which K does
+   the certificate name: one shared, or one per device (and the sealer seals to each)?
+   Undecided, and it shapes the certificate.
+3. **Revocation.** Revoking ring consent should send a signed withdrawal of K, and the peer
+   must stop sealing to it. A dropped withdrawal leaves the peer sealing to a key you no longer
+   want used, which is harmless (the island still enforces the conduct gate, and `block` still
+   severs) but untidy.
+4. **The certificate format** (fields, expiry, version byte per §8.1, size against §8.2's 5 KB
+   APNs budget) needs the specialist §8.3 asked for.
+5. **Relation to ADR-0009's link.** A link ("these two signing keys are both me") and this
+   certificate ("this encryption key is mine") are the same shape: a key making a signed
+   statement about another key. One statement format should probably serve both. Not decided.
+
+### 9.5 Sequencing
+
+Not 0.0.8. In order: the island tab's read of §9 (it changes nothing on the wire except the
+§4 blob it already accepted); the multi-device answer; a specialist on the certificate; then
+`/design-temper`. Until then, #377 builds **tier 2 only** (rename once Dart has verified the
+invite), and **tier 1 (an unverified native name cache) is rejected in favour of this
+section**, because it would paint a name on an unverified push.
+
