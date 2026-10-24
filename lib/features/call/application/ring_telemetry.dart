@@ -5,6 +5,7 @@ import '../../../core/logging/log_providers.dart';
 import '../../../core/logging/aiko_logger.dart';
 import '../domain/answer_outcome.dart';
 import '../domain/call_invite.dart';
+import '../domain/system_call_action.dart';
 import '../domain/wake_age.dart';
 
 /// The ring subsystem's typed telemetry facade.
@@ -203,6 +204,15 @@ class RingTelemetry {
   /// duplicate rate without the hot path drowning the buffer.
   void ringDuplicate(String channelId) =>
       _log.debug('call.ring.duplicate', fields: {'channel': channelId});
+
+  /// What the system ring did with a verified caller name (#377). `named` and
+  /// `held` are the feature working; `unsupported` is Android today;
+  /// `unavailable` is the line to look for when an iPhone rang as "Aiko".
+  void ringIdentified(String channelId, SystemRingIdentify outcome) =>
+      _log.info(
+        'call.ring.identified',
+        fields: {'channel': channelId, 'outcome': outcome.name},
+      );
 
   static const RingTelemetry noop = RingTelemetry(
     AikoLogger(subsystem: 'aiko.call.ring', sink: NoopLogSink()),

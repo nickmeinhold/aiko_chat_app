@@ -110,6 +110,10 @@ void main() {
     // up proving nothing about the wiring it was written for.
     SenderKind kind = SenderKind.human,
     String channelId = dmId,
+    // The island's label for the sender: what the system ring is told to show
+    // once the invite verifies (#377). Nullable, because "no name yet" is a
+    // real state the ring must survive.
+    String? label = 'Robin',
   }) async {
     final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
     final signedAt = DateTime.now().toUtc().subtract(age);
@@ -148,7 +152,7 @@ void main() {
       // the binding against an id that cannot occur.
       id: ulid,
       channelId: channelId,
-      sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
+      sender: MessageSender(userId: from, kind: kind, label: label),
       body: body,
       replyToId: replyTo,
       createdAt: DateTime.now().toUtc(),
@@ -1140,5 +1144,86 @@ void main() {
       );
       expect(admitted.map((i) => i.call), [kOtherCall, kTestCall]);
     });
+  });
+
+  // #377 tier 2: the system ring (CallKit) went up as "Aiko" before Dart ran.
+  // Once the signed invite VERIFIES, Dart tells native who is calling. Driven
+  // through the REAL control channel, so the method name and argument keys
+  // are the production ones; the handler stands in for Swift and Kotlin.
+  group('#377: a verified ring names its caller on the system ring', () {
+    late List<MethodCall> identified;
+
+    setUp(() {
+      identified = [];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel(kSystemCallControlChannel),
+            (call) async {
+              if (call.method == 'identifySystemCall') identified.add(call);
+              if (call.method == 'wakeAge') return {'state': 'notActionable'};
+              return null;
+            },
+          );
+    });
+
+    Future<void> listening() async {
+      await warmDms();
+      container.listen(incomingRingProvider, (_, _) {}, fireImmediately: true);
+      await pump();
+    }
+
+    test(
+      'an admitted invite names its caller, for exactly that call',
+      () async {
+        await listening();
+
+        transport.emitMessage(await inbound());
+        await pump();
+
+        expect(container.read(incomingRingProvider)?.call, kTestCall);
+        expect(identified, hasLength(1));
+        expect(identified.single.arguments, {
+          'channel': dmId,
+          'call': kTestCallId,
+          'name': 'Robin',
+        });
+      },
+    );
+
+    test('an invite that is REFUSED names nobody', () async {
+      // The whole point of tier 2: a name only ever follows a verification.
+      // A stale invite passes the signature but fails the gate, so it must not
+      // reach native as a name either.
+      await listening();
+
+      transport.emitMessage(
+        await inbound(age: kCallInviteFreshness + const Duration(seconds: 5)),
+      );
+      await pump();
+
+      expect(container.read(incomingRingProvider), isNull);
+      expect(identified, isEmpty);
+    });
+
+    for (final label in [null, '', '   ']) {
+      test('no label (${label == null
+              ? 'null'
+              : label.isEmpty
+              ? 'empty'
+              : 'spaces'}): the ring keeps its '
+          'placeholder, nothing is sent', () async {
+        await listening();
+
+        transport.emitMessage(await inbound(label: label));
+        await pump();
+
+        expect(
+          container.read(incomingRingProvider)?.call,
+          kTestCall,
+          reason: 'still rings: a missing name is not a reason to refuse',
+        );
+        expect(identified, isEmpty);
+      });
+    }
   });
 }

@@ -283,6 +283,18 @@ void main() {
 
 /// Records what the app asked the platform call UI to do.
 class _FakeSystemCall implements SystemCallBridge {
+  final List<String> identified = [];
+
+  @override
+  Future<SystemRingIdentify> identify(
+    String channelId,
+    CallRef call,
+    String callerName,
+  ) async {
+    identified.add('$channelId|${call.id}|$callerName');
+    return SystemRingIdentify.named;
+  }
+
   @override
   Future<WakeAge> wakeAge(String channelId, CallRef call) async =>
       const WakeNotActionable();

@@ -280,10 +280,7 @@ void main() {
       r'const val SPENT_TTL_MS = ([0-9_]+)L',
     ).firstMatch(kotlin)?.group(1);
     expect(ms, isNotNull, reason: 'the Kotlin constant did not parse');
-    expect(
-      int.parse(ms!.replaceAll('_', '')),
-      kCallSpentTtl.inMilliseconds,
-    );
+    expect(int.parse(ms!.replaceAll('_', '')), kCallSpentTtl.inMilliseconds);
     final swiftTtl = RegExp(
       r'static let spentTtl: TimeInterval = (\d+)',
     ).firstMatch(swift)?.group(1);
@@ -293,6 +290,71 @@ void main() {
 
   test('Swift emits the v2 call id under the key Dart decodes', () {
     expect(systemCallChannelSource(), contains('event["call"]'));
+  });
+
+  // #377 tier 2. With the app awake, Dart verifies the invite over the socket
+  // BEFORE the VoIP push raises the ring, so a name that arrives first must be
+  // held and applied at the report, not dropped (Maxwell, PR #404). Text pins,
+  // because Swift is not under test here: each fails if its half is deleted.
+  test('#377: a name verified before its ring is held, then applied', () {
+    expect(
+      swift,
+      contains('rememberVerifiedName(name, channel: channel, call: call)'),
+      reason: 'identifySystemCall must HOLD a name that beats its ring',
+    );
+    // The CALL and the ASSIGNMENT together: a pin on the call alone stayed green
+    // with `update.localizedCallerName = name` deleted (Noether, PR #404).
+    expect(
+      swift,
+      matches(
+        RegExp(
+          r'let heldName = channel\.flatMap \{ takeVerifiedName\(channel: \$0, call: callId\) \}\s*'
+          r'if let heldName \{ update\.localizedCallerName = heldName \}',
+        ),
+      ),
+      reason: 'the invite report must APPLY a held name to the first frame',
+    );
+  });
+
+  test('#377: Swift reads the argument keys Dart sends', () {
+    // The method NAME is pinned by "the method Dart invokes, Swift answers";
+    // the KEYS were not (Noether, PR #404 round 3).
+    for (final key in ['channel', 'call', 'name']) {
+      expect(swift, contains('args["$key"] as? String'));
+    }
+  });
+
+  test('#377: reading a held name never spends it (Tesla, PR #404 r2)', () {
+    // A consuming read lost the name to a refused report, or to a push naming
+    // the right call on the wrong channel. Only expiry may remove a hold.
+    final start = swift.indexOf('private func takeVerifiedName(');
+    expect(start, isNot(-1), reason: 'takeVerifiedName must exist');
+    final body = swift.substring(start, swift.indexOf('\n  }\n', start));
+    expect(body, isNot(contains('removeValue')));
+  });
+
+  test('#377: both native halves answer identify in words Dart decodes', () {
+    // Swift's raw values ARE the wire words: an enum case added there without
+    // a Dart twin, or renamed on one side, fails here.
+    final cases = RegExp(
+      r'enum IdentifyOutcome: String \{([^}]*)\}',
+    ).firstMatch(swift)?.group(1);
+    expect(cases, isNotNull, reason: 'Swift must declare IdentifyOutcome');
+    final words = RegExp(
+      r'case (\w+)',
+    ).allMatches(cases!).map((m) => m.group(1)!);
+    expect(words.toSet(), {'named', 'held'});
+    for (final word in words) {
+      expect(SystemRingIdentify.fromWire(word).name, word);
+    }
+    final kotlin = File(
+      'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app/CallChannels.kt',
+    ).readAsStringSync();
+    expect(kotlin, contains('result.success("unsupported")'));
+    expect(
+      SystemRingIdentify.fromWire('unsupported'),
+      SystemRingIdentify.unsupported,
+    );
   });
 
   // Design 23. The two traps the temper named, pinned in the source rather than

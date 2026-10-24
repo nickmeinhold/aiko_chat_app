@@ -52,6 +52,28 @@ abstract class SystemCallBridge {
   /// 22 temper round 3). Ended by [end], like every call.
   Future<void> callStarted(String channelId, CallRef call);
 
+  /// The signed invitation for [call] has been VERIFIED in Dart, so the system
+  /// ring may now name its caller (#377: tier 2 of design 12 Decision 6).
+  ///
+  /// The native ring went up before any Dart ran, from a push that names only a
+  /// channel, so it says "Aiko": nothing had checked who was calling. This is
+  /// sent only after `admitRing` has verified the signature, so a name never
+  /// appears on an unverified push. Tier 1 (a native name cache read before the
+  /// ring) is REJECTED for exactly that reason, in favour of design 20 §9.
+  ///
+  /// Scoped honestly: [callerName] is the island's label for the account, which
+  /// the signature does not cover (#265). Verified means "the key that signed
+  /// this invite is one this channel admits", not "the island told the truth
+  /// about whose key it is".
+  ///
+  /// Exact match on [channelId] and [call]. The answer says what happened, so a
+  /// name that never reached the screen is visible in telemetry.
+  Future<SystemRingIdentify> identify(
+    String channelId,
+    CallRef call,
+    String callerName,
+  );
+
   /// How long ago the native side was woken for [call] on [channelId], while
   /// the system still holds it as ringing or answered (design 23).
   ///
@@ -105,7 +127,11 @@ class NativeSystemCallBridge implements SystemCallBridge {
   /// room and ending the wrong call are both worse than ignoring the event.
   static SystemCallAction? _decode(dynamic event) {
     if (event is! Map) return null;
-    final kind = SystemCallActionKind.parse(event['action'] as String?);
+    // A type TEST, not a cast: `as String?` threw on a non-string action, and a
+    // throw inside the stream's `map` is a stream ERROR, not a dropped event
+    // (Carnot, PR #404).
+    final action = event['action'];
+    final kind = SystemCallActionKind.parse(action is String ? action : null);
     final channelId = event['channel'];
     if (kind == null || channelId is! String || channelId.isEmpty) return null;
     final origin = event['origin'];
@@ -130,6 +156,29 @@ class NativeSystemCallBridge implements SystemCallBridge {
   @override
   Future<void> callStarted(String channelId, CallRef call) =>
       _invoke('callStarted', channelId, call);
+
+  @override
+  Future<SystemRingIdentify> identify(
+    String channelId,
+    CallRef call,
+    String callerName,
+  ) async {
+    try {
+      return SystemRingIdentify.fromWire(
+        await _control.invokeMethod<Object?>('identifySystemCall', {
+          'channel': channelId,
+          'call': call.id,
+          'name': callerName,
+        }),
+      );
+    } on MissingPluginException {
+      // An older native half. The ring keeps saying "Aiko", which is today.
+      return SystemRingIdentify.unavailable;
+    } on PlatformException {
+      // A name is an enrichment. Failing to add one must never disturb the ring.
+      return SystemRingIdentify.unavailable;
+    }
+  }
 
   @override
   Future<WakeAge> wakeAge(String channelId, CallRef call) async {
