@@ -170,14 +170,14 @@ class _Built {
 Future<_Built> _build(String platform, String version, Directory work) async {
   switch (platform) {
     case 'android':
-      await _must('flutter', [
+      await _buildStep('flutter', [
         'build',
         'appbundle',
         '--release',
         '--dart-define-from-file=$_defines',
       ]);
       const aab = 'build/app/outputs/bundle/release/app-release.aab';
-      await _must('unzip', ['-q', aab, '-d', work.path]);
+      await _buildStep('unzip', ['-q', aab, '-d', work.path]);
       // The bundle's manifest is binary protobuf; the versionName survives as text.
       final manifest = latin1.decode(
         File(
@@ -192,7 +192,7 @@ Future<_Built> _build(String platform, String version, Directory work) async {
       final v = found.contains(version) ? version : found.join(',');
       return _Built(aab, '${work.path}/base/lib/arm64-v8a/libapp.so', v);
     case 'ios':
-      await _must('flutter', [
+      await _buildStep('flutter', [
         'build',
         'ipa',
         '--release',
@@ -200,7 +200,7 @@ Future<_Built> _build(String platform, String version, Directory work) async {
         '--export-options-plist=ios/ExportOptions.plist',
       ]);
       final ipa = _only('build/ios/ipa', '.ipa');
-      await _must('unzip', ['-q', ipa, '-d', work.path]);
+      await _buildStep('unzip', ['-q', ipa, '-d', work.path]);
       final app = '${work.path}/Payload/Runner.app';
       return _Built(
         ipa,
@@ -214,13 +214,13 @@ Future<_Built> _build(String platform, String version, Directory work) async {
       for (final d in ['build/macos-archive', 'build/mas-export']) {
         if (Directory(d).existsSync()) Directory(d).deleteSync(recursive: true);
       }
-      await _must('flutter', [
+      await _buildStep('flutter', [
         'build',
         'macos',
         '--release',
         '--dart-define-from-file=$_defines',
       ]);
-      await _must('xcodebuild', [
+      await _buildStep('xcodebuild', [
         '-workspace',
         'macos/Runner.xcworkspace',
         '-scheme',
@@ -231,7 +231,7 @@ Future<_Built> _build(String platform, String version, Directory work) async {
         archive,
         'archive',
       ]);
-      await _must('xcodebuild', [
+      await _buildStep('xcodebuild', [
         '-exportArchive',
         '-archivePath',
         archive,
@@ -313,11 +313,52 @@ Future<String> _plistVersion(String plist) => _out('plutil', [
 ]).then((s) => s.trim());
 
 /// Runs with the console attached; a nonzero exit stops the release.
-Future<void> _must(String cmd, List<String> args) async {
+Future<void> _must(
+  String cmd,
+  List<String> args, {
+  Map<String, String>? environment,
+}) async {
   stdout.writeln('+ $cmd ${args.join(' ')}');
-  final p = await Process.start(cmd, args, mode: ProcessStartMode.inheritStdio);
+  final p = await Process.start(
+    cmd,
+    args,
+    mode: ProcessStartMode.inheritStdio,
+    environment: environment,
+    includeParentEnvironment: environment == null,
+  );
   final code = await p.exitCode;
   if (code != 0) _die('$cmd exited $code');
+}
+
+/// A build step: runs with the credentials stripped from the environment.
+///
+/// `xcodebuild archive` prints the WHOLE environment into the log for each
+/// script phase, and on 2026-10-24 that printed a keystore password from
+/// ~/.claude/.env. Builds sign from the keychain and android/key.properties,
+/// never from env, so they don't need any of it.
+Future<void> _buildStep(String cmd, List<String> args) =>
+    _must(cmd, args, environment: buildEnvironment());
+
+/// The parent environment minus every name defined in ~/.claude/.env (that
+/// file IS the list of secrets) and anything whose name looks like one.
+Map<String, String> buildEnvironment({
+  Map<String, String>? parent,
+  String? envFile,
+}) {
+  final env = Map.of(parent ?? Platform.environment);
+  final file = File(envFile ?? '${Platform.environment['HOME']}/.claude/.env');
+  final defined = file.existsSync()
+      ? RegExp(
+          r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=',
+          multiLine: true,
+        ).allMatches(file.readAsStringSync()).map((m) => m[1]!).toSet()
+      : <String>{};
+  final looksSecret = RegExp(
+    r'PASS|SECRET|TOKEN|PRIVATE|CREDENTIAL|API_?KEY|_KEY$|_KEY_',
+    caseSensitive: false,
+  );
+  env.removeWhere((k, _) => defined.contains(k) || looksSecret.hasMatch(k));
+  return env;
 }
 
 Future<bool> _ok(String cmd, List<String> args) async =>
