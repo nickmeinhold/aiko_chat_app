@@ -2,7 +2,11 @@ import 'dart:async';
 
 import 'package:aiko_chat_app/features/call/application/ring_controller.dart';
 import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/core/logging/aiko_log.dart';
+import 'package:aiko_chat_app/core/logging/aiko_logger.dart';
 import 'package:aiko_chat_app/features/call/application/ring_allowlist_provider.dart';
+import 'package:aiko_chat_app/features/call/application/ring_telemetry.dart';
+import 'package:aiko_chat_app/features/call/application/system_call_providers.dart';
 import 'package:aiko_chat_app/features/call/data/system_call_bridge.dart'
     show kSystemCallControlChannel;
 import 'package:aiko_chat_app/features/call/domain/answer_outcome.dart';
@@ -1152,9 +1156,30 @@ void main() {
   // are the production ones; the handler stands in for Swift and Kotlin.
   group('#377: a verified ring names its caller on the system ring', () {
     late List<MethodCall> identified;
+    late _Capture logs;
+
+    /// What `call.ring.identified` said, as `outcome` or `outcome/reason`.
+    List<String> identifyLines() => [
+      for (final r in logs.records)
+        if (r.event == 'call.ring.identified')
+          [
+            r.fields['outcome'],
+            if (r.fields['reason'] != null) r.fields['reason'],
+          ].join('/'),
+    ];
 
     setUp(() {
       identified = [];
+      logs = _Capture();
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [
+          ...overrides(),
+          ringTelemetryProvider.overrideWithValue(
+            RingTelemetry(AikoLogger(subsystem: 'test', sink: logs)),
+          ),
+        ],
+      );
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(
             const MethodChannel(kSystemCallControlChannel),
@@ -1187,6 +1212,8 @@ void main() {
           'call': kTestCallId,
           'name': 'Robin',
         });
+        // The stand-in for native replies null, which reads as `unavailable`.
+        expect(identifyLines(), ['unavailable']);
       },
     );
 
@@ -1203,6 +1230,11 @@ void main() {
 
       expect(container.read(incomingRingProvider), isNull);
       expect(identified, isEmpty);
+      expect(
+        identifyLines(),
+        isEmpty,
+        reason: 'identify is never attempted for a refusal, so no line at all',
+      );
     });
 
     for (final label in [null, '', '   ']) {
@@ -1223,7 +1255,37 @@ void main() {
           reason: 'still rings: a missing name is not a reason to refuse',
         );
         expect(identified, isEmpty);
+        expect(identifyLines(), ['skipped/noLabel']);
       });
     }
+
+    test('no bridge (desktop): the skip is logged, not silent', () async {
+      // #5192: without this line, "no bridge", "no label" and "identify never
+      // ran" all read as the same missing `call.ring.identified`.
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [
+          ...overrides(),
+          systemCallBridgeProvider.overrideWithValue(null),
+          ringTelemetryProvider.overrideWithValue(
+            RingTelemetry(AikoLogger(subsystem: 'test', sink: logs)),
+          ),
+        ],
+      );
+      await listening();
+
+      transport.emitMessage(await inbound());
+      await pump();
+
+      expect(container.read(incomingRingProvider)?.call, kTestCall);
+      expect(identified, isEmpty);
+      expect(identifyLines(), ['skipped/noBridge']);
+    });
   });
+}
+
+class _Capture extends LogSink {
+  final records = <LogRecord>[];
+  @override
+  void add(LogRecord record) => records.add(record);
 }
