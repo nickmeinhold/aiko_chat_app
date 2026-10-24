@@ -925,6 +925,14 @@ void main() {
       // past zero and pass on the ordinary fresh path (Maxwell, PR #399). The
       // exact measured value is pinned in call_invite_test, at a fixed `now`.
       final admitted = await listening();
+      // The controller's clock AT ADMISSION, captured in the admissions
+      // listener itself, so a pause after a correct admission cannot fail
+      // this test (Carnot, PR #399 round 3).
+      DateTime? admittedAt;
+      container
+          .read(incomingRingProvider.notifier)
+          .admissions
+          .listen((_) => admittedAt ??= DateTime.now().add(skew));
 
       transport.emitMessage(await inbound(age: const Duration(seconds: -3)));
       await pump();
@@ -932,13 +940,13 @@ void main() {
       expect(container.read(incomingRingProvider)?.call, kTestCall);
       expect(admitted.map((i) => i.call), [kTestCall]);
       expect(asked, isEmpty);
-      // The case this test is NAMED for: the invite must still be in the
-      // controller's future now, so it was in the future when admitted. A stall
-      // past 3 s would have admitted it on the ordinary fresh path instead, and
+      // The case this test is NAMED for: the invite was still in the
+      // controller's future when it was admitted. A stall past 3 s BEFORE
+      // admission would have admitted it on the ordinary fresh path, and
       // without this line that loss of coverage would pass in silence
       // (Noether, PR #399 round 2).
       expect(
-        admitted.single.startedAt.isAfter(DateTime.now().add(skew)),
+        admitted.single.startedAt.isAfter(admittedAt!),
         isTrue,
         reason:
             'the fixture aged past zero before admission; this run no '
