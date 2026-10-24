@@ -16,25 +16,32 @@ translating.
 a cross-family *model* review. They find logic and consistency defects. None of them counts as
 a cryptographer's sign-off, and nothing below is marked done because a model panel approved it.
 
-## Blocking: design 20 §9 (the sealed ring), PR #403
+## Blocking: design 20 §10 (the sealed ring), PR #403
 
-1. **The key certificate format.** One account's Ed25519 key signs "my X25519 key is K, for
-   sealing ring invites to me". The open questions: the fields, expiry, version byte (§8.1),
-   and the size against the 5 KB APNs budget (§8.2). Also domain separation, so a certificate
-   can never verify as a chat message or a reaction, or the reverse. `design 20 §9.1, §9.4.4`
-2. **One statement format for two jobs?** ADR-0009's link (two signing keys, each signing
-   "A ↔ B") and §9's certificate (one key vouching for its sibling) are both a key making a
-   signed statement about another key. The question is whether one envelope with distinct,
-   domain-separated statement types is sound, or whether sharing a format invites confusion
-   between them. `design 20 §9.4.5, ADR-0009 ref. 2`
-3. **The seal itself (arm C).** The caller seals the signed invite to K, and the callee's handset
-   opens it natively (CryptoKit) before Dart runs. The questions: which construction (HPKE base
-   mode or a hand-rolled X25519 + HKDF + AEAD), what binds the envelope to its recipient and
-   context, and replay. The inner invite already carries a timestamp, checked with a 5 s
+§9 ("consent carries the key") was broken by the island tab's read on 2026-10-25: the island
+reads DM bodies, so a certificate sent on consent reveals the consent. §10 recasts it. Every
+account announces its X25519 key to every DM peer, and consent stays device-local.
+
+1. **The key statement format.** An account's Ed25519 key signs "my X25519 key is K". The open
+   questions: the fields, expiry, version byte (§8.1), and the size against the 5 KB APNs budget
+   (§8.2). It rides inside a DM, so it needs **its own inner domain tag, signed separately from the
+   carrying message**. Otherwise its signature is under `aikochat:msg:v1` and it *is* a chat
+   message (island tab's catch). `design 20 §10.1, §10.2`
+2. **One layout, one tag per statement type.** This extends the existing
+   `aikochat:msg:v1:EdDSA` / `aikochat:react:v1:EdDSA` length-prefixed pattern to the key
+   statement and ADR-0009's link. **The signer structure goes in the tag, not in the number of
+   signatures attached**: the link is mutual and the key statement is single, and a verifier
+   that infers the type from the signature count can be fed a one-signature link. Is that
+   enough domain separation? `design 20 §10.2, ADR-0009 ref. 2`
+3. **The seal itself (arm C).** The caller seals the signed invite to K, and the callee's
+   handset opens it natively (CryptoKit) before Dart runs. Questions: which construction (HPKE
+   base mode, or a hand-rolled X25519 + HKDF + AEAD), what binds the envelope to its recipient
+   and context, and replay. The inner invite already carries a timestamp, checked with a 5 s
    tolerance for clock skew (#393). `design 20 §4`
-4. **TOFU pinning and revocation.** The peer pins (signing key, K) per conversation. Questions:
-   is a first-contact key swap by the island the only substitution risk, and does a dropped
-   signed withdrawal of K leave anything worse than "untidy"? `design 20 §9.4.1, §9.4.3`
+4. **TOFU on the DM's signing key as the binding.** The peer pins (signing key, K) per DM. The
+   2026-09-15 review would accept published keys only with a binding users already trust. Is
+   "the key I have been talking to in this DM" that binding? First-contact substitution by the
+   island is the named residual risk. `design 20 §9.4.1, §10.4.4`
 5. **One copied key per account (ADR-0009 ref. 4).** Every device holds the same Ed25519 and
    X25519 keys. Revoking a lost device therefore means rotating the account's key. We'd like a
    cryptographer to confirm this is a sound choice and not a known trap.
@@ -74,7 +81,14 @@ a cryptographer's sign-off, and nothing below is marked done because a model pan
     says this "needs a specialist", and the v1 group key-management crucible was struck down.
     `docs/crucible/group-e2ee-key-management/`
 
-## Island side
+## Island side (from the island tab's read, 2026-10-25)
 
-Owed by the island tab (asked 2026-10-25), e.g. `SigningKey` binding and the first proof
-of possession that ADR-0009's link makes possible.
+14. **Proof of possession at key registration.** It would let `signing_keys` flip from
+    per-user to globally unique (island `models.py:1106-1113`). Until then the table records
+    "account X presented key P at send time", which is not ownership.
+15. **Verifying link signatures when a link is posted** (ADR-0009, "the link is the island's
+    first proof of possession"). This is the island's first signature check, so its bytes must
+    match the app's exactly: pin it with shared golden vectors, the way the msg/react tags are
+    pinned today.
+16. **Shape-only validation of the sealed push envelope (§8.1).** What do a version byte and a
+    length bound leak, including the size-bucketing leak the friends crucible flagged?
