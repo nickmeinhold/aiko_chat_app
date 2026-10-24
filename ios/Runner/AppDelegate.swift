@@ -1038,6 +1038,31 @@ final class CallKitRinger: NSObject {
     liveSession = (channel: channel, call: call)
   }
 
+  /// Tier 2 of design 12 Decision 6 (#377): the ring went up as "Aiko" because
+  /// nothing had verified the caller yet. Dart has now verified the signed
+  /// invite for [call], so the ring may say who it is.
+  ///
+  /// EXACT, like `endSystemCall`: the live entry on the channel must be the
+  /// call Dart names, so a late verification of call A can never rename call B
+  /// that displaced it. Only `localizedCallerName` is set; a `CXCallUpdate`
+  /// changes only the properties it sets, so the handle, video flag and state
+  /// stay as reported.
+  ///
+  /// The NAME, not the handle: `remoteHandle` stays the "Aiko" placeholder, so
+  /// nothing here becomes a dialable identity in Recents.
+  func identifySystemCall(channel: String, call: String, name: String) {
+    guard let entry = liveEntry(for: channel), entry.call == call else {
+      os_log(
+        "[callkit] identify: no live ring for this call on %{public}@", log: aikoCallLog,
+        type: .info, channel)
+      return
+    }
+    let update = CXCallUpdate()
+    update.localizedCallerName = name
+    provider.reportCall(with: entry.uuid, updated: update)
+    os_log("[callkit] identify: caller named on %{public}@", log: aikoCallLog, type: .info, channel)
+  }
+
   // MARK: The session, the lease and the spent calls (design 22 v4)
 
   /// The call Dart has live in THIS process. Process memory on purpose: the
@@ -1406,6 +1431,17 @@ final class SystemCallChannel: NSObject, FlutterStreamHandler {
           let callId = args["call"] as? String
         else { return result(["state": "notActionable"]) }
         result(CallKitRinger.shared.wakeAge(channel: channel, call: callId))
+      case "identifySystemCall":
+        // Dart has VERIFIED the signed invite for exactly this call, so the ring
+        // may name its caller (#377 tier 2).
+        if let args = call.arguments as? [String: Any],
+          let channel = args["channel"] as? String, !channel.isEmpty,
+          let callId = args["call"] as? String,
+          let name = args["name"] as? String, !name.isEmpty
+        {
+          CallKitRinger.shared.identifySystemCall(channel: channel, call: callId, name: name)
+        }
+        result(nil)
       case "callStarted":
         // Dart has a call live in this process (design 22 v4.2).
         if let args = call.arguments as? [String: Any],

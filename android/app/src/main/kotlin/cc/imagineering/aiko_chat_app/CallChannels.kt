@@ -97,6 +97,14 @@ object CallChannels {
             result.success(mapOf("state" to "notActionable"))
           }
         }
+        "identifySystemCall" -> {
+          // NOT BUILT ON ANDROID YET, and answered rather than left
+          // unimplemented so the shared bridge stays one contract (#377). The
+          // ring keeps "Aiko Chat". Re-posting the full-screen notification to
+          // rename it needs setOnlyAlertOnce and a check that it does not
+          // relaunch IncomingCallActivity, which wants a handset to prove.
+          result.success(null)
+        }
         "canRingFullScreen" -> result.success(IncomingCallNotifier.canRingFullScreen(app))
         "openFullScreenSettings" -> {
           openFullScreenSettings(app)
