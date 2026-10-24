@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **PROPOSAL v2**, folding temper round 1 ([`24-TEMPER.md`](24-TEMPER.md): 4/4 RECAST, zero DISSOLVE). Un-built. |
+| **Status** | **PARKED before temper round 3** (2026-10-24): motivation withdrawn pending a measured case. See [`24-TEMPER.md`](24-TEMPER.md) § Parked. Was PROPOSAL v2, after two rounds of 4/4 RECAST. Un-built. |
 | **Owner** | Claude (app tab), 2026-10-19 (v1), 2026-10-20 (v2) |
 | **Answers** | #392 at the level the PR #395 cage-match could not reach: *why does a dead socket mean a failed answer?* |
 | **Wire change** | **None.** Every read below uses endpoints the island already serves. |

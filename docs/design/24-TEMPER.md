@@ -1,5 +1,33 @@
 # TEMPER.md — design 24, "the answer fetches its own invite"
 
+## Parked before round 3 (2026-10-24)
+
+Round 3 was the last round (the cage-match cap). Before spending it, we checked whether the design still has a failure to fix. **It does not have a measured one.**
+
+**The measurement.** Pixel 4, store build 0.0.7 vc18 (carries #395 and #399). Aiko alive in the background, phone forced into deep Doze (`dumpsys battery unplug` + `deviceidle force-idle`), so the socket was dead underneath a process that thought it was connected. Ring sent by the island (`hw_ring.dart invite --island`), real FCM wake.
+
+| time (AEDT) | event |
+|---|---|
+| 19:26:52 | signed invite sent |
+| 57.121 | push wakes the app; transport drops the dead socket |
+| 57.127 → 57.203 | expired access token refreshed (76 ms) |
+| 57.241 | socket connected (38 ms) |
+| 57.371 | `call.ring.started ageMs=1060`: the invite arrived **in-band** over the rebuilt socket |
+| 19:27:03.127 | user taps Answer |
+| 03.151 | `call.answer.held` → `call.answer.resolved outcome=joined`, same millisecond |
+| 04.41 | island: `video-token mint` for the callee: joined |
+
+The push's temporary network allowance is enough for #395 to rebuild the socket and receive the invite **about 6 s before the user answers**. The answer waits 0 ms. The race design 24 is built to win did not occur. Design 24's own §0 cited #395 joining 1.35 s after Answer; this is the warm-process, slept-phone case, and it is stronger.
+
+**What remains of the motivation, and why it is not enough to temper now:**
+
+- *#395's recovery could stall in new ways* (three cage-match rounds each found one). True as a risk; no field instance.
+- *The socket's 403 cannot tell "renew" from "stop"; REST's 401 can.* This only matters when the refresh itself fails, which today's run did not exercise: the long-lived renewal token was still valid.
+
+**What would reopen it.** A measured answer that ends `neverAdmitted` (or is held to its deadline) on a build carrying #395. The most likely source is Nick's multi-day idle test of 0.0.7: if the renewal token expires and #395's retry loops, the 401-vs-403 distinction becomes the live argument, and round 3 has a real case to strike against. n=1 and forced Doze, not hours of natural idle; the code paths (dead socket, expired access token, island wake) are the real ones.
+
+**Round 3 is not spent.** The rounds above stand as the design record of v1 and v2.
+
 **Overall verdict: RECAST** (4/4 families seated, **4/4 RECAST, zero DISSOLVE**)
 **Struck:** dt-1792454135, 2026-10-20, families seated: Maxwell + Noether + Carnot + Tesla (Wu disabled)
 **Bundle:** design 24 + a code excerpt of `chat_repository.dart` (persist door, `_runReconnect`, delta loop) + app designs 23 and 20 + island `19-TEMPER.md` and `19-RECAST.md` (88KB).
