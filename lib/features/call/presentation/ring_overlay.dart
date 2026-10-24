@@ -95,11 +95,14 @@ class _RingBanner extends ConsumerWidget {
                       ],
                     ),
                   ),
-                  // "Ignore", NOT "Decline". The caller is never told — there is no
-                  // signal back to them until the island's occupancy endpoint lands
-                  // (claude-tasks#3159). "Decline" implies they hear about it; the
-                  // word would be the lie, so the honest word does the work instead
-                  // of a disclaimer.
+                  // "Ignore", NOT "Decline". The caller is never told: nothing signals
+                  // back to them. The island's occupancy endpoint (claude-tasks#3159)
+                  // won't change that, because ignoring leaves no trace in the room;
+                  // an ignored ring and an unanswered one both read as one
+                  // participant. Telling the caller would need a signed decline
+                  // message, which doesn't exist. "Decline" implies they hear about
+                  // it; the word would be the lie, so the honest word does the work
+                  // instead of a disclaimer.
                   TextButton(
                     onPressed: () => _ignore(ref, invite),
                     child: const Text('Ignore'),
