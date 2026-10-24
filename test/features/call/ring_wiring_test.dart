@@ -915,6 +915,41 @@ void main() {
       expect(asked, hasLength(1));
     });
 
+    test('#393: an open app rings an invite signed 0.82 s in its future, '
+        'without asking the native side', () async {
+      // Measured on a Pixel 2026-10-24: the invite arrived over the live socket
+      // from a sender 0.82 s fast and was refused clockSkew, so the native ring
+      // rang and the answer waited 30 s for an admission that never came.
+      final admitted = await listening();
+
+      transport.emitMessage(
+        await inbound(age: const Duration(milliseconds: -820)),
+      );
+      await pump();
+
+      expect(container.read(incomingRingProvider)?.call, kTestCall);
+      expect(admitted.map((i) => i.call), [kTestCall]);
+      expect(asked, isEmpty);
+    });
+
+    test(
+      '#393: a clock further ahead than the tolerance stays silent',
+      () async {
+        final admitted = await listening();
+
+        transport.emitMessage(
+          await inbound(
+            age: -kCallInviteClockSkewTolerance - const Duration(seconds: 1),
+          ),
+        );
+        await pump();
+
+        expect(container.read(incomingRingProvider), isNull);
+        expect(admitted, isEmpty);
+        expect(asked, isEmpty);
+      },
+    );
+
     test('a fresh invite never asks the native side', () async {
       // `receivedAt <= now`: a wake can only rescue what `now` refuses.
       await listening();
