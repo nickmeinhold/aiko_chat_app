@@ -139,7 +139,8 @@ class SovereignKeyStore {
 
   /// Load this account's persisted key, minting one on first use. Idempotent
   /// PER INSTANCE and once the slot is settled: after that, the same (device,
-  /// account) resolves to the same key until [clear]. NOT across two instances
+  /// account) resolves to the same key until [clear] (called with no load in
+  /// flight; see there). NOT across two instances
   /// racing an empty slot: both mint, and the session may sign with the seed
   /// that lost (the accepted race, see [_inflight]).
   Future<SovereignKey> loadOrCreate() => _inflight ??= _guardedLoad();
@@ -265,7 +266,11 @@ class SovereignKeyStore {
   }
 
   /// Wipe THIS ACCOUNT's key. A subsequent [loadOrCreate] mints a fresh identity
-  /// — which, pre-federation, reads as a NEW author. Has no production caller;
+  /// — which, pre-federation, reads as a NEW author. Call it only when no load is
+  /// in flight: a load still minting when this runs resumes after the delete and
+  /// writes ITS seed over whatever a later load persisted, so this instance's memo
+  /// and the disk disagree (Carnot, #4831 round-3 delta). Not serialised, for the
+  /// same reason [_inflight] takes no lock. Has no production caller;
   /// whether sign-out should call it is tracked on #4831, and is a question about
   /// ROTATION rather than correlation, which the scoping already takes.
   Future<void> clear() async {
