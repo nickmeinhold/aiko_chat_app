@@ -46,14 +46,20 @@ library;
 
 import '../../chat/domain/message.dart';
 import '../../chat/domain/origin_envelope.dart';
+import 'call_wire.dart';
 import 'ring_consent.dart';
+
+export 'call_wire.dart';
 
 /// The pinned invitation body. **Signed and durable — never edit this string.**
 /// A client that predates the feature renders it as a readable line of text
 /// rather than breaking, which is why the human words trail the machine anchor.
 ///
 /// Confirmed by Nick 2026-08-15 before first transmission to a live island.
-const String kCallInviteBody = 'aiko:call/1 · 📞 started a call';
+///
+/// Defined in `call_wire.dart` as [kCallInviteBodyV1]; this name is kept because
+/// signed history and many call sites cite it.
+const String kCallInviteBody = kCallInviteBodyV1;
 
 /// How old an invitation may be **on arrival** and still ring.
 ///
@@ -63,6 +69,24 @@ const String kCallInviteBody = 'aiko:call/1 · 📞 started a call';
 /// freshness; anything older is history replay (app reopen, reconnect drain,
 /// scrollback) and must stay silent.
 const Duration kCallInviteFreshness = Duration(seconds: 10);
+
+/// How far in the FUTURE an invitation's signature may be and still ring.
+///
+/// Two clocks are compared here: the sender's (it signed `signedAt`) and ours
+/// (`now`). A sender whose clock runs a little fast signs in our future, and an
+/// app that is OPEN reads the invite over its live socket within milliseconds,
+/// so its age comes out negative. With zero tolerance that refused every ring
+/// to a foreground app from a slightly fast sender. The native ring rang anyway,
+/// and the answer waited 30 s for an admission that never came (#393, measured
+/// on a Pixel 2026-10-24: `clockSkew ageMs=-820`). A cold app read the same
+/// invite seconds later, by which time its age was positive, which is why only
+/// the open app failed.
+///
+/// BOUNDED, not removed: a clock further ahead than this is still unreadable and
+/// refused, so a bad clock can't ring forever. An admitted future invite rings
+/// at most this much longer, because the ring window runs from `signedAt`. The
+/// island's `is_fresh()` has the same shape: `-skew <= age <= max_age`.
+const Duration kCallInviteClockSkewTolerance = Duration(seconds: 5);
 
 /// How long the IN-APP ring rings once admitted — a human-reaction clock. After
 /// this it stops ringing; the invitation remains in history as the record that
@@ -80,6 +104,13 @@ const Duration kCallInviteFreshness = Duration(seconds: 10);
 /// for both is how a constant that enforces nothing gets cited as though it
 /// does.
 const Duration kInAppRingDuration = Duration(seconds: 30);
+
+/// How soon the ring gate asks again when the native side answers that it
+/// cannot tell yet whether it was woken for a call (design 23, [WakeUnknown]).
+///
+/// A cadence, not a bound: it changes how quickly a late answer is noticed and
+/// nothing about what is admitted. The bound is [kInAppRingDuration].
+const Duration kWakeAgeRetry = Duration(milliseconds: 250);
 
 /// The pinned END body — the caller saying "I hung up". **Signed and durable —
 /// never edit this string.**
@@ -124,17 +155,24 @@ const Duration kInAppRingDuration = Duration(seconds: 30);
 /// already written the string into signed history by the time it was asked. The
 /// cost happened to be nil (a handful of rows from test accounts, no users on
 /// older builds) but that was luck, not process.
-const String kCallEndBody = 'aiko:call/1 · 📞 ended the call';
+///
+/// Defined in `call_wire.dart` as [kCallEndBodyV1].
+const String kCallEndBody = kCallEndBodyV1;
 
 /// True when [body] is the call-invitation sentinel.
 ///
 /// Exact match, deliberately: a `startsWith`/`contains` test would let anyone
 /// ring you by typing the sentinel with a word after it, and would make every
 /// quotation of this doc a ringing message.
-bool isCallInviteBody(String body) => body == kCallInviteBody;
+///
+/// Either version: v1's exact sentinel, or a v2 body whose id passes the shared
+/// grammar. Both decided by [parseCallBody], the one recogniser.
+bool isCallInviteBody(String body) =>
+    parseCallBody(body)?.kind == CallBodyKind.invite;
 
 /// True when [body] is the call-END sentinel. Exact match, same reasoning.
-bool isCallEndBody(String body) => body == kCallEndBody;
+bool isCallEndBody(String body) =>
+    parseCallBody(body)?.kind == CallBodyKind.end;
 
 /// A verified hangup: WHICH call ended, and WHO said so.
 ///
@@ -149,13 +187,21 @@ bool isCallEndBody(String body) => body == kCallEndBody;
 /// both consumers run [endsInvite].
 class CallEnd {
   const CallEnd({
-    required this.targetIslandMsgId,
+    required this.call,
     required this.fromUserId,
     required this.channelId,
+    this.targetIslandMsgId,
   });
 
-  /// The island ULID of the invitation being ended — the signed `replyTo`.
-  final String targetIslandMsgId;
+  /// The call this ends — the id in its own signed body. Also the key
+  /// [RingController] remembers an early end under, so an end that overtakes
+  /// its invitation finds it by the same name.
+  final CallRef call;
+
+  /// The island id of the invite this replies to, when the hangup knew it.
+  /// Threading only: the call is named by [call], which is what lets a hangup
+  /// go out before the invite's ack (design 21 v2).
+  final String? targetIslandMsgId;
   final String fromUserId;
   final String channelId;
 }
@@ -178,7 +224,7 @@ class CallEnd {
 /// - **a bot** — mirroring [admitRing]. Unreachable while an end must match a
 ///   human's invitation, but the two gates sit side by side and asymmetric
 ///   clauses are how a later reader "fixes" the wrong one.
-/// - **names no call** — a stop with no `replyTo` is about everything or nothing.
+/// - **a v1 body** — history, never a call (design 22 v2.0).
 /// - **has no author** — `MessageSender.userId` is null for an external actor.
 ///   "Only the caller may end the call" is unanswerable without one, and an
 ///   authorless stop would then be a stop from anybody.
@@ -200,10 +246,26 @@ class CallEnd {
 /// (cage-match — Carnot HIGH and Tesla, independently, which is the strongest
 /// signal this review produced). A protocol whose start and stop have different
 /// admission rules is not a protocol, it is two.
-bool _isCallEndShape(Message message) =>
-    isCallEndBody(message.body) &&
-    message.sender.userId != null &&
-    message.replyToId != null; // "names no call" — see admitCallEnd's doc
+bool _isCallEndShape(Message message) {
+  final body = parseCallBody(message.body);
+  if (body?.kind != CallBodyKind.end) return false;
+  if (message.sender.userId == null) return false;
+  // "Names no call" — see admitCallEnd's doc. A v1 end names its call only by
+  // replying to it; a v2 end names it in its own signed body.
+  //
+  // NAMED TRADEOFF (design 21 v2): the reply binding was ALSO what kept a TYPED
+  // v1 end from rendering as "X ended the call" for a call that never existed
+  // (cage-match #139 round 6). A v2 end that someone types with an id of their
+  // own invention renders as a hangup line for a call that never rang. It is
+  // signed by them, it can only stop a ring of THEIR OWN (admission matches
+  // author and id), and the only thing it misleads is the timeline's wording.
+  // Accepted in exchange for a hangup that does not wait on the invite's ack —
+  // the misdial path. Owner: the app tab.
+  //
+  // A v1 end still RENDERS by its old rule (it is history), though it is never
+  // admitted as a call (design 22 v2.0).
+  return body!.call != null || message.replyToId != null;
+}
 
 /// A verified sovereign origin: this key signed these bytes, checked at ingest.
 bool _hasVerifiedOrigin(Message message) =>
@@ -272,15 +334,16 @@ CallEndDecision admitCallEnd(
   // three very different situations. The render path still uses the compound
   // form (it only needs a bool); admission needs to tell them apart, because two
   // of the three are anomalies and one is every message anyone ever sends.
-  if (!isCallEndBody(message.body)) {
+  final body = parseCallBody(message.body);
+  if (body == null || body.kind != CallBodyKind.end) {
     return const CallEndRefused(RingRefusal.notAnEnd);
   }
   if (message.sender.userId == null) {
     return const CallEndRefused(RingRefusal.endMissingAuthor);
   }
-  if (message.replyToId == null) {
-    return const CallEndRefused(RingRefusal.endMissingTarget);
-  }
+  // A v1 end is history, not a call (design 22 v2.0): it ends nothing.
+  final call = body.call;
+  if (call == null) return const CallEndRefused(RingRefusal.v1Call);
   // DECOMPOSED, mirroring `admitRing` clause for clause. `_hasVerifiedOrigin` is
   // `originCryptoValid == true && origin != null` — one bool over two different
   // invariant breaks — so the stop gate answered `unverifiedOrigin` for an
@@ -310,10 +373,10 @@ CallEndDecision admitCallEnd(
   if (notPermitted != null) return CallEndRefused(notPermitted);
   final from = message.sender.userId!;
   if (from == meUserId) return const CallEndRefused(RingRefusal.ownEnd);
-  final target = message.replyToId!;
   return CallEndAdmitted(
     CallEnd(
-      targetIslandMsgId: target,
+      call: call,
+      targetIslandMsgId: message.replyToId,
       fromUserId: from,
       channelId: message.channelId,
     ),
@@ -323,29 +386,32 @@ CallEndDecision admitCallEnd(
 /// Does [end] end [invite]? Applied identically whether the end arrived while
 /// the invitation was ringing or before it existed.
 ///
-/// The binding is the SERVER id, and that is not a preference: a live probe
-/// showed `reply_to` is an FK onto `messages.id`, so a frame carrying a
-/// `client_msg_id` there is refused outright (`no_reply_target`) and the hangup
-/// never leaves the device. Comparing the client id would have matched a message
-/// that cannot exist.
+/// The binding is the CALL ID both bodies carry inside their signatures
+/// (call/2, island design 12 Decision 1). It used to be the invite's server id
+/// via `reply_to`, which made the hangup wait for the ack and let a sender
+/// point an end at any row in the channel. The id needs neither.
 ///
-/// FRESHNESS NEEDS NO CLOCK, and that falls out of the binding: a replayed end
-/// can only match an invitation still live, and a live invitation is at most
-/// [kInAppRingDuration] old. Re-delivery is idempotent.
+/// FRESHNESS NEEDS NO CLOCK: a replayed end can only match an invitation still
+/// live, and a live invitation is at most [kInAppRingDuration] old.
+/// Re-delivery is idempotent.
 bool endsInvite(CallEnd end, CallInvite invite) {
   // Only the account that started the call may end it, and only in the channel
   // it was started in. (Inherited caveat: `sender` is server-supplied and outside
   // the signature, so this is exactly as strong as the app's trust root and no
-  // stronger — see admitRing. What IS signed is the end body and its reply
-  // binding; the claim is not cryptographic caller identity.)
-  return end.targetIslandMsgId == invite.islandMsgId &&
-      end.fromUserId == invite.from.userId &&
-      end.channelId == invite.channelId;
+  // stronger — see admitRing. What IS signed is the end body — and, in v2, the
+  // call id inside it; the claim is not cryptographic caller identity.)
+  if (end.fromUserId != invite.from.userId) return false;
+  // The door policy, applied before the identity match: the same id on another
+  // channel ends nothing (design 22 v4.2).
+  if (!oneChannelPerCall(invite.channelId, end.channelId)) return false;
+  // The call is named by the id both bodies carry, signed.
+  return end.call == invite.call;
 }
 
 /// An admitted, ringable invitation — the room to join and who is calling.
 class CallInvite {
   const CallInvite({
+    required this.call,
     required this.inviteId,
     required this.islandMsgId,
     required this.channelId,
@@ -363,6 +429,11 @@ class CallInvite {
   /// freshness window rang all over again (cage-match #139 R2, Carnot). A thing
   /// you must remember having dismissed needs a name, not a shape.
   final String inviteId;
+
+  /// The call — the id inside the signed invite body, minted by the caller
+  /// (island design 12, Decision 1). What the system ring (CallKit / the
+  /// Android ring) is keyed by, and what an end names.
+  final CallRef call;
 
   /// The island's ULID for this invitation — what a hangup's `reply_to` names.
   ///
@@ -601,10 +672,10 @@ enum RingRefusal {
   /// level down.
   endMissingAuthor(refusedAnAttempt: true, startGate: false, stopGate: true),
 
-  /// A call-END sentinel naming NO CALL (`reply_to` absent). It could never stop
-  /// any ring, so a bell may still be ringing for a call the caller believes is
-  /// over — the failure is silent and user-visible at once.
-  endMissingTarget(refusedAnAttempt: true, startGate: false, stopGate: true),
+  /// A v1 call body (`aiko:call/1`). History, never a call: no store build ever
+  /// placed one, so only an old dev build sends it (design 22 v2.0). Recorded,
+  /// because somebody did try to reach this handset.
+  v1Call(refusedAnAttempt: true),
 
   /// `originCryptoValid != true` — unsigned, or carried-but-invalid. The
   /// security-relevant refusal: a ring that could not prove who sent it.
@@ -642,8 +713,8 @@ enum RingRefusal {
   /// The conversation is muted.
   conversationMuted(refusedAnAttempt: true, startGate: true, stopGate: false),
 
-  /// Signed in the future by a skewed clock. Refused rather than admitted: a
-  /// bad clock would otherwise ring forever.
+  /// Signed further in the future than [kCallInviteClockSkewTolerance].
+  /// Refused rather than admitted: a bad clock would otherwise ring forever.
   clockSkew(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// Older than [kCallInviteFreshness].
@@ -816,8 +887,16 @@ RingDecision admitRing(
   required bool conversationMuted,
   required bool isDm,
   required DateTime now,
+
+  /// When this device's native side was woken for this call, if it vouches for
+  /// it (design 23): the instant freshness is measured from. Null judges
+  /// freshness at [now], as before. Never after [now] by construction
+  /// (`now − wakeAge`); clamped anyway, so a bad caller cannot make an invite
+  /// younger than it is when Dart reaches it.
+  DateTime? receivedAt,
 }) {
-  if (!isCallInviteBody(message.body)) {
+  final body = parseCallBody(message.body);
+  if (body == null || body.kind != CallBodyKind.invite) {
     return const RingRefused(RingRefusal.notAnInvite);
   }
   // VERIFY BEFORE ANY SERVER-SUPPLIED FIELD IS CONSULTED — `userId` included.
@@ -872,12 +951,30 @@ RingDecision admitRing(
     isUtc: true,
   );
   final age = now.difference(signedAt);
-  // Negative age (signed in the future by a skewed clock) is not fresh — it is
-  // unreadable, and admitting it would let a bad clock ring forever.
-  // `!isNegative` is the guard; `> freshness` alone would admit it.
-  if (age.isNegative) return RingRefused(RingRefusal.clockSkew, age: age);
-  if (age > kCallInviteFreshness) {
-    return RingRefused(RingRefusal.stale, age: age);
+  // Signed further in the future than [kCallInviteClockSkewTolerance] is not
+  // fresh — it is unreadable, and admitting it would let a bad clock ring
+  // forever. This bound is the guard; `> freshness` alone would admit it.
+  // Within the tolerance it is ordinary skew between two honest clocks, and an
+  // open app meets it on every invite from a sender running a little fast
+  // (#393).
+  //
+  // JUDGED AT [now], NEVER AT [receivedAt]. A wake can land before `signedAt`
+  // on the receiver's clock when the sender's runs a fraction fast — a 0.3 s
+  // push under a 0.5 s skew — and that invite rings today. Skew asks "was this
+  // signed in the future?", which only [now] can answer.
+  if (age < -kCallInviteClockSkewTolerance) {
+    return RingRefused(RingRefusal.clockSkew, age: age);
+  }
+  // TRANSIT is what freshness bounds: signature to this device's wake. What
+  // follows the wake (Face ID, session restore, the fetch) is the user's and
+  // the app's latency, not the invitation's (design 23). Floored at zero for
+  // the same skew case.
+  final from = receivedAt == null || receivedAt.isAfter(now) ? now : receivedAt;
+  final transit = from.isBefore(signedAt)
+      ? Duration.zero
+      : from.difference(signedAt);
+  if (transit > kCallInviteFreshness) {
+    return RingRefused(RingRefusal.stale, age: transit);
   }
   // The island's id is REFUSED here rather than carried as a null. Unreachable
   // via either production producer (see [CallInvite.islandMsgId]) — so this is
@@ -886,8 +983,14 @@ RingDecision admitRing(
   // `reply_to` is an FK onto `messages.id`, so there would be nothing to name.
   final islandMsgId = message.id;
   if (islandMsgId == null) return const RingRefused(RingRefusal.noIslandId);
+  // LAST, after every security clause, so a forged v1 invite is still named by
+  // its security fault first. A v1 body is history, never a call (design 22
+  // v2.0).
+  final call = body.call;
+  if (call == null) return const RingRefused(RingRefusal.v1Call);
   return RingAdmitted(
     CallInvite(
+      call: call,
       inviteId: origin.clientMsgId,
       islandMsgId: islandMsgId,
       channelId: message.channelId,

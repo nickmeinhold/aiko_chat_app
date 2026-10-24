@@ -6,6 +6,8 @@ import 'package:aiko_chat_app/features/chat/domain/origin_envelope.dart';
 import 'package:aiko_chat_app/features/chat/domain/message.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'call_fixtures.dart';
+
 /// The ring's admission door (#2808). A ring is the highest-privilege message in
 /// the app — it lights up a device and offers to turn on the camera — so every
 /// refusal it makes gets its own test, and the sentinel that will live in
@@ -34,7 +36,7 @@ void main() {
   Message invite({
     String from = robin,
     String channelId = 'dm:aaa:bbb',
-    String body = kCallInviteBody,
+    String body = kTestInviteBody,
     Duration age = const Duration(seconds: 1),
     bool? cryptoValid = true,
     bool withOrigin = true,
@@ -78,7 +80,7 @@ void main() {
     id: '01M0GS7FDWBVQ31950B1PTV2DX',
     channelId: 'dm:aaa:bbb',
     sender: MessageSender(userId: from, kind: kind, label: 'Robin'),
-    body: kCallEndBody,
+    body: kTestEndBody,
     replyToId: target,
     createdAt: now,
     origin: signedAt(now, key: key),
@@ -177,9 +179,9 @@ void main() {
       expect(refusal(invite(), muted: true), RingRefusal.conversationMuted);
     });
 
-    test('signed in the FUTURE by a skewed clock', () {
+    test('signed further in the FUTURE than the skew tolerance', () {
       expect(
-        refusal(invite(age: const Duration(seconds: -5))),
+        refusal(invite(age: const Duration(seconds: -6))),
         RingRefusal.clockSkew,
       );
     });
@@ -237,7 +239,7 @@ void main() {
         id: '01M0GS7FDWBVQ31950B1PTV2DX',
         channelId: 'dm:aaa:bbb',
         sender: const MessageSender(userId: null, kind: SenderKind.human),
-        body: kCallEndBody,
+        body: kTestEndBody,
         replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
         createdAt: now,
         origin: signedAt(now),
@@ -255,33 +257,43 @@ void main() {
       expect(RingRefusal.endMissingAuthor.refusedAnAttempt, isTrue);
     });
 
-    test(
-      'a hangup NAMING NO CALL is observable — a bell may still be ringing',
-      () {
-        // The nastier of the two: it could never stop any ring, so the caller
-        // believes the call is over while the callee's handset is still going.
-        final noTarget = Message(
-          clientTempId: 'e1',
-          id: '01M0GS7FDWBVQ31950B1PTV2DX',
-          channelId: 'dm:aaa:bbb',
-          sender: const MessageSender(userId: robin, kind: SenderKind.human),
-          body: kCallEndBody,
-          createdAt: now,
-          origin: signedAt(now),
-          originCryptoValid: true,
-          deliveryState: DeliveryState.sent,
-        );
-        expect(
-          admitCallEnd(noTarget, meUserId: me, consent: RingConsent.none),
-          isA<CallEndRefused>().having(
-            (r) => r.reason,
-            'reason',
-            RingRefusal.endMissingTarget,
-          ),
-        );
-        expect(RingRefusal.endMissingTarget.refusedAnAttempt, isTrue);
-      },
-    );
+    test('a v1 call body is NAMED at both gates — history, never a call', () {
+      // Design 22 v2.0: no store build ever placed a v1 call, so a v1 body is
+      // history. It is refused at both doors with its own reason, and the
+      // refusal is recorded (somebody did try to reach this handset).
+      final v1Invite = invite(body: kCallInviteBody);
+      final v1End = Message(
+        clientTempId: 'e1',
+        id: '01M0GS7FDWBVQ31950B1PTV2DX',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(userId: robin, kind: SenderKind.human),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: now,
+        origin: signedAt(now),
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(refusal(v1Invite), RingRefusal.v1Call);
+      expect(
+        admitCallEnd(v1End, meUserId: me, consent: RingConsent.none),
+        isA<CallEndRefused>().having(
+          (r) => r.reason,
+          'reason',
+          RingRefusal.v1Call,
+        ),
+      );
+      expect(RingRefusal.v1Call.refusedAnAttempt, isTrue);
+    });
+
+    test('a forged v1 invite is still named by its SECURITY fault first', () {
+      // v1Call is the LAST clause of admitRing, so an unsigned v1 body reports
+      // `unverifiedOrigin`, never the quieter `v1Call`.
+      expect(
+        refusal(invite(body: kCallInviteBody, cryptoValid: null)),
+        RingRefusal.unverifiedOrigin,
+      );
+    });
 
     test('each gate produces EXACTLY its own reasons — driven, not counted', () {
       // REPLACES a roster with a graph (Tesla, round 2, #3591). The first version
@@ -306,6 +318,7 @@ void main() {
         invite(withOrigin: false), // cryptoValid true, origin absent
         invite(hasAccount: false),
         invite(kind: SenderKind.llm),
+        invite(body: kCallInviteBody), // v1: history, never a call
         invite(),
       ]) {
         for (final blocked in [
@@ -320,7 +333,7 @@ void main() {
           }
         }
       }
-      producedByStart.add(refusal(invite(age: const Duration(seconds: -5)))!);
+      producedByStart.add(refusal(invite(age: const Duration(seconds: -6)))!);
       // A signed, permitted invite carrying NO SERVER ID. Built by hand because
       // the `invite` fixture always mints one — which is precisely why the first
       // roster version could file `noIslandId` as "deliberately unreachable" and
@@ -330,7 +343,7 @@ void main() {
           clientTempId: 'm1',
           channelId: 'dm:aaa:bbb',
           sender: const MessageSender(userId: robin, kind: SenderKind.human),
-          body: kCallInviteBody,
+          body: kTestInviteBody,
           createdAt: now,
           origin: signedAt(now),
           originCryptoValid: true,
@@ -354,7 +367,7 @@ void main() {
 
       final producedByStop = <RingRefusal>{};
       Message end({
-        String body = kCallEndBody,
+        String body = kTestEndBody,
         String? from = robin,
         String? target = '01M0GS7FDWBVQ31950B1PTV2DW',
         bool? cryptoValid = true,
@@ -376,6 +389,7 @@ void main() {
         end(body: 'hello'),
         end(from: null),
         end(target: null),
+        end(body: kCallEndBody), // v1: history, never a call
         end(cryptoValid: null),
         end(withOrigin: false), // cryptoValid true, origin absent
         end(kind: SenderKind.llm),
@@ -484,7 +498,7 @@ void main() {
       // reading ageMs=12000 argues the window is wrong for the push path, and
       // one reading ageMs=300000 argues nothing about the window at all.
       const overdue = Duration(seconds: 47);
-      const fromTheFuture = Duration(seconds: -5);
+      const fromTheFuture = Duration(seconds: -6);
       final stale = refuse(invite(age: overdue));
       expect(stale.reason, RingRefusal.stale);
       expect(stale.age, overdue);
@@ -621,7 +635,7 @@ void main() {
           kind: SenderKind.human,
           label: 'Robin',
         ),
-        body: kCallInviteBody,
+        body: kTestInviteBody,
         createdAt: now, // island says "just now"
         origin: signedAt(now.subtract(const Duration(days: 7))), // truth
         originCryptoValid: true,
@@ -688,9 +702,166 @@ void main() {
     });
 
     test('an invite stamped in the FUTURE by a skewed clock', () {
-      // Negative age is not "very fresh" — it is unreadable, and admitting it
-      // would let a bad clock ring forever. `age > freshness` alone admits this.
+      // An age further negative than the skew tolerance is not "very fresh" —
+      // it is unreadable, and admitting it would let a bad clock ring forever.
+      // `age > freshness` alone admits this.
       expect(admit(invite(age: const Duration(seconds: -60))), isNull);
+    });
+  });
+
+  // Design 23: freshness bounds TRANSIT (signature → this device's wake); skew
+  // is judged at `now`. `receivedAt` is the only new input, and it comes from
+  // the device, never the wire.
+  group('design 23: freshness is transit, skew is judged at now', () {
+    RingDecision judge(Message m, {DateTime? receivedAt}) => admitRing(
+      m,
+      meUserId: me,
+      blockedUserIds: const {},
+      consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
+      conversationMuted: false,
+      isDm: true,
+      now: now,
+      receivedAt: receivedAt,
+    );
+
+    test('signed 16 s ago, woken 0.5 s after signing: admitted', () {
+      final m = invite(age: const Duration(seconds: 16));
+      expect(
+        judge(m),
+        isA<RingRefused>(),
+        reason: 'precondition: stale at now',
+      );
+      expect(
+        judge(m, receivedAt: now.subtract(const Duration(milliseconds: 15500))),
+        isA<RingAdmitted>(),
+      );
+    });
+
+    test('transit over the window is stale, and carries the transit age', () {
+      final m = invite(age: const Duration(seconds: 16));
+      final got = judge(
+        m,
+        receivedAt: now.subtract(const Duration(seconds: 5)),
+      );
+      expect(got, isA<RingRefused>());
+      got as RingRefused;
+      expect(got.reason, RingRefusal.stale);
+      expect(got.age, const Duration(seconds: 11));
+    });
+
+    test('null receivedAt is the pre-design-23 judgement exactly', () {
+      // Concrete outcomes, not judge(m) against itself: `receivedAt` defaults
+      // to null, so comparing judge(m) with judge(m, receivedAt: null) was one
+      // call compared with itself and could never fail (Noether + Tesla,
+      // PR #399). Null must mean "judge at now": the same verdict as a wake AT
+      // now, and the verdict the age alone predicts.
+      const cases = <(Duration, RingRefusal?)>[
+        (Duration(seconds: 1), null),
+        (Duration(seconds: 10), null),
+        (Duration(seconds: 11), RingRefusal.stale),
+        (Duration(seconds: -5), null),
+        (Duration(seconds: -6), RingRefusal.clockSkew),
+      ];
+      for (final (age, refusal) in cases) {
+        final m = invite(age: age);
+        final atNull = judge(m);
+        final atNow = judge(m, receivedAt: now);
+        if (refusal == null) {
+          expect(atNull, isA<RingAdmitted>(), reason: 'age $age');
+          expect(atNow, isA<RingAdmitted>(), reason: 'age $age');
+        } else {
+          expect((atNull as RingRefused).reason, refusal, reason: 'age $age');
+          expect((atNow as RingRefused).reason, refusal, reason: 'age $age');
+        }
+      }
+    });
+
+    test('a wake that lands BEFORE signedAt (sender clock a fraction fast) '
+        'rings, as it does today', () {
+      // Sender 0.5 s fast, push 0.3 s: on our clock the wake is 0.2 s before
+      // the signature. Judging skew at the wake refused this call; it rings
+      // today, judged at now.
+      final m = invite(age: const Duration(seconds: 1));
+      final wake = now.subtract(const Duration(milliseconds: 1200));
+      expect(judge(m, receivedAt: wake), isA<RingAdmitted>());
+    });
+
+    test('signed in the future at now is still clockSkew, whatever the wake '
+        'says', () {
+      final m = invite(age: const Duration(seconds: -60));
+      final got = judge(
+        m,
+        receivedAt: now.subtract(const Duration(seconds: 1)),
+      );
+      expect(got, isA<RingRefused>());
+      expect((got as RingRefused).reason, RingRefusal.clockSkew);
+    });
+
+    test('a receivedAt after now cannot make an invite younger than it is', () {
+      final m = invite(age: const Duration(seconds: 16));
+      final got = judge(m, receivedAt: now.add(const Duration(hours: 1)));
+      expect((got as RingRefused).reason, RingRefusal.stale);
+      expect(got.age, const Duration(seconds: 16));
+    });
+
+    test('an earlier clause still refuses first: an unverified origin never '
+        'asks for, or benefits from, a wake', () {
+      final m = invite(age: const Duration(seconds: 16), cryptoValid: null);
+      final got = judge(
+        m,
+        receivedAt: now.subtract(const Duration(seconds: 15)),
+      );
+      expect((got as RingRefused).reason, RingRefusal.unverifiedOrigin);
+    });
+  });
+
+  // #393: an OPEN app reads an invite over its live socket within
+  // milliseconds of the signature, so a sender whose clock runs a little fast
+  // produces a negative age on every ring. Ordinary skew between honest clocks
+  // is admitted; a clock further ahead than the tolerance is still refused.
+  group('#393: bounded clock skew', () {
+    RingDecision judge(Message m) => admitRing(
+      m,
+      meUserId: me,
+      blockedUserIds: const {},
+      consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
+      conversationMuted: false,
+      isDm: true,
+      now: now,
+    );
+
+    test('the measured case: signed 0.82 s in our future, read at once, '
+        'rings', () {
+      final got = judge(invite(age: const Duration(milliseconds: -820)));
+      expect(got, isA<RingAdmitted>());
+    });
+
+    test('exactly the tolerance in the future rings (inclusive, as the '
+        "island's is_fresh)", () {
+      final got = judge(invite(age: -kCallInviteClockSkewTolerance));
+      expect(got, isA<RingAdmitted>());
+    });
+
+    test(
+      'one millisecond past the tolerance is clockSkew, carrying its age',
+      () {
+        final past =
+            -kCallInviteClockSkewTolerance - const Duration(milliseconds: 1);
+        final got = judge(invite(age: past));
+        expect(got, isA<RingRefused>());
+        got as RingRefused;
+        expect(got.reason, RingRefusal.clockSkew);
+        expect(got.age, past);
+      },
+    );
+
+    test('the tolerance is a few seconds, never a window a bad clock could '
+        'ring through', () {
+      // A future invite rings this much longer (the window runs from
+      // signedAt). Pin it below the freshness window so "skew" can never grow
+      // into a second, unbounded freshness gate.
+      expect(kCallInviteClockSkewTolerance, lessThan(kCallInviteFreshness));
+      expect(kCallInviteClockSkewTolerance, greaterThan(Duration.zero));
     });
   });
 
@@ -751,7 +922,11 @@ void main() {
         // prevent. Consent you cannot withdraw is not consent.
         expect(
           admit(
-            invite(kind: SenderKind.unknown, key: residentKey, hasAccount: false),
+            invite(
+              kind: SenderKind.unknown,
+              key: residentKey,
+              hasAccount: false,
+            ),
             allowedKeys: {mk(residentKey)},
           ),
           isNull,
@@ -1018,13 +1193,15 @@ void main() {
         // rather than the id alone (call_invite.dart). Both the live path and
         // the memory path run it, so this pins the property both share.
         final ringInA = CallInvite(
+          call: kTestCall,
           inviteId: 'c-1',
           islandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
           channelId: here,
           from: const MessageSender(userId: 'agent', kind: SenderKind.llm),
           startedAt: now,
         );
-        const endFromB = CallEnd(
+        final endFromB = CallEnd(
+          call: kTestCall,
           targetIslandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
           fromUserId: 'agent',
           channelId: elsewhere,
@@ -1039,7 +1216,8 @@ void main() {
         );
         expect(
           endsInvite(
-            const CallEnd(
+            CallEnd(
+              call: kTestCall,
               targetIslandMsgId: '01M0GS7FDWBVQ31950B1PTV2D0',
               fromUserId: 'agent',
               channelId: here,
@@ -1107,7 +1285,7 @@ void main() {
       String from = robin,
       String? replyTo = '01M0GS7FDWBVQ31950B1PTV2DW',
       String channelId = 'dm:aaa:bbb',
-      String body = kCallEndBody,
+      String body = kTestEndBody,
       bool? cryptoValid = true,
       bool withOrigin = true,
     }) => Message(
@@ -1192,7 +1370,7 @@ void main() {
         id: 'e1',
         channelId: 'dm:aaa:bbb',
         sender: const MessageSender(kind: SenderKind.human, label: 'ghost'),
-        body: kCallEndBody,
+        body: kTestEndBody,
         replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
         createdAt: now,
         origin: signedAt(now),
@@ -1226,7 +1404,7 @@ void main() {
         id: 'e1',
         channelId: 'dm:aaa:bbb',
         sender: const MessageSender(userId: robin, kind: SenderKind.robot),
-        body: kCallEndBody,
+        body: kTestEndBody,
         replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
         createdAt: now,
         origin: signedAt(now),
@@ -1263,27 +1441,137 @@ void main() {
       expect(stops(end(from: me)), isFalse);
     });
 
-    test('the end must name the SERVER id — a client_msg_id is a frame the '
-        'gateway REFUSES outright', () {
-      // Found live, not by review: `reply_to` is an FK onto `messages.id`, so a
-      // frame carrying a client_msg_id there comes back `no_reply_target` and
-      // the hangup never leaves the device — silently, because announcing it is
-      // best-effort. Both ids are opaque 26-char strings, so nothing but the
-      // real island could tell them apart.
-      expect(stops(end(replyTo: 'm1')), isFalse);
+    test('reply_to does not name the call — the body does (call/2)', () {
+      // The binding used to be the signed reply_to, an FK onto the invite's
+      // server id. Under call/2 the call id inside the signed body is the
+      // binding, so reply_to is threading only: present, absent or pointing
+      // anywhere, it neither creates nor breaks the match.
+      expect(stops(end(replyTo: 'm1')), isTrue);
+      expect(stops(end(replyTo: null)), isTrue);
       expect(stops(end(replyTo: '01M0GS7FDWBVQ31950B1PTV2DW')), isTrue);
     });
 
     test('an end for a DIFFERENT call does not stop this one', () {
       // The double-call race: hang up, ring again immediately, and the first
-      // end must not reach through and kill the second ring. The signed replyTo
-      // is what makes the end about ONE call.
-      expect(stops(end(replyTo: 'some-other-invite')), isFalse);
-      expect(stops(end(replyTo: null)), isFalse);
+      // end must not reach through and kill the second ring. The call id in
+      // the signed body is what makes the end about ONE call.
+      expect(stops(end(body: kOtherEndBody)), isFalse);
+      expect(stops(end(body: kTestEndBody)), isTrue, reason: 'control');
     });
 
     test('an end in a different channel does not stop this ring', () {
       expect(stops(end(channelId: 'dm:ccc:ddd')), isFalse);
     });
+  });
+
+  // ---- call/2: the call has an identity (design 21 v2, island design 12 D1) --
+  group('call/2 — a call is named by its id, not its channel', () {
+    final callA = CallRef('01JABCDEFGHJKMNPQRSTVWXYZ0');
+    final callB = CallRef('7ZZZZZZZZZZZZZZZZZZZZZZZZZ');
+
+    Message v2End(
+      CallRef call, {
+      String from = robin,
+      String? replyTo,
+      String channelId = 'dm:aaa:bbb',
+    }) => Message(
+      clientTempId: 'e2',
+      id: 'e2',
+      channelId: channelId,
+      sender: MessageSender(
+        userId: from,
+        kind: SenderKind.human,
+        label: 'Robin',
+      ),
+      body: callEndBodyV2(call),
+      replyToId: replyTo,
+      createdAt: now,
+      origin: signedAt(now),
+      originCryptoValid: true,
+      deliveryState: DeliveryState.sent,
+    );
+
+    CallEnd? admitEnd(Message m) => switch (admitCallEnd(
+      m,
+      meUserId: me,
+      consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
+    )) {
+      CallEndAdmitted(:final end) => end,
+      CallEndRefused() => null,
+    };
+
+    test('an invite is admitted CARRYING its call', () {
+      final got = admit(invite(body: callInviteBodyV2(callA)));
+      expect(got, isNotNull);
+      expect(got!.call, callA);
+    });
+
+    test('an end needs NO reply_to — its body names the call', () {
+      // The misdial path: the hangup goes out before the invite is acked, so
+      // there is no island id to reply to yet.
+      final end = admitEnd(v2End(callA));
+      expect(end, isNotNull);
+      expect(end!.call, callA);
+      expect(end.targetIslandMsgId, isNull);
+    });
+
+    test('an end ends ITS call — and not another call on the same channel', () {
+      // The whole class design 21 is about: one channel, two calls.
+      final a = admit(invite(body: callInviteBodyV2(callA)))!;
+      final b = admit(invite(body: callInviteBodyV2(callB)))!;
+      final endA = admitEnd(v2End(callA))!;
+      expect(endsInvite(endA, a), isTrue);
+      expect(endsInvite(endA, b), isFalse);
+    });
+
+    test('an end from someone else does not end the call', () {
+      final call = admit(invite(body: callInviteBodyV2(callA)))!;
+      final stranger = admitEnd(v2End(callA, from: 'mallory-key'))!;
+      expect(endsInvite(stranger, call), isFalse);
+    });
+
+    test('the SAME id in another channel ends nothing (oneChannelPerCall)', () {
+      // Design 22 v4.2: the channel is checked at the door, before identity.
+      final call = admit(invite(body: callInviteBodyV2(callA)))!;
+      final elsewhere = admitEnd(v2End(callA, channelId: 'dm:aaa:ccc'))!;
+      expect(endsInvite(elsewhere, call), isFalse);
+    });
+
+    test('a v1 end is never admitted, so it can end nothing', () {
+      // Replaces four cross-version tests (v1 end vs v2 invite and back):
+      // with v1 never admitted, there is no second version to cross.
+      expect(
+        admitEnd(callEnd(target: '01M0GS7FDWBVQ31950B1PTV2DW')),
+        isNotNull,
+        reason: 'positive control: the fixture end IS admitted as v2',
+      );
+      final v1 = Message(
+        clientTempId: 'e3',
+        id: 'e3',
+        channelId: 'dm:aaa:bbb',
+        sender: const MessageSender(userId: robin, kind: SenderKind.human),
+        body: kCallEndBody,
+        replyToId: '01M0GS7FDWBVQ31950B1PTV2DW',
+        createdAt: now,
+        origin: signedAt(now),
+        originCryptoValid: true,
+        deliveryState: DeliveryState.sent,
+      );
+      expect(admitEnd(v1), isNull);
+    });
+
+    test('a v2 end renders as a hangup without reply_to (named tradeoff)', () {
+      expect(isRenderableCallEnd(v2End(callA), isMine: false), isTrue);
+    });
+
+    test(
+      'a v2-shaped body with a non-canonical id is neither call nor end',
+      () {
+        final lower = invite(
+          body: 'aiko:call/2 01jabcdefghjkmnpqrstvwxyz0 · 📞 started a call',
+        );
+        expect(refusal(lower), RingRefusal.notAnInvite);
+      },
+    );
   });
 }

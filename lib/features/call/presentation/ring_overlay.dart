@@ -11,8 +11,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../app/feature_flags.dart' show callingEnabledProvider;
 import '../../../app/router.dart';
+import '../application/desktop_ring.dart';
 import '../application/ring_controller.dart';
 import '../application/system_call_providers.dart';
 import '../domain/call_invite.dart';
@@ -29,13 +29,11 @@ class RingOverlay extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // The gate lives HERE, not at the mount site in `main.dart`, because this
-    // widget is the only thing that answers a ring: a banner whose Accept
-    // pushes `/call/...` while that route is unregistered would offer a button
-    // that goes nowhere, which is worse than not ringing. One door, one
-    // decision (see `app/feature_flags.dart`).
-    if (!ref.watch(callingEnabledProvider)) return child;
     final invite = ref.watch(incomingRingProvider);
+    // The Mac's sound, notification and Dock bounce: the parts a phone's OS
+    // supplies itself. Mounted here because this widget is the one thing that
+    // is always present and already follows the ring.
+    ref.watch(desktopRingDriverProvider);
     return Stack(
       children: [
         child,
@@ -103,7 +101,7 @@ class _RingBanner extends ConsumerWidget {
                   // word would be the lie, so the honest word does the work instead
                   // of a disclaimer.
                   TextButton(
-                    onPressed: () => _ignore(ref, invite.channelId),
+                    onPressed: () => _ignore(ref, invite),
                     child: const Text('Ignore'),
                   ),
                   const SizedBox(width: 8),
@@ -153,14 +151,20 @@ class _RingBanner extends ConsumerWidget {
   /// window elapsing, not a decision about the call, and the CallKit ring
   /// answers to a ceiling the island owns (design 16 v2 §3). Only the two
   /// buttons are decisions.
-  void _endSystemCall(WidgetRef ref, String channelId) {
+  void _endSystemCall(WidgetRef ref, CallInvite invite) {
     final bridge = ref.read(systemCallBridgeProvider);
-    if (bridge != null) unawaited(bridge.end(channelId));
+    // THIS call by id, not the channel: the system ring for a newer call on the
+    // same channel must survive this invitation's Ignore/Answer.
+    if (bridge != null) {
+      unawaited(bridge.end(invite.channelId, invite.call));
+    }
   }
 
-  void _ignore(WidgetRef ref, String channelId) {
-    ref.read(incomingRingProvider.notifier).stopRinging(RingStopCause.declined);
-    _endSystemCall(ref, channelId);
+  void _ignore(WidgetRef ref, CallInvite invite) {
+    ref
+        .read(incomingRingProvider.notifier)
+        .stopRingingFor(invite.call, RingStopCause.declined);
+    _endSystemCall(ref, invite);
   }
 
   void _answer(BuildContext context, WidgetRef ref) {
@@ -191,9 +195,11 @@ class _RingBanner extends ConsumerWidget {
       Future<void>.delayed(Duration.zero, () {
         ref
             .read(incomingRingProvider.notifier)
-            .stopRinging(RingStopCause.answeredOverSpentCall);
-        _endSystemCall(ref, invite.channelId);
-        pushCallOn(router, invite.channelId);
+            // KEYED: a turn has passed, and another call may be ringing now
+            // (Tesla, design 22 delta review).
+            .stopRingingFor(invite.call, RingStopCause.answeredOverSpentCall);
+        _endSystemCall(ref, invite);
+        pushCallOn(router, invite.channelId, call: invite.call);
       });
       return;
     }
@@ -202,12 +208,12 @@ class _RingBanner extends ConsumerWidget {
     // painted over the live call for its whole duration.
     ref
         .read(incomingRingProvider.notifier)
-        .stopRinging(RingStopCause.answeredInApp);
-    _endSystemCall(ref, invite.channelId);
+        .stopRingingFor(invite.call, RingStopCause.answeredInApp);
+    _endSystemCall(ref, invite);
     // Router from the PROVIDER, not from context: this widget lives above the
     // Router in `MaterialApp.router`'s builder, so `context.push` would throw
     // `No GoRouter found in context` (cage-match #139 — the feature's primary
     // button was dead until `ring_overlay_test.dart` pressed it).
-    pushCallOn(ref.read(routerProvider), invite.channelId);
+    pushCallOn(ref.read(routerProvider), invite.channelId, call: invite.call);
   }
 }

@@ -11,6 +11,7 @@ import 'app/router.dart';
 import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
 import 'features/call/presentation/system_call_navigator.dart';
+import 'features/chat/application/transport_wake.dart';
 import 'features/notifications/presentation/notification_tap_navigator.dart';
 import 'features/notifications/data/fcm_token_source.dart';
 import 'features/notifications/application/push_providers.dart';
@@ -77,6 +78,9 @@ class AikoChatApp extends ConsumerWidget {
     // Held here so the announcer's lifetime is INTENTIONAL rather than
     // incidental — it must outlive any call screen (see CallEndAnnouncer).
     ref.watch(callEndAnnouncerProvider);
+    // Reconnect the moment the network is likely usable again, rather than
+    // after the backoff (#392). Root-held for the same reason as the above.
+    ref.watch(transportWakeProvider);
     // The chosen look supplies BOTH halves, so picking a preset never costs you
     // OS following: themeMode still decides how bright, the preset decides which
     // look, and the chosen typeface rides along in both. All three are set in

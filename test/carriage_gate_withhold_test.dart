@@ -87,7 +87,8 @@ void main() {
     expect(
       sent.contains('"origin"'),
       isTrue,
-      reason: 'positive control — this envelope IS emittable when the gate opens',
+      reason:
+          'positive control — this envelope IS emittable when the gate opens',
     );
   });
 }

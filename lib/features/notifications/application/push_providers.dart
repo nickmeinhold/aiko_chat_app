@@ -8,7 +8,6 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../app/feature_flags.dart' show callingEnabledProvider;
 import '../../../app/providers.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../auth/domain/auth_models.dart';
@@ -75,23 +74,11 @@ final pushTokenSourceProvider = Provider<PushTokenSource?>((ref) {
 /// answers `TargetPlatform.iOS` and this would construct a PushKit source inside
 /// a renderer that has never heard of PushKit.
 ///
-/// **GATED ON `callingEnabled`, and the gap it closes was live on this branch.**
-/// The flag closes the three visible doors into calling — the `/call/:id` route,
-/// the ring banner, the DM long-press action — and said nothing about the VoIP
-/// token, which is not a door into calling but a door into being CALLED. So a
-/// store build registered a `voip` row, armed PushKit at launch, and would ring
-/// full-screen from a locked handset for a call it has no route to answer: rung
-/// but unanswerable, in exactly the configuration that ships. The gate's own
-/// doc says it closes *every* door; this is one it was not holding.
-///
-/// **A ROW ALREADY REGISTERED IS NOT REVOKED BY THIS.** A null source means a
-/// null registrar, and a null registrar never fires the unregister — so a device
-/// that ran an ungated build keeps its island-side `voip` row until something
-/// else drains it (claude-tasks#4426, the device-row debt). That set is the
-/// handsets this unmerged branch has been on, not the field.
+/// Until 0.0.6 this was gated behind the calling build flag (claude-tasks#4420),
+/// so store builds before then registered no `voip` row. They start doing so on
+/// first launch of 0.0.6.
 final voipTokenSourceProvider = Provider<PushTokenSource?>((ref) {
   if (kIsWeb) return null;
-  if (!ref.watch(callingEnabledProvider)) return null;
   return switch (defaultTargetPlatform) {
     TargetPlatform.iOS => VoipTokenSource(
       telemetry: ref.watch(pushTelemetryProvider),

@@ -20,6 +20,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/prefs/pref_key_migration.dart';
 
 import '../core/auth/token_provider.dart';
+import '../core/logging/log_providers.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/auth/data/cached_user_store.dart';
 import '../features/auth/data/passkey_hint_store.dart';
@@ -225,6 +226,7 @@ final transportProvider = Provider<ChatTransport>((ref) {
     tokens: tokens,
     carriesOrigin: () => carriage.carriesOrigin,
     onConnected: carriage.refresh,
+    logger: ref.watch(rootLoggerProvider).child('transport'),
   );
   ref.onDispose(transport.disconnect);
   return transport;

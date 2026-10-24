@@ -14,6 +14,7 @@ import '../application/ring_telemetry.dart';
 import '../data/call_session.dart';
 import '../data/system_call_bridge.dart';
 import '../domain/call_connection_state.dart';
+import '../domain/call_wire.dart' show CallRef;
 import 'media_confidentiality_chip.dart';
 
 /// Single door for opening a call (#18). Rapid double-taps — or a tap while a
@@ -47,11 +48,21 @@ bool get isCallRouteOpen => _callLaunchInFlight;
 /// has to be told the truth about which of the two conditions refused it.
 bool get isInLiveCall => _callLaunchInFlight && !_mountedCallEnded;
 
+/// What a `/call/:channelId` navigation carries beyond the room: WHICH call,
+/// and whether this device placed it (only the caller announces the hangup).
+///
+/// Required, never null: a joined room is a call, and a call has a [CallRef]
+/// (design 22 v2.5). A navigation without one — a bare deep link — is
+/// redirected home by the router and joins nothing.
+typedef CallRouteExtra = ({CallRef call, bool outgoing});
+
 Future<void> pushCall(
   BuildContext context,
   String channelId, {
-  String? inviteId,
-}) => pushCallOn(GoRouter.of(context), channelId, inviteId: inviteId);
+  required CallRef call,
+  bool outgoing = false,
+}) =>
+    pushCallOn(GoRouter.of(context), channelId, call: call, outgoing: outgoing);
 
 /// Router-first form of [pushCall], for callers that have a [GoRouter] but no
 /// in-scope context.
@@ -67,12 +78,14 @@ Future<void> pushCall(
 Future<void> pushCallOn(
   GoRouter router,
   String channelId, {
-  String? inviteId,
+  required CallRef call,
+  bool outgoing = false,
 }) async {
   if (_callLaunchInFlight) return;
   _callLaunchInFlight = true;
   try {
-    await router.push('/call/$channelId', extra: inviteId);
+    final CallRouteExtra extra = (call: call, outgoing: outgoing);
+    await router.push('/call/$channelId', extra: extra);
   } finally {
     _callLaunchInFlight = false;
   }
@@ -81,26 +94,67 @@ Future<void> pushCallOn(
 /// Clear the launch guard between widget tests (a test that navigates to the
 /// call route never pops it, so the latch would leak into the next test). Not a
 /// production seam.
+/// [pushCallOn] for an answer that arrives while a SPENT call route — "Call
+/// ended", not yet closed — still holds the latch: close it first, then push.
+///
+/// Without this a system-UI answer during that window was consumed, recorded
+/// as joined, and then silently dropped by the latch, with the OS showing a
+/// connected call and no room behind it (Tesla, PR #210 v2 round 2). The ring
+/// banner's Answer already did this inline; this is the one door for both.
+/// A LIVE call is the caller's to refuse — this never closes one.
+Future<void> pushCallOverSpent(
+  GoRouter router,
+  String channelId, {
+  required CallRef call,
+}) async {
+  if (isCallRouteOpen && !isInLiveCall) {
+    if (router.canPop()) router.pop();
+    // The latch is released when the popped route's `router.push` future
+    // resolves, which is after this turn.
+    await Future<void>.delayed(Duration.zero);
+  }
+  await pushCallOn(router, channelId, call: call);
+}
+
 @visibleForTesting
-void resetCallLaunchGuard() => _callLaunchInFlight = false;
+void resetCallLaunchGuard() {
+  _callLaunchInFlight = false;
+  _mountedCallEnded = false;
+}
+
+/// Mark the mounted call route's call as over, for a test whose call route is
+/// a stand-in with no [CallSession]. Not a production seam.
+@visibleForTesting
+void debugMarkMountedCallEnded() => _mountedCallEnded = true;
+
+/// The `/call/:channelId` route's redirect: a navigation that names no call
+/// (a bare or crafted deep link) goes home and joins nothing. A joined room
+/// that no event can address was the "hot mic with no name" (Tesla, design 22
+/// temper round 1).
+String? callRouteRedirect(Object? extra) =>
+    extra is CallRouteExtra ? null : '/';
 
 /// Full-screen A/V call for a channel (handoff #2726). Owns a [CallSession] for
 /// its lifetime; the room is whatever the island's minted token names (it is
 /// derived from the channel, but is NOT the bare channel id). Renders the first remote
 /// participant full-screen with a mirrored local PiP overlay.
 class CallScreen extends ConsumerStatefulWidget {
-  const CallScreen({super.key, required this.channelId, this.inviteId});
+  const CallScreen({
+    super.key,
+    required this.channelId,
+    required this.call,
+    this.outgoing = false,
+  });
 
   final String channelId;
 
-  /// The signed `clientMsgId` of the invitation that opened this call, when we
-  /// are the party that sent it. Leaving announces the end of THAT call.
-  ///
-  /// Null for every other way in — answering someone else's ring, a deep link, a
-  /// restored route. Only the caller ends the call it started: an end from
-  /// anyone else names no live invitation and would be refused anyway
-  /// ([admitCallEnd]), so sending one would be a signed row saying nothing.
-  final String? inviteId;
+  /// The call this screen is in. Its teardown ends exactly this call.
+  final CallRef call;
+
+  /// Whether this device placed the call. Only the caller announces the end:
+  /// an end from anyone else would be refused at the peer ([admitCallEnd]),
+  /// so sending one would be a signed row saying nothing.
+  final bool outgoing;
 
   @override
   ConsumerState<CallScreen> createState() => _CallScreenState();
@@ -145,11 +199,31 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // later call never inherits a stale `ended`.
     _mountedCallEnded = false;
     _session.state.addListener(_trackLiveness);
+    // THIS CALL IS LIVE, as far as the native half is concerned: it refuses a
+    // second system answer from here until `end` (design 22 v4.2). Outgoing
+    // and answered calls alike, because the native half otherwise knew only
+    // the calls IT answered, and only for 120s (design 22 temper round 3).
+    unawaited(
+      _systemCall?.callStarted(widget.channelId, widget.call) ??
+          Future<void>.value(),
+    );
     unawaited(_session.connect());
   }
 
   void _trackLiveness() {
-    _mountedCallEnded = _session.state.value == CallConnectionState.ended;
+    final ended = _session.state.value == CallConnectionState.ended;
+    if (ended && !_mountedCallEnded) {
+      // THE CALL IS OVER NOW, not when this screen is closed. The native half
+      // refuses a second system answer while a call is live (design 22 v4.2),
+      // and a "Call ended" screen can stay up indefinitely — so ending the
+      // system call only at dispose left native refusing an answer that Dart's
+      // own door (`pushCallOverSpent`) would allow. Dispose ends it again;
+      // ending is idempotent. (Fix-interaction pass, design 22 build.)
+      unawaited(
+        _systemCall?.end(widget.channelId, widget.call) ?? Future<void>.value(),
+      );
+    }
+    _mountedCallEnded = ended;
   }
 
   @override
@@ -167,9 +241,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // The screen is the wrong owner for work that may have to outlive it: the
     // invitation may not be acked yet (so it has no id the wire can name) and
     // this widget's repository may be replaced mid-ring. See CallEndAnnouncer.
-    final inviteId = widget.inviteId;
-    if (inviteId != null) {
-      _endAnnouncer.announce(channelId: widget.channelId, inviteId: inviteId);
+    if (widget.outgoing) {
+      _endAnnouncer.announce(channelId: widget.channelId, call: widget.call);
     }
     // TELL THE OS THE CALL IS OVER — unconditionally, from the one place every
     // exit already lands in (claude-tasks#4420).
@@ -181,7 +254,9 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     // whether THIS call came from a ring — is a second copy of a fact the
     // native side already holds, and the failure of getting it wrong is a
     // phantom connected call in the system UI that outlives the app.
-    unawaited(_systemCall?.end(widget.channelId) ?? Future<void>.value());
+    unawaited(
+      _systemCall?.end(widget.channelId, widget.call) ?? Future<void>.value(),
+    );
     super.dispose();
   }
 

@@ -27,9 +27,24 @@ final logBufferProvider = Provider<RingBufferLogSink>(
 /// the one whose contents a user hands to somebody else.
 final logSinkProvider = Provider<LogSink>(
   (ref) => RedactingLogSink(
-    FanOutLogSink([const DeveloperLogSink(), ref.watch(logBufferProvider)]),
+    FanOutLogSink([
+      const DeveloperLogSink(),
+      ref.watch(logBufferProvider),
+      const ConsoleLogSink(subsystems: kConsoleSubsystems),
+    ]),
   ),
 );
+
+/// What reaches the platform console (logcat / unified log) in a RELEASE
+/// build (#223): the ring, the call, push delivery, boot, and the island
+/// transport whose silent death left a ringing phone that could not join
+/// (#392). Every one logs scalars and opaque ids only, by facade signature.
+const kConsoleSubsystems = [
+  'aiko.boot',
+  'aiko.call',
+  'aiko.push',
+  'aiko.transport',
+];
 
 /// Root logger. Subsystem facades take `ref.watch(rootLoggerProvider).child(...)`.
 final rootLoggerProvider = Provider<AikoLogger>(

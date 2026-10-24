@@ -207,3 +207,39 @@ class FanOutLogSink extends LogSink {
     }
   }
 }
+
+/// Prints records from an allowlist of subsystems to the platform console —
+/// the one channel a RELEASE build on a real handset can be read through
+/// without the user exporting anything (#223).
+///
+/// `print` reaches logcat on Android (tag `flutter`) and the unified log on
+/// Apple platforms. [DeveloperLogSink] reaches neither in release, and
+/// [RingBufferLogSink] only reaches a reader through Report-a-problem, which a
+/// signed-in screen does not offer — so the ring's own refusal reason was
+/// unreadable on a shipped build, and four diagnoses proceeded by inference.
+///
+/// ALLOWLISTED, NOT EVERYTHING: the console is readable by anyone holding the
+/// handset on a cable, and chatty subsystems would bury the lines that matter.
+/// A prefix matches on a dotted boundary (`aiko.call` admits `aiko.call.ring`,
+/// never `aiko.callx`). It must sit INSIDE the redacting wrapper, like every
+/// other branch.
+class ConsoleLogSink extends LogSink {
+  const ConsoleLogSink({
+    required this.subsystems,
+    void Function(String line)? printer,
+  }) : _printer = printer;
+
+  /// Dotted subsystem prefixes that reach the console.
+  final List<String> subsystems;
+  final void Function(String line)? _printer;
+
+  bool _admits(String subsystem) =>
+      subsystems.any((p) => subsystem == p || subsystem.startsWith('$p.'));
+
+  @override
+  void add(LogRecord record) {
+    if (!_admits(record.subsystem)) return;
+    // ignore: avoid_print — the release-visible channel IS print.
+    (_printer ?? print)('[aiko] ${record.format()}');
+  }
+}

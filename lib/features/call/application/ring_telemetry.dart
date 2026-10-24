@@ -5,6 +5,7 @@ import '../../../core/logging/log_providers.dart';
 import '../../../core/logging/aiko_logger.dart';
 import '../domain/answer_outcome.dart';
 import '../domain/call_invite.dart';
+import '../domain/wake_age.dart';
 
 /// The ring subsystem's typed telemetry facade.
 ///
@@ -151,10 +152,37 @@ class RingTelemetry {
   /// The ring was admitted and the handset is ringing. INFO, and the positive
   /// control for the refusals above: without it, an empty report cannot
   /// distinguish "no call arrived" from "logging is broken".
-  void ringStarted(String channelId, Duration age) => _log.info(
-    'call.ring.started',
-    fields: {'channel': channelId, 'ageMs': age.inMilliseconds},
-  );
+  /// What the native side answered when an invitation, stale measured at
+  /// `now`, was judged again from its wake (design 23). The line that tells a
+  /// locked answer the gate rescued from one it still refused, and how many
+  /// times an `unknown` was asked again before the answer.
+  void ringWakeAge(String channelId, WakeAge wake, {required int attempts}) =>
+      _log.info(
+        'call.ring.wakeAge',
+        fields: {
+          'channel': channelId,
+          'state': switch (wake) {
+            Woke() => 'woke',
+            WakeNotActionable() => 'notActionable',
+            WakeUnknown() => 'unknown',
+          },
+          if (wake case Woke(:final age)) 'wakeAgeMs': age.inMilliseconds,
+          'attempts': attempts,
+        },
+      );
+
+  /// [transit] is present when the invitation was admitted by its wake age
+  /// (design 23): signature to this device's wake. Without it, a wake
+  /// admission reads `ageMs=16000` — an instrument saying a stale invite rang.
+  void ringStarted(String channelId, Duration age, {Duration? transit}) =>
+      _log.info(
+        'call.ring.started',
+        fields: {
+          'channel': channelId,
+          'ageMs': age.inMilliseconds,
+          if (transit != null) 'transitMs': transit.inMilliseconds,
+        },
+      );
 
   /// ADMITTED by every trust clause and then suppressed anyway, because the
   /// caller's hangup was already remembered. Not a gate refusal — the call was

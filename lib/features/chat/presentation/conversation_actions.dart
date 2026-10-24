@@ -11,13 +11,17 @@
 /// Report/Block; the sheet composes both halves.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../call/application/call_end_announcer.dart'
     show callEndAnnouncerProvider;
-import '../../call/domain/call_invite.dart' show kCallInviteBody;
+import '../../call/application/system_call_providers.dart';
+import '../../call/domain/call_wire.dart'
+    show CallRef, callInviteBodyV2, mintCall;
 import '../../call/presentation/call_screen.dart' show pushCall;
 import '../../moderation/application/moderation_controller.dart';
 import '../application/chat_providers.dart';
@@ -98,12 +102,15 @@ Future<void> startCall(
   // already gone. The announcer is app-scoped (pinned in `main`), so holding one
   // across a teardown is the whole point of the class rather than a leak.
   final endAnnouncer = ref.read(callEndAnnouncerProvider);
+  // Captured for the same reason: the `finally` below must be able to end the
+  // native live session even when this widget is already gone.
+  final systemCall = ref.read(systemCallBridgeProvider);
   // Hoisted out of the try so EVERY exit below can see it. The obligation is
   // owed from the instant the invitation is on the wire, and after that point no
   // arm of this function — early return, throw, or success — is allowed to leave
   // the peer ringing. Channel and invitation travel together because the
   // announcement needs both and neither is meaningful alone.
-  ({String channelId, String inviteId})? owedHangup;
+  ({String channelId, CallRef call})? owedHangup;
   final String failure;
   try {
     // openDm stays idempotent (same room on a re-open) — belt-and-braces under
@@ -114,17 +121,23 @@ Future<void> startCall(
     // was inverted in the pre-move `_call` (cage-match #133).
     if (!context.mounted) return;
     _seedIfNew(ref, dm);
-    final inviteId = await _ring(ref, dm.id);
-    if (inviteId != null) {
-      owedHangup = (channelId: dm.id, inviteId: inviteId);
-    }
+    final call = mintCall();
+    // OWED FROM THE MINT, before the send: the ref exists before any ack, and
+    // so does the hangup (design 22 temper round 2, Maxwell).
+    owedHangup = (channelId: dm.id, call: call);
+    // LIVE FROM THE MINT, too: the native half refuses a second system answer
+    // while a call is live, and for an outgoing call "live" starts here, not
+    // at the call screen's first frame (Tesla, design 22 delta review). The
+    // screen says it again on mount; saying it twice is harmless.
+    unawaited(systemCall?.callStarted(dm.id, call) ?? Future<void>.value());
+    final rang = await _ring(ref, dm.id, call);
     // RE-checked after the ring: `_ring` awaits, so the mounted check above no
     // longer holds here. A mounted check does not survive a subsequent await —
     // adding the ring introduced a NEW async gap, not just another statement
     // (the #133 bug class, caught by `use_build_context_synchronously`).
     // This return is the one that used to strand the peer — see the `finally`.
     if (!context.mounted) return;
-    if (inviteId == null) {
+    if (!rang) {
       // Honest, not fatal: the room is still opening behind this.
       messenger.showSnackBar(
         SnackBar(
@@ -132,10 +145,8 @@ Future<void> startCall(
         ),
       );
     }
-    // The invitation's id rides along so the leave can END this call by name.
-    // Null is fine and ordinary: a call opened without a ring (or whose ring
-    // failed) has nothing to end, and the leave simply says nothing.
-    await pushCall(context, dm.id, inviteId: inviteId);
+    // The call rides along so the leave can END this call by name.
+    await pushCall(context, dm.id, call: call, outgoing: true);
     return;
   } on DmTargetNotFound {
     failure = "Couldn't reach $name for a call.";
@@ -166,7 +177,16 @@ Future<void> startCall(
     // through here as a no-op rather than saying it twice into signed history.
     final owed = owedHangup;
     if (owed != null) {
-      endAnnouncer.announce(channelId: owed.channelId, inviteId: owed.inviteId);
+      endAnnouncer.announce(channelId: owed.channelId, call: owed.call);
+      // AND THE NATIVE SESSION, born at the mint by `callStarted`. On the
+      // ordinary path the call screen's dispose already ended it and this is
+      // an idempotent repeat; on every early exit (unmounted before the push,
+      // a throw) no screen ever mounted, and without this the native door
+      // refused every later answer for the life of the process (Tesla, design
+      // 22 delta review round 2).
+      unawaited(
+        systemCall?.end(owed.channelId, owed.call) ?? Future<void>.value(),
+      );
     }
   }
   // Liveness on the ERROR path too. Every arm above fires after an await and the
@@ -203,21 +223,26 @@ void resetCallActionGuard() => _callActionInFlight = false;
 /// before the wire send (invariant B-optimistic), so this returns fast and does
 /// not gate navigation on a round-trip.
 ///
-/// The body is [kCallInviteBody] and nothing else — room, caller and start time
-/// are already inside the signed envelope (channelId, signing key, signedAtMs).
-/// Returns the invitation's signed `clientMsgId`, or null if it did not send.
+/// The body is a v2 invite naming [call] and nothing else — room, caller and
+/// start time are already inside the signed envelope (channelId, signing key,
+/// signedAtMs).
 ///
-/// The id is the NAME OF THIS CALL, and the caller carries it into the call
-/// screen so that hanging up can say which call it is ending (see
-/// [kCallEndBody]). Null still means "they may not have been rung" — the caller
-/// reports that and the call proceeds, because the call is the capability and
-/// the ring is only its announcement.
-Future<String?> _ring(WidgetRef ref, String channelId) async {
+/// [call] is minted by the caller BEFORE this runs (island design 12,
+/// Decision 1; app design 22): every later message about this call — the
+/// hangup, the system ring's key on the other handset, the island's wake `m` —
+/// names it, and the hangup is owed from the moment it exists.
+///
+/// Returns whether the invite was accepted for sending. False means "they may
+/// not have been rung": the caller reports that and the call proceeds, because
+/// the call is the capability and the ring is only its announcement.
+Future<bool> _ring(WidgetRef ref, String channelId, CallRef call) async {
   try {
     final repo = await ref.read(chatRepositoryProvider.future);
-    return await repo.sendMessage(channelId, kCallInviteBody);
+    return await repo.sendMessage(channelId, callInviteBodyV2(call)) != null;
   } catch (_) {
-    return null; // reported to the user by the caller; the call proceeds.
+    // Reported to the user by the caller; the call proceeds, and its hangup
+    // is still owed.
+    return false;
   }
 }
 

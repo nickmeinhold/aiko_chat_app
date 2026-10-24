@@ -18,7 +18,7 @@ reactions are **signed-at-birth**. Stack: `dio` + `freezed` +
   bears on it**, and if it does, build against THAT — the ticket is intent, the
   other tab's design is the other half of the binding contract. Read: the
   island's `docs/design/` and `docs/crucible/`, the `HANDOFF-to-app-tab-*`
-  contract docs, the matching `nickmeinhold/claude-tasks` issue comments, and (for
+  contract docs, the matching task-issue comments, and (for
   wire specifically) its served `/openapi.json` as a live drift-gate. This is the
   **#2634 lesson** (the reactions build came off a ticket + a narrow answer, never
   checked the recorded design, and a cross-family review then hardened the wrong
@@ -36,6 +36,11 @@ reactions are **signed-at-birth**. Stack: `dio` + `freezed` +
     drift.
 
 - **Conventional Commits.** Branch off `main`; commit + push proactively.
+- **Releases go through `dart run tool/ship.dart <android|ios|macos>`.** It builds
+  with `prod.json`, checks the artifact, uploads, and tags `<platform>/v<name>+<build>`.
+  Tags are per platform because each store ships from its own commit; `git log
+  android/v0.0.7+18..main` is what Android hasn't got yet. `ship.dart android` IS the
+  submission (this Play account auto-submits on commit).
 - **Signed-at-birth is a trust boundary.** Anything touching message/reaction
   signing, identity keys, or the wire contract gets an adversarial different-family
   review (`/cage-match`), not solo self-review.
@@ -47,6 +52,8 @@ reactions are **signed-at-birth**. Stack: `dio` + `freezed` +
   (tempered design docs).
 - The gateway (peer repo): `../aiko-chat-island` — wire contract in its
   `HANDOFF-to-app-tab-*.md` + `docs/design/`, live schema at its `/openapi.json`.
-- Tasks: `nickmeinhold/claude-tasks` (shared with the island tab).
+- Tasks: file with `~/.claude/scripts/file-task --dir .`. This repo is public, so
+  task notes land on the private tracker (shared with the island tab) and reach
+  this repo's issues only after a scrub.
 - Message signer (the byte contract reactions mirror):
   `lib/features/chat/domain/message_signing.dart`.

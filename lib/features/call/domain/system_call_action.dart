@@ -6,6 +6,8 @@
 /// platform answered. The vocabulary is the seam's, not Apple's.
 library;
 
+import 'call_wire.dart';
+
 /// The transitions the platform call UI can report. **A closed set** — the wire
 /// carries the name as a string across a platform channel and this enum is where
 /// that string stops being one.
@@ -36,16 +38,16 @@ enum SystemCallActionKind {
   }
 }
 
-/// One transition, and the channel it happened to.
+/// One transition: which [call], on which channel.
 ///
-/// **The channel is the only identity there is.** The VoIP payload is
-/// `{"aps": …, "c": <channel>, "k": <kind>}` — there is no call id on the wire
-/// (island design 14 would add one and is undecided), the SFU room IS the
-/// channel, and so the channel is what a join and a teardown are both keyed on.
+/// The [call] is the identity (call/2's `m`, design 22). The channel rides
+/// beside it and is checked against the stored call's channel at the door
+/// ([oneChannelPerCall]), never folded into equality.
 class SystemCallAction {
   const SystemCallAction({
     required this.kind,
     required this.channelId,
+    required this.call,
     this.origin,
   });
 
@@ -72,17 +74,22 @@ class SystemCallAction {
   /// every test that does not care).
   final String? origin;
 
+  /// The call this action is about. Never absent: an event without a valid
+  /// call id is dropped at the bridge, because calling is v2-only (design 22).
+  final CallRef call;
+
   @override
   String toString() =>
-      'SystemCallAction(${kind.name}, $channelId${origin == null ? '' : ', $origin'})';
+      'SystemCallAction(${kind.name}, $channelId, ${call.id}${origin == null ? '' : ', $origin'})';
 
   @override
   bool operator ==(Object other) =>
       other is SystemCallAction &&
       other.kind == kind &&
       other.channelId == channelId &&
-      other.origin == origin;
+      other.origin == origin &&
+      other.call == call;
 
   @override
-  int get hashCode => Object.hash(kind, channelId, origin);
+  int get hashCode => Object.hash(kind, channelId, origin, call);
 }

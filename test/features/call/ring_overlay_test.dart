@@ -13,9 +13,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:aiko_chat_app/app/feature_flags.dart';
+import 'package:aiko_chat_app/features/call/domain/wake_age.dart';
 import 'package:aiko_chat_app/app/router.dart';
 import 'package:go_router/go_router.dart';
+
+import 'call_fixtures.dart';
 
 /// The ring OVERLAY (#2808) — mounted in `MaterialApp.router`'s `builder`, which
 /// is a genuinely load-bearing placement choice: the banner must sit ABOVE the
@@ -26,6 +28,7 @@ void main() {
   setUp(resetCallLaunchGuard);
 
   final invite = CallInvite(
+    call: kTestCall,
     inviteId: 'inv-1',
     islandMsgId: 'srv-1',
     channelId: 'dm:aaa:bbb',
@@ -56,10 +59,6 @@ void main() {
     );
     return ProviderScope(
       overrides: [
-        // Calling ships gated OFF (`app/feature_flags.dart`); this file is about
-        // the overlay's PLACEMENT, so it opts the capability on. The gated-off
-        // shape is proven in `call_gating_test.dart`.
-        callingEnabledProvider.overrideWithValue(true),
         incomingRingProvider.overrideWith(() => _FakeRing(initial)),
         // The overlay reaches the router through the PROVIDER (it lives above
         // the Router, outside InheritedGoRouter — cage-match #139), so the test
@@ -203,6 +202,7 @@ void main() {
     'an unnamed caller still renders as a person, never a blank row',
     (tester) async {
       final anon = CallInvite(
+        call: kOtherCall,
         inviteId: 'inv-2',
         islandMsgId: 'srv-2',
         channelId: 'dm:aaa:bbb',
@@ -283,13 +283,24 @@ void main() {
 
 /// Records what the app asked the platform call UI to do.
 class _FakeSystemCall implements SystemCallBridge {
+  @override
+  Future<WakeAge> wakeAge(String channelId, CallRef call) async =>
+      const WakeNotActionable();
+
   final List<String> ended = [];
+  final List<CallRef> endedCalls = [];
 
   @override
   Stream<SystemCallAction> get actions => const Stream.empty();
 
   @override
-  Future<void> end(String channelId) async => ended.add(channelId);
+  Future<void> end(String channelId, CallRef call) async {
+    ended.add(channelId);
+    endedCalls.add(call);
+  }
+
+  @override
+  Future<void> callStarted(String channelId, CallRef call) async {}
 }
 
 class _FakeRing extends RingController {
@@ -301,6 +312,11 @@ class _FakeRing extends RingController {
 
   @override
   void stopRinging(RingStopCause cause) => state = null;
+
+  @override
+  void stopRingingFor(CallRef call, RingStopCause cause) {
+    if (state?.call == call) state = null;
+  }
 
   /// Re-publish a ring, so a test can reach the "already in a call" branch —
   /// which is only reachable with a live call AND a live ring at once.
