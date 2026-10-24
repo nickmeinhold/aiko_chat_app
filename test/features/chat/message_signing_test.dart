@@ -24,7 +24,7 @@ void main() {
     setUp(installSecureStorageMock);
 
     test('mints a 32-byte Ed25519 key on first use', () async {
-      final key = await SovereignKeyStore().loadOrCreate();
+      final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
       expect(key.rawPublicKey.length, 32);
       expect(key.keyVersion, 1);
     });
@@ -32,15 +32,18 @@ void main() {
     test(
       'loadOrCreate is stable across a fresh store instance (restart proxy)',
       () async {
-        final first = await SovereignKeyStore().loadOrCreate();
-        final second = await SovereignKeyStore()
-            .loadOrCreate(); // new instance, same storage
+        final first = await SovereignKeyStore(
+          userId: 'test-user',
+        ).loadOrCreate();
+        final second = await SovereignKeyStore(
+          userId: 'test-user',
+        ).loadOrCreate(); // new instance, same storage
         expect(second.rawPublicKey, first.rawPublicKey);
       },
     );
 
     test('clear() wipes — a subsequent load mints a NEW key', () async {
-      final store = SovereignKeyStore();
+      final store = SovereignKeyStore(userId: 'test-user');
       final before = await store.loadOrCreate();
       await store.clear();
       final after = await store.loadOrCreate();
@@ -77,7 +80,7 @@ void main() {
             }
           });
 
-      final store = SovereignKeyStore();
+      final store = SovereignKeyStore(userId: 'test-user');
       await expectLater(
         store.loadOrCreate(),
         throwsA(isA<PlatformException>()),
@@ -144,7 +147,7 @@ void main() {
     setUp(installSecureStorageMock);
 
     test('round-trips: a signature verifies against its payload', () async {
-      final key = await SovereignKeyStore().loadOrCreate();
+      final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
       final p = _fixture(key.rawPublicKey);
       final s = await sign(key, p);
       expect(s.sig.length, 64);
@@ -152,7 +155,7 @@ void main() {
     });
 
     test('tamper: a flipped body byte fails verification', () async {
-      final key = await SovereignKeyStore().loadOrCreate();
+      final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
       final p = _fixture(key.rawPublicKey);
       final s = await sign(key, p);
       final tampered = SignedPayload(
@@ -168,7 +171,7 @@ void main() {
     test(
       'tamper: a different channel fails (no cross-channel replay)',
       () async {
-        final key = await SovereignKeyStore().loadOrCreate();
+        final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
         final p = _fixture(key.rawPublicKey);
         final s = await sign(key, p);
         final otherChannel = SignedPayload(
@@ -186,7 +189,7 @@ void main() {
     );
 
     test('tamper: a substituted public key fails verification', () async {
-      final key = await SovereignKeyStore().loadOrCreate();
+      final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
       final p = _fixture(key.rawPublicKey);
       final s = await sign(key, p);
       final wrongPub = Uint8List(32); // all-zero, not the signer
@@ -204,7 +207,7 @@ void main() {
     // payload whose pubkey isn't the signing key's — else self-verify passes but
     // the persisted pubkey can't verify (wrong-forever history).
     test('sign REJECTS a payload pubkey != the signing key', () async {
-      final key = await SovereignKeyStore().loadOrCreate();
+      final key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
       final wrongPub = Uint8List(32); // valid length, wrong key
       final p = _fixture(wrongPub);
       expect(() => sign(key, p), throwsArgumentError);

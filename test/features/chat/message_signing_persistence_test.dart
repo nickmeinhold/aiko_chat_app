@@ -66,7 +66,7 @@ void main() {
     transport = FakeChatTransport();
     rest = FakeChatRestApi();
     seq = 0;
-    key = await SovereignKeyStore().loadOrCreate();
+    key = await SovereignKeyStore(userId: 'test-user').loadOrCreate();
   });
 
   tearDown(() async {
