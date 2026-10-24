@@ -218,10 +218,12 @@ void main() {
     // process-shared map is shared by every widget test while the mock backing
     // resets per test. Each fix was worse than the finding.
     //
-    // These tests exist so the tradeoff is executable rather than prose: if someone
-    // later fixes it properly (by stopping chatRepositoryProvider holding a store
-    // across its awaits), the first test here goes RED and that is the signal to
-    // delete this group, not to restore the behaviour.
+    // These tests pin the STORE's half of the tradeoff, and only that half. They
+    // never build `chatRepositoryProvider`, so the real fix (stopping that provider
+    // holding a store across its awaits) leaves this whole group GREEN: nothing here
+    // signals it. That fix needs its own provider-level test. If the FIRST test goes
+    // red, the per-instance memo has regressed; restore it. The second test does not
+    // assert the two keys differ, so it stays green whether the race happens or not.
 
     test('one instance mints once, however many callers', () async {
       final store = storeFor('alice');

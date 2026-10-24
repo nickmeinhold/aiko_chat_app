@@ -670,7 +670,12 @@ final chatRepositoryProvider = FutureProvider.autoDispose<ChatRepository>((
   // both filed it under The Good; Tesla read the data flow and showed it was
   // unreachable: `user` and `keyStore` are both `ref.watch`-ed BEFORE any await in
   // this build, so they come from one consistent `authControllerProvider` state and
-  // the stamped id always matches. A check whose success value equals its disabled
+  // the stamped id always matches, with ONE exception: an EMPTY `user.userId` is
+  // stamped `null` (the store treats empty as no session and hands out an
+  // ephemeral, never-persisted key), so `null != ""` would have thrown. The assert
+  // turned that state into an AsyncError; without it the repo starts and signs with
+  // a throwaway key, which is the store's documented no-session behaviour (Tesla,
+  // delta audit 2026-10-24). A check whose success value equals its disabled
   // value — the exact class this repo hunts, added by the fix for another one.
   //
   // Round 3 then found the assert STILL HERE, directly above a comment claiming it

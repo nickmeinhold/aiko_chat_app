@@ -137,8 +137,11 @@ class SovereignKeyStore {
   SovereignKeyStore({this.userId, FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
 
-  /// Load this account's persisted key, minting one on first use. Idempotent:
-  /// the same (device, account) resolves to the same key until [clear].
+  /// Load this account's persisted key, minting one on first use. Idempotent
+  /// PER INSTANCE and once the slot is settled: after that, the same (device,
+  /// account) resolves to the same key until [clear]. NOT across two instances
+  /// racing an empty slot: both mint, and the session may sign with the seed
+  /// that lost (the accepted race, see [_inflight]).
   Future<SovereignKey> loadOrCreate() => _inflight ??= _guardedLoad();
 
   Future<SovereignKey> _guardedLoad() async {
@@ -210,16 +213,18 @@ class SovereignKeyStore {
   /// properties that cost the most are all gone at once. We are not going to use
   /// these bytes, so they need not decode, need not be 32 bytes long, and need not
   /// be gone before anything else happens. A delete that fails is retried on the
-  /// next load. Nothing can race it, because no other code path names this key.
+  /// next load that reaches [_loadOrCreate] (a new store, or this one after a
+  /// failed load). Nothing can race it, because no other code path names this key.
   Future<void> _discardLegacySeed() async {
     try {
       await _storage.delete(key: _kLegacySeed);
     } catch (_) {
       // BEST-EFFORT PER STORE INSTANCE, not per call, and the distinction is one
       // Carnot has now had to make three times. `loadOrCreate` memoises its result
-      // in `_inflight`, so a second call on THIS instance never re-enters
-      // `_loadOrCreate` and never reaches here. A retry happens when the provider
-      // rebuilds and constructs a new store — which is a different sentence from
+      // in `_inflight`, so after a SUCCESSFUL load a second call on THIS instance
+      // never re-enters `_loadOrCreate` and never reaches here. (A FAILED load
+      // evicts the memo, so the next call does re-enter.) Otherwise a retry happens
+      // when the provider rebuilds and constructs a new store — which is a different sentence from
       // "the next load tries again", and the version of this comment that said the
       // shorter thing was simply wrong. Nothing depends on the delete succeeding:
       // no code path reads this key for its value.
