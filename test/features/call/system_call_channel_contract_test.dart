@@ -308,12 +308,20 @@ void main() {
       swift,
       matches(
         RegExp(
-          r'let name = takeVerifiedName\(channel: channel, call: callId\) \{\s*'
-          r'update\.localizedCallerName = name',
+          r'let heldName = channel\.flatMap \{ takeVerifiedName\(channel: \$0, call: callId\) \}\s*'
+          r'if let heldName \{ update\.localizedCallerName = heldName \}',
         ),
       ),
       reason: 'the invite report must APPLY a held name to the first frame',
     );
+  });
+
+  test('#377: Swift reads the argument keys Dart sends', () {
+    // The method NAME is pinned by "the method Dart invokes, Swift answers";
+    // the KEYS were not (Noether, PR #404 round 3).
+    for (final key in ['channel', 'call', 'name']) {
+      expect(swift, contains('args["$key"] as? String'));
+    }
   });
 
   test('#377: reading a held name never spends it (Tesla, PR #404 r2)', () {

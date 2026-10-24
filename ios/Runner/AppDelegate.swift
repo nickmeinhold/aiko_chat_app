@@ -773,12 +773,8 @@ final class CallKitRinger: NSObject {
     update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
     // Tier 2, early: Dart already verified this exact call before its push
     // landed (an awake app), so the ring can carry the name from its first frame.
-    if let channel, let name = takeVerifiedName(channel: channel, call: callId) {
-      update.localizedCallerName = name
-      os_log(
-        "[callkit] identify: held name applied on %{public}@", log: aikoCallLog, type: .info,
-        channel)
-    }
+    let heldName = channel.flatMap { takeVerifiedName(channel: $0, call: callId) }
+    if let heldName { update.localizedCallerName = heldName }
     update.hasVideo = true
 
     // Recorded BEFORE the report, not in its completion. If iOS terminates this
@@ -813,6 +809,15 @@ final class CallKitRinger: NSObject {
         os_log(
           "[callkit] invite reported for %{public}@ as %{public}@", log: aikoCallLog,
           type: .info, channel ?? "<no channel>", uuid.uuidString)
+        // SHOWN only once CallKit has ACCEPTED the report. Marking it at the read
+        // let a refused report count as shown, so its expiry stayed silent
+        // (Tesla + Maxwell, PR #404 round 3).
+        if heldName != nil {
+          self.markHeldNameShown(call: callId)
+          os_log(
+            "[callkit] identify: held name applied on %{public}@", log: aikoCallLog,
+            type: .info, channel ?? "<no channel>")
+        }
       }
       // SCOPED TO THE UUID WE JUST STORED, not to the channel. Forgetting by
       // channel alone let a FAILED report evict a DIFFERENT, live call's
@@ -1111,18 +1116,32 @@ final class CallKitRinger: NSObject {
 
   private func rememberVerifiedName(_ name: String, channel: String, call: String) {
     let now = Date()
-    // A held name that ages out was never shown, so it SAYS so: `held` in Dart's
-    // telemetry is only half the story without this (Noether, PR #404).
-    for (expired, held) in verifiedNames
-    where now.timeIntervalSince(held.at) >= Self.liveCallTrustWindow {
-      verifiedNames.removeValue(forKey: expired)
-      if !held.applied {
-        os_log(
-          "[callkit] identify: held name expired unshown on %{public}@", log: aikoCallLog,
-          type: .info, held.channel)
-      }
-    }
     verifiedNames[call] = (channel: channel, name: name, at: now, applied: false)
+    // EAGER expiry, one timer per hold. A sweep inside this function only ran at
+    // the NEXT identify, so a hold that aged out with no later call was never
+    // reported (Maxwell + Noether, PR #404 round 3).
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.liveCallTrustWindow) { [weak self] in
+      self?.expireHold(call: call, heldAt: now)
+    }
+  }
+
+  /// Ends exactly the hold that armed this timer (`heldAt`), so a newer hold
+  /// for the same call id is left alone. A name that was never shown SAYS so:
+  /// `held` in Dart's telemetry is only half the story without this (Noether).
+  private func expireHold(call: String, heldAt: Date) {
+    guard let held = verifiedNames[call], held.at == heldAt else { return }
+    verifiedNames.removeValue(forKey: call)
+    if !held.applied {
+      os_log(
+        "[callkit] identify: held name expired unshown on %{public}@", log: aikoCallLog,
+        type: .info, held.channel)
+    }
+  }
+
+  private func markHeldNameShown(call: String) {
+    guard var held = verifiedNames[call] else { return }
+    held.applied = true
+    verifiedNames[call] = held
   }
 
   /// The held name for exactly this call on exactly this channel. Both must
@@ -1130,12 +1149,10 @@ final class CallKitRinger: NSObject {
   /// and a name never crosses to a call it was not verified for. A mismatch
   /// leaves the hold untouched for the report that does match.
   private func takeVerifiedName(channel: String, call: String) -> String? {
-    guard var held = verifiedNames[call],
+    guard let held = verifiedNames[call],
       held.channel == channel,
       Date().timeIntervalSince(held.at) < Self.liveCallTrustWindow
     else { return nil }
-    held.applied = true
-    verifiedNames[call] = held
     return held.name
   }
 
