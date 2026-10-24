@@ -32,8 +32,9 @@ ADR-0004 said: *"On any island you are the same person because the same key sign
 
 1. **Scope.** The sovereign seed is scoped per `(island, user_id)`. Island `user_id`s are ULIDs and never collide across islands, so PR #208's per-`user_id` scoping already gives this. The storage key should say so in its name when next touched, so the scope is visible rather than incidental.
 2. **The link (future increment, shape fixed now).** A *mutual* attestation: key A signs "A ↔ B", **and** key B signs the same statement. A one-sided claim proves nothing (anyone can claim to be Nick). The pair is carried in each account's `IdentityDoc` as additional `verificationMethod` entries plus the countersigned statement. Revocation is a signed "unlink" by either key. Building this is **not** part of this ADR; it fixes only that continuity arrives this way and no other.
-3. **Key continuity (#236) gets simpler.** The app pins the first key it sees for each `(island, account)`. Moving islands no longer looks like a key change, because it's a different account. The open hard case stays **multi-device within one account** (several phones, one account), which this ADR does not decide.
-4. **Unchanged from ADR-0004:** opaque identifiers; origin as a locator only; no central directory; home-scoped handles; the browse-by-island roster.
+3. **Key continuity (#236) gets simpler.** The app pins the first key it sees for each `(island, account)`. Moving islands no longer looks like a key change, because it's a different account. Multi-device within one account is decided in 5: one key, copied, so a second phone is not a key change either.
+4. **Multi-device: one key, copied (Nick, 2026-10-25).** Every device of one island account holds the *same* signing key, and the same second key where one exists (design 20 §9's X25519). Devices are not separate identities, and none of them vouches for another. The key moves between devices the way the in-app key backup already moves it: a restore onto a second device is multi-device with n=2. Passkeys sync within one platform's keychain; an iPhone and a Pixel share the key only through an explicit restore.
+5. **Unchanged from ADR-0004:** opaque identifiers; origin as a locator only; no central directory; home-scoped handles; the browse-by-island roster.
 
 ## Rationale and alternatives
 
@@ -53,10 +54,11 @@ ADR-0004 said: *"On any island you are the same person because the same key sign
 
 ## Unresolved questions
 
-1. **Multi-device within one account.** N devices: one key synced (as passkeys are), or N keys cross-signed (Matrix, Keybase)? Deferred; it's what #236 is really blocked on.
-2. **Where links live and who serves them.** The island tab's lean (2026-10-24, not decided): the island stores and serves signed link documents next to `/v1/keys` / the IdentityDoc as opaque, self-verifying blobs, so recipients on other islands can fetch them while the linking client is offline.
-3. **Linking UX.** How a person proves control of both keys at once: both accounts signed in on one device is the obvious path, and possibly the only one at first.
+1. **Where links live and who serves them.** The island tab's lean (2026-10-24, not decided): the island stores and serves signed link documents next to `/v1/keys` / the IdentityDoc as opaque, self-verifying blobs, so recipients on other islands can fetch them while the linking client is offline.
+2. **Linking UX.** How a person proves control of both keys at once: both accounts signed in on one device is the obvious path, and possibly the only one at first.
 
 ## Rejected ideas
+
+- **N keys per account, cross-signed (Matrix, Keybase).** Rejected for multi-device, 2026-10-25. It buys per-device revocation, but every new device then has to reach every peer who pinned the account, and design 20 §9's sealed ring would be sealed once per device. With one copied key a lost phone means rotating the account's key. That rotation is a key change #236 must surface, and we accept that cost.
 
 - **Leaving it implicit in #208.** The fork that ADR-0004 rejected (home-anchoring as an *unnamed default*) would have arrived through a bug fix, which is how #4831 and #4775 both arrived. This ADR exists so that it doesn't.
