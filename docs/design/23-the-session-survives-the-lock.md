@@ -163,7 +163,7 @@ the `requestDismissKeyguard` unlock after it no longer do.
    (unit: fake channel answers `wakeAge` while no event has been emitted). Pass = admitted.
 5. **Unit (`admitRing`, pure):** admitted when `receivedAt − signedAt` ≤ 10 s with
    `now − signedAt` = 16 s; `stale` when `receivedAt − signedAt` > 10 s; falls back to `now`
-   when `receivedAt` is null; `clockSkew` on negative age; refused before age when ended;
+   when `receivedAt` is null; `clockSkew` when signed more than `kCallInviteClockSkewTolerance` (5 s) in the future (was: on any negative age, #393); refused before age when ended;
    malformed or missing `CallRef` refused before any lookup.
 6. **Native:** `wakeAge` null after reboot (stored uptime > now), null for an ended CallKit
    call, null for a different call id; never re-stamped by a duplicate push.

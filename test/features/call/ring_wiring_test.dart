@@ -915,16 +915,18 @@ void main() {
       expect(asked, hasLength(1));
     });
 
-    test('#393: an open app rings an invite signed 0.82 s in its future, '
+    test('#393: an open app rings an invite signed in its future, '
         'without asking the native side', () async {
       // Measured on a Pixel 2026-10-24: the invite arrived over the live socket
       // from a sender 0.82 s fast and was refused clockSkew, so the native ring
       // rang and the answer waited 30 s for an admission that never came.
+      // -3 s, not the measured -0.82 s: this fixture signs on the wall clock
+      // and the controller judges later, so a slow machine could age -0.82 s
+      // past zero and pass on the ordinary fresh path (Maxwell, PR #399). The
+      // exact measured value is pinned in call_invite_test, at a fixed `now`.
       final admitted = await listening();
 
-      transport.emitMessage(
-        await inbound(age: const Duration(milliseconds: -820)),
-      );
+      transport.emitMessage(await inbound(age: const Duration(seconds: -3)));
       await pump();
 
       expect(container.read(incomingRingProvider)?.call, kTestCall);

@@ -702,8 +702,9 @@ void main() {
     });
 
     test('an invite stamped in the FUTURE by a skewed clock', () {
-      // Negative age is not "very fresh" — it is unreadable, and admitting it
-      // would let a bad clock ring forever. `age > freshness` alone admits this.
+      // An age further negative than the skew tolerance is not "very fresh" —
+      // it is unreadable, and admitting it would let a bad clock ring forever.
+      // `age > freshness` alone admits this.
       expect(admit(invite(age: const Duration(seconds: -60))), isNull);
     });
   });
@@ -749,19 +750,29 @@ void main() {
     });
 
     test('null receivedAt is the pre-design-23 judgement exactly', () {
-      for (final age in const [
-        Duration(seconds: 1),
-        Duration(seconds: 10),
-        Duration(seconds: 11),
-        Duration(seconds: -5),
-        Duration(seconds: -6),
-      ]) {
+      // Concrete outcomes, not judge(m) against itself: `receivedAt` defaults
+      // to null, so comparing judge(m) with judge(m, receivedAt: null) was one
+      // call compared with itself and could never fail (Noether + Tesla,
+      // PR #399). Null must mean "judge at now": the same verdict as a wake AT
+      // now, and the verdict the age alone predicts.
+      const cases = <(Duration, RingRefusal?)>[
+        (Duration(seconds: 1), null),
+        (Duration(seconds: 10), null),
+        (Duration(seconds: 11), RingRefusal.stale),
+        (Duration(seconds: -5), null),
+        (Duration(seconds: -6), RingRefusal.clockSkew),
+      ];
+      for (final (age, refusal) in cases) {
         final m = invite(age: age);
-        expect(
-          judge(m).runtimeType,
-          judge(m, receivedAt: null).runtimeType,
-          reason: 'age $age',
-        );
+        final atNull = judge(m);
+        final atNow = judge(m, receivedAt: now);
+        if (refusal == null) {
+          expect(atNull, isA<RingAdmitted>(), reason: 'age $age');
+          expect(atNow, isA<RingAdmitted>(), reason: 'age $age');
+        } else {
+          expect((atNull as RingRefused).reason, refusal, reason: 'age $age');
+          expect((atNow as RingRefused).reason, refusal, reason: 'age $age');
+        }
       }
     });
 
