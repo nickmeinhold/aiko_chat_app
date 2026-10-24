@@ -214,6 +214,21 @@ class RingTelemetry {
         fields: {'channel': channelId, 'outcome': outcome.name},
       );
 
+  /// Identify was never asked, and why. The same event as [ringIdentified] so
+  /// one grep finds every admitted ring's naming, with `outcome=skipped`: no
+  /// line now means identify never ran, not "no label" or "no bridge" (#5192,
+  /// Noether on PR #404). `skipped` is Dart's, never native's, so it stays out
+  /// of [SystemRingIdentify], whose set is the wire's.
+  void ringIdentifySkipped(String channelId, RingIdentifySkip reason) =>
+      _log.info(
+        'call.ring.identified',
+        fields: {
+          'channel': channelId,
+          'outcome': 'skipped',
+          'reason': reason.name,
+        },
+      );
+
   static const RingTelemetry noop = RingTelemetry(
     AikoLogger(subsystem: 'aiko.call.ring', sink: NoopLogSink()),
   );
@@ -228,3 +243,13 @@ class RingTelemetry {
 final ringTelemetryProvider = Provider<RingTelemetry>(
   (ref) => RingTelemetry(ref.watch(rootLoggerProvider).child('call.ring')),
 );
+
+/// Why an admitted ring's caller was not offered to the system ring (#5192).
+enum RingIdentifySkip {
+  /// The invite carried no name, or only spaces. The island's choice; the ring
+  /// keeps its placeholder.
+  noLabel,
+
+  /// No native ring on this platform (desktop, web).
+  noBridge,
+}

@@ -446,15 +446,26 @@ class RingController extends Notifier<CallInvite?> {
   ///
   /// TRIMMED before the check: a label of spaces passed `isEmpty` and blanked
   /// the ring, the exact outcome the check exists to prevent (Noether, PR #404).
+  ///
+  /// Each skip is LOGGED, so a missing line means identify never ran (#5192).
   void _identifySystemRing(CallInvite invite) {
-    final name = invite.from.label?.trim();
-    if (name == null || name.isEmpty) return;
-    final bridge = ref.read(systemCallBridgeProvider);
-    if (bridge == null) return;
     // Captured BEFORE the await: `_telemetry` reads `ref`, and a controller
     // disposed while native answers would throw on that read. The answer is
     // still worth recording after a rebuild.
     final telemetry = _telemetry;
+    final name = invite.from.label?.trim();
+    if (name == null || name.isEmpty) {
+      telemetry.ringIdentifySkipped(invite.channelId, RingIdentifySkip.noLabel);
+      return;
+    }
+    final bridge = ref.read(systemCallBridgeProvider);
+    if (bridge == null) {
+      telemetry.ringIdentifySkipped(
+        invite.channelId,
+        RingIdentifySkip.noBridge,
+      );
+      return;
+    }
     unawaited(
       bridge
           .identify(invite.channelId, invite.call, name)
