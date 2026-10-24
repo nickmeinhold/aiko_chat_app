@@ -835,11 +835,14 @@ class _FakeBridge implements SystemCallBridge {
   final List<String> identified = [];
 
   @override
-  Future<void> identify(
+  Future<SystemRingIdentify> identify(
     String channelId,
     CallRef call,
     String callerName,
-  ) async => identified.add('$channelId|${call.id}|$callerName');
+  ) async {
+    identified.add('$channelId|${call.id}|$callerName');
+    return SystemRingIdentify.named;
+  }
 
   @override
   Future<WakeAge> wakeAge(String channelId, CallRef call) async =>

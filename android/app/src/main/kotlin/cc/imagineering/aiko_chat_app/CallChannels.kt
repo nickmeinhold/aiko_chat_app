@@ -103,7 +103,8 @@ object CallChannels {
           // ring keeps "Aiko Chat". Re-posting the full-screen notification to
           // rename it needs setOnlyAlertOnce and a check that it does not
           // relaunch IncomingCallActivity, which wants a handset to prove.
-          result.success(null)
+          // Says so, rather than answering like a success (Noether, PR #404).
+          result.success("unsupported")
         }
         "canRingFullScreen" -> result.success(IncomingCallNotifier.canRingFullScreen(app))
         "openFullScreenSettings" -> {

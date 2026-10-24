@@ -1205,8 +1205,12 @@ void main() {
       expect(identified, isEmpty);
     });
 
-    for (final label in [null, '']) {
-      test('no label (${label == null ? 'null' : 'empty'}): the ring keeps its '
+    for (final label in [null, '', '   ']) {
+      test('no label (${label == null
+              ? 'null'
+              : label.isEmpty
+              ? 'empty'
+              : 'spaces'}): the ring keeps its '
           'placeholder, nothing is sent', () async {
         await listening();
 

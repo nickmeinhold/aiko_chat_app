@@ -443,12 +443,25 @@ class RingController extends Notifier<CallInvite?> {
   ///
   /// No label means no call: the ring keeps its product placeholder rather than
   /// trading it for "Someone", which says no more and looks like a person.
+  ///
+  /// TRIMMED before the check: a label of spaces passed `isEmpty` and blanked
+  /// the ring, the exact outcome the check exists to prevent (Noether, PR #404).
   void _identifySystemRing(CallInvite invite) {
-    final name = invite.from.label;
+    final name = invite.from.label?.trim();
     if (name == null || name.isEmpty) return;
-    ref
-        .read(systemCallBridgeProvider)
-        ?.identify(invite.channelId, invite.call, name);
+    final bridge = ref.read(systemCallBridgeProvider);
+    if (bridge == null) return;
+    // Captured BEFORE the await: `_telemetry` reads `ref`, and a controller
+    // disposed while native answers would throw on that read. The answer is
+    // still worth recording after a rebuild.
+    final telemetry = _telemetry;
+    unawaited(
+      bridge
+          .identify(invite.channelId, invite.call, name)
+          .then(
+            (outcome) => telemetry.ringIdentified(invite.channelId, outcome),
+          ),
+    );
   }
 
   /// Ask the native side when it was woken for this invitation's call, then
