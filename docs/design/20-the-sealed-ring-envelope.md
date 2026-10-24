@@ -447,7 +447,11 @@ refusal. A refusal still has to report. Pick one:
   counter. That wake is bounded by gate 7 (only DM peers who have spoken), the island's ring
   ceiling, and `block`.
 
-**(c) is what the code already does**, so the honest move is to choose it by name, and to stop
+**Today's code is (c) without the device's choice.** The PushKit handler never checks
+consent (`AppDelegate.swift`, `didReceiveIncomingPushWith` → `ringer.handle`): every push that
+passes the island rings in full, and only Dart, once it's running, can verify and retract. So
+§10 makes things strictly better than today: a refused peer gets report-then-end, not a full
+ring. The honest move is to choose (c) by name, and to stop
 the allowlist header claiming "may this agent wake me at 3am" when what it decides is **how the
 wake presents**. The tier-3 question rides with it. With no pin, the caller has no K, and an
 unsealed ring is one the island fully controls. Does it still ring at tier 3 (`"Aiko"`), or does
