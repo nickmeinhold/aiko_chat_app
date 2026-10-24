@@ -771,6 +771,11 @@ final class CallKitRinger: NSObject {
     // is worse than no name. Tiers 1 and 2 (the App Group name cache, and
     // reportCall(with:updated:) once Dart is up) are not built yet.
     update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
+    // Tier 2, early: Dart already verified this exact call before its push
+    // landed (an awake app), so the ring can carry the name from its first frame.
+    if let channel, let name = takeVerifiedName(channel: channel, call: callId) {
+      update.localizedCallerName = name
+    }
     update.hasVideo = true
 
     // Recorded BEFORE the report, not in its completion. If iOS terminates this
@@ -1036,6 +1041,71 @@ final class CallKitRinger: NSObject {
   /// design 22 temper round 3).
   func callStarted(channel: String, call: String) {
     liveSession = (channel: channel, call: call)
+  }
+
+  /// Tier 2 of design 12 Decision 6 (#377): the ring went up as "Aiko" because
+  /// nothing had verified the caller yet. Dart has now verified the signed
+  /// invite for [call], so the ring may say who it is.
+  ///
+  /// EXACT, like `endSystemCall`: the live entry on the channel must be the
+  /// call Dart names, so a late verification of call A can never rename call B
+  /// that displaced it.
+  ///
+  /// The update RE-STATES the handle and video flag the ring was reported with,
+  /// rather than relying on CallKit leaving unset fields alone. Whether a fresh
+  /// `CXCallUpdate` publishes its defaults (`hasVideo` false) is not something
+  /// this file can verify offline, and getting it wrong would strip the video
+  /// affordance at the moment the caller is named (Tesla, PR #404).
+  ///
+  /// The NAME, not the handle: `remoteHandle` stays the "Aiko" placeholder, so
+  /// nothing here becomes a dialable identity in Recents.
+  func identifySystemCall(channel: String, call: String, name: String) -> String {
+    guard let entry = liveEntry(for: channel), entry.call == call else {
+      // NOT YET, rather than never. With the app awake, the invite reaches Dart
+      // over the socket in milliseconds while the VoIP push that raises this
+      // ring is still crossing APNs, so the usual order is name-then-ring.
+      // Dropping the name here meant an awake iPhone (the case tier 2 is FOR)
+      // rang as "Aiko" whenever the socket won. Kept for exactly this call, and
+      // applied by `reportInvite` when its ring is reported (Maxwell, PR #404).
+      rememberVerifiedName(name, channel: channel, call: call)
+      os_log(
+        "[callkit] identify: no live ring yet on %{public}@, name held for its report",
+        log: aikoCallLog, type: .info, channel)
+      return "held"
+    }
+    let update = CXCallUpdate()
+    update.remoteHandle = CXHandle(type: .generic, value: "Aiko")
+    update.hasVideo = true
+    update.localizedCallerName = name
+    provider.reportCall(with: entry.uuid, updated: update)
+    os_log("[callkit] identify: caller named on %{public}@", log: aikoCallLog, type: .info, channel)
+    return "named"
+  }
+
+  /// Names Dart verified before the ring they belong to was reported, keyed by
+  /// call id. PROCESS MEMORY on purpose: a name can only arrive here from a
+  /// running Dart, and a ring reported by a different process (a cold wake) had
+  /// no Dart to verify anything, so it has nothing to find. Bounded by the
+  /// ring-trust window: a held name older than any ring could be is dropped.
+  private var verifiedNames: [String: (channel: String, name: String, at: Date)] = [:]
+
+  private func rememberVerifiedName(_ name: String, channel: String, call: String) {
+    let now = Date()
+    verifiedNames = verifiedNames.filter {
+      now.timeIntervalSince($0.value.at) < Self.liveCallTrustWindow
+    }
+    verifiedNames[call] = (channel: channel, name: name, at: now)
+  }
+
+  /// The held name for exactly this call on exactly this channel, consumed.
+  /// Both must match: the channel comes from the push, the name from the
+  /// verified invite, and a name never crosses to a call it was not verified for.
+  private func takeVerifiedName(channel: String, call: String) -> String? {
+    guard let held = verifiedNames.removeValue(forKey: call),
+      held.channel == channel,
+      Date().timeIntervalSince(held.at) < Self.liveCallTrustWindow
+    else { return nil }
+    return held.name
   }
 
   // MARK: The session, the lease and the spent calls (design 22 v4)
@@ -1406,6 +1476,19 @@ final class SystemCallChannel: NSObject, FlutterStreamHandler {
           let callId = args["call"] as? String
         else { return result(["state": "notActionable"]) }
         result(CallKitRinger.shared.wakeAge(channel: channel, call: callId))
+      case "identifySystemCall":
+        // Dart has VERIFIED the signed invite for exactly this call, so the ring
+        // may name its caller (#377 tier 2).
+        // Answers what happened ("named" | "held"), so Dart can log a name that
+        // never reached the screen (Noether, PR #404). Malformed args answer nil,
+        // which Dart reads as "unavailable".
+        guard let args = call.arguments as? [String: Any],
+          let channel = args["channel"] as? String, !channel.isEmpty,
+          let callId = args["call"] as? String,
+          let name = (args["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !name.isEmpty
+        else { return result(nil) }
+        result(CallKitRinger.shared.identifySystemCall(channel: channel, call: callId, name: name))
       case "callStarted":
         // Dart has a call live in this process (design 22 v4.2).
         if let args = call.arguments as? [String: Any],

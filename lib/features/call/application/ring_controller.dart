@@ -409,6 +409,7 @@ class RingController extends Notifier<CallInvite?> {
         transit: receivedAt?.difference(invite.startedAt),
       );
       _admissions.add(invite);
+      _identifySystemRing(invite);
       return;
     }
     if (displaced != null) _settle(displaced);
@@ -426,6 +427,7 @@ class RingController extends Notifier<CallInvite?> {
       transit: receivedAt?.difference(invite.startedAt),
     );
     _admissions.add(invite);
+    _identifySystemRing(invite);
     // ONE equation of motion. Arming an absolute `kInAppRingDuration` here while
     // `_republish` derived the remaining time from `startedAt` meant a ring's
     // length depended on whether a rebuild happened to occur: an invite signed
@@ -433,6 +435,33 @@ class RingController extends Notifier<CallInvite?> {
     // Carnot). Both paths now go through `_republish`, so the deadline is a
     // function of the signed start time and nothing else.
     state = _republish();
+  }
+
+  /// Name the caller on the system ring, now that the signature has verified
+  /// (#377 tier 2). Every admission does it, the displaced one too: native may
+  /// be ringing for either.
+  ///
+  /// No label means no call: the ring keeps its product placeholder rather than
+  /// trading it for "Someone", which says no more and looks like a person.
+  ///
+  /// TRIMMED before the check: a label of spaces passed `isEmpty` and blanked
+  /// the ring, the exact outcome the check exists to prevent (Noether, PR #404).
+  void _identifySystemRing(CallInvite invite) {
+    final name = invite.from.label?.trim();
+    if (name == null || name.isEmpty) return;
+    final bridge = ref.read(systemCallBridgeProvider);
+    if (bridge == null) return;
+    // Captured BEFORE the await: `_telemetry` reads `ref`, and a controller
+    // disposed while native answers would throw on that read. The answer is
+    // still worth recording after a rebuild.
+    final telemetry = _telemetry;
+    unawaited(
+      bridge
+          .identify(invite.channelId, invite.call, name)
+          .then(
+            (outcome) => telemetry.ringIdentified(invite.channelId, outcome),
+          ),
+    );
   }
 
   /// Ask the native side when it was woken for this invitation's call, then

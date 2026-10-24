@@ -832,6 +832,18 @@ void main() {
 /// sides of that channel are pinned by `system_call_channel_contract_test.dart`,
 /// because a fake cannot catch a rename it shares.
 class _FakeBridge implements SystemCallBridge {
+  final List<String> identified = [];
+
+  @override
+  Future<SystemRingIdentify> identify(
+    String channelId,
+    CallRef call,
+    String callerName,
+  ) async {
+    identified.add('$channelId|${call.id}|$callerName');
+    return SystemRingIdentify.named;
+  }
+
   @override
   Future<WakeAge> wakeAge(String channelId, CallRef call) async =>
       const WakeNotActionable();

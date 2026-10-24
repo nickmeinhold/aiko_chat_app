@@ -102,6 +102,9 @@ void main() {
         {'action': 'answered', 'channel': ''}, // empty channel
         {'action': 'answered', 'channel': 7}, // channel not a string
         {'channel': 'dm:aaa:bbb'}, // no action
+        // action not a string: must DROP, not throw a stream error that
+        // takes down every later event (Carnot, PR #404)
+        {'action': 42, 'channel': 'dm:aaa:bbb', 'call': kTestCallId},
         {'action': 'exploded', 'channel': 'dm:aaa:bbb'}, // unknown kind
         // the one good one
         {'action': 'ended', 'channel': 'dm:ccc:ddd', 'call': kTestCallId},
@@ -152,6 +155,48 @@ void main() {
           call: kTestCall,
         ).channelId,
         weird,
+      );
+    });
+  });
+
+  group('identify (#377)', () {
+    test(
+      'the wire words decode to a closed set; anything else is unavailable',
+      () {
+        expect(SystemRingIdentify.fromWire('named'), SystemRingIdentify.named);
+        expect(SystemRingIdentify.fromWire('held'), SystemRingIdentify.held);
+        expect(
+          SystemRingIdentify.fromWire('unsupported'),
+          SystemRingIdentify.unsupported,
+        );
+        for (final odd in [null, '', 'NAMED', 42, true]) {
+          expect(
+            SystemRingIdentify.fromWire(odd),
+            SystemRingIdentify.unavailable,
+            reason: '$odd must not read as a success',
+          );
+        }
+      },
+    );
+
+    test('the REAL bridge reports what native answered', () async {
+      String? reply = 'held';
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel(kSystemCallControlChannel),
+            (call) async => call.method == 'identifySystemCall' ? reply : null,
+          );
+      final bridge = NativeSystemCallBridge(
+        platformOverride: TargetPlatform.iOS,
+      );
+      expect(
+        await bridge.identify('dm:a', kTestCall, 'Robin'),
+        SystemRingIdentify.held,
+      );
+      reply = null; // malformed args answer nil on iOS
+      expect(
+        await bridge.identify('dm:a', kTestCall, 'Robin'),
+        SystemRingIdentify.unavailable,
       );
     });
   });

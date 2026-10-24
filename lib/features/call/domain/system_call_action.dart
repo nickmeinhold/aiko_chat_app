@@ -93,3 +93,34 @@ class SystemCallAction {
   @override
   int get hashCode => Object.hash(kind, channelId, origin, call);
 }
+
+/// What the platform did with a verified caller name (#377 tier 2).
+///
+/// A CLOSED SET on purpose: the first version returned nothing, so "the ring
+/// now shows the name", "no ring yet" and "this platform cannot rename" were
+/// one indistinguishable `null`, and no log could show the feature failing
+/// (Noether, PR #404).
+enum SystemRingIdentify {
+  /// The live ring now shows the name.
+  named,
+
+  /// No ring yet for this call. The name is held for exactly this call and
+  /// applied when its ring is reported (the awake-app order: socket, then push).
+  held,
+
+  /// This platform does not rename its ring (Android today).
+  unsupported,
+
+  /// No answer the app can read: an older native half, a native error, or a
+  /// reply outside this set. The one worth noticing.
+  unavailable;
+
+  /// Permissive, in the same direction as the action decoder: anything this
+  /// build does not know is [unavailable], never guessed at.
+  static SystemRingIdentify fromWire(Object? value) => switch (value) {
+    'named' => named,
+    'held' => held,
+    'unsupported' => unsupported,
+    _ => unavailable,
+  };
+}

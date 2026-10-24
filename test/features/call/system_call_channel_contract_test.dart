@@ -280,10 +280,7 @@ void main() {
       r'const val SPENT_TTL_MS = ([0-9_]+)L',
     ).firstMatch(kotlin)?.group(1);
     expect(ms, isNotNull, reason: 'the Kotlin constant did not parse');
-    expect(
-      int.parse(ms!.replaceAll('_', '')),
-      kCallSpentTtl.inMilliseconds,
-    );
+    expect(int.parse(ms!.replaceAll('_', '')), kCallSpentTtl.inMilliseconds);
     final swiftTtl = RegExp(
       r'static let spentTtl: TimeInterval = (\d+)',
     ).firstMatch(swift)?.group(1);
@@ -293,6 +290,38 @@ void main() {
 
   test('Swift emits the v2 call id under the key Dart decodes', () {
     expect(systemCallChannelSource(), contains('event["call"]'));
+  });
+
+  // #377 tier 2. With the app awake, Dart verifies the invite over the socket
+  // BEFORE the VoIP push raises the ring, so a name that arrives first must be
+  // held and applied at the report, not dropped (Maxwell, PR #404). Text pins,
+  // because Swift is not under test here: each fails if its half is deleted.
+  test('#377: a name verified before its ring is held, then applied', () {
+    expect(
+      swift,
+      contains('rememberVerifiedName(name, channel: channel, call: call)'),
+      reason: 'identifySystemCall must HOLD a name that beats its ring',
+    );
+    expect(
+      swift,
+      contains('takeVerifiedName(channel: channel, call: callId)'),
+      reason: 'the invite report must APPLY a held name to the first frame',
+    );
+  });
+
+  test('#377: both native halves answer identify in words Dart decodes', () {
+    for (final word in ['named', 'held']) {
+      expect(swift, contains('return "$word"'), reason: 'Swift answers $word');
+      expect(SystemRingIdentify.fromWire(word).name, word);
+    }
+    final kotlin = File(
+      'android/app/src/main/kotlin/cc/imagineering/aiko_chat_app/CallChannels.kt',
+    ).readAsStringSync();
+    expect(kotlin, contains('result.success("unsupported")'));
+    expect(
+      SystemRingIdentify.fromWire('unsupported'),
+      SystemRingIdentify.unsupported,
+    );
   });
 
   // Design 23. The two traps the temper named, pinned in the source rather than
