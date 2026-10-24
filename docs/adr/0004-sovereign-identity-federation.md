@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **ADR** | 0004 |
-| **Status** | Draft, requesting comments (distills the reserved slot; supersedes the unresolved tension in Design 06) |
+| **Status** | Draft, requesting comments (distills the reserved slot; supersedes the unresolved tension in Design 06). **Amended by [ADR-0009](0009-signing-keys-are-per-island-account.md) (2026-10-24):** a key belongs to one island account; "same person across islands" is an explicit signed link between keys, not one shared key. |
 | **Owner** | Nick Meinhold, with Claude |
 | **Created** | 2026-08-08 |
 | **Thread** | Crucible: `docs/crucible/federated-identity-anchor/` (CRUCIBLE · RESEARCH · DESIGN · TEMPER) |
