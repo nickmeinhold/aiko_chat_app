@@ -151,9 +151,9 @@ class SovereignKeyStore {
   }
 
   /// Drop the memoised load so a later call can retry. Caching a REJECTED future
-  /// would mute signing until process death on one transient keychain error
-  /// (cage-match Tesla R2) — and now that the memo is shared across instances,
-  /// failing to evict would brick the account for every future store too.
+  /// would mute signing on one transient keychain error for as long as this store
+  /// lives, which in practice is the whole session (cage-match Tesla R2). The memo
+  /// is per INSTANCE (see [_inflight]), not shared with other stores.
   void _evictMemo() => _inflight = null;
 
   Future<SovereignKey> _loadOrCreate() async {
@@ -264,7 +264,7 @@ class SovereignKeyStore {
   /// whether sign-out should call it is tracked on #4831, and is a question about
   /// ROTATION rather than correlation, which the scoping already takes.
   Future<void> clear() async {
-    _evictMemo(); // shared across instances now, so this must clear the slot's memo
+    _evictMemo(); // this instance's memo would otherwise keep returning the wiped key
     final uid = userId;
     if (uid != null && uid.isNotEmpty) {
       await _storage.delete(key: _seedKeyFor(uid));
