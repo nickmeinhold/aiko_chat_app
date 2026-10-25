@@ -562,3 +562,14 @@ wakeability (gate 7 is per DM), but never behind it. That's harmless.
      Presence alone isn't enough, because an empty or junk field would buy a wake.
    - **The release.** The app version that ships sealing and removes tier 3 (§10.5's ordering
      rule). The island's change is cut to match it.
+   - **The capability field: this is its one statement** (island #415 and the app half link
+     here and don't restate it). The app sends it on every push-token registration, and the
+     island stores it on that device's `install_id` row.
+     - **Shape:** a boolean, provisionally `sealed_ring`. The island may rename it before build,
+       and this line changes with it.
+     - **Absent means not capable.** A missing field is an old app, never "unknown, so assume
+       yes". It's the safe direction: an old device keeps today's unsealed wake.
+     - **Replaced on every registration, never merged.** The row holds what the latest
+       registration said. A device that reinstalls an older build re-registers without the
+       field and loses the capability, so the island never withholds a wake from an app that
+       can't open a seal. (Round 3 left this open; this closes it.)
