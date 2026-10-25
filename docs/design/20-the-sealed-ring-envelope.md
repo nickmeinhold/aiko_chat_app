@@ -413,10 +413,11 @@ signed by the old key can tell the owner from the thief.** So:
   old key's signature.
 - Until a peer re-verifies, the thief can seal-receive rings meant for the owner and sign as them.
 
-This cost belongs to ADR-0009's one-copied-key choice. **Decided 2026-10-25 (ADR-0009 ref. 5):**
-an offline recovery key, kept only in the passphrase-encrypted backup, certifies the signing key
-and signs its successor after a loss, so peers can accept recovery in band. Until that's built,
-recovery is out-of-band re-verification. §10 inherits it and can't fix it. Bytes (epoch encoding, expiry) belong to the
+This cost belongs to ADR-0009's one-copied-key choice, and it's narrower than it reads: **a stolen
+*locked* phone can't sign.** The seed sits behind iOS data protection, and the app won't open.
+Only a thief who also knows the passcode can, and that passcode defeats the passkey just the
+same (Nick, 2026-10-25). So the offline recovery key (ADR-0009 ref. 5) is **deferred**. Recovery
+is out-of-band re-verification, and the seed is pinned to `WhenUnlockedThisDeviceOnly`. §10 inherits it and can't fix it. Bytes (epoch encoding, expiry) belong to the
 specialist (queue item 1).
 
 ### 10.2 The statement format (island tab's Q3, accepted)
