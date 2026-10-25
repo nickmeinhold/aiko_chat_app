@@ -413,8 +413,10 @@ signed by the old key can tell the owner from the thief.** So:
   old key's signature.
 - Until a peer re-verifies, the thief can seal-receive rings meant for the owner and sign as them.
 
-This cost belongs to ADR-0009's one-copied-key choice and is priced there (re-opened for Nick,
-2026-10-25). §10 inherits it and can't fix it. Bytes (epoch encoding, expiry) belong to the
+This cost belongs to ADR-0009's one-copied-key choice. **Decided 2026-10-25 (ADR-0009 ref. 5):**
+an offline recovery key, kept only in the passphrase-encrypted backup, certifies the signing key
+and signs its successor after a loss, so peers can accept recovery in band. Until that's built,
+recovery is out-of-band re-verification. §10 inherits it and can't fix it. Bytes (epoch encoding, expiry) belong to the
 specialist (queue item 1).
 
 ### 10.2 The statement format (island tab's Q3, accepted)
@@ -515,11 +517,21 @@ and tier-3 ring until they update, so the island can deploy first, as it always 
 side, tier 3 is removed in the same release that adds sealing, and that release is the one that
 declares the capability.
 
-**The wake needs a contracted rate, owned by the island.** The island's check is shape-only
-(§8.1), so it can't tell a real seal from junk. Any peer who has spoken can therefore force
-report-then-end. Gate 7 is a yes/no, not a rate, so the **ring ceiling must be a contracted
-per-(caller, callee) rate** in the island's design record, not a citation. `block` remains the
-user's hard stop.
+**The wake rate: what exists, and the open conflict.** The island's sealed check is shape-only
+(§8.1), so any peer who has spoken can attach junk and force report-then-end. The island already
+has a wake budget: **per recipient**, 6 a minute by default, set by the operator
+(`push_service.py:983`, `config.py:289`). It deliberately protects the person being woken rather
+than throttling each sender, "which a second sender would simply route around". Against that
+budget the attack isn't unlimited flashes. It's a **denial of ring**: a junk-attaching peer
+spends the recipient's budget and starves real callers.
+
+Round 2's fold asked for a per-(caller, callee) rate. **That was wrong, and it's withdrawn.** It
+collides with two of Nick's rulings that weren't in the panel's bundle: "the island doesn't keep
+a record of who called who" (2026-09-01), and the island should learn neither who is friends
+nor who is calling (2026-08-25). A per-pair counter is a short-lived record of exactly that.
+**Open, for Nick:** whether a denial of ring is accepted (with `block` as the remedy), or wake
+budgets move to blind wake tokens (the budget lives in token issuance, and the island never
+keys anything on the caller; island tab's suggestion, not yet designed).
 
 **Measurement owed before build:** report-then-end is measured to *count* as a report (#4178,
 #4278; `AppDelegate.swift:476`). What a locked iPhone **shows and sounds** during report-then-end
