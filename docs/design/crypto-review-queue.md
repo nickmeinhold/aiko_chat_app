@@ -18,33 +18,29 @@ a cryptographer's sign-off, and nothing below is marked done because a model pan
 
 ## Blocking: design 20 §10 (the sealed ring), PR #403
 
-§9 ("consent carries the key") was broken by the island tab's read on 2026-10-25: the island
-reads DM bodies, so a certificate sent on consent reveals the consent. §10 recasts it. Every
-account announces its X25519 key to every DM peer, and consent stays device-local.
+§10 has been through two design-temper rounds (4/4 RECAST each, folded). In its current shape,
+an account publishes **one** signed X25519 statement in its IdentityDoc. A caller uses it only
+for a signing key it pinned from a signed message, and freshness rides on speech: each message
+carries the sender's current key epoch. Consent stays device-local.
 
-1. **The key statement format.** An account's Ed25519 key signs "my X25519 key is K". The open
-   questions: the fields, expiry, version byte (§8.1), and the size against the 5 KB APNs budget
-   (§8.2). It rides inside a DM, so it needs **its own inner domain tag, signed separately from the
-   carrying message**. Otherwise its signature is under `aikochat:msg:v1` and it *is* a chat
-   message (island tab's catch). `design 20 §10.1, §10.2`
-2. **One layout, one tag per statement type.** This extends the existing
-   `aikochat:msg:v1:EdDSA` / `aikochat:react:v1:EdDSA` length-prefixed pattern to the key
-   statement and ADR-0009's link. **The signer structure goes in the tag, not in the number of
-   signatures attached**: the link is mutual and the key statement is single, and a verifier
-   that infers the type from the signature count can be fed a one-signature link. Is that
-   enough domain separation? `design 20 §10.2, ADR-0009 ref. 2`
-3. **The seal itself (arm C).** The caller seals the signed invite to K, and the callee's
-   handset opens it natively (CryptoKit) before Dart runs. Questions: which construction (HPKE
-   base mode, or a hand-rolled X25519 + HKDF + AEAD), what binds the envelope to its recipient
-   and context, and replay. The inner invite already carries a timestamp, checked with a 5 s
-   tolerance for clock skew (#393). `design 20 §4`
-4. **TOFU on the DM's signing key as the binding.** The peer pins (signing key, K) per DM. The
-   2026-09-15 review would accept published keys only with a binding users already trust. Is
-   "the key I have been talking to in this DM" that binding? First-contact substitution by the
-   island is the named residual risk. `design 20 §9.4.1, §10.4.4`
+1. **The key statement format.** Fields, epoch, expiry, version byte (§8.1), size, and its own
+   domain tag, so it can never verify as a chat message. Also: how a message carries the current
+   K epoch inside its signature. `design 20 §10.0, §10.1, §10.2`
+2. **One layout, one tag per statement type,** with the signer structure in the tag, shared with
+   ADR-0009's link. Is that enough domain separation? `design 20 §10.2`
+3. **The seal itself (arm C).** HPKE base mode versus a hand-rolled construction, and binding the
+   envelope to its recipient. The signed invite inside must carry the conversation id, intended
+   recipient, freshness and the caller's name (round-2 requirements), so the island can't pick
+   the consent bucket, relabel, replay or move the call. `design 20 §4, §10.3`
+4. **TOFU on a signing key pinned from a signed message as the binding,** plus the rule that a
+   key is accepted only if its epoch matches the latest seen on a message. Is that enough
+   against an island that can omit statements? First-contact substitution is the named residual
+   risk. `design 20 §10.0, §9.4.1`
 5. **One copied key per account (ADR-0009 ref. 4).** Every device holds the same Ed25519 and
-   X25519 keys. Revoking a lost device therefore means rotating the account's key. We'd like a
-   cryptographer to confirm this is a sound choice and not a known trap.
+   X25519 keys. Round 2 showed the trap: a stolen device holds the signing key, so it can sign
+   any rotation the owner could, and **recovery needs out-of-band re-verification by every
+   peer**. Is that acceptable, and is there a construction that recovers a lost device without
+   per-device keys? `design 20 §10.1`
 
 ## Shipped, never specialist-reviewed
 
