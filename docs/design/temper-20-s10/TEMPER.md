@@ -29,7 +29,7 @@
 - The allowlist's doctrine (device-local, per conversation, keyed on the multikey). The break is *when* it runs, not how it is stored.
 
 ## Disposition
-RECAST round 1 of ≤3. Fold 2, 3, 4, 5 and 7 into §10 now. 1 and 6 are one product decision that only Nick can make; re-strike after it.
+RECAST round 1 of ≤3. Folded 2, 3, 4, 5 and 7 into §10 v3.1. **1 and 6 decided by Nick, 2026-10-25:** (c) chosen by name; no key, no system ring (caller requests no wake without K; an unsealed push is always report-then-end). Re-strike (round 2) before any build.
 
 ---
 

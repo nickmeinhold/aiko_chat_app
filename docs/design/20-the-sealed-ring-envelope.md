@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **PROPOSAL — arm C ACCEPTED IN PRINCIPLE by the island tab 2026-09-11 15:55, with three conditions (§8). Un-tempered.** §4a's key-reuse route was answered AGAINST by an external review on 2026-09-15 (#316: use two keys; the binding is the real blocker). **§9 (2026-10-24) proposed that ring consent carry the second key; the island tab's read (2026-10-25) broke it, because the island can read DMs. §10 recasts: one published account key, used only for peers pinned from real speech; consent stays on the device. Tempered 4/4 RECAST (`temper-20-s10/TEMPER.md`), folded; one product decision open (§10.5).** |
+| **Status** | **PROPOSAL — arm C ACCEPTED IN PRINCIPLE by the island tab 2026-09-11 15:55, with three conditions (§8). Un-tempered.** §4a's key-reuse route was answered AGAINST by an external review on 2026-09-15 (#316: use two keys; the binding is the real blocker). **§9 (2026-10-24) proposed that ring consent carry the second key; the island tab's read (2026-10-25) broke it, because the island can read DMs. §10 recasts: one published account key, used only for peers pinned from real speech; consent stays on the device. Tempered 4/4 RECAST (`temper-20-s10/TEMPER.md`), folded; refusal decided by Nick (§10.5: no key, no system ring).** |
 | **Owner** | Claude (app tab), 2026-09-11 |
 | **Answers** | claude-tasks#4254 question 3 — *what does Swift verify before reporting to CallKit, and where do the bytes come from?* |
 | **Provoked by** | Nick, 2026-09-11 15:38: *"it feels like there could be a better solution… how does Signal do it?"* That was a pointer at prior art, and it was right. |
@@ -357,7 +357,7 @@ section**, because it would paint a name on an unverified push.
 
 **Status: a direction, tempered once.** v3 (a key statement posted into every DM) was struck
 4/4 RECAST, with no DISSOLVE (`temper-20-s10/TEMPER.md`). This is the fold. Nothing is built.
-One product decision is open (§10.5), and the formats wait for the specialist
+The refusal is decided (§10.5), and the formats wait for the specialist
 (`docs/design/crypto-review-queue.md`).
 
 ### 10.0 The move
@@ -430,7 +430,7 @@ The key is per account, so channels get it for free: the same pin serves every c
 with that person. Whether a **channel** ring seals is then a wake-gate question
 (per-conversation consent defaults OFF for groups, decided 2026-09-01), not a key question.
 
-### 10.5 OPEN, for Nick: what a refusal does (the consent trilemma)
+### 10.5 DECIDED (Nick, 2026-10-25): wake, then the device decides; no key, no system ring
 
 All four families, and the island, found the same hole. A ring reaches the handset as a VoIP
 push, and **iOS requires every VoIP push to be reported to CallKit**: four consecutive
@@ -447,15 +447,47 @@ refusal. A refusal still has to report. Pick one:
   counter. That wake is bounded by gate 7 (only DM peers who have spoken), the island's ring
   ceiling, and `block`.
 
-**Today's code is (c) without the device's choice.** The PushKit handler never checks
-consent (`AppDelegate.swift`, `didReceiveIncomingPushWith` → `ringer.handle`): every push that
-passes the island rings in full, and only Dart, once it's running, can verify and retract. So
-§10 makes things strictly better than today: a refused peer gets report-then-end, not a full
-ring. The honest move is to choose (c) by name, and to stop
-the allowlist header claiming "may this agent wake me at 3am" when what it decides is **how the
-wake presents**. The tier-3 question rides with it. With no pin, the caller has no K, and an
-unsealed ring is one the island fully controls. Does it still ring at tier 3 (`"Aiko"`), or does
-"no pin" mean no system ring at all, and the call surfaces in-app instead?
+**(c) is chosen.** Today's code is (c) without the device's choice: the PushKit handler never
+checks consent (`AppDelegate.swift`, `didReceiveIncomingPushWith` → `ringer.handle`), so every
+push that passes the island rings in full, and only Dart, once it's running, can verify and
+retract. The allowlist header's "may this agent wake me at 3am" should be reworded to what it
+actually decides: **how the wake presents**.
+
+**No key, no system ring (Nick, 2026-10-25, over the app tab's recommendation to keep tier 3).**
+A ring the island fully controls, unsealed and unverified, is exactly what a hostile island
+would use, so it doesn't get the lock screen. The rule has two halves, because must-report rules
+out a push that shows nothing:
+
+1. **Caller side:** with no cached K for the callee, the caller's app **does not request a VoIP
+   wake**. The invite goes as an ordinary in-app message, and the callee sees the call when they
+   open the app.
+2. **Callee side:** an unsealed VoIP push, which only a hostile or outdated island would still
+   send, is **always reported and ended at once**. It never rings and never names anyone.
+
+Outcomes on the callee's handset, from one native-readable view (§10.3):
+
+| arrives | outcome |
+|---|---|
+| sealed, opens, signature verifies against a pin, conversation allowed | **verified ring with the caller's name** |
+| sealed and verified, conversation not allowed | report-then-end (no ring) |
+| sealed, fails to open or verify | report-then-end |
+| unsealed (no K, an old client, or a hostile island) | report-then-end |
+| admission view missing or unreadable | report-then-end |
+
+**The cost, accepted:** until both sides have the update *and* the caller has pinned the callee
+from real speech, iOS locked-phone rings go silent and the call surfaces in-app. That includes
+calls from friends.
+
+**Sequencing, because of that cost:** **every iOS ring today is unsealed.** Tier 3 is removed in
+the **same release** that ships the sealed path, never before. Doing it sooner would silence
+every locked-phone ring. Android's ring path is outside this design.
+
+**The island has to build the socket** (island tab, 2026-10-25). The island has **no
+IdentityDoc today** (`mentions.py:21`: "ADR-0004's IdentityDoc, not built"), so "serving the
+statement" is new storage, a new endpoint and a new wire shape: a structural change on the
+island, which means a cage-match. It is **not free**, and it should be built **once**, for both
+this statement and ADR-0009's link. Also, pinning from any channel lets sealability run ahead of
+wakeability (gate 7 is per DM), but never behind it. That's harmless.
 
 ### 10.6 Still open, unchanged
 1. **First-contact substitution** (§9.4.1): an in-person QR check is the later fix.
