@@ -70,7 +70,40 @@ class SovereignKeyStore {
   /// attribution works), and two accounts on one handset no longer share one.
   /// STABLE WITHIN AN ACCOUNT, MEANINGLESS ACROSS IT — the same property
   /// #4775 needs, for the same reason.
-  static String _seedKeyFor(String userId) => 'aiko_sov_private_seed_$userId';
+  ///
+  /// The name carries `v2` and the scope because the Keychain CLASS changed with
+  /// it (see [_pinnedIos]); ADR-0009 ref. 1 asked for the scope to be visible in
+  /// the name the next time it was touched.
+  static String _seedKeyFor(String userId) =>
+      'aiko_sov_seed_v2_island_account_$userId';
+
+  /// The v1 scoped name (2026-09-26 to 2026-10-25), written under the package's
+  /// default Keychain class. MIGRATED, then deleted: see [_migrateV1].
+  static String _v1SeedKeyFor(String userId) => 'aiko_sov_private_seed_$userId';
+
+  /// PINNED KEYCHAIN CLASS: when-unlocked, this device only (Nick, 2026-10-25;
+  /// crypto queue item 9). Until now no options were passed, so the seed sat in
+  /// the package default, `kSecAttrAccessibleWhenUnlocked`, which iCloud and
+  /// encrypted iTunes backups carry. A stolen LOCKED phone can't read either
+  /// class; "this device only" additionally keeps the seed out of every backup.
+  /// The key backup we decided on is our own encrypted file, so nothing needs it.
+  ///
+  /// WHY A NEW NAME, not the old one with new options. In the pinned plugin
+  /// (flutter_secure_storage_darwin 0.3.2) every read query carries
+  /// `kSecAttrAccessible`, so a read under the new class does not find an item
+  /// written under the old one; it returns null, and this store would mint, a
+  /// silent identity change for every account. And a write under the new class
+  /// while the old item exists is a `SecItemAdd` that collides on the item's
+  /// identity (account + service, which excludes the class), so it throws. Under
+  /// one name there is no order of write and delete that never loses the seed.
+  /// Under a new name there is: write the new item, read it back, and only then
+  /// delete the old one.
+  static const _pinnedIos = IOSOptions(
+    accessibility: KeychainAccessibility.unlocked_this_device,
+  );
+  static const _pinnedMac = MacOsOptions(
+    accessibility: KeychainAccessibility.unlocked_this_device,
+  );
 
   /// Ed25519 private seeds are exactly 32 bytes. A stored value of any other
   /// length is corruption, not a key — caught before it is written or used.
@@ -175,12 +208,65 @@ class SovereignKeyStore {
     unawaited(_discardLegacySeed());
 
     final seedKey = _seedKeyFor(uid);
-    final stored = await _storage.read(key: seedKey);
-    if (stored != null) return _materialise(_decodeSeed(stored), uid);
+    final stored = await _readPinned(seedKey);
+    if (stored != null) {
+      // A crash between the migration's write and its delete leaves the v1 item
+      // behind. Nothing reads it once this slot exists, so retire it quietly.
+      unawaited(_deleteQuietly(_v1SeedKeyFor(uid)));
+      return _materialise(_decodeSeed(stored), uid);
+    }
+
+    // NEVER MINT WHILE A v1 SEED EXISTS. A read error here propagates rather
+    // than reading as "absent": absent is the only state that may mint.
+    final v1 = await _storage.read(key: _v1SeedKeyFor(uid));
+    if (v1 != null) return _migrateV1(uid, v1);
 
     final seed = await _mintSeed();
-    await _storage.write(key: seedKey, value: base64Encode(seed));
+    await _storage.write(
+      key: seedKey,
+      value: base64Encode(seed),
+      iOptions: _pinnedIos,
+      mOptions: _pinnedMac,
+    );
     return _materialise(seed, uid);
+  }
+
+  Future<String?> _readPinned(String key) =>
+      _storage.read(key: key, iOptions: _pinnedIos, mOptions: _pinnedMac);
+
+  /// MOVE a v1 seed into the pinned slot. The SAME seed, so the same pubkey: this
+  /// is a storage move, not the #4831 discard (that one was a different slot
+  /// shared across accounts; this one already belongs to this account).
+  ///
+  /// The v1 item is deleted only after the pinned copy reads back identical. Any
+  /// failure before that leaves the v1 item in place and signs with it, and the
+  /// next load retries. A corrupt v1 seed throws the same named error a corrupt
+  /// pinned one does, before anything is written.
+  Future<SovereignKey> _migrateV1(String uid, String v1) async {
+    final seed = _decodeSeed(v1);
+    final seedKey = _seedKeyFor(uid);
+    try {
+      await _storage.write(
+        key: seedKey,
+        value: v1,
+        iOptions: _pinnedIos,
+        mOptions: _pinnedMac,
+      );
+      if (await _readPinned(seedKey) == v1) {
+        await _deleteQuietly(_v1SeedKeyFor(uid));
+      }
+    } catch (_) {
+      // Keychain refused the move. Keep v1, sign with it, retry next load.
+    }
+    return _materialise(seed, uid);
+  }
+
+  Future<void> _deleteQuietly(String key) async {
+    try {
+      await _storage.delete(key: key);
+    } catch (_) {
+      // Best-effort, like [_discardLegacySeed]; the next load retries.
+    }
   }
 
   /// DELETE THE PRE-#4831 UNSCOPED SEED. Do not adopt it.
@@ -278,6 +364,8 @@ class SovereignKeyStore {
     final uid = userId;
     if (uid != null && uid.isNotEmpty) {
       await _storage.delete(key: _seedKeyFor(uid));
+      // The v1 slot too, or the next load would migrate the wiped key back.
+      await _storage.delete(key: _v1SeedKeyFor(uid));
     }
   }
 }
