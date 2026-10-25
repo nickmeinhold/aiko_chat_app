@@ -46,7 +46,7 @@ carries the sender's current key epoch. Consent stays device-local.
 5. **One copied key per account (ADR-0009 ref. 4).** Every device holds the same Ed25519 and
    X25519 keys. Round 2 showed the trap: a stolen device holds the signing key, so it can sign
    any rotation the owner could, and **recovery needs out-of-band re-verification by every
-   peer**. **Decided 2026-10-25 (ADR-0009 ref. 5):** an offline recovery key, kept only in the
+   peer**. **Decided, then DEFERRED, 2026-10-25 (ADR-0009 ref. 5):** a stolen locked phone can't sign; only a passcode-known thief can. Deferred design: an offline recovery key, kept only in the
    passphrase-encrypted backup, certifies the signing key and signs its successor after a loss
    (Matrix's master-key pattern). For review: the certification statement, how peers learn and
    pin the recovery key, and whether a backup restore can be used to impersonate the owner.
@@ -61,7 +61,7 @@ carries the sender's current key epoch. Consent stays device-local.
    `lib/features/chat/domain/origin_envelope.dart`
 8. **The Carried Record's trust model.** An Ed25519 signature proves possession of the key,
    not who holds it; is the record's stated model complete? `lib/features/chat/domain/carried_record.dart`
-9. **Key storage at rest.** The per-(island, account) seed lives in the platform secure store,
+9. **Key storage at rest.** (Nick, 2026-10-25: pin the seed to `WhenUnlockedThisDeviceOnly`, with a migration so the existing item isn't lost and re-minted; PR in progress.) The per-(island, account) seed lives in the platform secure store,
     (`flutter_secure_storage`), **with no accessibility or backup options passed**, so the
     class is whatever the package defaults to on each platform. Nobody has pinned it. ADR-0009's
     "one key, copied" relies on backup moving it, so it should be pinned deliberately: which
