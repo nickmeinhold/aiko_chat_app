@@ -355,7 +355,7 @@ section**, because it would paint a name on an unverified push.
 
 ## 10. v3.1 (2026-10-25): one published key, used only for peers who have spoken
 
-**Status: a direction, tempered twice.** v3 (a key statement posted into every DM) was struck
+**Status: UN-TEMPERED (provisional) after three rounds (`temper-20-s10/TEMPER-r3.md`); escalated to a design pass, which is to derive K from the signing seed (specialist gate first). Do not build from this section.** Earlier status: a direction, tempered twice. v3 (a key statement posted into every DM) was struck
 4/4 RECAST (`temper-20-s10/TEMPER.md`), and v3.1 struck 4/4 RECAST again (`TEMPER-r2.md`);
 both are folded here. Round 3 is the last. Nothing is built.
 The refusal is decided (§10.5), and the formats wait for the specialist
