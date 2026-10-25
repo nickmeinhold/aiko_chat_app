@@ -495,3 +495,11 @@ wakeability (gate 7 is per DM), but never behind it. That's harmless.
    real speech" is the binding the 2026-09-15 review asked for.
 3. **The island's edge:** an in-app invite to a connected callee who hasn't spoken has no key to
    seal to. That's acceptable: an open app takes the ring through Dart, which needs no seal.
+4. **Owed to the island when the sealed path is built** (its task #21: stop sending a VoIP wake
+   for an invite without a sealed blob, shipped in the same release, island deploys first):
+   - **The wire signal.** The sealed blob travels in a named invite field, fixed with the format
+     (queue item 1). The island treats an invite as sealed only when that field is **present
+     and passes §8.1's shape check** (version byte, length bound), which the island already owns.
+     Presence alone isn't enough, because an empty or junk field would buy a wake.
+   - **The release.** The app version that ships sealing and removes tier 3 (§10.5's ordering
+     rule). The island's change is cut to match it.
