@@ -355,8 +355,9 @@ section**, because it would paint a name on an unverified push.
 
 ## 10. v3.1 (2026-10-25): one published key, used only for peers who have spoken
 
-**Status: a direction, tempered once.** v3 (a key statement posted into every DM) was struck
-4/4 RECAST, with no DISSOLVE (`temper-20-s10/TEMPER.md`). This is the fold. Nothing is built.
+**Status: a direction, tempered twice.** v3 (a key statement posted into every DM) was struck
+4/4 RECAST (`temper-20-s10/TEMPER.md`), and v3.1 struck 4/4 RECAST again (`TEMPER-r2.md`);
+both are folded here. Round 3 is the last. Nothing is built.
 The refusal is decided (§10.5), and the formats wait for the specialist
 (`docs/design/crypto-review-queue.md`).
 
@@ -376,30 +377,45 @@ the account.**
    n"* under its own domain tag (§10.2), and the statement goes into the account's IdentityDoc
    `verificationMethod[]`, the socket ADR-0009 opened for the link. It's public account
    material, in the same class as the signing key. The island serves it and cannot forge it.
-2. **Pin from speech, not from the statement.** A peer's signing key is pinned from a **real
-   message that person sent** (TOFU, as today, and the pin #236 wants). The statement is
-   accepted **only for a signing key already pinned that way**. So "can be sealed to" and "has
-   spoken" coincide. That's the island's gate-7 condition (PR #403 issuecomment-6390837964), it
-   needs no island change, and a verified name is never minted on a pin no human produced.
-3. **Fetch when a DM opens, never at ring time.** The caller's app fetches a pinned peer's
-   statement when it opens or syncs a conversation with them, and caches it. The island already
-   sees those reads; a fetch at ring time would reveal an intent to call.
+2. **Pin from speech, not from the statement.** A peer's signing key is pinned from a **signed
+   message in a conversation** (TOFU, as today, and the pin #236 wants). The protection is that
+   the island can't forge such a message, not that a human typed it: a resident agent pins the
+   same way. The statement is accepted **only for a signing key already pinned that way**, so
+   "can be sealed to" coincides with "has spoken" (the island's gate-7 condition). Pins are
+   **directional**: a ring verifies only if the callee has also pinned the caller, so the caller
+   must have spoken too.
+3. **Freshness rides on speech; fetch when a DM opens, never at ring time.** Every signed message
+   carries the sender's **current K epoch inside its signature**, so a peer learns that K has
+   moved on from a channel the island can't forge or rewrite. The caller fetches the statement
+   when it opens or syncs the conversation, and caches it. It seals only to a cached K whose
+   epoch matches the latest epoch seen on that peer's messages. A newer epoch on a message
+   means the caller re-fetches before sealing; until then it treats the peer as having no K.
+   That defeats an island that **omits** the newer statement, not just one that replays an old
+   one.
 4. **Seal.** A caller seals the signed invite to the callee's cached K (§4, arm C).
 5. **Admit on the device**, from one native-readable view (§10.3). The outcome for each case,
    including refusal, is §10.5's decision.
 6. **Withdraw by doing nothing.** Revoking consent is a local edit. Nothing is sent.
 
-### 10.1 Rotation
+### 10.1 Rotation, and what it cannot do
 
-One document per account, so a rotation is one atomic change. The rules:
-- The successor carries epoch n+1 and is signed by the current signing key. A peer accepts only
-  a higher epoch and **rejects a superseded statement**, so a replay by the island can't roll it
-  back to a dead K.
-- A change of the **signing** key is a key change #236 must surface. It is not silently accepted.
-- A lost phone holds the old K until the account rotates (ADR-0009 ref. 4: one key, copied).
-  Its old statements carry a lower epoch, so it can't fork the pin.
+One document per account, and the successor carries epoch n+1, signed by the current signing
+key. A peer accepts only a higher epoch than it has seen, on a statement or carried in a message
+(§10.0 step 3), and rejects anything older.
 
-The bytes (epoch encoding, expiry) are the specialist's (queue item 1).
+**A stolen device can't be revoked in band.** ADR-0009 ref. 4 copies **both** keys to every
+device. A thief holding a lost phone holds the Ed25519 key, so it can sign epoch n+1 with a K of
+its choosing, and it can sign a signing-key change just as well as the owner can. **No statement
+signed by the old key can tell the owner from the thief.** So:
+- An X25519-only rotation under the same signing key is a **routine refresh**, not a revocation.
+- Recovering from a lost device means a **new signing key**, which peers must re-verify **out of
+  band** (an in-person QR or a safety-number check, §9.4.1, #236). It is never accepted on the
+  old key's signature.
+- Until a peer re-verifies, the thief can seal-receive rings meant for the owner and sign as them.
+
+This cost belongs to ADR-0009's one-copied-key choice and is priced there (re-opened for Nick,
+2026-10-25). §10 inherits it and can't fix it. Bytes (epoch encoding, expiry) belong to the
+specialist (queue item 1).
 
 ### 10.2 The statement format (island tab's Q3, accepted)
 
@@ -408,27 +424,40 @@ One length-prefixed layout with a leading domain tag per statement type. It exte
 never a chat-message signature, and **the signer structure lives in the tag**, not in the number
 of signatures (the link is mutual, while this statement is one key vouching for its sibling).
 
-### 10.3 One native-readable admission view
+### 10.3 Admission on the device: two stores, and what the seal must carry
 
-The decision runs before Dart (§0), but today its inputs live in Dart's stores: consent in
-SharedPreferences (`ring_allowlist_store.dart`), the private K and pins in Dart-owned storage.
-So this design **withdraws v3's "`ring_allowlist_store.dart`, unchanged"**. The push handler
-needs one store it owns, holding:
-- the active account;
-- per-conversation consent;
-- the pinned signing keys and their cached Ks;
-- the device's private K.
+The decision runs before Dart (§0), so this design **withdraws v3's "`ring_allowlist_store.dart`,
+unchanged"**. Round 2 showed that one view doing two jobs was the defect, so there are two
+stores:
 
-Dart writes it and native reads it, and both treat it as untrusted until verified. The update
-ordering has to be defined: a revocation lands before the next push can read stale consent,
-and on sign-out or an account switch the view is cleared before the next push. A view that's
-missing or unreadable is treated as "not admitted", never as "allowed".
+- **Secret custody.** The private K lives in the Keychain, in a class the push handler can read
+  while the phone is locked (`AfterFirstUnlock`). Cost, accepted and named: it's weaker at rest
+  than `WhenUnlocked`, and before the first unlock after a reboot it can't be read, so every
+  ring is report-then-end until the user unlocks once. This ties to crypto queue item 9: no
+  Keychain class is pinned for the signing key today.
+- **Policy data.** Per-conversation consent and the pinned signing keys with their cached Ks
+  and epochs. **Keyed per account**, never "the active account", because ADR-0009's premise is
+  two accounts on one handset. Dart writes a **versioned snapshot and replaces it atomically**;
+  native reads whichever whole snapshot is current. A push that reads the snapshot just before
+  a revocation lands can still ring once. That window is the length of one atomic write, and
+  it's accepted. A snapshot that's missing or unreadable means "not admitted".
 
-### 10.4 Scope
+**What the seal must carry** (requirements; the construction belongs to the specialist, queue
+item 3). The island must not be able to pick the consent bucket, relabel the caller, replay an
+invite or move it to another conversation. So the signed invite inside the seal carries:
+- the **conversation id**, used to look up consent (never the outer payload's `c`);
+- the **intended recipient**;
+- **freshness** (the timestamp it already has, under #393's 5 s tolerance, plus the call id);
+- the **caller's display name**, signed by the caller, which is what CallKit shows. The island's
+  `sender.label` is outside every signature and is never shown on this path.
 
-The key is per account, so channels get it for free: the same pin serves every conversation
-with that person. Whether a **channel** ring seals is then a wake-gate question
-(per-conversation consent defaults OFF for groups, decided 2026-09-01), not a key question.
+### 10.4 Scope: DMs only, for now
+
+v1 seals **DM rings only**. An account-level K makes the *key* available to channels, but a
+channel ring is a fan-out to many recipients with different keys, partial delivery and a
+per-recipient APNs budget. That needs its own design, and declaring it "free" (v3.1) hid that.
+Until it exists, channel rings don't seal, and under §10.5 they don't system-ring; they surface
+in-app.
 
 ### 10.5 DECIDED (Nick, 2026-10-25): wake, then the device decides; no key, no system ring
 
@@ -478,9 +507,24 @@ Outcomes on the callee's handset, from one native-readable view (§10.3):
 from real speech, iOS locked-phone rings go silent and the call surfaces in-app. That includes
 calls from friends.
 
-**Sequencing, because of that cost:** **every iOS ring today is unsealed.** Tier 3 is removed in
-the **same release** that ships the sealed path, never before. Doing it sooner would silence
-every locked-phone ring. Android's ring path is outside this design.
+**Cutover is per device, by capability, so nobody goes dark at once** (round 2: "island deploys
+first" plus "stop unsealed wakes" would have silenced the whole installed base). A device that
+can open sealed rings **declares that capability when it registers its push token**. The island
+stops unsealed VoIP **only toward devices that declared it**. Old apps keep today's unsealed wake
+and tier-3 ring until they update, so the island can deploy first, as it always does. On the app
+side, tier 3 is removed in the same release that adds sealing, and that release is the one that
+declares the capability.
+
+**The wake needs a contracted rate, owned by the island.** The island's check is shape-only
+(§8.1), so it can't tell a real seal from junk. Any peer who has spoken can therefore force
+report-then-end. Gate 7 is a yes/no, not a rate, so the **ring ceiling must be a contracted
+per-(caller, callee) rate** in the island's design record, not a citation. `block` remains the
+user's hard stop.
+
+**Measurement owed before build:** report-then-end is measured to *count* as a report (#4178,
+#4278; `AppDelegate.swift:476`). What a locked iPhone **shows and sounds** during report-then-end
+has never been measured. If it's visible or audible, "no system ring" means "a flash at the
+ceiling's rate", and the ceiling is the only thing bounding it.
 
 **The island has to build the socket** (island tab, 2026-10-25). The island has **no
 IdentityDoc today** (`mentions.py:21`: "ADR-0004's IdentityDoc, not built"), so "serving the
@@ -493,10 +537,10 @@ wakeability (gate 7 is per DM), but never behind it. That's harmless.
 1. **First-contact substitution** (§9.4.1): an in-person QR check is the later fix.
 2. **The specialist:** the statement format, the seal construction, and whether "pinned from
    real speech" is the binding the 2026-09-15 review asked for.
-3. **The island's edge:** an in-app invite to a connected callee who hasn't spoken has no key to
+3. **The island's edge:** an in-app invite to a callee the caller hasn't pinned has no key to
    seal to. That's acceptable: an open app takes the ring through Dart, which needs no seal.
-4. **Owed to the island when the sealed path is built** (its task #21: stop sending a VoIP wake
-   for an invite without a sealed blob, shipped in the same release, island deploys first):
+4. **Owed to the island when the sealed path is built** (its task #21, reshaped by round 2: stop unsealed VoIP
+   only toward devices that declared the sealing capability; island deploys first):
    - **The wire signal.** The sealed blob travels in a named invite field, fixed with the format
      (queue item 1). The island treats an invite as sealed only when that field is **present
      and passes §8.1's shape check** (version byte, length bound), which the island already owns.
