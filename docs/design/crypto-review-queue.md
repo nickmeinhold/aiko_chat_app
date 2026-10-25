@@ -23,6 +23,13 @@ an account publishes **one** signed X25519 statement in its IdentityDoc. A calle
 for a signing key it pinned from a signed message, and freshness rides on speech: each message
 carries the sender's current key epoch. Consent stays device-local.
 
+0. **Gate for the next design pass: may the X25519 sealing key be DERIVED from the Ed25519
+   signing seed** (a domain-separated KDF such as HKDF with a fixed `aikochat:ring-seal` label),
+   rather than minted on its own? It dissolves round 3's largest cluster: every device computes
+   the same K, so there's no fork, no private-key distribution and no epoch. The 2026-09-15
+   review said "two keys, not one" against the *birational* reuse of one keypair. Is a separate
+   key derived from the same seed acceptable, given that compromising the seed already
+   compromises both under ADR-0009's copied keys? `design 20 temper-20-s10/TEMPER-r3.md`
 1. **The key statement format.** Fields, epoch, expiry, version byte (§8.1), size, and its own
    domain tag, so it can never verify as a chat message. Also: how a message carries the current
    K epoch inside its signature. `design 20 §10.0, §10.1, §10.2`
