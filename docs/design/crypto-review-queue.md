@@ -39,8 +39,11 @@ carries the sender's current key epoch. Consent stays device-local.
 5. **One copied key per account (ADR-0009 ref. 4).** Every device holds the same Ed25519 and
    X25519 keys. Round 2 showed the trap: a stolen device holds the signing key, so it can sign
    any rotation the owner could, and **recovery needs out-of-band re-verification by every
-   peer**. Is that acceptable, and is there a construction that recovers a lost device without
-   per-device keys? `design 20 §10.1`
+   peer**. **Decided 2026-10-25 (ADR-0009 ref. 5):** an offline recovery key, kept only in the
+   passphrase-encrypted backup, certifies the signing key and signs its successor after a loss
+   (Matrix's master-key pattern). For review: the certification statement, how peers learn and
+   pin the recovery key, and whether a backup restore can be used to impersonate the owner.
+   `ADR-0009 ref. 5, design 20 §10.1`
 
 ## Shipped, never specialist-reviewed
 
