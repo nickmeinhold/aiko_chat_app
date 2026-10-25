@@ -529,9 +529,11 @@ Round 2's fold asked for a per-(caller, callee) rate. **That was wrong, and it's
 collides with two of Nick's rulings that weren't in the panel's bundle: "the island doesn't keep
 a record of who called who" (2026-09-01), and the island should learn neither who is friends
 nor who is calling (2026-08-25). A per-pair counter is a short-lived record of exactly that.
-**Open, for Nick:** whether a denial of ring is accepted (with `block` as the remedy), or wake
-budgets move to blind wake tokens (the budget lives in token issuance, and the island never
-keys anything on the caller; island tab's suggestion, not yet designed).
+**Decided (Nick, 2026-10-25): accepted, and `block` is the remedy.** The wake budget stays per
+recipient. A DM peer who spends it gets blocked: it takes someone who has already spoken with
+you, and it stops the moment you block them. **Blind wake tokens** (the budget lives in token
+issuance, so the island never keys anything on the caller; the island tab's suggestion) are the
+future fix, and they don't block §10.
 
 **Measurement owed before build:** report-then-end is measured to *count* as a report (#4178,
 #4278; `AppDelegate.swift:476`). What a locked iPhone **shows and sounds** during report-then-end
