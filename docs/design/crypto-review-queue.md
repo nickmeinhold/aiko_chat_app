@@ -61,7 +61,7 @@ carries the sender's current key epoch. Consent stays device-local.
    `lib/features/chat/domain/origin_envelope.dart`
 8. **The Carried Record's trust model.** An Ed25519 signature proves possession of the key,
    not who holds it; is the record's stated model complete? `lib/features/chat/domain/carried_record.dart`
-9. **Key storage at rest.** (Nick, 2026-10-25: pin the seed to `WhenUnlockedThisDeviceOnly`, with a migration so the existing item isn't lost and re-minted; PR in progress.) The per-(island, account) seed lives in the platform secure store,
+9. **Key storage at rest.** (Nick, 2026-10-25: pin to `WhenUnlockedThisDeviceOnly`, PARKED in draft PR #416 until the in-app key backup ships, because "this device only" ends iCloud-restore identity continuity, the only path a new iPhone has today. They ship together.) The per-(island, account) seed lives in the platform secure store,
     (`flutter_secure_storage`), **with no accessibility or backup options passed**, so the
     class is whatever the package defaults to on each platform. Nobody has pinned it. ADR-0009's
     "one key, copied" relies on backup moving it, so it should be pinned deliberately: which
