@@ -208,38 +208,17 @@ Future<_Built> _build(String platform, String version, Directory work) async {
         await _plistVersion('$app/Info.plist'),
       );
     default: // macos
-      // Not `asc mas-package`: it runs a bare `flutter build macos`, which drops
-      // prod.json's defines, and `xcodebuild archive` then reuses that config.
+      // asc builds it (flutter build -> xcodebuild archive -> exportArchive),
+      // forwarding prod.json's defines and stripping credentials from every step
+      // (enspyrco/cli-tools#107). It leaves the archive here, which is where the
+      // version is read back from.
       const archive = 'build/macos-archive/Runner.xcarchive';
-      for (final d in ['build/macos-archive', 'build/mas-export']) {
-        if (Directory(d).existsSync()) Directory(d).deleteSync(recursive: true);
-      }
-      await _buildStep('flutter', [
-        'build',
-        'macos',
-        '--release',
-        '--dart-define-from-file=$_defines',
-      ]);
-      await _buildStep('xcodebuild', [
-        '-workspace',
-        'macos/Runner.xcworkspace',
-        '-scheme',
-        'Runner',
-        '-configuration',
-        'Release',
-        '-archivePath',
-        archive,
-        'archive',
-      ]);
-      await _buildStep('xcodebuild', [
-        '-exportArchive',
-        '-archivePath',
-        archive,
-        '-exportPath',
-        'build/mas-export',
-        '-exportOptionsPlist',
-        'macos/ExportOptions.plist',
-        '-allowProvisioningUpdates',
+      await _buildStep('asc', [
+        'mas-package',
+        '--repo',
+        '.',
+        '--dart-define-from-file',
+        _defines,
       ]);
       final app = Directory(
         '$archive/Products/Applications',
