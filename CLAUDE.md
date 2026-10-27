@@ -52,8 +52,9 @@ reactions are **signed-at-birth**. Stack: `dio` + `freezed` +
   (tempered design docs).
 - The gateway (peer repo): `../aiko-chat-island` — wire contract in its
   `HANDOFF-to-app-tab-*.md` + `docs/design/`, live schema at its `/openapi.json`.
-- Tasks: file with `~/.claude/scripts/file-task --dir .`. This repo is public, so
-  task notes land on the private tracker (shared with the island tab) and reach
-  this repo's issues only after a scrub.
+- Tasks: file with `~/.claude/scripts/file-task --dir .`. It files on this repo's
+  issues. The repo is public, so it PII-scans the title and body first and refuses
+  on a hit (exit 3); rephrase, and add names/hosts it should catch to
+  `~/.claude/pii-denylist.txt`.
 - Message signer (the byte contract reactions mirror):
   `lib/features/chat/domain/message_signing.dart`.
