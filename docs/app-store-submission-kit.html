@@ -39,7 +39,7 @@
     <li><strong>The reviewer taps "Already have a passkey? Sign in" on a fresh device</strong> → no passkey exists yet → dead-end. The in-app nudge (PR&nbsp;#101) now redirects that to "Create a passkey," but the App Access note below must <em>also</em> say it explicitly — reviewers follow the note literally.</li>
     <li><strong>The review device has no screen lock / biometric enrolled</strong> → passkey creation itself can't proceed. The note asks them to enrol one.</li>
   </ul>
-  <p>Install the review build, tap <strong>Create a passkey</strong>, authenticate with Face ID / Touch ID, confirm you land in the chat. Only then submit.</p>
+  <p>Install the review build, tap <strong>Create a passkey</strong>, type a handle on <strong>Pick your handle</strong> and tap <strong>Create passkey as @…</strong>, authenticate with Face ID / Touch ID, confirm you land in the chat under that handle. Only then submit. (Since #436 the handle comes before the passkey; a note that skips that step sends the reviewer looking for a button that isn't on the first screen.)</p>
 </div>
 
 <h2>1 · Export compliance / encryption</h2>
@@ -68,11 +68,12 @@
 <h2>3 · Per-build → "What to Test"</h2>
 <div class="field"><span class="label">What to Test (per-build notes)</span>
 <pre>First run shows a EULA you must accept (scroll to the bottom).
-Then create your account with a passkey (Face ID / Touch ID) —
-tap "Create a passkey", NOT "Sign in".
+Then create your account with a passkey (Face ID / Touch ID):
+tap "Create a passkey" (NOT "Sign in"), pick a handle, then tap
+"Create passkey as @<your handle>".
 
 Please test:
-• Create a passkey (an account is created automatically on first use)
+• Create an account: pick a handle, then create a passkey
 • Join a channel and send / receive messages
 • Long-press a message → Report, or a user → Block
 • Settings → Delete Account (full account removal)</pre></div>
@@ -97,8 +98,10 @@ To sign in:
 1. Make sure the review device has a screen lock with Face ID or Touch ID
    enrolled — creating a passkey requires it.
 2. On the login screen, tap "Create a passkey" (NOT "Sign in").
-3. Authenticate with Face ID / Touch ID. An Aiko account is created
-   automatically on your first passkey, and you are taken straight to the chat.
+3. Type any handle (for example "applereview") and tap
+   "Create passkey as @applereview".
+4. Authenticate with Face ID / Touch ID. Your Aiko account is created with
+   that handle, and you are taken straight to the chat.
 
 Network: the app connects to https://chat.imagineering.cc — please allow
 network access.
