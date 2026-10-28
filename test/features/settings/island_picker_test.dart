@@ -290,6 +290,10 @@ void main() {
       () async {
         final h = await loggedInContainer();
         addTearDown(h.container.dispose);
+        // Resolving the island now SAVES it (settleUnsavedIsland), so clear the
+        // key: a no-op switch must then leave it absent, which a write of any
+        // value would not.
+        await h.prefs.remove(_kKey);
 
         // Same gateway, with a trailing slash — normalization must treat it as a
         // no-op and NOT log the user out.
@@ -454,10 +458,7 @@ void main() {
 
       final before = container.read(configProvider).httpBaseUrl;
       final tile = tester.widget<ListTile>(
-        find.ancestor(
-          of: find.text('Production'),
-          matching: find.byType(ListTile),
-        ),
+        find.ancestor(of: find.text('Enspyr'), matching: find.byType(ListTile)),
       );
       expect(
         tile.onTap,
@@ -473,7 +474,7 @@ void main() {
       expect(
         find.descendant(
           of: find.ancestor(
-            of: find.text('Production'),
+            of: find.text('Enspyr'),
             matching: find.byType(ListTile),
           ),
           matching: find.text('Connected'),

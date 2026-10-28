@@ -13,6 +13,7 @@
 // must surface its raw text ("Sign-in failed: …"), never the generic message —
 // so a new failure mode is never invisible again.
 
+import 'package:aiko_chat_app/app/config.dart';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/core/network/network_status.dart';
@@ -195,7 +196,7 @@ void main() {
         final hint = c.read(passkeyHintStoreProvider);
         expect(hint.seenFor(c.read(configProvider).httpBaseUrl), isTrue);
         expect(
-          hint.seenFor('https://chat.enspyr.co'),
+          hint.seenFor(kLegacyDefaultIslandBaseUrl),
           isFalse,
           reason:
               'a passkey is scoped to a relying party; one island must never vouch '

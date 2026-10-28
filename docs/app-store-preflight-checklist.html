@@ -74,12 +74,14 @@ done   # every line must be 200</pre>
   <div class="tags"><span class="tag manual">manual gate (partly automatable)</span><span class="tag">all platforms</span></div>
   <div class="why"><b>Wall it prevents:</b> passkey is the <em>only</em> way in — if it's broken on a platform, <em>no one</em> gets in, reviewer included. Android CREATE failed on every device because <code>assetlinks.json</code> was missing the <code>handle_all_urls</code> relation (while Google's own <code>assetlinks:check</code> stayed green — a lying proxy).</div>
   <b>Verify (automatable part) — the well-known files carry the right relations:</b>
-  <pre># Android: BOTH relations required (get_login_creds AND handle_all_urls)
-curl -s https://chat.imagineering.cc/.well-known/assetlinks.json | \
+  <pre># The default island (chat.enspyr.co since 2026-10-28) is where a reviewer
+# lands. Check every island the app lists, not only that one.
+# Android: BOTH relations required (get_login_creds AND handle_all_urls)
+curl -s https://chat.enspyr.co/.well-known/assetlinks.json | \
   grep -o 'get_login_creds\|handle_all_urls' | sort -u   # must show BOTH
 
 # Apple: AASA served for the associated domain
-curl -s https://chat.imagineering.cc/.well-known/apple-app-site-association | head</pre>
+curl -s https://chat.enspyr.co/.well-known/apple-app-site-association | head</pre>
   <b>Verify (manual gate):</b> on the target platform, against prod, tap <strong>Create a passkey</strong> (never "Sign in" on a fresh device), authenticate, confirm you reach the chat. This is the single most-rejected path — see the Submission Kit's reviewer note.
 </div>
 

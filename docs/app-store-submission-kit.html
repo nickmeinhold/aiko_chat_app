@@ -33,7 +33,7 @@
 
 <div class="gate">
   <h2>⚠️ The one gate before submitting</h2>
-  <p><strong>Verify passkey <em>CREATE</em> works end-to-end on the review build, against <code>chat.imagineering.cc</code>, before hitting Submit — and make sure the App Access note tells the reviewer to tap <em>Create a passkey</em>, not <em>Sign in</em>.</strong></p>
+  <p><strong>Verify passkey <em>CREATE</em> works end-to-end on the review build, against <code>chat.enspyr.co</code> (the default island since 2026-10-28; <code>chat.imagineering.cc</code> does not create accounts, so a reviewer there cannot get in), before hitting Submit — and make sure the App Access note tells the reviewer to tap <em>Create a passkey</em>, not <em>Sign in</em>.</strong></p>
   <p>Aiko is passkey-only, so there is no demo account to hand Apple — the reviewer must create their own passkey on the review device. Two things sink this if unchecked, and both bit the Android launch (rejected <em>twice</em>):</p>
   <ul>
     <li><strong>The reviewer taps "Already have a passkey? Sign in" on a fresh device</strong> → no passkey exists yet → dead-end. The in-app nudge (PR&nbsp;#101) now redirects that to "Create a passkey," but the App Access note below must <em>also</em> say it explicitly — reviewers follow the note literally.</li>
@@ -100,7 +100,7 @@ To sign in:
 3. Authenticate with Face ID / Touch ID. An Aiko account is created
    automatically on your first passkey, and you are taken straight to the chat.
 
-Network: the app connects to https://chat.imagineering.cc — please allow
+Network: the app connects to https://chat.enspyr.co — please allow
 network access.
 
 UGC compliance: a EULA must be accepted on first launch (zero tolerance for

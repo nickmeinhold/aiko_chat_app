@@ -98,7 +98,79 @@ class IslandConfigController extends Notifier<IslandConfig> {
     if (persisted != null && persisted.trim().isNotEmpty) {
       return IslandConfig.normalized(persisted);
     }
-    return IslandConfig.fromEnvironment();
+    return settleUnsavedIsland(prefs);
+  }
+}
+
+/// The island an install with NO saved choice is on, decided once and SAVED.
+///
+/// Until 2026-10-28 an install that never opened the picker saved nothing and
+/// re-read the compiled default on every launch. Changing that default would
+/// have moved every such install to another island on update, still holding
+/// the first island's tokens and push registration, skipping the teardown
+/// [AuthController.switchIsland] does first. So:
+///
+/// - an install with evidence it ran an older build stays where that build
+///   was ([kLegacyDefaultIslandBaseUrl]);
+/// - a fresh install gets [kDefaultIslandBaseUrl];
+/// - either way the answer is saved, so the NEXT default change can only ever
+///   reach fresh installs. Re-checking evidence on later launches instead
+///   would be wrong: a fresh install's first sign-in creates the same evidence.
+///
+/// Only when this build resolves to [kDefaultIslandBaseUrl]. A dev build aimed
+/// elsewhere by `--dart-define` keeps following its define, unsaved, as before.
+IslandConfig settleUnsavedIsland(SharedPreferences prefs) {
+  final env = IslandConfig.fromEnvironment();
+  if (env.httpBaseUrl != kDefaultIslandBaseUrl) return env;
+  final settled = ranAnOlderBuild(prefs)
+      ? kLegacyDefaultIslandBaseUrl
+      : kDefaultIslandBaseUrl;
+  // Not awaited, like [readAndAdopt]: the in-memory value is set synchronously.
+  // A failed disk write would leave the decision to be made again next launch,
+  // and by then this build may have recorded a session that reads as old-build
+  // evidence. So recording a session writes the island again first
+  // (AuthController._bindIsland): this build never leaves that pair behind.
+  unawaited(
+    prefs.setString(islandBaseUrlPrefKey, settled).catchError((_) => false),
+  );
+  return IslandConfig.normalized(settled);
+}
+
+/// Evidence in prefs that an older build ran here: a session (the cached user
+/// lives and dies with the tokens) or a passkey made on the old default. Read
+/// synchronously, which matters because a VoIP wake on a locked phone can be
+/// the first launch after an update, and the Keychain may refuse a read then.
+bool ranAnOlderBuild(SharedPreferences prefs) =>
+    CachedUserStore(prefs).read() != null ||
+    PasskeyHintStore(prefs).seenFor(kLegacyDefaultIslandBaseUrl);
+
+/// The one case prefs can't see: iOS keeps the Keychain across an uninstall
+/// but not UserDefaults, so a reinstall can hold an older build's tokens with
+/// nothing in prefs. Those tokens were minted where the older build pointed,
+/// so pin that island before anything resolves one. Run once at boot; it
+/// costs nothing after the first launch, because an island is saved by then.
+Future<void> pinIslandForSurvivingTokens(
+  SharedPreferences prefs, {
+  required Future<bool> Function() hasTokens,
+}) async {
+  final saved = readAndAdopt(
+    prefs,
+    key: islandBaseUrlPrefKey,
+    legacyKey: kLegacyIslandBaseUrlPrefKey,
+    isUsable: (v) => v.trim().isNotEmpty,
+  );
+  if (saved != null && saved.trim().isNotEmpty) return;
+  if (IslandConfig.fromEnvironment().httpBaseUrl != kDefaultIslandBaseUrl) {
+    return;
+  }
+  bool held;
+  try {
+    held = await hasTokens();
+  } catch (_) {
+    held = false; // a locked Keychain: [ranAnOlderBuild] still has prefs
+  }
+  if (held) {
+    await prefs.setString(islandBaseUrlPrefKey, kLegacyDefaultIslandBaseUrl);
   }
 }
 
