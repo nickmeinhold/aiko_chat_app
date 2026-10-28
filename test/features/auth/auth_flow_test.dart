@@ -2,6 +2,7 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/network/network_status_banner.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/presentation/chat_message_pane.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart' show rootBundle;
@@ -207,18 +208,39 @@ void main() {
     },
   );
 
-  testWidgets('a NEW passkey account → claim-handle → chat', (tester) async {
-    // Default finishPasskeyRegistration outcome = PendingHandle, so creating a
-    // passkey mints the account then routes to the handle claim.
-    final rest = FakeRestApi();
+  // An island that still asks for the handle ITSELF (PendingHandle). None does
+  // today: since #1728 the island answers registration with a live session,
+  // and the handle is asked first on /choose-handle (#436, see
+  // handle_first_flow_test). These used to get PendingHandle from the fake's
+  // DEFAULT, which is how "never asked for a handle" stayed green in
+  // production; the outcome is now set explicitly, on purpose.
+  const islandThatAsks = PendingHandle(
+    provisioningToken: 'passkey-prov',
+    suggestedName: null,
+  );
+
+  Future<void> createThroughChooseHandle(WidgetTester tester) async {
+    await tester.tap(find.widgetWithText(FilledButton, 'Create a passkey'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('choose-handle-field')),
+      'robin',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('choose-handle-submit')));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('an island that asks: choose-handle → passkey → claim-handle → '
+      'chat', (tester) async {
+    final rest = FakeRestApi()..passkeyRegisterOutcome = islandThatAsks;
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await tester.tap(find.widgetWithText(FilledButton, 'Create a passkey'));
-    await tester.pumpAndSettle();
+    await createThroughChooseHandle(tester);
 
-    // A new identity is routed to the pick-your-handle screen, NOT chat.
+    // The island's own claim step, NOT chat.
     expect(find.widgetWithText(AppBar, 'Pick your handle'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Display name'), findsOneWidget);
 
@@ -234,15 +256,14 @@ void main() {
   });
 
   testWidgets('claim-handle surfaces a taken handle inline', (tester) async {
-    final rest =
-        FakeRestApi() // default register outcome = PendingHandle
-          ..claimThrows = const HandleTaken();
+    final rest = FakeRestApi()
+      ..passkeyRegisterOutcome = islandThatAsks
+      ..claimThrows = const HandleTaken();
     final container = makeContainer(rest: rest, transport: FakeChatTransport());
     addTearDown(container.dispose);
 
     await pumpApp(tester, container);
-    await tester.tap(find.widgetWithText(FilledButton, 'Create a passkey'));
-    await tester.pumpAndSettle();
+    await createThroughChooseHandle(tester);
     await tester.enterText(find.byType(TextField).at(0), 'taken');
     await tester.tap(find.widgetWithText(FilledButton, 'Continue'));
     await tester.pumpAndSettle();

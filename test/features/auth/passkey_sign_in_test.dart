@@ -7,7 +7,7 @@ import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show PasskeyAlreadyRegistered, RegistrationClosed;
+    show HandleTaken, PasskeyAlreadyRegistered, RegistrationClosed;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -212,16 +212,108 @@ void main() {
   });
 
   group('register (first passkey creates account)', () {
+    Future<void> register(ProviderContainer c) => c
+        .read(authControllerProvider.notifier)
+        .registerWithPasskey(handle: 'nicka', displayName: 'Nick');
+
+    // THE behaviour #436 is about, against what the island really answers (a
+    // live session under an auto-assigned `aiko-…` handle). It went missing
+    // twice while the fake answered a PendingHandle the island no longer sends.
     test(
-      'attestation → finish → parks a PendingHandle, stays logged out',
+      'a new account ends up with the handle it chose, never on aiko-…',
       () async {
-        final rest = FakeRestApi(); // default register outcome = PendingHandle
+        final rest = FakeRestApi(); // the island's real answer, by default
+        final passkey = FakePasskeyAuthClient();
+        final c = makeContainer(rest: rest, passkey: passkey);
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+
+        await register(c);
+
+        expect(
+          rest.lastPasskeyRegisterName,
+          'nicka',
+          reason: 'the passkey is labelled with the handle',
+        );
+        expect(rest.updateProfileCalls, 1, reason: 'the handle is applied');
+        final user = c.read(authControllerProvider).value;
+        expect(user?.username, 'nicka');
+        expect(user?.displayName, 'Nick');
+        expect(user?.handleAuto, isFalse);
+        expect(c.read(owedHandleProvider), isNull, reason: 'nothing left owed');
+      },
+    );
+
+    test('the island refuses the handle → signed in, but the handle is still '
+        'owed, bound to this account, with the reason', () async {
+      final rest = FakeRestApi()..updateProfileThrows = const HandleTaken();
+      final passkey = FakePasskeyAuthClient();
+      final c = makeContainer(rest: rest, passkey: passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+
+      final user = c.read(authControllerProvider).value;
+      expect(user, isNotNull, reason: 'the account exists; never fail sign-in');
+      expect(user!.username, startsWith('aiko-'));
+      final owed = c.read(owedHandleProvider);
+      expect(
+        owed?.userId,
+        user.userId,
+        reason: 'this is what the router reads',
+      );
+      expect(owed?.handle, 'nicka');
+      expect(owed?.failure, isA<HandleTaken>());
+
+      // Picking again from /choose-handle pays it.
+      rest.updateProfileThrows = null;
+      await c
+          .read(authControllerProvider.notifier)
+          .chooseHandle('nicka2', 'Nick');
+      expect(c.read(authControllerProvider).value?.username, 'nicka2');
+      expect(c.read(owedHandleProvider), isNull);
+    });
+
+    test('nothing is owed when the island made no account', () async {
+      for (final rest in [
+        FakeRestApi()..createsAccounts = false, // refused before the ceremony
+        FakeRestApi()..startPasskeyRegistrationThrows = StateError('down'),
+      ]) {
+        final c = makeContainer(rest: rest, passkey: FakePasskeyAuthClient());
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+        await register(c);
+        expect(c.read(authControllerProvider).value, isNull);
+        expect(c.read(owedHandleProvider), isNull);
+      }
+      final cancelled = makeContainer(
+        rest: FakeRestApi(),
+        passkey: FakePasskeyAuthClient(
+          registerThrows: const AuthCeremonyCancelled(),
+        ),
+      );
+      addTearDown(cancelled.dispose);
+      await cancelled.read(authControllerProvider.future);
+      await register(cancelled);
+      expect(cancelled.read(owedHandleProvider), isNull);
+    });
+
+    test(
+      'an island that still asks for the handle itself (PendingHandle) parks '
+      'it for the claim screen, and the app owes nothing of its own',
+      () async {
+        final rest = FakeRestApi()
+          ..passkeyRegisterOutcome = const PendingHandle(
+            provisioningToken: 'passkey-prov',
+            suggestedName: null,
+          );
         final passkey = FakePasskeyAuthClient(attestation: 'attest-json');
         final c = makeContainer(rest: rest, passkey: passkey);
         addTearDown(c.dispose);
         await c.read(authControllerProvider.future);
 
-        await c.read(authControllerProvider.notifier).registerWithPasskey();
+        await register(c);
 
         expect(rest.passkeyRegisterStartCalls, 1);
         expect(passkey.registerCalls, 1);
@@ -237,6 +329,7 @@ void main() {
           'passkey-prov',
           reason: 'pending state drives the router to /claim-handle',
         );
+        expect(c.read(owedHandleProvider), isNull);
       },
     );
 
@@ -256,7 +349,7 @@ void main() {
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
 
       expect(c.read(authControllerProvider).value, isNotNull);
     });
@@ -272,7 +365,7 @@ void main() {
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
 
       expect(c.read(authControllerProvider).error, isA<RegistrationClosed>());
       expect(c.read(authControllerProvider).value, isNull);
@@ -289,7 +382,7 @@ void main() {
         addTearDown(c.dispose);
         await c.read(authControllerProvider.future);
 
-        await c.read(authControllerProvider.notifier).registerWithPasskey();
+        await register(c);
 
         expect(rest.createsAccountsCalls, 1, reason: 'it did ask');
         expect(passkey.registerCalls, 1, reason: 'absence is not a refusal');
@@ -305,7 +398,7 @@ void main() {
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
 
       expect(passkey.registerCalls, 1);
       expect(rest.passkeyRegisterFinishCalls, 1);
@@ -320,7 +413,7 @@ void main() {
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
 
       final state = c.read(authControllerProvider);
       expect(state.hasError, isFalse);
@@ -344,11 +437,11 @@ void main() {
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
       expect(c.read(authControllerProvider).value, isNotNull);
       final callsAfterLogin = passkey.registerCalls;
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
       expect(
         passkey.registerCalls,
         callsAfterLogin,
@@ -420,6 +513,11 @@ void main() {
           reason: 'finishes via the authed add endpoint',
         );
         expect(rest.lastAddPasskeyState, 'reg-state');
+        expect(
+          rest.lastPasskeyRegisterName,
+          FakeRestApi.defaultUser.username,
+          reason: 'the new passkey is labelled with the signed-in handle',
+        );
         expect(rest.lastAddPasskeyCredential, 'attest-json');
         expect(
           rest.passkeyRegisterFinishCalls,

@@ -101,10 +101,26 @@ class FakeRestApi implements ChatRestApi {
     return user;
   }
 
-  /// Programmable passkey outcomes. Default register: a new identity that must
-  /// claim a handle (first-passkey-creates-account). Default authenticate: a
-  /// known identity (log straight in). Override per-test.
+  /// Programmable passkey outcomes. Override per-test.
+  ///
+  /// Default register is what the island ACTUALLY answers (Design 04, since
+  /// #1728): a live session for a brand-new account under an auto-assigned
+  /// `aiko-…` handle, flagged `handle_auto`. It used to default to a
+  /// PendingHandle the island had stopped sending, so every test of sign-up
+  /// proved a claim-handle step production never reached, and "never asked for
+  /// a handle" shipped green twice (#436). Keep this matching the island.
+  /// Default authenticate: a known identity (log straight in).
   IdentityOutcome? passkeyRegisterOutcome;
+  String? lastPasskeyRegisterName;
+
+  /// The account a default registration creates, as the island creates it.
+  static const newAccountUser = AppUser(
+    userId: 'u-new',
+    username: 'aiko-0123456789ab',
+    displayName: 'aiko-0123456789ab',
+    aikoUsername: 'aiko-0123456789ab',
+    handleAuto: true,
+  );
   IdentityOutcome? passkeyAuthOutcome;
 
   int passkeyRegisterStartCalls = 0;
@@ -117,8 +133,9 @@ class FakeRestApi implements ChatRestApi {
   String? lastPasskeyAuthCredential;
 
   @override
-  Future<PasskeyChallenge> startPasskeyRegistration() async {
+  Future<PasskeyChallenge> startPasskeyRegistration({String? name}) async {
     passkeyRegisterStartCalls++;
+    lastPasskeyRegisterName = name;
     if (startPasskeyRegistrationThrows != null) {
       throw startPasskeyRegistrationThrows!;
     }
@@ -133,11 +150,10 @@ class FakeRestApi implements ChatRestApi {
     passkeyRegisterFinishCalls++;
     lastPasskeyRegisterState = state;
     lastPasskeyRegisterCredential = credentialJson;
-    return passkeyRegisterOutcome ??
-        const PendingHandle(
-          provisioningToken: 'passkey-prov',
-          suggestedName: null,
-        );
+    final explicit = passkeyRegisterOutcome;
+    if (explicit != null) return explicit;
+    user = newAccountUser;
+    return Authenticated(_session());
   }
 
   @override
@@ -208,6 +224,8 @@ class FakeRestApi implements ChatRestApi {
       displayName: displayName ?? user.displayName,
       aikoUsername: handle ?? user.aikoUsername,
       isModerator: user.isModerator,
+      // As the island: choosing a handle ends "auto"; a name-only edit doesn't.
+      handleAuto: handle != null ? false : user.handleAuto,
     );
     return user;
   }

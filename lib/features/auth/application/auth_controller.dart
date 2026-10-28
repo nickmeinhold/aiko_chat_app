@@ -27,6 +27,7 @@ import '../../../app/config.dart';
 import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
 import '../../chat/data/chat_rest_api.dart';
+import '../data/owed_handle_store.dart';
 import '../../chat/data/transport/chat_transport.dart';
 import '../../notifications/application/push_providers.dart';
 import '../data/auth_exceptions.dart';
@@ -56,6 +57,44 @@ class PendingHandleNotifier extends Notifier<PendingHandle?> {
   PendingHandle? build() => null;
   void set(PendingHandle pending) => state = pending;
   void clear() => state = null;
+}
+
+/// The handle a new account still owes the island, if any (see [OwedHandle]).
+/// Read by the router: while it names the signed-in account, that account is
+/// held on `/choose-handle`.
+final owedHandleProvider = NotifierProvider<OwedHandleNotifier, OwedHandle?>(
+  OwedHandleNotifier.new,
+);
+
+class OwedHandleNotifier extends Notifier<OwedHandle?> {
+  /// Fail-open like the passkey hint: no prefs (a test container) means the
+  /// record lives in memory only, and it can never fail a sign-in.
+  OwedHandleStore? get _store {
+    try {
+      return OwedHandleStore(ref.read(sharedPreferencesProvider));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  OwedHandle? build() => _store?.read();
+
+  Future<void> set(OwedHandle owed) async {
+    state = owed;
+    await _store?.write(owed);
+  }
+
+  /// Remember why the island refused it, for the screen. Not persisted.
+  void refused(Object failure) {
+    final owed = state;
+    if (owed != null) state = owed.refusedWith(failure);
+  }
+
+  Future<void> clear() async {
+    state = null;
+    await _store?.clear();
+  }
 }
 
 /// Whether THIS island has suspended the current account (a ban — the gateway's
@@ -387,9 +426,16 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// Create a NEW passkey and account (first-passkey-creates-account). Mirrors
   /// [signInWithPasskey] with the registration ceremony: fetch creation options,
   /// let the platform mint a device-bound credential, then register it at the
-  /// gateway (which stores only the public key and mints the account). Routes on
-  /// the SAME outcome — typically a [PendingHandle] so the new user claims a
-  /// handle before landing in chat. Cancellation restores the prior state.
+  /// gateway (which stores only the public key and mints the account).
+  /// Cancellation restores the prior state.
+  ///
+  /// HANDLE FIRST (#436, Nick 2026-10-28). The island answers with a live
+  /// session under an auto-assigned `aiko-…` handle (its Design 04; it has not
+  /// returned a [PendingHandle] since #1728). So the user picks [handle] BEFORE
+  /// the ceremony: it labels the passkey in their password manager, and is
+  /// applied with `PATCH /v1/me` the moment the account exists. An
+  /// [OwedHandle] record carries it across a kill in between; until it is paid
+  /// the router holds the account on `/choose-handle`, never in chat.
   ///
   /// The island is asked FIRST, because the ceremony can't be taken back: the
   /// phone saves the passkey before `register/finish` answers, so a refusal
@@ -398,24 +444,98 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// island would have, so the login screen has one path for both. The island
   /// can't make this check itself: `register/start` is also add-a-device's
   /// start, and the app calls it without a bearer either way.
-  Future<void> registerWithPasskey() => _ingress((prior) async {
+  Future<void> registerWithPasskey({
+    required String handle,
+    required String displayName,
+  }) => _ingress((prior) async {
     if (await _rest.passkeyCreatesAccounts() == false) {
       throw const RegistrationClosed();
     }
-    final challenge = await _rest.startPasskeyRegistration();
-    final String attestation;
+    final owed = ref.read(owedHandleProvider.notifier);
+    // Written BEFORE the ceremony, which can't be taken back: if the app dies
+    // after the island makes the account, this is how the next launch knows a
+    // handle is still owed.
+    await owed.set(OwedHandle(handle: handle, displayName: displayName));
+    final IdentityOutcome outcome;
     try {
-      attestation = await _passkey.register(challenge.optionsJson);
-    } on AuthCeremonyCancelled {
-      return prior; // user dismissed the sheet — no-op, restore prior state
+      final challenge = await _rest.startPasskeyRegistration(name: handle);
+      final String attestation;
+      try {
+        attestation = await _passkey.register(challenge.optionsJson);
+      } on AuthCeremonyCancelled {
+        await owed.clear();
+        return prior; // user dismissed the sheet — no-op, restore prior state
+      }
+      await _markPasskeySeen();
+      outcome = await _rest.finishPasskeyRegistration(
+        challenge.state,
+        attestation,
+      );
+    } catch (_) {
+      await owed.clear(); // the island made no account, so nothing is owed
+      rethrow;
     }
-    await _markPasskeySeen();
-    final outcome = await _rest.finishPasskeyRegistration(
-      challenge.state,
-      attestation,
-    );
-    return _applyOutcome(outcome, prior);
+    switch (outcome) {
+      case Authenticated(:final session):
+        // Bind the debt to the account BEFORE the session is published, so a
+        // kill from here on still lands the next launch on /choose-handle.
+        await owed.set(
+          OwedHandle(
+            handle: handle,
+            displayName: displayName,
+          ).bindTo(session.user.userId),
+        );
+        final user = await _applyOutcome(outcome, prior);
+        return user == null ? null : _payOwedHandle(user);
+      case PendingHandle():
+        // An island that still asks for the handle itself: its claim screen
+        // does, so this app owes nothing of its own.
+        await owed.clear();
+        return _applyOutcome(outcome, prior);
+    }
   });
+
+  /// Apply the handle a new account chose before its passkey existed. Never
+  /// fails the sign-in: the account exists either way, so a refusal (taken, no
+  /// network) keeps the debt, the router holds the user on `/choose-handle`,
+  /// and that screen shows why. A 409 stamps nothing on the island, so picking
+  /// again is safe; a SUCCESS starts the island's 30-day handle cooldown, which
+  /// is why the screen shows the exact handle on the button that commits it.
+  Future<AppUser> _payOwedHandle(AppUser user) async {
+    final owedNotifier = ref.read(owedHandleProvider.notifier);
+    final owed = ref.read(owedHandleProvider);
+    if (owed == null || owed.userId != user.userId) return user;
+    try {
+      final updated = await _rest.updateProfile(
+        handle: owed.handle,
+        displayName: owed.displayName,
+      );
+      await _writeCachedUser(updated);
+      await owedNotifier.clear();
+      return updated;
+    } catch (e) {
+      owedNotifier.refused(e);
+      return user;
+    }
+  }
+
+  /// Pay the owed handle from `/choose-handle`, signed in: after the island
+  /// refused the first choice, after a kill mid-sign-up, or for an account the
+  /// island still reports as auto-handled ([AppUser.handleAuto]). Goes through
+  /// [saveProfile], the same door as the Settings edit, so it inherits that
+  /// door's fences and terminal-auth handling. [HandleTaken] and
+  /// [HandleChangeOnCooldown] propagate for the screen to show inline.
+  Future<AppUser?> chooseHandle(String handle, String displayName) async {
+    final userId = state.value?.userId;
+    if (userId == null) return null;
+    final owed = ref.read(owedHandleProvider.notifier);
+    await owed.set(
+      OwedHandle(handle: handle, displayName: displayName).bindTo(userId),
+    );
+    final updated = await saveProfile(handle: handle, displayName: displayName);
+    if (updated != null) await owed.clear();
+    return updated;
+  }
 
   /// Add a passkey to the CURRENTLY signed-in account (link-to-existing, #1727).
   /// This is the recovery path for a user who ALREADY has an account and wants a
@@ -456,7 +576,11 @@ class AuthController extends AsyncNotifier<AppUser?> {
       return false; // a link is already in flight — no 2nd sheet
     _addingPasskey = true;
     try {
-      final challenge = await _rest.startPasskeyRegistration();
+      // Labelled with the handle, so this passkey is recognisably theirs in the
+      // password manager (#436). Islands that predate the label ignore it.
+      final challenge = await _rest.startPasskeyRegistration(
+        name: state.value?.username,
+      );
       final String attestation;
       try {
         attestation = await _passkey.register(challenge.optionsJson);
