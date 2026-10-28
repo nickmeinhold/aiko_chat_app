@@ -36,7 +36,16 @@ class ChooseHandleScreen extends ConsumerStatefulWidget {
 /// The island's own bound on a handle (`PATCH /v1/me`: 1 to 64 characters).
 /// Deliberately no stricter: a rule only the app enforced would be its own
 /// drift from the island.
+///
+/// Counted the island's way, in CODE POINTS ([handleLength]). Dart's
+/// `String.length` counts UTF-16 units and a TextField's `maxLength` counts
+/// grapheme clusters, so either would refuse emoji handles the island takes,
+/// or pass ones it 422s. Same class as RFC-0001's codec bug (UTF-16 units
+/// against Python's code points).
 const kMaxHandleLength = 64;
+
+/// A handle's length as the island (Python, pydantic `max_length`) counts it.
+int handleLength(String handle) => handle.runes.length;
 
 class _ChooseHandleScreenState extends ConsumerState<ChooseHandleScreen> {
   final _handle = TextEditingController();
@@ -62,7 +71,7 @@ class _ChooseHandleScreenState extends ConsumerState<ChooseHandleScreen> {
 
   Future<void> _submit({required bool signedIn}) async {
     final handle = _trimmed;
-    if (handle.isEmpty || handle.length > kMaxHandleLength) {
+    if (handle.isEmpty || handleLength(handle) > kMaxHandleLength) {
       setState(() => _error = 'A handle is 1 to $kMaxHandleLength characters.');
       return;
     }
@@ -175,7 +184,6 @@ class _ChooseHandleScreenState extends ConsumerState<ChooseHandleScreen> {
                   controller: _handle,
                   enabled: !busy,
                   autocorrect: false,
-                  maxLength: kMaxHandleLength,
                   decoration: const InputDecoration(
                     labelText: 'Handle',
                     prefixText: '@',

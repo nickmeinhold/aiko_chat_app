@@ -12,6 +12,8 @@ import 'dart:convert';
 
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
+import 'package:aiko_chat_app/features/auth/presentation/choose_handle_screen.dart'
+    show handleLength;
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show HandleTaken;
 import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart';
@@ -90,6 +92,48 @@ void main() {
     expect(c.read(authControllerProvider).value?.username, 'nicka');
     expect(find.byType(ChatScreen), findsOneWidget);
     expect(_screen, findsNothing);
+  });
+
+  // The island bounds a handle at 64 CODE POINTS (pydantic). The app used to
+  // count UTF-16 units, which refused emoji handles the island accepts.
+  test('handle length is counted in code points, as the island counts it', () {
+    final forty = '😀' * 40;
+    expect(forty.length, 80, reason: 'UTF-16 units: the wrong ruler');
+    expect(handleLength(forty), 40);
+  });
+
+  testWidgets('an emoji handle the island accepts is not refused by the app', (
+    tester,
+  ) async {
+    final rest = FakeRestApi();
+    await app(tester, rest);
+    await tester.tap(find.text('Create a passkey'));
+    await tester.pumpAndSettle();
+
+    final forty = '😀' * 40; // 40 code points, 80 UTF-16 units
+    await tester.enterText(_field, forty);
+    await tester.pump();
+    await tester.tap(_submit);
+    await tester.pumpAndSettle();
+
+    expect(rest.lastPasskeyRegisterName, forty);
+  });
+
+  testWidgets('a handle over 64 code points is refused BEFORE any passkey', (
+    tester,
+  ) async {
+    final rest = FakeRestApi();
+    await app(tester, rest);
+    await tester.tap(find.text('Create a passkey'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(_field, 'a' * 65);
+    await tester.pump();
+    await tester.tap(_submit);
+    await tester.pumpAndSettle();
+
+    expect(find.text('A handle is 1 to 64 characters.'), findsOneWidget);
+    expect(rest.passkeyRegisterStartCalls, 0, reason: 'no passkey to orphan');
   });
 
   testWidgets('a handle taken in the meantime keeps the new account on Pick '
