@@ -7,7 +7,12 @@ import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show HandleTaken, PasskeyAlreadyRegistered, RegistrationClosed;
+    show
+        AccountSuspended,
+        HandleTaken,
+        PasskeyAlreadyRegistered,
+        RegistrationClosed,
+        Unauthorized;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -274,6 +279,55 @@ void main() {
       expect(c.read(authControllerProvider).value?.username, 'nicka2');
       expect(c.read(owedHandleProvider), isNull);
     });
+
+    // A TERMINAL answer to the first payment is not a refusal. Shown as one, it
+    // left the dead (or banned) session published on /choose-handle until a
+    // retry happened to go through `saveProfile`, which settles both.
+    test('a dead session on the first payment SIGNS OUT — not a reason on '
+        '/choose-handle', () async {
+      final rest = FakeRestApi()..updateProfileThrows = const Unauthorized(401);
+      final store = InMemoryTokenStore();
+      final c = makeContainer(
+        rest: rest,
+        passkey: FakePasskeyAuthClient(),
+        store: store,
+      );
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+      await pumpEventQueue(); // the teardown is unawaited, as in saveProfile
+
+      expect(c.read(authControllerProvider).value, isNull);
+      expect(store.current, isNull, reason: 'the dead tokens are cleared');
+      final owed = c.read(owedHandleProvider);
+      expect(owed?.handle, 'nicka', reason: 'still owed by that account');
+      expect(owed?.failure, isNull, reason: 'never filed as a refusal');
+    });
+
+    test(
+      'a ban on the first payment goes through the suspended door',
+      () async {
+        final rest = FakeRestApi()
+          ..updateProfileThrows = const AccountSuspended();
+        final store = InMemoryTokenStore();
+        final c = makeContainer(
+          rest: rest,
+          passkey: FakePasskeyAuthClient(),
+          store: store,
+        );
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+
+        await register(c);
+
+        expect(c.read(suspendedProvider), isTrue);
+        final auth = c.read(authControllerProvider);
+        expect(auth.hasError, isFalse, reason: 'settled, not left as an error');
+        expect(auth.value, isNull);
+        expect(store.current, isNull);
+      },
+    );
 
     test('nothing is owed when the island made no account', () async {
       for (final rest in [

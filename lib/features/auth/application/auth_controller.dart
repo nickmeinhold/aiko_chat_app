@@ -501,7 +501,11 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// and that screen shows why. A 409 stamps nothing on the island, so picking
   /// again is safe; a SUCCESS starts the island's 30-day handle cooldown, which
   /// is why the screen shows the exact handle on the button that commits it.
-  Future<AppUser> _payOwedHandle(AppUser user) async {
+  ///
+  /// A TERMINAL answer is not a refusal. A ban or a dead session is settled by
+  /// the doors [saveProfile] uses, never shown as a reason on `/choose-handle`
+  /// with the session still published. Null means one was settled.
+  Future<AppUser?> _payOwedHandle(AppUser user) async {
     final owedNotifier = ref.read(owedHandleProvider.notifier);
     final owed = ref.read(owedHandleProvider);
     if (owed == null || owed.userId != user.userId) return user;
@@ -513,6 +517,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
       await _writeCachedUser(updated);
       await owedNotifier.clear();
       return updated;
+    } on AccountSuspended {
+      // BEFORE `on Unauthorized`, its supertype. Rethrown into [_ingress],
+      // which records it as the state's error and settles it through
+      // [_settleSuspension] — the one door a ban at sign-in takes too.
+      rethrow;
+    } on Unauthorized {
+      // A 401 that survived the interceptor's refresh: the session
+      // [_applyOutcome] just published is dead (island #443: an account deleted
+      // mid-request answers exactly this). Torn down as [saveProfile] does. The
+      // debt stays bound to the account, so signing back in as it lands on
+      // `/choose-handle` again.
+      _becomeUnauthenticated();
+      return null;
     } catch (e) {
       owedNotifier.refused(e);
       return user;
