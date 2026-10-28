@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **ADR** | 0010 |
-| **Status** | **Draft** (written 2026-10-28 at Nick's request; acceptance is his) |
+| **Status** | **Draft** (written 2026-10-28 at Nick's request; acceptance is his). Part 2's "Aiko builds no eDiscovery-shaped features" is **confirmed by Nick, 2026-10-28** ("yeah keep it"); it was the one new commitment, and the other parts record earlier rulings. |
 | **Owner** | Nick Meinhold, with Claude |
 | **Created** | 2026-10-28 |
 | **Thread** | Nick, 2026-10-28: "I'm just looking at Buzz and it's like exactly the same thing" |
