@@ -12,8 +12,7 @@ import 'dart:convert';
 
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
-import 'package:aiko_chat_app/features/auth/presentation/choose_handle_screen.dart'
-    show handleLength;
+import 'package:aiko_chat_app/features/auth/domain/handle_input.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show HandleTaken;
 import 'package:aiko_chat_app/features/chat/presentation/chat_screen.dart';
@@ -117,6 +116,34 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(rest.lastPasskeyRegisterName, forty);
+  });
+
+  // The first outside user typed the "@" the field already shows: "@armbot"
+  // was stored and rendered "@@armbot".
+  test('a typed "@" is the prefix, never part of the handle', () {
+    expect(normalizeHandle('@armbot'), 'armbot');
+    expect(normalizeHandle('@@armbot'), 'armbot');
+    expect(normalizeHandle('  @ nick '), 'nick');
+    expect(normalizeHandle('ni@ck'), 'ni@ck', reason: 'only a LEADING @');
+    expect(normalizeHandle('@'), '', reason: 'nothing left: refused as empty');
+  });
+
+  testWidgets('sign-up strips a typed "@" before naming the passkey', (
+    tester,
+  ) async {
+    final rest = FakeRestApi();
+    final c = await app(tester, rest);
+    await tester.tap(find.text('Create a passkey'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(_field, '@armbot');
+    await tester.pump();
+    expect(find.text('Create passkey as @armbot'), findsOneWidget);
+    await tester.tap(_submit);
+    await tester.pumpAndSettle();
+
+    expect(rest.lastPasskeyRegisterName, 'armbot');
+    expect(c.read(authControllerProvider).value?.username, 'armbot');
   });
 
   testWidgets('a handle over 64 code points is refused BEFORE any passkey', (
