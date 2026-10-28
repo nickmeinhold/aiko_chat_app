@@ -237,6 +237,75 @@ void main() {
     );
   });
 
+  // The island's CLOSED-REGISTRATION refusal: `403 {"detail":"registration is
+  // closed"}` from `_require_may_provision_account` (island rest/auth.py), the
+  // same wording on every account-creating door. #436: it used to surface as a
+  // plain Unauthorized, so a would-be new user read "couldn't verify that
+  // passkey, create a new one" and looped, leaving a dead passkey per attempt.
+  group('registration-closed 403 → RegistrationClosed', () {
+    test(
+      'register/finish: 403 registration is closed → RegistrationClosed',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(403, '{"detail":"registration is closed"}'),
+        );
+        await expectLater(
+          api.finishPasskeyRegistration('st', '{"id":"c"}'),
+          throwsA(isA<RegistrationClosed>()),
+        );
+      },
+    );
+
+    test(
+      'RegistrationClosed IS an Unauthorized (routers on the base type hold)',
+      () async {
+        final api = apiWith(
+          (_) => jsonBody(403, '{"detail":"registration is closed"}'),
+        );
+        await expectLater(
+          api.finishPasskeyRegistration('st', '{"id":"c"}'),
+          throwsA(isA<Unauthorized>()),
+        );
+      },
+    );
+
+    test('a body dio leaves as a raw String is read too', () async {
+      // text/plain stops dio decoding it, so `data` arrives as a String: the
+      // shape `_isSuspended` already tolerates.
+      final api = apiWith(
+        (_) => ResponseBody.fromString(
+          '{"detail":"Registration is closed."}',
+          403,
+          headers: {
+            Headers.contentTypeHeader: ['text/plain'],
+          },
+        ),
+      );
+      await expectLater(
+        api.finishPasskeyRegistration('st', '{"id":"c"}'),
+        throwsA(isA<RegistrationClosed>()),
+      );
+    });
+
+    test('a 403 with another body is NOT RegistrationClosed', () async {
+      final api = apiWith((_) => jsonBody(403, '{"detail":"forbidden"}'));
+      await expectLater(
+        api.finishPasskeyRegistration('st', '{"id":"c"}'),
+        throwsA(allOf(isA<Unauthorized>(), isNot(isA<RegistrationClosed>()))),
+      );
+    });
+
+    test('a 401 is NOT RegistrationClosed, even with the phrase', () async {
+      final api = apiWith(
+        (_) => jsonBody(401, '{"detail":"registration is closed"}'),
+      );
+      await expectLater(
+        api.finishPasskeyRegistration('st', '{"id":"c"}'),
+        throwsA(allOf(isA<Unauthorized>(), isNot(isA<RegistrationClosed>()))),
+      );
+    });
+  });
+
   // The island's per-island BAN — `403 {"detail":"account suspended"}` at every
   // ingress (handoff 2026-07-27, island #1914). Must map to the AccountSuspended
   // REFINEMENT of Unauthorized so the UI says "suspended," not "session expired"
