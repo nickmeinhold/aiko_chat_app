@@ -203,7 +203,7 @@ class _ChooseHandleScreenState extends ConsumerState<ChooseHandleScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'You can change your handle once every 30 days.',
+                  'You can change it again later.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 if (error != null) ...[
