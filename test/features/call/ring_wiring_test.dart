@@ -96,6 +96,10 @@ void main() {
   /// When set, the cache cannot answer the conduct question — see
   /// [_FaultableCache]. Reset for every test.
   var conductFault = false;
+
+  /// When set, the conduct question waits on it before answering, so a test
+  /// can look at the ring while a lookup is genuinely open. Reset per test.
+  Completer<void>? conductHeld;
   late FakeChatTransport transport;
   late ChatRepository repo;
   late ProviderContainer container;
@@ -214,7 +218,12 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
     conductFault = false;
-    cache = _FaultableCache(NativeDatabase.memory(), () => conductFault);
+    conductHeld = null;
+    cache = _FaultableCache(
+      NativeDatabase.memory(),
+      () => conductFault,
+      () => conductHeld?.future,
+    );
     transport = FakeChatTransport();
     repo = ChatRepository(
       cache: cache,
@@ -1550,6 +1559,30 @@ void main() {
         );
       },
     );
+
+    test('a held answer can SEE the lookup: an open conduct question is an '
+        'admission in flight', () async {
+      // The navigator releases a held answer at its deadline unless
+      // `wakeAdmissionFor` names something still deciding. An in-memory cache
+      // answers inside a microtask, so no other test here ever sees the
+      // lookup open — which let an unregistered lookup pass the whole suite.
+      // Holding it open is the only way to ask.
+      conductHeld = Completer<void>();
+      rebuild(bridge: false);
+      await watchRing();
+
+      transport.emitMessage(await inbound());
+      expect(await pumpUntil(() => seen.contains(islandIdFor('M1'))), isTrue);
+
+      final ring = container.read(incomingRingProvider.notifier);
+      expect(ring.wakeAdmissionFor(kTestCall), isNotNull);
+      expect(ring.conductLookupOpen, isTrue);
+      expect(ringing(), isFalse, reason: 'nothing is decided yet');
+
+      conductHeld!.complete();
+      expect(await pumpUntil(ringing), isTrue);
+      expect(ring.wakeAdmissionFor(kTestCall), isNull);
+    });
   });
 }
 
@@ -1563,12 +1596,15 @@ class _Capture extends LogSink {
 /// fault is raised where production's would be — inside the cache, under the
 /// repository — so the ring meets it through every layer it would really cross.
 class _FaultableCache extends DriftCache {
-  _FaultableCache(super.executor, this._faulty);
+  _FaultableCache(super.executor, this._faulty, this._held);
 
   final bool Function() _faulty;
+  final Future<void>? Function() _held;
 
   @override
-  Future<bool> hasPostedIn(String channelId, String userId) {
+  Future<bool> hasPostedIn(String channelId, String userId) async {
+    final held = _held();
+    if (held != null) await held;
     if (_faulty()) throw StateError('the disk said no');
     return super.hasPostedIn(channelId, userId);
   }
