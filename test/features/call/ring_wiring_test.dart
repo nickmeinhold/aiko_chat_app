@@ -56,6 +56,11 @@ void main() {
     'M2': '01M0GS7FDWBVQ31950B1PTV2D1',
     'M9': '01M0GS7FDWBVQ31950B1PTV2D2',
   };
+
+  /// The server id of MY earlier message in the established DM — sorted below
+  /// every [islandIds] value, since it preceded every call in this file.
+  const mySpokeId = '01M0GS7FDWBVQ31950B1PTV2C0';
+
   String islandIdFor(String clientMsgId) {
     final id = islandIds[clientMsgId];
     if (id == null) {
@@ -73,6 +78,12 @@ void main() {
   const meId = 'me-key';
   const robinId = 'robin-key';
   const dmId = 'dm:aaa:bbb';
+
+  /// A DM a stranger opened with me, where I have never posted — FIRST CONTACT.
+  /// [dmId] is the other world: an ESTABLISHED conversation, because I have
+  /// spoken there (see [setUp]). Every ring test in this file before the
+  /// conduct clause was about that world without saying so.
+  const strangerDmId = 'dm:aaa:zzz';
   const me = AppUser(
     userId: meId,
     username: 'nick',
@@ -81,6 +92,10 @@ void main() {
   );
 
   late DriftCache cache;
+
+  /// When set, the cache cannot answer the conduct question — see
+  /// [_FaultableCache]. Reset for every test.
+  var conductFault = false;
   late FakeChatTransport transport;
   late ChatRepository repo;
   late ProviderContainer container;
@@ -189,6 +204,7 @@ void main() {
     dmsProvider.overrideWith(
       (ref) async => [
         const Channel(id: dmId, name: 'Ring Test', kind: ChannelKind.dm),
+        const Channel(id: strangerDmId, name: 'Stranger', kind: ChannelKind.dm),
       ],
     ),
   ];
@@ -197,15 +213,40 @@ void main() {
     installSecureStorageMock(); // the sovereign key store needs a backing store
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
-    cache = DriftCache(NativeDatabase.memory());
+    conductFault = false;
+    cache = _FaultableCache(NativeDatabase.memory(), () => conductFault);
     transport = FakeChatTransport();
     repo = ChatRepository(
       cache: cache,
       transport: transport,
       rest: FakeChatRestApi(),
       me: me,
-      subscribedChannelIds: const [dmId],
+      subscribedChannelIds: const [dmId, strangerDmId],
       newTempId: () => 'tmp',
+    );
+    // I HAVE SPOKEN IN [dmId], and that is now load-bearing — the island's
+    // own `dm` fixture says the same of Bob. The ring refuses a person calling
+    // in a DM where I have never posted, so a fixture where I never speak
+    // describes first contact. This row puts every test here in the world it
+    // was written about; the first-contact group holds the other one.
+    //
+    // A server row (an island ULID), as the pager or an ack writes it: the
+    // gate counts what the island holds, never the outbox. Older than every
+    // fixture invite, as a real reply that preceded a call would be.
+    await cache.upsertInbound(
+      Message(
+        clientTempId: mySpokeId,
+        id: mySpokeId,
+        channelId: dmId,
+        sender: const MessageSender(
+          userId: meId,
+          kind: SenderKind.human,
+          label: 'Nick',
+        ),
+        body: 'see you soon',
+        createdAt: DateTime.now().toUtc().subtract(const Duration(days: 30)),
+        deliveryState: DeliveryState.sent,
+      ),
     );
     repo.start();
     container = ProviderContainer(overrides: overrides());
@@ -273,13 +314,25 @@ void main() {
     seenSub = repo.inboundMessages.listen((m) => seen.add(m.id!));
   }
 
-  /// The ring has received message [id]: a refusal checked now is a decision,
-  /// not a race. Fails LOUDLY if it never arrives, or "does not ring" would
-  /// pass on a message the ring never saw.
+  /// The ring has received message [id] AND finished asking the cache about
+  /// it: a refusal checked now is a decision, not a race. Fails LOUDLY if it
+  /// never arrives, or "does not ring" would pass on a message the ring never
+  /// saw.
+  ///
+  /// Receiving used to BE deciding. A person's DM invitation now waits on an
+  /// async conduct lookup first, so without the second condition every
+  /// "does not ring" here would pass before the gate had been asked anything —
+  /// the void-test class this file has paid for before, one await wide.
   Future<void> considered(String id) async => expect(
-    await pumpUntil(() => seen.contains(id)),
+    await pumpUntil(
+      () =>
+          seen.contains(id) &&
+          !container.read(incomingRingProvider.notifier).conductLookupOpen,
+    ),
     isTrue,
-    reason: 'the repository never announced $id to the ring',
+    reason:
+        'the repository never announced $id, or its conduct lookup never '
+        'closed',
   );
 
   /// [considered], and any wake question it raised has been answered and
@@ -1314,10 +1367,209 @@ void main() {
       expect(identifyLines(), ['skipped/noBridge']);
     });
   });
+
+  // FIRST CONTACT, END TO END. The island refuses to WAKE a handset for a
+  // caller its owner has never posted to, and lets the invite frame through to
+  // an open app — which rang it, for anyone who could open a DM. These drive a
+  // signed invite in [strangerDmId] through the real repository and cache.
+  group('first contact — a stranger cannot ring an open app', () {
+    late _Capture logs;
+    late List<Map<Object?, Object?>> asked;
+    late Future<Object?> Function(Map<Object?, Object?> args) answer;
+
+    List<Object?> refusals() => [
+      for (final r in logs.records)
+        if (r.event == 'call.ring.refused') r.fields['reason'],
+    ];
+
+    /// The container, with captured telemetry and a bridge or none.
+    void rebuild({required bool bridge}) {
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [
+          ...overrides(),
+          if (!bridge) systemCallBridgeProvider.overrideWithValue(null),
+          ringTelemetryProvider.overrideWithValue(
+            RingTelemetry(AikoLogger(subsystem: 'test', sink: logs)),
+          ),
+        ],
+      );
+    }
+
+    setUp(() {
+      logs = _Capture();
+      asked = [];
+      answer = (_) async => {'state': 'notActionable'};
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel(kSystemCallControlChannel),
+            (call) async {
+              if (call.method != 'wakeAge') return null;
+              final args = call.arguments as Map<Object?, Object?>;
+              asked.add(args);
+              return answer(args);
+            },
+          );
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel(kSystemCallControlChannel),
+            null,
+          );
+    });
+
+    /// A server row from ME in [channelId], as an ack or the pager writes one.
+    Future<void> iPosted(String channelId) => cache.upsertInbound(
+      Message(
+        clientTempId: '01M0GS7FDWBVQ31950B1PTV2C1',
+        id: '01M0GS7FDWBVQ31950B1PTV2C1',
+        channelId: channelId,
+        sender: const MessageSender(userId: meId, kind: SenderKind.human),
+        body: 'hello stranger',
+        createdAt: DateTime.now().toUtc(),
+        deliveryState: DeliveryState.sent,
+      ),
+    );
+
+    test('THE MUST-FAIL ARM: on the desktop app (no native side), a stranger '
+        'does not ring, and the refusal names itself', () async {
+      rebuild(bridge: false);
+      await watchRing();
+
+      // The stranger's own invite is in the cache by the time the gate asks
+      // (announced after persist), and I have posted in [dmId]. So a query
+      // that dropped its SENDER conjunct finds the invite and rings, and one
+      // that dropped its CHANNEL conjunct finds my [dmId] row and rings. This
+      // arm fails both, which is what the island's own first-contact arm had
+      // to learn over two rounds.
+      transport.emitMessage(await inbound(channelId: strangerDmId));
+      await considered(islandIdFor('M1'));
+
+      expect(ringing(), isFalse);
+      expect(refusals(), [RingRefusal.noPriorConduct.name]);
+    });
+
+    test(
+      'THE CONTROL: the same desktop app rings a DM I have posted in',
+      () async {
+        rebuild(bridge: false);
+        await watchRing();
+
+        transport.emitMessage(await inbound());
+        expect(await pumpUntil(ringing), isTrue);
+        expect(refusals(), isEmpty);
+      },
+    );
+
+    test('a phone not woken for this call asks native, then refuses', () async {
+      rebuild(bridge: true);
+      await watchRing();
+
+      transport.emitMessage(await inbound(channelId: strangerDmId));
+      await settled(islandIdFor('M1'));
+
+      expect(ringing(), isFalse);
+      expect(asked, [
+        {'channel': strangerDmId, 'call': kTestCallId},
+      ]);
+      expect(refusals(), [RingRefusal.noPriorConduct.name]);
+    });
+
+    test('A WAKE IS THE ISLAND\'S WORD: a call the system is already ringing '
+        'rings with no post of mine in the cache', () async {
+      // A fresh install still paging its history, or a message I since
+      // deleted (its row is gone here; the island still counts it). The
+      // island judged the whole history before it woke this handset, so
+      // refusing here would leave a system ring nobody can answer.
+      answer = (_) async => {'state': 'woke', 'ms': 200};
+      rebuild(bridge: true);
+      await watchRing();
+
+      transport.emitMessage(await inbound(channelId: strangerDmId));
+      expect(await pumpUntil(ringing), isTrue);
+      expect(container.read(incomingRingProvider)?.channelId, strangerDmId);
+      expect(refusals(), isEmpty);
+    });
+
+    test('my UNSENT reply does not count: the island has not got it', () async {
+      // An outbox row has no island id. Counting it would let this door
+      // admit a caller the island's door refuses, about the same DM.
+      await cache.insertOptimistic(
+        Message(
+          clientTempId: 'tmp-unsent',
+          channelId: strangerDmId,
+          sender: const MessageSender(userId: meId, kind: SenderKind.human),
+          body: 'who is this?',
+          createdAt: DateTime.now().toUtc(),
+          deliveryState: DeliveryState.sending,
+        ),
+      );
+      rebuild(bridge: false);
+      await watchRing();
+
+      transport.emitMessage(await inbound(channelId: strangerDmId));
+      await considered(islandIdFor('M1'));
+
+      expect(ringing(), isFalse);
+      expect(refusals(), [RingRefusal.noPriorConduct.name]);
+    });
+
+    test('once my reply lands, the same stranger CAN ring — conduct is read at '
+        'the call, never snapshotted', () async {
+      rebuild(bridge: false);
+      await watchRing();
+      // The ring is already built and subscribed when the reply lands, so a
+      // build-time snapshot of "where have I posted" would miss it.
+      await iPosted(strangerDmId);
+
+      transport.emitMessage(await inbound(channelId: strangerDmId));
+      expect(await pumpUntil(ringing), isTrue);
+    });
+
+    test(
+      'a cache that cannot answer is NAMED, not mistaken for a stranger',
+      () async {
+        conductFault = true;
+        rebuild(bridge: false);
+        await watchRing();
+
+        transport.emitMessage(await inbound());
+        await considered(islandIdFor('M1'));
+
+        // Refused — the cache cannot vouch and there is no native side to —
+        // but the line before the refusal says which kind of no this is.
+        expect(ringing(), isFalse);
+        expect(
+          logs.records.map((r) => r.event),
+          containsAllInOrder([
+            'call.ring.conduct_unreadable',
+            'call.ring.refused',
+          ]),
+        );
+      },
+    );
+  });
 }
 
 class _Capture extends LogSink {
   final records = <LogRecord>[];
   @override
   void add(LogRecord record) => records.add(record);
+}
+
+/// The real cache, except that the conduct question can be made to FAIL. The
+/// fault is raised where production's would be — inside the cache, under the
+/// repository — so the ring meets it through every layer it would really cross.
+class _FaultableCache extends DriftCache {
+  _FaultableCache(super.executor, this._faulty);
+
+  final bool Function() _faulty;
+
+  @override
+  Future<bool> hasPostedIn(String channelId, String userId) {
+    if (_faulty()) throw StateError('the disk said no');
+    return super.hasPostedIn(channelId, userId);
+  }
 }

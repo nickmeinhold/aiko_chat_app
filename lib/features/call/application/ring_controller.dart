@@ -130,8 +130,23 @@ class RingController extends Notifier<CallInvite?> {
   ///
   /// The navigator's join deadline asks this before it releases an answer: an
   /// admission already in flight completes first (v3.1, requirement 3).
-  Future<void>? wakeAdmissionFor(CallRef call) => _awaitingWake[call];
+  ///
+  /// The conduct lookup counts too, and is answered FIRST: it runs before any
+  /// wake question, and registers that question before it completes, so a
+  /// caller that re-asks on completion (the navigator does) finds the wake.
+  Future<void>? wakeAdmissionFor(CallRef call) =>
+      _awaitingConduct[call] ?? _awaitingWake[call];
   final Map<CallRef, Future<void>> _awaitingWake = {};
+
+  /// Admissions waiting on the cache's answer to "have I posted here?", by call.
+  final Map<CallRef, Future<void>> _awaitingConduct = {};
+
+  /// Whether any conduct lookup is still open. A person's DM invitation is no
+  /// longer decided when [ChatRepository.inboundMessages] delivers it, so a test
+  /// asserting "it did not ring" must wait for this, or it passes on a decision
+  /// that has not been made yet.
+  @visibleForTesting
+  bool get conductLookupOpen => _awaitingConduct.isNotEmpty;
 
   /// Arrival order of invitations, so last-wins follows ARRIVAL. An admission
   /// that waited on native can finish after a newer one that did not.
@@ -317,6 +332,7 @@ class RingController extends Notifier<CallInvite?> {
     required int arrival,
     DateTime? receivedAt,
     WakeAge? wake,
+    bool? spoke,
   }) {
     final decision = admitRing(
       m,
@@ -325,17 +341,38 @@ class RingController extends Notifier<CallInvite?> {
       consent: consent,
       conversationMuted: _isMuted(m),
       isDm: _isDm(m),
+      // A WAKE IS THE ISLAND'S WORD FOR IT. The island wakes a handset only
+      // for a recipient who has posted in the channel (its `_spoken_here`, on
+      // every wake kind), and judged that against its whole history — which
+      // this device may not hold yet (a fresh install still paging) or no
+      // longer holds (a retracted message's row is deleted here, and counted
+      // there). Refusing a call the system is already ringing would leave a
+      // ring nobody can answer.
+      spokenHere: spoke == true || wake is Woke,
       now: now,
       receivedAt: receivedAt,
     );
+    // FIRST CONTACT IS LOOKED UP, NEVER JUDGED BLIND. `spoke == null` is "the
+    // cache has not been asked", not "never posted": the first pass refuses
+    // every person's DM call on this clause, and the lookup decides it.
+    if (decision case RingRefused(
+      reason: RingRefusal.noPriorConduct,
+    ) when spoke == null) {
+      _askConduct(m, me: me, arrival: arrival);
+      return;
+    }
     // A `stale` at `now` means every clause ahead of age has passed, signature
     // first — so the call the native side is asked about is the SIGNED body's.
     // Not refused yet: the answer decides. An `if`, not a pattern guard,
     // because it starts work.
+    //
+    // `noPriorConduct` asks the SAME question for a different reason: the
+    // cache found no post of ours, and a wake for this call would mean the
+    // island found one. One question settles a stale stranger both ways.
     if (decision case RingRefused(
-      reason: RingRefusal.stale,
+      reason: RingRefusal.stale || RingRefusal.noPriorConduct,
     ) when wake == null) {
-      if (_askWake(m, me: me, arrival: arrival)) return;
+      if (_askWake(m, me: me, arrival: arrival, spoke: spoke)) return;
     }
     final CallInvite invite;
     switch (decision) {
@@ -481,17 +518,82 @@ class RingController extends Notifier<CallInvite?> {
   ///
   /// ONE QUESTION PER CALL: a duplicate delivery while the first is waiting
   /// joins it rather than asking twice.
-  bool _askWake(Message m, {required String me, required int arrival}) {
+  bool _askWake(
+    Message m, {
+    required String me,
+    required int arrival,
+    bool? spoke,
+  }) {
     final call = parseCallBody(m.body)?.call;
     final bridge = ref.read(systemCallBridgeProvider);
     if (call == null || bridge == null) return false;
     if (_awaitingWake.containsKey(call)) return true;
     late final Future<void> asking;
-    asking = _wakeThenAdmit(m, call, me: me, arrival: arrival).whenComplete(() {
-      if (identical(_awaitingWake[call], asking)) _awaitingWake.remove(call);
-    });
+    asking = _wakeThenAdmit(m, call, me: me, arrival: arrival, spoke: spoke)
+        .whenComplete(() {
+          if (identical(_awaitingWake[call], asking)) {
+            _awaitingWake.remove(call);
+          }
+        });
     _awaitingWake[call] = asking;
     return true;
+  }
+
+  /// Ask the cache whether this handset's user has posted in the invitation's
+  /// DM, then judge again with the answer. Always asks: `noPriorConduct` with
+  /// no lookup yet is the gate saying "find out", never "no".
+  ///
+  /// Registered by call like [_askWake], so [wakeAdmissionFor] covers it and a
+  /// held answer waits for it rather than releasing a call it would admit.
+  void _askConduct(Message m, {required String me, required int arrival}) {
+    final call = parseCallBody(m.body)?.call;
+    // Unreachable — the gate refuses a non-call body long before this clause —
+    // but an unkeyed lookup could not be waited on, so it is not started.
+    if (call == null) return;
+    if (_awaitingConduct.containsKey(call)) return;
+    late final Future<void> asking;
+    asking = _conductThenAdmit(m, me: me, arrival: arrival).whenComplete(() {
+      if (identical(_awaitingConduct[call], asking)) {
+        _awaitingConduct.remove(call);
+      }
+    });
+    _awaitingConduct[call] = asking;
+  }
+
+  Future<void> _conductThenAdmit(
+    Message m, {
+    required String me,
+    required int arrival,
+  }) async {
+    var spoke = false;
+    final repo = ref.read(chatRepositoryProvider).value;
+    if (repo != null) {
+      try {
+        spoke = await repo.hasPostedIn(m.channelId, me);
+      } catch (e) {
+        // A FAULT IS NOT A STRANGER. It still falls through as "not found",
+        // so the wake can rescue a call the island vouched for, but it is
+        // named on its own line: without it a broken cache reads, in a
+        // report, exactly like every stranger the gate correctly refused.
+        _telemetry.conductUnreadable(m.channelId, e);
+      }
+    }
+    if (!ref.mounted) return;
+    // Identity is not a reversible state variable (see [build]).
+    if (ref.read(currentUserProvider)?.userId != me) return;
+    final now = _clock().toUtc();
+    _forget(now);
+    _admit(
+      m,
+      me: me,
+      // Sliced again: a new decision at a later moment, as in [_wakeThenAdmit].
+      consent: ref
+          .read(ringConsentByChannelProvider.notifier)
+          .consentIn(m.channelId),
+      now: now,
+      arrival: arrival,
+      spoke: spoke,
+    );
   }
 
   Future<void> _wakeThenAdmit(
@@ -499,6 +601,7 @@ class RingController extends Notifier<CallInvite?> {
     CallRef call, {
     required String me,
     required int arrival,
+    bool? spoke,
   }) async {
     // `unknown` is asked again, never judged at `now` (v3.1, requirement 1):
     // the oracle that has not synced is not the oracle saying no. Bounded by
@@ -551,6 +654,7 @@ class RingController extends Notifier<CallInvite?> {
         _ => null,
       },
       wake: wake,
+      spoke: spoke,
     );
   }
 

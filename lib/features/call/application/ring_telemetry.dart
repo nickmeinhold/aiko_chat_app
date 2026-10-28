@@ -205,6 +205,17 @@ class RingTelemetry {
   void ringDuplicate(String channelId) =>
       _log.debug('call.ring.duplicate', fields: {'channel': channelId});
 
+  /// The cache could not say whether this handset's user has posted in the
+  /// DM a call came from. The call is then judged as first contact unless the
+  /// native wake vouches for it — so a refusal following this line is the
+  /// cache failing, not a stranger calling, and this is how a report tells the
+  /// two apart.
+  void conductUnreadable(String channelId, Object error) => _log.warning(
+    'call.ring.conduct_unreadable',
+    fields: {'channel': channelId},
+    error: error,
+  );
+
   /// What the system ring did with a verified caller name (#377). `named` and
   /// `held` are the feature working; `unsupported` is Android today;
   /// `unavailable` is the line to look for when an iPhone rang as "Aiko".

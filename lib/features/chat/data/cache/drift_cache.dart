@@ -1078,6 +1078,27 @@ class DriftCache extends GeneratedDatabase {
   Future<String?> islandUlidFor(String clientTempId) async =>
       (await _messageBy(_M.clientTempId, clientTempId))?.islandUlid;
 
+  /// Whether [userId] has a message in [channelId] that the island HOLDS — the
+  /// ring's conduct question, asked the way the island's `_spoken_here` asks it.
+  ///
+  /// ACKED ROWS ONLY (`island_ulid` set). An optimistic or failed row is a
+  /// message the island has not got, and it is the island's record this mirrors:
+  /// counting the outbox would let the two doors disagree about the same DM.
+  ///
+  /// Complete for any channel the pager has walked, because it pages FROM THE
+  /// START ([historyContiguousThrough]). Short in two places, both of which the
+  /// caller covers by asking the native wake: a channel still paging in, and a
+  /// message since retracted — [applyRetraction] deletes the row, while the
+  /// island deliberately keeps counting a soft-deleted message as conduct.
+  Future<bool> hasPostedIn(String channelId, String userId) async {
+    final rows = await customSelect(
+      'SELECT 1 FROM ${_M.table} WHERE ${_M.channelId} = ? '
+      'AND ${_M.senderUserId} = ? AND ${_M.islandUlid} IS NOT NULL LIMIT 1',
+      variables: [Variable(channelId), Variable(userId)],
+    ).get();
+    return rows.isNotEmpty;
+  }
+
   /// Invariant O — the outbox is a QUERY, not a table: every un-acked,
   /// not-failed row, in send order.
   Future<List<Message>> outbox() async {

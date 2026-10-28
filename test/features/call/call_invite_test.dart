@@ -99,6 +99,7 @@ void main() {
     Set<String> allowedKeys = const {},
     bool muted = false,
     bool isDm = true,
+    bool spokenHere = true,
   }) => switch (admitRing(
     m,
     meUserId: me,
@@ -109,6 +110,7 @@ void main() {
     consent: RingConsent.inChannel(channelId: m.channelId, keys: allowedKeys),
     conversationMuted: muted,
     isDm: isDm,
+    spokenHere: spokenHere,
     now: now,
   )) {
     RingAdmitted(:final invite) => invite,
@@ -122,6 +124,7 @@ void main() {
     Set<String> allowedKeys = const {},
     bool muted = false,
     bool isDm = true,
+    bool spokenHere = true,
   }) => switch (admitRing(
     m,
     meUserId: me,
@@ -129,6 +132,7 @@ void main() {
     consent: RingConsent.inChannel(channelId: m.channelId, keys: allowedKeys),
     conversationMuted: muted,
     isDm: isDm,
+    spokenHere: spokenHere,
     now: now,
   )) {
     RingAdmitted() => null,
@@ -334,6 +338,7 @@ void main() {
         }
       }
       producedByStart.add(refusal(invite(age: const Duration(seconds: -6)))!);
+      producedByStart.add(refusal(invite(), spokenHere: false)!);
       // A signed, permitted invite carrying NO SERVER ID. Built by hand because
       // the `invite` fixture always mints one — which is precisely why the first
       // roster version could file `noIslandId` as "deliberately unreachable" and
@@ -354,6 +359,7 @@ void main() {
         consent: RingConsent.none,
         conversationMuted: false,
         isDm: true,
+        spokenHere: true,
         now: now,
       )) {
         RingRefused(:final reason) => reason,
@@ -479,6 +485,7 @@ void main() {
         Set<String> blocked = const {},
         bool muted = false,
         bool isDm = true,
+        bool spokenHere = true,
       }) => switch (admitRing(
         m,
         meUserId: me,
@@ -486,6 +493,7 @@ void main() {
         consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
         conversationMuted: muted,
         isDm: isDm,
+        spokenHere: spokenHere,
         now: now,
       )) {
         final RingRefused r => r,
@@ -709,6 +717,80 @@ void main() {
     });
   });
 
+  // The island's wake gate refuses a sleeping handset to anyone its owner has
+  // never posted to (`_spoken_here`), and lets the invite frame through to an
+  // open app, which rang it. Every fixture above is an ESTABLISHED DM
+  // (`spokenHere` defaults to true in the helpers); this group is the other
+  // world.
+  group('first contact — a stranger cannot ring an open app', () {
+    test('a person calling in a DM I never posted in is refused, by name', () {
+      expect(refusal(invite(), spokenHere: false), RingRefusal.noPriorConduct);
+    });
+
+    test('THE CONTROL: the same call, once I have posted there, rings', () {
+      // Without it the test above passes as well against a gate that refuses
+      // every person, which would be an outage of calling, not a stranger gate.
+      expect(admit(invite(), spokenHere: true), isNotNull);
+    });
+
+    test('conduct is asked of PERSONS: a consented agent rings without it', () {
+      // An agent already needs per-conversation consent, which is explicit and
+      // stronger than "I posted once"; asking both would refuse a ring the user
+      // deliberately allowed.
+      expect(
+        refusal(
+          invite(kind: SenderKind.llm, key: residentKey),
+          allowedKeys: {encodeMultikey(residentKey)},
+          spokenHere: false,
+        ),
+        isNull,
+      );
+      // ...and an unconsented one is still refused for the reason it always was.
+      expect(
+        refusal(
+          invite(kind: SenderKind.llm, key: residentKey),
+          spokenHere: false,
+        ),
+        RingRefusal.consentWithheld,
+      );
+    });
+
+    test('every cheaper refusal is named first, so the lookup never runs for '
+        'a call already refused', () {
+      // The caller answers `noPriorConduct` with a cache read and maybe a
+      // native question. Ordered after these, it only does that for an
+      // invitation nothing else has refused.
+      expect(
+        refusal(
+          invite(withOrigin: false, cryptoValid: null),
+          spokenHere: false,
+        ),
+        RingRefusal.unverifiedOrigin,
+      );
+      expect(
+        refusal(invite(), isDm: false, spokenHere: false),
+        RingRefusal.notDirectMessage,
+      );
+      expect(
+        refusal(invite(), blocked: {robin}, spokenHere: false),
+        RingRefusal.senderBlocked,
+      );
+      expect(
+        refusal(invite(), muted: true, spokenHere: false),
+        RingRefusal.conversationMuted,
+      );
+    });
+
+    test('a STALE stranger is named a stranger, so one wake question settles '
+        'both', () {
+      final old = invite(
+        age: kCallInviteFreshness + const Duration(seconds: 1),
+      );
+      expect(refusal(old, spokenHere: false), RingRefusal.noPriorConduct);
+      expect(refusal(old, spokenHere: true), RingRefusal.stale);
+    });
+  });
+
   // Design 23: freshness bounds TRANSIT (signature → this device's wake); skew
   // is judged at `now`. `receivedAt` is the only new input, and it comes from
   // the device, never the wire.
@@ -720,6 +802,7 @@ void main() {
       consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
       conversationMuted: false,
       isDm: true,
+      spokenHere: true,
       now: now,
       receivedAt: receivedAt,
     );
@@ -827,6 +910,7 @@ void main() {
       consent: RingConsent.inChannel(channelId: m.channelId, keys: const {}),
       conversationMuted: false,
       isDm: true,
+      spokenHere: true,
       now: now,
     );
 
@@ -1066,6 +1150,7 @@ void main() {
             ),
             conversationMuted: false,
             isDm: true,
+            spokenHere: true,
             now: now,
           ),
           isA<RingAdmitted>(),
@@ -1093,6 +1178,7 @@ void main() {
               ),
               conversationMuted: false,
               isDm: true,
+              spokenHere: true,
               now: now,
             ),
             isA<RingAdmitted>(),
@@ -1113,6 +1199,7 @@ void main() {
               ),
               conversationMuted: false,
               isDm: true,
+              spokenHere: true,
               now: now,
             ),
             // Named, so a future refactor that starts refusing this for the
@@ -1146,6 +1233,7 @@ void main() {
             consent: consent,
             conversationMuted: false,
             isDm: true,
+            spokenHere: true,
             now: now,
           ),
           isA<RingRefused>().having(

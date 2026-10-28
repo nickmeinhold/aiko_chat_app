@@ -542,6 +542,19 @@ class CallInvite {
 /// - **muted conversation** — mute is attention-scoped and a ring is the loudest
 ///   attention there is. Muting a DM and then being rung by it would make mute a
 ///   lie.
+/// - **first contact** — a PERSON whose DM you have never posted in. The
+///   island's wake gate (`_spoken_here`, island claude-tasks#4216) refuses this
+///   for a sleeping handset, and it gates the WAKE, never the invite: an open
+///   app still receives the frame, and until this clause it rang. Any account
+///   can open a DM with any user id it reads off a public channel, so on an
+///   island with open sign-up this was a stranger ringing whoever had the app
+///   in front of them — the desktop app all day. CONDUCT, NOT CONSENT, as the
+///   island words it: one message ever and that party may ring you, with no
+///   un-reply. Persons only — any other sender already needs [RingConsent],
+///   which is explicit and stronger.
+///
+///   [spokenHere] is resolved by the CALLER, which has the cache and the native
+///   bridge; this gate stays synchronous and pure.
 /// - **stale** — older than [kCallInviteFreshness]; see that constant.
 ///
 /// Freshness is measured on the **signed** [OriginEnvelope.signedAtMs], never on
@@ -712,6 +725,14 @@ enum RingRefusal {
 
   /// The conversation is muted.
   conversationMuted(refusedAnAttempt: true, startGate: true, stopGate: false),
+
+  /// A person calling in a DM where you have never posted — first contact.
+  ///
+  /// The island's name for the same refusal, on purpose: its wake gate logs
+  /// `reason=no_prior_conduct` for exactly this case, so one grep finds both
+  /// doors. Expected whenever a stranger calls, and the line to look for in a
+  /// "why didn't my new friend's call ring?" report.
+  noPriorConduct(refusedAnAttempt: true, startGate: true, stopGate: false),
 
   /// Signed further in the future than [kCallInviteClockSkewTolerance].
   /// Refused rather than admitted: a bad clock would otherwise ring forever.
@@ -886,6 +907,11 @@ RingDecision admitRing(
   required RingConsent consent,
   required bool conversationMuted,
   required bool isDm,
+
+  /// Whether this handset's user has posted in [Message.channelId], or the
+  /// island has vouched that they have by waking this device for this call.
+  /// Read only for a person; see "first contact" above.
+  required bool spokenHere,
   required DateTime now,
 
   /// When this device's native side was woken for this call, if it vouches for
@@ -945,6 +971,13 @@ RingDecision admitRing(
   }
   if (conversationMuted) {
     return const RingRefused(RingRefusal.conversationMuted);
+  }
+  // AFTER every person-level clause and BEFORE the clocks, so the caller's
+  // lookup (the cache, then the native wake) only runs for an invitation that
+  // nothing cheaper has already refused — and a stale stranger is named a
+  // stranger, which the one wake question then settles both ways.
+  if (message.sender.kind == SenderKind.human && !spokenHere) {
+    return const RingRefused(RingRefusal.noPriorConduct);
   }
   final signedAt = DateTime.fromMillisecondsSinceEpoch(
     origin.signedAtMs,
