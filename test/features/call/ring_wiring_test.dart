@@ -346,18 +346,22 @@ void main() {
 
   /// [considered], and any wake question it raised has been answered and
   /// judged (`wakeAdmissionFor` holds a question only while it is open).
+  ///
+  /// BOTH questions, in one condition. The conduct lookup runs first and the
+  /// wake question it may start is registered before it closes, so waiting on
+  /// each in turn could pass between them; asking both at once cannot.
+  /// [considered] stays conduct-only on purpose: the design-23 tests hold a
+  /// wake question open and need to observe the ring while it is.
   Future<void> settled(String id) async {
     await considered(id);
     expect(
-      await pumpUntil(
-        () =>
-            container
-                .read(incomingRingProvider.notifier)
-                .wakeAdmissionFor(kTestCall) ==
-            null,
-      ),
+      await pumpUntil(() {
+        final ring = container.read(incomingRingProvider.notifier);
+        return ring.wakeAdmissionFor(kTestCall) == null &&
+            !ring.conductLookupOpen;
+      }),
       isTrue,
-      reason: 'the wake question for $id never closed',
+      reason: 'the wake question or conduct lookup for $id never closed',
     );
   }
 
@@ -1560,13 +1564,14 @@ void main() {
       },
     );
 
-    test('a held answer can SEE the lookup: an open conduct question is an '
-        'admission in flight', () async {
-      // The navigator releases a held answer at its deadline unless
-      // `wakeAdmissionFor` names something still deciding. An in-memory cache
-      // answers inside a microtask, so no other test here ever sees the
-      // lookup open — which let an unregistered lookup pass the whole suite.
-      // Holding it open is the only way to ask.
+    test('a STALLED cache cannot hold an answered call: the lookup is never '
+        'offered to the navigator', () async {
+      // The navigator waits on `wakeAdmissionFor` before releasing a held
+      // answer. The wake question there has a budget; the cache lookup has
+      // none, so exposing it let a cache that never answered hold an answered
+      // system call forever (Carnot, round 1). An in-memory cache answers
+      // inside a microtask, so only a lookup held open can show which side of
+      // that line it is on.
       conductHeld = Completer<void>();
       rebuild(bridge: false);
       await watchRing();
@@ -1575,14 +1580,49 @@ void main() {
       expect(await pumpUntil(() => seen.contains(islandIdFor('M1'))), isTrue);
 
       final ring = container.read(incomingRingProvider.notifier);
-      expect(ring.wakeAdmissionFor(kTestCall), isNotNull);
-      expect(ring.conductLookupOpen, isTrue);
+      expect(ring.conductLookupOpen, isTrue, reason: 'the lookup is open');
+      expect(
+        ring.wakeAdmissionFor(kTestCall),
+        isNull,
+        reason: 'and nothing a held answer waits on names it',
+      );
       expect(ringing(), isFalse, reason: 'nothing is decided yet');
 
       conductHeld!.complete();
       expect(await pumpUntil(ringing), isTrue);
-      expect(ring.wakeAdmissionFor(kTestCall), isNull);
     });
+
+    test(
+      'a lookup that fails AFTER the ring is torn down ends quietly',
+      () async {
+        // The likeliest reason the cache read fails is the teardown that is also
+        // disposing the ring. Reading telemetry through a dead `ref` in the
+        // catch would throw a second time, as an unhandled async error, which
+        // fails this test (Maxwell, round 1).
+        conductHeld = Completer<void>();
+        conductFault = true;
+        rebuild(bridge: false);
+        await watchRing();
+
+        transport.emitMessage(await inbound());
+        expect(await pumpUntil(() => seen.contains(islandIdFor('M1'))), isTrue);
+        expect(
+          container.read(incomingRingProvider.notifier).conductLookupOpen,
+          isTrue,
+        );
+
+        container.dispose(); // the ring is gone while its lookup is open
+        container = ProviderContainer(overrides: overrides()); // for tearDown
+        conductHeld!.complete();
+        await pumpEventQueue();
+
+        expect(
+          logs.records.map((r) => r.event),
+          isNot(contains('call.ring.conduct_unreadable')),
+          reason: 'nothing to report for a ring that no longer exists',
+        );
+      },
+    );
   });
 }
 

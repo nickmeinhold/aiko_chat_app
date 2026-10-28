@@ -131,14 +131,17 @@ class RingController extends Notifier<CallInvite?> {
   /// The navigator's join deadline asks this before it releases an answer: an
   /// admission already in flight completes first (v3.1, requirement 3).
   ///
-  /// The conduct lookup counts too, and is answered FIRST: it runs before any
-  /// wake question, and registers that question before it completes, so a
-  /// caller that re-asks on completion (the navigator does) finds the wake.
-  Future<void>? wakeAdmissionFor(CallRef call) =>
-      _awaitingConduct[call] ?? _awaitingWake[call];
+  /// The conduct lookup is deliberately NOT here. It has no bound of its own,
+  /// and the wake question below does ("a reply that never comes would hold an
+  /// answered system call open forever"); exposing the lookup let a stalled
+  /// cache hold an answer indefinitely (Carnot, cage-match round 1). Left out,
+  /// a held answer meets only the navigator's own deadline, and the lookup
+  /// reads the cache that persisted this very invitation milliseconds before.
+  Future<void>? wakeAdmissionFor(CallRef call) => _awaitingWake[call];
   final Map<CallRef, Future<void>> _awaitingWake = {};
 
-  /// Admissions waiting on the cache's answer to "have I posted here?", by call.
+  /// Conduct lookups in flight, by call: a duplicate delivery joins the open
+  /// one rather than asking twice. Not exposed to the navigator; see above.
   final Map<CallRef, Future<void>> _awaitingConduct = {};
 
   /// Whether any conduct lookup is still open. A person's DM invitation is no
@@ -347,7 +350,9 @@ class RingController extends Notifier<CallInvite?> {
       // this device may not hold yet (a fresh install still paging) or no
       // longer holds (a retracted message's row is deleted here, and counted
       // there). Refusing a call the system is already ringing would leave a
-      // ring nobody can answer.
+      // ring nobody can answer. The vouch is only as good as the island's
+      // version: one older than v0.11.1 woke for anyone, so a `Woke` from it
+      // vouches for nobody — no worse than before this clause, which rang it.
       spokenHere: spoke == true || wake is Woke,
       now: now,
       receivedAt: receivedAt,
@@ -543,8 +548,9 @@ class RingController extends Notifier<CallInvite?> {
   /// DM, then judge again with the answer. Always asks: `noPriorConduct` with
   /// no lookup yet is the gate saying "find out", never "no".
   ///
-  /// Registered by call like [_askWake], so [wakeAdmissionFor] covers it and a
-  /// held answer waits for it rather than releasing a call it would admit.
+  /// Registered by call so a duplicate delivery joins it, but NOT through
+  /// [wakeAdmissionFor]: an unbounded future must not be able to hold an
+  /// answered call.
   void _askConduct(Message m, {required String me, required int arrival}) {
     final call = parseCallBody(m.body)?.call;
     // Unreachable — the gate refuses a non-call body long before this clause —
@@ -567,16 +573,21 @@ class RingController extends Notifier<CallInvite?> {
   }) async {
     var spoke = false;
     final repo = ref.read(chatRepositoryProvider).value;
-    if (repo != null) {
-      try {
-        spoke = await repo.hasPostedIn(m.channelId, me);
-      } catch (e) {
-        // A FAULT IS NOT A STRANGER. It still falls through as "not found",
-        // so the wake can rescue a call the island vouched for, but it is
-        // named on its own line: without it a broken cache reads, in a
-        // report, exactly like every stranger the gate correctly refused.
-        _telemetry.conductUnreadable(m.channelId, e);
-      }
+    try {
+      // NO REPOSITORY IS UNREADABLE, NOT "NEVER POSTED". Silently leaving
+      // `spoke` false here reported it as a stranger (Tesla, round 1).
+      if (repo == null) throw StateError('no chat repository to ask');
+      spoke = await repo.hasPostedIn(m.channelId, me);
+    } catch (e) {
+      // Mounted FIRST: `_telemetry` reads `ref`, and the likeliest reason the
+      // read failed is a teardown that is disposing this controller too — the
+      // trap [_identifySystemRing] documents (Maxwell, round 1).
+      if (!ref.mounted) return;
+      // A FAULT IS NOT A STRANGER. It still falls through as "not found",
+      // so the wake can rescue a call the island vouched for, but it is
+      // named on its own line: without it a broken cache reads, in a
+      // report, exactly like every stranger the gate correctly refused.
+      _telemetry.conductUnreadable(m.channelId, e);
     }
     if (!ref.mounted) return;
     // Identity is not a reversible state variable (see [build]).

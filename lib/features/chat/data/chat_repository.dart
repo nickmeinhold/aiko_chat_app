@@ -497,6 +497,13 @@ class ChatRepository {
     }
   }
 
+  /// Whether [userId] has posted in [channelId], by the island's record as this
+  /// device holds it — see [DriftCache.hasPostedIn]. THROWS on a cache fault
+  /// rather than answering false: "unreadable" and "never posted" are different
+  /// findings, and the ring logs them differently.
+  Future<bool> hasPostedIn(String channelId, String userId) =>
+      _cache.hasPostedIn(channelId, userId);
+
   /// The island's ULID for a message this client sent, once acked.
   ///
   /// The two ids are NOT interchangeable on the wire: `reply_to` is an FK onto
@@ -505,13 +512,6 @@ class ChatRepository {
   /// something it sent — the hangup naming the invitation it ends — has to
   /// resolve one to the other, and only the ack can do that. Null means the
   /// send has not been acked (offline, or still in flight).
-  /// Whether [userId] has posted in [channelId], by the island's record as this
-  /// device holds it — see [DriftCache.hasPostedIn]. THROWS on a cache fault
-  /// rather than answering false: "unreadable" and "never posted" are different
-  /// findings, and the ring logs them differently.
-  Future<bool> hasPostedIn(String channelId, String userId) =>
-      _cache.hasPostedIn(channelId, userId);
-
   Future<String?> islandIdFor(String clientTempId) async {
     if (_disposed) return null;
     try {
