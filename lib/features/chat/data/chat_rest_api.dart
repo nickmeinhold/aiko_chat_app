@@ -371,6 +371,17 @@ abstract interface class ChatRestApi {
   /// off. Token-less: capability discovery must work before/without a session.
   Future<GatewayCapabilities?> getCapabilities();
 
+  /// Will this island's PASSKEY door create a NEW account right now? Read from
+  /// `creates_accounts` on the passkey entry of the public `GET
+  /// /v1/auth/providers` (island PR #433). Only `false` stops anything: the
+  /// caller must then not start a registration ceremony, because the phone
+  /// saves the passkey before the island can refuse, leaving one it will never
+  /// accept (#436). `null` means the island didn't say (older than the field,
+  /// a 404, no network, an odd body) and reads as "carry on as before": absence
+  /// is not a refusal. Token-less and never throws, like [getCapabilities].
+  /// Sign-in and add-a-device work whatever this says.
+  Future<bool?> passkeyCreatesAccounts();
+
   Future<AppUser> me();
 
   /// Update the authenticated user's mutable profile labels — [handle] and/or
