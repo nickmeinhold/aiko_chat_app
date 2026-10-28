@@ -164,6 +164,23 @@ class AccountSuspended extends Unauthorized {
   String toString() => 'AccountSuspended';
 }
 
+/// The island is not creating new accounts: `403 {"detail":"registration is
+/// closed"}`, raised by the island's single account-creation gate
+/// (`_require_may_provision_account`) with the same wording on every door that
+/// creates a user. A refinement of [Unauthorized] for the same reason as
+/// [AccountSuspended]: routers on the base type keep treating it as terminal,
+/// and only the copy changes.
+///
+/// It was a plain [Unauthorized] until #436, so a would-be new user read
+/// "couldn't verify that passkey, create a new one" and looped. The phone
+/// stores each passkey BEFORE `register/finish` answers, so every loop left one
+/// more credential the island will never accept.
+class RegistrationClosed extends Unauthorized {
+  const RegistrationClosed() : super(403);
+  @override
+  String toString() => 'RegistrationClosed';
+}
+
 /// The gateway ANSWERED and refused this specific action for an **authorization**
 /// reason — a plain `403` whose body is NOT the ban phrase (e.g. the island's
 /// `ModeratorUser` gate on an operator endpoint, `deps.py:63 "not a moderator"`,

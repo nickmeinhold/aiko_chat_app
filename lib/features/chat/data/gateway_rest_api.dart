@@ -245,8 +245,28 @@ class GatewayRestApi implements ChatRestApi {
   static Never _throwIfAuthTerminal(DioException e) {
     final code = e.response?.statusCode;
     if (_isSuspended(e)) throw const AccountSuspended();
+    if (_isRegistrationClosed(e)) throw const RegistrationClosed();
     if (code == 401 || code == 403) throw Unauthorized(code);
     throw e;
+  }
+
+  /// True iff this is the island's closed-registration refusal, `403
+  /// {"detail":"registration is closed"}` (#436). Keyed on the body like
+  /// [_isSuspended], so an unrelated 403 on the same door stays a plain
+  /// [Unauthorized].
+  static bool _isRegistrationClosed(DioException e) =>
+      e.response?.statusCode == 403 &&
+      (_detail(e)?.toLowerCase().contains('registration is closed') ?? false);
+
+  /// The `detail` string of an error body, whether dio decoded it to a Map or
+  /// left it a raw JSON String; null for anything else.
+  static String? _detail(DioException e) {
+    final data = e.response?.data;
+    final Object? body = data is String && data.isNotEmpty
+        ? _tryJson(data)
+        : data;
+    final detail = body is Map ? body['detail'] : null;
+    return detail is String ? detail : null;
   }
 
   /// True iff this is the island's account-ban response — `403 {"detail":
@@ -260,16 +280,9 @@ class GatewayRestApi implements ChatRestApi {
   /// hiccup falls through to the generic mapping — on the bare login door that is
   /// 401/403 → Unauthorized; on the authed door a plain 403 → Forbidden (A3). A
   /// suspended user hitting the login door then sees the re-auth copy, never a crash.
-  static bool _isSuspended(DioException e) {
-    if (e.response?.statusCode != 403) return false;
-    final data = e.response?.data;
-    final Object? body = data is String && data.isNotEmpty
-        ? _tryJson(data)
-        : data;
-    final detail = body is Map ? body['detail'] : null;
-    return detail is String &&
-        detail.toLowerCase().contains('account suspended');
-  }
+  static bool _isSuspended(DioException e) =>
+      e.response?.statusCode == 403 &&
+      (_detail(e)?.toLowerCase().contains('account suspended') ?? false);
 
   static Object? _tryJson(String s) {
     try {

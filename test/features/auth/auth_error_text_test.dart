@@ -76,6 +76,25 @@ void main() {
       expect(t, isNot(contains('sign in again')));
       expect(t, isNot(contains("couldn't verify")));
     });
+
+    test(
+      'RegistrationClosed → island not taking accounts, never "create a new one"',
+      () {
+        // #436: "create a new one" sent a would-be user round a loop that left a
+        // dead passkey on the phone per attempt.
+        for (final action in AuthAction.values) {
+          final t = text(
+            const RegistrationClosed(),
+            host: 'chat.example.com',
+            action: action,
+          );
+          expect(t, contains("isn't taking new accounts"));
+          expect(t, contains('chat.example.com'));
+          expect(t, isNot(contains('create a new one')));
+          expect(t, isNot(contains("couldn't verify")));
+        }
+      },
+    );
   });
 
   group('passkey ceremony codes (AuthCeremonyFailed) keep their guidance', () {

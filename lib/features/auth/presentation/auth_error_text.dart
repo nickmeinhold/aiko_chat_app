@@ -4,6 +4,7 @@ import '../../chat/data/chat_rest_api.dart'
         HandleTaken,
         NetworkUnavailable,
         PasskeyAlreadyRegistered,
+        RegistrationClosed,
         Unauthorized;
 import '../data/auth_exceptions.dart';
 
@@ -68,6 +69,11 @@ String authErrorText(
     case HandleTaken():
       return "That handle is taken — try another. If it's already yours, sign in "
           'with your existing account, then add a passkey from Settings.';
+    case RegistrationClosed():
+      // Never "create a new one": every attempt stores another passkey on the
+      // phone that this island will never accept (#436).
+      return "$host isn't taking new accounts right now. If you already have "
+          'an account here, sign in instead.';
     case PasskeyAlreadyRegistered():
       return 'That passkey is already registered to an account. Try '
           '"Already have a passkey? Sign in" instead.';
