@@ -21,12 +21,20 @@ class AppUser {
   /// gateway that omits the field never accidentally exposes the operator seat.
   final bool isModerator;
 
+  /// Whether the island says this account still carries the handle it
+  /// auto-assigned at sign-up (`handle_auto`, #436). `null` when the island
+  /// doesn't say (older than the field): never read as "yes", so an older
+  /// island gates nobody, and the app's own owed-handle record covers its
+  /// sign-ups. A non-boolean is an odd body, read as `null` too.
+  final bool? handleAuto;
+
   const AppUser({
     required this.userId,
     required this.username,
     required this.displayName,
     required this.aikoUsername,
     this.isModerator = false,
+    this.handleAuto,
   });
 
   factory AppUser.fromJson(Map<String, dynamic> j) => AppUser(
@@ -35,6 +43,7 @@ class AppUser {
     displayName: (j['display_name'] as String?) ?? '',
     aikoUsername: (j['aiko_username'] as String?) ?? '',
     isModerator: (j['is_moderator'] as bool?) ?? false,
+    handleAuto: j['handle_auto'] is bool ? j['handle_auto'] as bool : null,
   );
 
   /// Serialize for local persistence (offline-first session restore). Keys
@@ -46,6 +55,7 @@ class AppUser {
     'display_name': displayName,
     'aiko_username': aikoUsername,
     'is_moderator': isModerator,
+    if (handleAuto != null) 'handle_auto': handleAuto,
   };
 
   @override
@@ -55,11 +65,18 @@ class AppUser {
       other.username == username &&
       other.displayName == displayName &&
       other.aikoUsername == aikoUsername &&
-      other.isModerator == isModerator;
+      other.isModerator == isModerator &&
+      other.handleAuto == handleAuto;
 
   @override
-  int get hashCode =>
-      Object.hash(userId, username, displayName, aikoUsername, isModerator);
+  int get hashCode => Object.hash(
+    userId,
+    username,
+    displayName,
+    aikoUsername,
+    isModerator,
+    handleAuto,
+  );
 }
 
 /// JWT pair. The access token is short-lived (~15min); the refresh token is

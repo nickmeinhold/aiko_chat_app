@@ -21,6 +21,7 @@ import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
     show NetworkUnavailable;
+import 'package:aiko_chat_app/features/auth/presentation/choose_handle_screen.dart';
 import 'package:aiko_chat_app/features/auth/presentation/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -243,10 +244,15 @@ void main() {
     );
     addTearDown(container.dispose);
     expect(await container.read(authControllerProvider.future), isNull);
+    // Create starts on Pick your handle since #436 (the handle comes before
+    // the passkey), so that is the screen where a would-be user meets the
+    // create-path message. Sign-in still starts on the login screen.
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: const MaterialApp(home: LoginScreen()),
+        child: MaterialApp(
+          home: signInPath ? const LoginScreen() : const ChooseHandleScreen(),
+        ),
       ),
     );
     // TAP THE REAL BUTTON, do not drive the notifier. `loginActionProvider` is
@@ -254,11 +260,16 @@ void main() {
     // it — so calling the controller directly leaves the action at its default
     // and silently renders the WRONG ingress's message. Found exactly that way:
     // the create-path arm read back sign-in's text.
-    await tester.tap(
-      signInPath
-          ? find.text('Already have a passkey? Sign in')
-          : find.text('Create a passkey'),
-    );
+    if (signInPath) {
+      await tester.tap(find.text('Already have a passkey? Sign in'));
+    } else {
+      await tester.enterText(
+        find.byKey(const Key('choose-handle-field')),
+        'nicka',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('choose-handle-submit')));
+    }
     await tester.pump();
     await tester.pump();
   }

@@ -120,8 +120,33 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
-  Future<PasskeyChallenge> startPasskeyRegistration() =>
-      _passkeyStart('/v1/auth/passkey/register/start');
+  Future<bool?> passkeyCreatesAccounts() async {
+    // Same contract as getCapabilities: every "can't tell" path is null and
+    // nothing throws. Only a real boolean on the passkey entry is an answer; a
+    // string "false" is an odd body, not a refusal.
+    try {
+      final r = await _bare.get('/v1/auth/providers');
+      final data = r.data is String ? jsonDecode(r.data as String) : r.data;
+      final providers = data is Map ? data['providers'] : null;
+      if (providers is! List) return null;
+      for (final p in providers) {
+        if (p is Map && p['slug'] == 'passkey') {
+          final says = p['creates_accounts'];
+          return says is bool ? says : null;
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<PasskeyChallenge> startPasskeyRegistration({String? name}) =>
+      _passkeyStart(
+        '/v1/auth/passkey/register/start',
+        body: name == null ? null : {'name': name},
+      );
 
   @override
   Future<IdentityOutcome> finishPasskeyRegistration(
@@ -185,8 +210,11 @@ class GatewayRestApi implements ChatRestApi {
   /// `options` is the WebAuthn options object. We re-encode `options` to the
   /// opaque JSON string the device authenticator consumes, and carry `state`
   /// untouched to the `finish` call (server-side challenge binding).
-  Future<PasskeyChallenge> _passkeyStart(String path) => _mapNetwork(() async {
-    final r = await _bare.post(path);
+  Future<PasskeyChallenge> _passkeyStart(
+    String path, {
+    Map<String, dynamic>? body,
+  }) => _mapNetwork(() async {
+    final r = await _bare.post(path, data: body);
     final m = _map(r.data);
     final options = m['options'];
     final state = m['state'];
