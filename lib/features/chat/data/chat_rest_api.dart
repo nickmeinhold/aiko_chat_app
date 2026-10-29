@@ -310,7 +310,12 @@ abstract interface class ChatRestApi {
   /// WebAuthn creation options + a binding [PasskeyChallenge.state]. No prior
   /// session is required — the matching [finishPasskeyRegistration] mints the
   /// account.
-  Future<PasskeyChallenge> startPasskeyRegistration();
+  ///
+  /// [name] labels the passkey in the user's password manager: their handle
+  /// (#436), sent as `{"name": …}`. It is only a label on their own phone and
+  /// grants nothing. An island older than the label ignores the body and keeps
+  /// its random `aiko-…` one.
+  Future<PasskeyChallenge> startPasskeyRegistration({String? name});
 
   /// Complete registration: hand back the device's attestation [credentialJson]
   /// with the [state] from [startPasskeyRegistration]. Returns an

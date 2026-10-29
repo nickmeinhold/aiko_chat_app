@@ -81,10 +81,9 @@ class LoginScreen extends ConsumerWidget {
       ref.read(authControllerProvider.notifier).signInWithPasskey();
     }
 
-    void passkeyRegister() {
-      ref.read(loginActionProvider.notifier).set(AuthAction.createAccount);
-      ref.read(authControllerProvider.notifier).registerWithPasskey();
-    }
+    // Handle first (#436): the handle is chosen before the passkey exists, so
+    // the passkey is named after it. The ceremony runs from that screen.
+    void passkeyRegister() => context.push('/choose-handle');
 
     return Scaffold(
       // No AppBar — a passkey-first ingress doesn't need a Material title bar;

@@ -142,8 +142,11 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
-  Future<PasskeyChallenge> startPasskeyRegistration() =>
-      _passkeyStart('/v1/auth/passkey/register/start');
+  Future<PasskeyChallenge> startPasskeyRegistration({String? name}) =>
+      _passkeyStart(
+        '/v1/auth/passkey/register/start',
+        body: name == null ? null : {'name': name},
+      );
 
   @override
   Future<IdentityOutcome> finishPasskeyRegistration(
@@ -207,8 +210,11 @@ class GatewayRestApi implements ChatRestApi {
   /// `options` is the WebAuthn options object. We re-encode `options` to the
   /// opaque JSON string the device authenticator consumes, and carry `state`
   /// untouched to the `finish` call (server-side challenge binding).
-  Future<PasskeyChallenge> _passkeyStart(String path) => _mapNetwork(() async {
-    final r = await _bare.post(path);
+  Future<PasskeyChallenge> _passkeyStart(
+    String path, {
+    Map<String, dynamic>? body,
+  }) => _mapNetwork(() async {
+    final r = await _bare.post(path, data: body);
     final m = _map(r.data);
     final options = m['options'];
     final state = m['state'];

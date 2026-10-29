@@ -101,10 +101,26 @@ class FakeRestApi implements ChatRestApi {
     return user;
   }
 
-  /// Programmable passkey outcomes. Default register: a new identity that must
-  /// claim a handle (first-passkey-creates-account). Default authenticate: a
-  /// known identity (log straight in). Override per-test.
+  /// Programmable passkey outcomes. Override per-test.
+  ///
+  /// Default register is what the island ACTUALLY answers (Design 04, since
+  /// #1728): a live session for a brand-new account under an auto-assigned
+  /// `aiko-…` handle, flagged `handle_auto`. It used to default to a
+  /// PendingHandle the island had stopped sending, so every test of sign-up
+  /// proved a claim-handle step production never reached, and "never asked for
+  /// a handle" shipped green twice (#436). Keep this matching the island.
+  /// Default authenticate: a known identity (log straight in).
   IdentityOutcome? passkeyRegisterOutcome;
+  String? lastPasskeyRegisterName;
+
+  /// The account a default registration creates, as the island creates it.
+  static const newAccountUser = AppUser(
+    userId: 'u-new',
+    username: 'aiko-0123456789ab',
+    displayName: 'aiko-0123456789ab',
+    aikoUsername: 'aiko-0123456789ab',
+    handleAuto: true,
+  );
   IdentityOutcome? passkeyAuthOutcome;
 
   int passkeyRegisterStartCalls = 0;
@@ -117,8 +133,9 @@ class FakeRestApi implements ChatRestApi {
   String? lastPasskeyAuthCredential;
 
   @override
-  Future<PasskeyChallenge> startPasskeyRegistration() async {
+  Future<PasskeyChallenge> startPasskeyRegistration({String? name}) async {
     passkeyRegisterStartCalls++;
+    lastPasskeyRegisterName = name;
     if (startPasskeyRegistrationThrows != null) {
       throw startPasskeyRegistrationThrows!;
     }
@@ -133,11 +150,12 @@ class FakeRestApi implements ChatRestApi {
     passkeyRegisterFinishCalls++;
     lastPasskeyRegisterState = state;
     lastPasskeyRegisterCredential = credentialJson;
-    return passkeyRegisterOutcome ??
-        const PendingHandle(
-          provisioningToken: 'passkey-prov',
-          suggestedName: null,
-        );
+    final explicit = passkeyRegisterOutcome;
+    if (explicit != null) return explicit;
+    user = newAccountUser;
+    final lost = finishPasskeyRegistrationReplyLost;
+    if (lost != null) throw lost; // the account exists; the answer never came
+    return Authenticated(_session());
   }
 
   @override
@@ -174,6 +192,11 @@ class FakeRestApi implements ChatRestApi {
   /// which is what a user with no signal actually hits.
   Object? startPasskeyRegistrationThrows;
   Object? startPasskeyAuthenticationThrows;
+
+  /// Make `register/finish` throw AFTER the island has made the account: the
+  /// reply was lost. The app cannot tell this from "no account", which is the
+  /// case the owed-handle draft must survive (cage-match #440, Carnot + Noether).
+  Object? finishPasskeyRegistrationReplyLost;
   int addPasskeyCalls = 0;
   String? lastAddPasskeyState;
   String? lastAddPasskeyCredential;
@@ -202,12 +225,18 @@ class FakeRestApi implements ChatRestApi {
   Future<AppUser> updateProfile({String? handle, String? displayName}) async {
     updateProfileCalls++;
     if (updateProfileThrows != null) throw updateProfileThrows!;
+    // As the island answers it (`users_service.update_profile`): only a CHANGE
+    // of handle ends "auto". The same handle is a no-op that leaves the flag
+    // set, and so does a name-only edit. This fake said "any handle ends it",
+    // which made a loop on /choose-handle impossible to test (cage-match #440).
+    final change = handle != null && handle != user.username;
     user = AppUser(
       userId: user.userId,
-      username: handle ?? user.username,
+      username: change ? handle : user.username,
       displayName: displayName ?? user.displayName,
-      aikoUsername: handle ?? user.aikoUsername,
+      aikoUsername: change ? handle : user.aikoUsername,
       isModerator: user.isModerator,
+      handleAuto: change ? false : user.handleAuto,
     );
     return user;
   }

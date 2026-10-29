@@ -244,7 +244,7 @@ class FakeChatRestApi implements ChatRestApi {
   @override
   Future<void> banUser(String userId) => throw UnimplementedError();
   @override
-  Future<PasskeyChallenge> startPasskeyRegistration() =>
+  Future<PasskeyChallenge> startPasskeyRegistration({String? name}) =>
       throw UnimplementedError();
   @override
   Future<IdentityOutcome> finishPasskeyRegistration(
