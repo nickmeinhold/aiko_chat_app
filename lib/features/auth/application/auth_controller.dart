@@ -452,29 +452,35 @@ class AuthController extends AsyncNotifier<AppUser?> {
       throw const RegistrationClosed();
     }
     final owed = ref.read(owedHandleProvider.notifier);
+    // `register/start` FIRST: it makes nothing, so if it fails no record has
+    // been touched. Writing the draft ahead of it let a failed start erase a
+    // debt another account on this device still owed (Tesla, cage-match #440).
+    final challenge = await _rest.startPasskeyRegistration(name: handle);
     // Written BEFORE the ceremony, which can't be taken back: if the app dies
     // after the island makes the account, this is how the next launch knows a
     // handle is still owed.
     await owed.set(OwedHandle(handle: handle, displayName: displayName));
-    final IdentityOutcome outcome;
+    final String attestation;
     try {
-      final challenge = await _rest.startPasskeyRegistration(name: handle);
-      final String attestation;
-      try {
-        attestation = await _passkey.register(challenge.optionsJson);
-      } on AuthCeremonyCancelled {
-        await owed.clear();
-        return prior; // user dismissed the sheet — no-op, restore prior state
-      }
-      await _markPasskeySeen();
-      outcome = await _rest.finishPasskeyRegistration(
-        challenge.state,
-        attestation,
-      );
+      attestation = await _passkey.register(challenge.optionsJson);
+    } on AuthCeremonyCancelled {
+      await owed.clear();
+      return prior; // user dismissed the sheet — no-op, restore prior state
     } catch (_) {
-      await owed.clear(); // the island made no account, so nothing is owed
+      // No credential reached the island, so no account can exist.
+      await owed.clear();
       rethrow;
     }
+    await _markPasskeySeen();
+    // NOT cleared if this throws. A reply lost after the island made the
+    // account looks exactly like a refusal from here, and clearing deleted the
+    // only record of the handle the user chose (Carnot + Noether, cage-match
+    // #440). Kept unbound, the draft never gates anyone; it pre-fills the
+    // screen, and the island's `handle_auto` holds the account if it exists.
+    final outcome = await _rest.finishPasskeyRegistration(
+      challenge.state,
+      attestation,
+    );
     switch (outcome) {
       case Authenticated(:final session):
         // Bind the debt to the account BEFORE the session is published, so a
@@ -499,8 +505,13 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// fails the sign-in: the account exists either way, so a refusal (taken, no
   /// network) keeps the debt, the router holds the user on `/choose-handle`,
   /// and that screen shows why. A 409 stamps nothing on the island, so picking
-  /// again is safe; a SUCCESS starts the island's 30-day handle cooldown, which
-  /// is why the screen shows the exact handle on the button that commits it.
+  /// again is safe. A first claim doesn't start the island's 30-day cooldown
+  /// either (island #438, live since v0.21.0): moving off the assigned handle
+  /// leaves the stamp unset, so a typo can be fixed once more straight away,
+  /// and that second change starts it. An island older than v0.21.0 starts it
+  /// on the first claim. The screen names the exact handle on the button either
+  /// way. (This said "a SUCCESS starts the cooldown", which was true only before
+  /// #438, and it led a cage-match #440 seat to a false finding.)
   ///
   /// A TERMINAL answer is not a refusal. A ban or a dead session is settled by
   /// the doors [saveProfile] uses, never shown as a reason on `/choose-handle`

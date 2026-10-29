@@ -4,6 +4,7 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
+import 'package:aiko_chat_app/features/auth/data/owed_handle_store.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
@@ -326,6 +327,50 @@ void main() {
         expect(auth.hasError, isFalse, reason: 'settled, not left as an error');
         expect(auth.value, isNull);
         expect(store.current, isNull);
+      },
+    );
+
+    test('a reply LOST after the island made the account keeps the chosen '
+        'handle, unbound', () async {
+      // Indistinguishable from "no account" here, so it must not be treated as
+      // one. Unbound, the draft gates nobody; it pre-fills /choose-handle, and
+      // the island's handle_auto holds the account that does exist.
+      final rest = FakeRestApi()
+        ..finishPasskeyRegistrationReplyLost = StateError('connection reset');
+      final c = makeContainer(rest: rest, passkey: FakePasskeyAuthClient());
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+
+      expect(c.read(authControllerProvider).value, isNull);
+      final owed = c.read(owedHandleProvider);
+      expect(owed?.handle, 'nicka', reason: 'the choice survives');
+      expect(owed?.userId, isNull, reason: 'unbound: never a gate');
+    });
+
+    test(
+      'a failed register/start never touches a debt another account owes',
+      () async {
+        final rest = FakeRestApi()
+          ..startPasskeyRegistrationThrows = StateError('offline');
+        final c = makeContainer(rest: rest, passkey: FakePasskeyAuthClient());
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+        await c
+            .read(owedHandleProvider.notifier)
+            .set(
+              const OwedHandle(
+                handle: 'robin',
+                displayName: 'Robin',
+              ).bindTo('someone-else'),
+            );
+
+        await register(c);
+
+        final owed = c.read(owedHandleProvider);
+        expect(owed?.userId, 'someone-else');
+        expect(owed?.handle, 'robin');
       },
     );
 

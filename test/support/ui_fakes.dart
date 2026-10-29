@@ -153,6 +153,8 @@ class FakeRestApi implements ChatRestApi {
     final explicit = passkeyRegisterOutcome;
     if (explicit != null) return explicit;
     user = newAccountUser;
+    final lost = finishPasskeyRegistrationReplyLost;
+    if (lost != null) throw lost; // the account exists; the answer never came
     return Authenticated(_session());
   }
 
@@ -190,6 +192,11 @@ class FakeRestApi implements ChatRestApi {
   /// which is what a user with no signal actually hits.
   Object? startPasskeyRegistrationThrows;
   Object? startPasskeyAuthenticationThrows;
+
+  /// Make `register/finish` throw AFTER the island has made the account: the
+  /// reply was lost. The app cannot tell this from "no account", which is the
+  /// case the owed-handle draft must survive (cage-match #440, Carnot + Noether).
+  Object? finishPasskeyRegistrationReplyLost;
   int addPasskeyCalls = 0;
   String? lastAddPasskeyState;
   String? lastAddPasskeyCredential;
@@ -218,14 +225,18 @@ class FakeRestApi implements ChatRestApi {
   Future<AppUser> updateProfile({String? handle, String? displayName}) async {
     updateProfileCalls++;
     if (updateProfileThrows != null) throw updateProfileThrows!;
+    // As the island answers it (`users_service.update_profile`): only a CHANGE
+    // of handle ends "auto". The same handle is a no-op that leaves the flag
+    // set, and so does a name-only edit. This fake said "any handle ends it",
+    // which made a loop on /choose-handle impossible to test (cage-match #440).
+    final change = handle != null && handle != user.username;
     user = AppUser(
       userId: user.userId,
-      username: handle ?? user.username,
+      username: change ? handle : user.username,
       displayName: displayName ?? user.displayName,
-      aikoUsername: handle ?? user.aikoUsername,
+      aikoUsername: change ? handle : user.aikoUsername,
       isModerator: user.isModerator,
-      // As the island: choosing a handle ends "auto"; a name-only edit doesn't.
-      handleAuto: handle != null ? false : user.handleAuto,
+      handleAuto: change ? false : user.handleAuto,
     );
     return user;
   }

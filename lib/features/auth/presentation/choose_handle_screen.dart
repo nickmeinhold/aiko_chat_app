@@ -76,9 +76,19 @@ class _ChooseHandleScreenState extends ConsumerState<ChooseHandleScreen> {
 
     setState(() => _saving = true);
     try {
-      await ref
+      final saved = await ref
           .read(authControllerProvider.notifier)
           .chooseHandle(handle, displayName);
+      // The island treats the handle it ASSIGNED as no choice at all: sending
+      // it back is a no-op that leaves `handle_auto` set, so the router keeps
+      // this screen up. Said, rather than a Continue that silently does
+      // nothing forever (cage-match #440).
+      if (mounted && saved?.handleAuto == true) {
+        setState(
+          () => _error =
+              "That's the handle this island gave you. Choose one of your own.",
+        );
+      }
     } on HandleTaken {
       if (mounted) setState(() => _error = '@$handle is already taken.');
     } on HandleChangeOnCooldown {
@@ -124,7 +134,15 @@ class _ChooseHandleScreenState extends ConsumerState<ChooseHandleScreen> {
 
     // Pre-fill from what was chosen before, exactly once, so a refused or
     // interrupted sign-up picks up where it left off.
-    if (!_prefilled && owed != null) {
+    // ONLY A DRAFT THAT BELONGS HERE. One bound to another account on this
+    // device was pre-filled for whoever stood at the screen, and one tap of
+    // Continue gave them that person's chosen handle (Tesla, cage-match #440).
+    // An unbound draft is this device's own interrupted sign-up, including a
+    // lost `register/finish` reply, so it pre-fills either way.
+    final mine =
+        owed != null &&
+        (owed.userId == null || owed.userId == auth.value?.userId);
+    if (!_prefilled && mine) {
       _handle.text = owed.handle;
       if (owed.displayName != owed.handle) {
         _displayName.text = owed.displayName;

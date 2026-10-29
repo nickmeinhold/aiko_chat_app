@@ -239,6 +239,52 @@ void main() {
     expect(find.byKey(const Key('login-screen')), findsOneWidget);
   });
 
+  testWidgets('a debt bound to ANOTHER account is never pre-filled for this '
+      'one', (tester) async {
+    // A shared device: the island holds this account (handle_auto) on the
+    // screen, and the leftover record is someone else's. Pre-filling it put
+    // their chosen handle one tap from being taken by this person.
+    await testPrefs.setString(
+      _owedKey,
+      jsonEncode({
+        'handle': 'robin',
+        'display_name': 'Robin',
+        'user_id': 'someone-else',
+      }),
+    );
+    await app(
+      tester,
+      FakeRestApi(user: FakeRestApi.newAccountUser),
+      signedIn: true,
+    );
+
+    expect(_screen, findsOneWidget);
+    expect(find.text('Continue as @robin'), findsNothing);
+    expect(tester.widget<TextField>(_field).controller?.text, isEmpty);
+  });
+
+  testWidgets('choosing the handle the island ASSIGNED says so, instead of a '
+      'Continue that does nothing', (tester) async {
+    // The island treats its own assigned handle as no choice: a no-op that
+    // leaves handle_auto set, so the router keeps this screen up.
+    final rest = FakeRestApi(user: FakeRestApi.newAccountUser);
+    await app(tester, rest, signedIn: true);
+
+    await tester.enterText(_field, FakeRestApi.newAccountUser.username);
+    await tester.pump();
+    await tester.tap(_submit);
+    await tester.pumpAndSettle();
+
+    expect(rest.updateProfileCalls, 1);
+    expect(_screen, findsOneWidget, reason: 'still owed: the island said so');
+    expect(
+      find.text(
+        "That's the handle this island gave you. Choose one of your own.",
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('an island that does not report handle_auto gates nobody', (
     tester,
   ) async {
