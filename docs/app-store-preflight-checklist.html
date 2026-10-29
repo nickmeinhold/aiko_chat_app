@@ -76,12 +76,14 @@ done   # every line must be 200</pre>
   <b>Verify (automatable part) — the well-known files carry the right relations:</b>
   <pre># The default island (chat.enspyr.co since 2026-10-28) is where a reviewer
 # lands. Check every island the app lists, not only that one.
-# Android: BOTH relations required (get_login_creds AND handle_all_urls)
-curl -s https://chat.enspyr.co/.well-known/assetlinks.json | \
-  grep -o 'get_login_creds\|handle_all_urls' | sort -u   # must show BOTH
-
-# Apple: AASA served for the associated domain
-curl -s https://chat.enspyr.co/.well-known/apple-app-site-association | head</pre>
+for host in chat.enspyr.co chat.imagineering.cc; do
+  echo "== $host"
+  # Android: BOTH relations required (get_login_creds AND handle_all_urls)
+  curl -s "https://$host/.well-known/assetlinks.json" | \
+    grep -o 'get_login_creds\|handle_all_urls' | sort -u   # must show BOTH
+  # Apple: AASA served for the associated domain
+  curl -s "https://$host/.well-known/apple-app-site-association" | head
+done</pre>
   <b>Verify (manual gate):</b> on the target platform, against prod, tap <strong>Create a passkey</strong> (never "Sign in" on a fresh device), pick a handle, tap <strong>Create passkey as @…</strong>, authenticate, confirm you reach the chat under that handle. This is the single most-rejected path — see the Submission Kit's reviewer note.
 </div>
 

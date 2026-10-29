@@ -9,18 +9,13 @@
 
 import 'package:aiko_chat_app/app/config.dart';
 import 'package:aiko_chat_app/app/providers.dart';
-import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/core/prefs/pref_key_migration.dart';
-import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/data/cached_user_store.dart';
 import 'package:aiko_chat_app/features/auth/data/passkey_hint_store.dart';
-import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../support/fake_chat_transport.dart';
-import '../support/fakes.dart';
 import '../support/ui_fakes.dart';
 
 void main() {
@@ -101,68 +96,99 @@ void main() {
     );
   });
 
-  // The same trap from the other side: a session recorded before anything had
-  // resolved the island. Recording a session resolves (and saves) the island
-  // FIRST, so this build never leaves a cached user beside an unsaved island.
+  // The same trap from the other side: this build's settle never reached disk,
+  // and the person signed in. Their cached user now reads as old-build evidence,
+  // so the settle alone would move them; the boot pin answers first, from the
+  // island their tokens were minted on.
   test(
-    'recording a session binds the island before the cached user lands',
+    'a fresh install whose save never reached disk is pinned back by its tokens',
     () async {
       final prefs = await freshPrefs();
-      final store = InMemoryTokenStore(
-        const AuthTokens(accessToken: 'a', refreshToken: 'r'),
+      await CachedUserStore(prefs).write(FakeRestApi.defaultUser);
+      final boot = await pinIslandForSurvivingTokens(
+        prefs,
+        keychain: () async => (held: true, mintedOn: kDefaultIslandBaseUrl),
       );
-      late final ProviderContainer c;
-      c = ProviderContainer(
-        overrides: [
-          sharedPreferencesProvider.overrideWithValue(prefs),
-          secureTokenStoreProvider.overrideWithValue(store),
-          restApiProvider.overrideWithValue(FakeRestApi()),
-          transportProvider.overrideWithValue(FakeChatTransport()),
-          tokenProviderProvider.overrideWithValue(
-            DefaultTokenProvider(
-              store: store,
-              remoteRefresh: (_) async => 'a2',
-              onUnauthenticated: () => c.read(authEventsProvider).add(null),
-            ),
-          ),
-        ],
-      );
-      addTearDown(c.dispose);
-
-      // Restore runs me() and writes the cached user; nothing has read
-      // configProvider before it.
-      expect(await c.read(authControllerProvider.future), isNotNull);
-      expect(CachedUserStore(prefs).read(), isNotNull);
-
-      expect(prefs.getString(islandBaseUrlPrefKey), kDefaultIslandBaseUrl);
+      expect(boot, IslandBoot.decided);
       expect(launch(prefs), kDefaultIslandBaseUrl);
     },
   );
 
   group('pinIslandForSurvivingTokens (boot, before anything resolves)', () {
+    // Round 1 of the cage-match: "any token means the old default" pinned
+    // every reinstall of an Enspyr account to imagineering, which then
+    // received Enspyr's refresh token.
     test(
-      'a reinstall holding Keychain tokens, prefs empty → old default',
+      'a reinstall holding tokens minted on the new default stays there',
       () async {
         final prefs = await freshPrefs();
-        await pinIslandForSurvivingTokens(prefs, hasTokens: () async => true);
+        await pinIslandForSurvivingTokens(
+          prefs,
+          keychain: () async => (held: true, mintedOn: kDefaultIslandBaseUrl),
+        );
+        expect(launch(prefs), kDefaultIslandBaseUrl);
+      },
+    );
+
+    test('tokens minted on any other island pin that island', () async {
+      final prefs = await freshPrefs();
+      await pinIslandForSurvivingTokens(
+        prefs,
+        keychain: () async => (held: true, mintedOn: 'https://other.island/'),
+      );
+      expect(launch(prefs), 'https://other.island');
+    });
+
+    test(
+      'a reinstall holding an older build\'s untagged tokens → old default',
+      () async {
+        final prefs = await freshPrefs();
+        await pinIslandForSurvivingTokens(
+          prefs,
+          keychain: () async => (held: true, mintedOn: null),
+        );
         expect(launch(prefs), kLegacyDefaultIslandBaseUrl);
       },
     );
 
     test('no tokens → saves nothing, the settle decides', () async {
       final prefs = await freshPrefs();
-      await pinIslandForSurvivingTokens(prefs, hasTokens: () async => false);
+      final boot = await pinIslandForSurvivingTokens(
+        prefs,
+        keychain: () async => (held: false, mintedOn: null),
+      );
+      expect(boot, IslandBoot.decided);
       expect(prefs.getString(islandBaseUrlPrefKey), isNull);
       expect(launch(prefs), kDefaultIslandBaseUrl);
     });
 
-    test('a Keychain that refuses (locked phone) → saves nothing', () async {
+    // Round 1 again: the pin saved nothing here, and the settle that ran next
+    // SAVED the new default from empty prefs, so a reinstall's old tokens were
+    // presented to the wrong island once the Keychain opened.
+    test('a Keychain that refuses (locked phone) decides nothing, even in the '
+        'settle, and the next readable launch pins from the tokens', () async {
       final prefs = await freshPrefs();
+      final boot = await pinIslandForSurvivingTokens(
+        prefs,
+        keychain: () async => throw StateError('errSecInteractionNotAllowed'),
+      );
+      expect(boot, IslandBoot.undecided);
+
+      final locked = ProviderContainer(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+          islandBootProvider.overrideWithValue(boot),
+        ],
+      );
+      addTearDown(locked.dispose);
+      locked.read(configProvider); // resolves for this launch only
+      expect(prefs.getString(islandBaseUrlPrefKey), isNull);
+
       await pinIslandForSurvivingTokens(
         prefs,
-        hasTokens: () async => throw StateError('errSecInteractionNotAllowed'),
+        keychain: () async => (held: true, mintedOn: null),
       );
-      expect(prefs.getString(islandBaseUrlPrefKey), isNull);
+      expect(launch(prefs), kLegacyDefaultIslandBaseUrl);
     });
 
     test(
@@ -174,7 +200,10 @@ void main() {
         var asked = false;
         await pinIslandForSurvivingTokens(
           prefs,
-          hasTokens: () async => asked = true,
+          keychain: () async {
+            asked = true;
+            return (held: true, mintedOn: null);
+          },
         );
         expect(asked, isFalse, reason: 'free on every launch after the first');
         expect(launch(prefs), kDefaultIslandBaseUrl);

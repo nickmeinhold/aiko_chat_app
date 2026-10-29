@@ -13,14 +13,27 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 /// methods, so tests never touch the platform FlutterSecureStorage.
 class InMemoryTokenStore extends SecureTokenStore {
   AuthTokens? _tokens;
-  InMemoryTokenStore([AuthTokens? initial]) : _tokens = initial;
+
+  /// The island the tokens were minted on; null for an older build's tokens,
+  /// which is what a seeded [initial] pair models.
+  String? island;
+  InMemoryTokenStore([AuthTokens? initial, this.island]) : _tokens = initial;
 
   @override
   Future<AuthTokens?> read() async => _tokens;
   @override
-  Future<void> write(AuthTokens tokens) async => _tokens = tokens;
+  Future<String?> readIsland() async => island;
   @override
-  Future<void> clear() async => _tokens = null;
+  Future<void> write(AuthTokens tokens, {required String island}) async {
+    this.island = island;
+    _tokens = tokens;
+  }
+
+  @override
+  Future<void> clear() async {
+    _tokens = null;
+    island = null;
+  }
 
   AuthTokens? get current => _tokens;
 }

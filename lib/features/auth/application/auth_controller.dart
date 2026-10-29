@@ -300,26 +300,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// failed write is degraded to a CLEAR so the next offline restore can never
   /// pair fresh tokens with a stale/mismatched cached identity (Carnot) — worst
   /// case is "no offline restore", never "wrong identity". Never throws.
-  /// This build never records a session beside an unsaved island, so that pair
-  /// can only mean an OLDER build wrote it, which is what [ranAnOlderBuild]
-  /// relies on. Resolving [configProvider] settles and saves the island if
-  /// nothing had yet; writing the saved value again gives the disk a second
-  /// chance at it, at the moment it starts to matter. A dev build following a
-  /// `--dart-define` saves nothing, so it has nothing to write.
-  ///
-  /// Best-effort, like the passkey hint: binding the island must never fail a
-  /// sign-in.
-  Future<void> _bindIsland() async {
-    try {
-      ref.read(configProvider);
-      final prefs = ref.read(sharedPreferencesProvider);
-      final saved = prefs.getString(islandBaseUrlPrefKey);
-      if (saved != null) await prefs.setString(islandBaseUrlPrefKey, saved);
-    } catch (_) {}
-  }
-
   Future<void> _writeCachedUser(AppUser user) async {
-    await _bindIsland();
     // setString/remove return false on a persistence failure WITHOUT throwing
     // (Carnot, PR #71). The invariant to protect: a storage failure must never
     // leave a cached identity that MISMATCHES the current tokens. So a failed

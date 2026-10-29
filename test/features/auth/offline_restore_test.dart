@@ -56,6 +56,7 @@ void main() {
         ),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
+            island: 'https://island.test',
             store: tokenStore,
             remoteRefresh: (_) async => 'access2',
             onUnauthenticated: () =>

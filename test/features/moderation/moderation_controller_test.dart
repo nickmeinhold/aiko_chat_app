@@ -31,6 +31,7 @@ ProviderContainer _loggedInContainer(FakeRestApi rest) {
       cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
       tokenProviderProvider.overrideWithValue(
         DefaultTokenProvider(
+          island: 'https://island.test',
           store: InMemoryTokenStore(),
           remoteRefresh: (_) async => 'access2',
           onUnauthenticated: () => container.read(authEventsProvider).add(null),

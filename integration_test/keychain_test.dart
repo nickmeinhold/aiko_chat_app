@@ -34,18 +34,25 @@ void main() {
       );
 
       // The write is where -34018 fired before the signing/entitlement fix.
-      await store.write(tokens);
+      await store.write(tokens, island: 'https://island.test');
 
       final read = await store.read();
       expect(read, isNotNull);
       expect(read!.accessToken, tokens.accessToken);
       expect(read.refreshToken, tokens.refreshToken);
+      // The minting island rides in the same keychain (#436), so it has to
+      // survive the same real write.
+      expect(await store.readIsland(), 'https://island.test');
     });
 
     testWidgets('clear removes the persisted pair', (tester) async {
-      await store.write(const AuthTokens(accessToken: 'a', refreshToken: 'r'));
+      await store.write(
+        const AuthTokens(accessToken: 'a', refreshToken: 'r'),
+        island: 'https://island.test',
+      );
       await store.clear();
       expect(await store.read(), isNull);
+      expect(await store.readIsland(), isNull);
     });
   });
 }

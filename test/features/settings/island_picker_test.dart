@@ -86,6 +86,7 @@ void main() {
           transportProvider.overrideWithValue(transport),
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
+              island: 'https://island.test',
               store: store,
               remoteRefresh: (_) async => 'a2',
               onUnauthenticated: () =>
@@ -95,6 +96,10 @@ void main() {
         ],
       );
       // Drive the cold-start restore to a logged-in session.
+      // As the real graph does: REST and the token provider hang off
+      // configProvider, so the island resolves before any session is
+      // recorded. These overrides cut that edge, so restore it here.
+      container.read(configProvider);
       await container.read(authControllerProvider.future);
       expect(
         container.read(authControllerProvider).value,
@@ -206,6 +211,7 @@ void main() {
           transportProvider.overrideWithValue(transport),
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
+              island: 'https://island.test',
               store: store,
               remoteRefresh: (_) async => 'a2',
               onUnauthenticated: () =>
@@ -215,6 +221,10 @@ void main() {
         ],
       );
       addTearDown(container.dispose);
+      // As the real graph does: REST and the token provider hang off
+      // configProvider, so the island resolves before any session is
+      // recorded. These overrides cut that edge, so restore it here.
+      container.read(configProvider);
       await container.read(authControllerProvider.future);
 
       // Does not throw (teardown error swallowed — the switch still completed).
@@ -257,6 +267,7 @@ void main() {
             transportProvider.overrideWithValue(FakeChatTransport()),
             tokenProviderProvider.overrideWithValue(
               DefaultTokenProvider(
+                island: 'https://island.test',
                 store: store,
                 remoteRefresh: (_) async => 'a2',
                 onUnauthenticated: () =>
@@ -266,6 +277,10 @@ void main() {
           ],
         );
         addTearDown(container.dispose);
+        // As the real graph does: REST and the token provider hang off
+        // configProvider, so the island resolves before any session is
+        // recorded. These overrides cut that edge, so restore it here.
+        container.read(configProvider);
         await container.read(authControllerProvider.future);
 
         await expectLater(
@@ -338,6 +353,7 @@ void main() {
           transportProvider.overrideWithValue(transport),
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
+              island: 'https://island.test',
               store: store,
               remoteRefresh: (_) async => 'a2',
               onUnauthenticated: () =>
@@ -350,6 +366,10 @@ void main() {
           islandDirectoryProvider.overrideWith((ref) async => directory),
         ],
       );
+      // As the real graph does: REST and the token provider hang off
+      // configProvider, so the island resolves before any session is
+      // recorded. These overrides cut that edge, so restore it here.
+      container.read(configProvider);
       await container.read(authControllerProvider.future);
       await tester.pumpWidget(
         UncontrolledProviderScope(

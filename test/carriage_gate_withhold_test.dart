@@ -26,6 +26,7 @@ import 'support/fakes.dart';
 void main() {
   final seed = AuthTokens(accessToken: 'a0', refreshToken: 'r0');
   DefaultTokenProvider tokens() => DefaultTokenProvider(
+    island: 'https://island.test',
     store: InMemoryTokenStore(seed),
     remoteRefresh: (rt) async => 'access1',
   );

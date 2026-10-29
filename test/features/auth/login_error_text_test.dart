@@ -57,6 +57,7 @@ void main() {
         passkeyAuthClientProvider.overrideWithValue(passkey),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
+            island: 'https://island.test',
             store: tokenStore,
             remoteRefresh: (_) async => 'access2',
             onUnauthenticated: () {},
@@ -115,6 +116,7 @@ void main() {
         // cold-start restore never settles — the run hangs rather than fails.
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
+            island: 'https://island.test',
             store: InMemoryTokenStore(),
             remoteRefresh: (_) async => 'access2',
             onUnauthenticated: () {},
@@ -230,6 +232,7 @@ void main() {
         passkeyAuthClientProvider.overrideWithValue(FakePasskeyAuthClient()),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
+            island: 'https://island.test',
             store: InMemoryTokenStore(),
             remoteRefresh: (_) async => 'access2',
             onUnauthenticated: () {},

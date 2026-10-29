@@ -42,13 +42,20 @@ Future<void> main() async {
   // unconditionally, which its internal platform guard already prevents.
   await FcmTokenSource.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  await pinIslandForSurvivingTokens(
+  final tokenStore = SecureTokenStore();
+  final islandBoot = await pinIslandForSurvivingTokens(
     prefs,
-    hasTokens: () async => await SecureTokenStore().read() != null,
+    keychain: () async => (
+      held: await tokenStore.read() != null,
+      mintedOn: await tokenStore.readIsland(),
+    ),
   );
   runApp(
     ProviderScope(
-      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        islandBootProvider.overrideWithValue(islandBoot),
+      ],
       child: const AikoChatApp(),
     ),
   );
