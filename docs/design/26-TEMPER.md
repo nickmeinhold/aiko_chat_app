@@ -452,3 +452,173 @@ Tesla: "If you want the secrets of the universe, think in energy, frequency and 
 - In §2c and §2d, unresolved and guess build no token provider and emit no auth-logout. Adoption rebuilds the presenter for L after the read, with the guess provider already unable to call `onUnauthenticated` or `clearTokens`. Answer the open question in the smaller gate: the shell may show a guess; the credential actor waits for the vault. Design 23's call still connects on the Face ID edge.
 - In §2e, locked and entitlement-unwritable stay "save nothing, write nothing." Malformed and unknown `v` are replaceable by sign-in. Put that state on the write rule's positive list.
 
+
+
+---
+---
+
+# Round 3: v3 at `d14117f` (the cap)
+
+**Overall verdict:** RECAST (Noether, Carnot, Tesla RECAST; Maxwell SOUND). **Converged at the cap;
+build to v3 plus the five v3.1 requirements below.** This is the same disposition design 23 took at
+its cap. No fourth design round. The build's own `/cage-match` is the next gate.
+
+**Maxwell's SOUND was wrong for the second round running.** Requirement 1 below came from Maxwell's
+own round-2 build note, which specified the fallback order backwards. The author instance's verdicts
+on design 26 carry no weight; the adversaries' do.
+
+**Why converged, not still failing.** In rounds 1 and 2 each fix moved the design (one vault, then
+no credential actor while unresolved). Every round-3 finding is a single rule the panel specified
+exactly, and none of them adds a mechanism. The design stopped growing. Its seams are now ordering
+and wording.
+
+## v3.1 requirements (the build must meet each, and test each)
+
+1. **The sign-out fallback deletes the legacy items FIRST, then `aiko_session`.** Raised by
+   Carnot, Noether and Tesla.
+   - The other order lets a crash leave a live legacy pair with no `aiko_session`, and the next
+     boot places it.
+   - With this order, a crash leaves `aiko_session` present, which is the allowed failure.
+   - Test: the tombstone write fails, then a crash lands after each delete.
+2. **A placement write that fails (throws, or reports failure) takes the unreadable branch:
+   unresolved, and the settle saves nothing.** Raised by Noether and Tesla.
+   - Otherwise this launch saves the settle's island, and the next launch places the pair on it:
+     v2's leak through a write fault instead of a clock.
+   - Test: a placement write that fails, `main` continues, then the next boot.
+3. **Owner-unknown is never presented, and is discardable.** Raised by Tesla.
+   - v3 promised it's never deleted. The resolved logged-out graph can discard it: the picker's
+     `switchIsland` clears first, and the "nothing of ours" teardown runs `_clearCredentialAndUnpair`.
+   - Nothing ever presents it, so discarding it costs nothing.
+   - Make the claims honest: never presented; a sign-in, a switch or a sign-out may discard it.
+     Fix the header and §2b to match.
+   - Its value was never the bytes. It was that no guess presents them.
+4. **A thrown read that isn't the lock** (for example -34018, a broken entitlement) shows an error
+   state, after the first resume that still throws, not an endless neutral screen. Raised by
+   Noether and Maxwell. It goes to telemetry, and the report-a-problem button is offered. A locked
+   read (-25308) stays a quiet wait.
+5. **State that resolution can't race a sign-in or a switch.** Raised by Noether. While
+   unresolved there's no auth UI and no credential actor, so resolution, including its island
+   save, is the only writer, serialised in the vault. Resolution runs only while unresolved.
+
+Maxwell's round-3 build notes, also required:
+- push-token registration waits for resolution, like the transport;
+- one test-support helper resolves the island, instead of 46 per-test overrides.
+
+## What holds (across all three rounds)
+
+- **One Keychain item in four states,** with the legacy pair read at most once and retired durably.
+- **Placement before the settle,** recorded, never fed by an island this build saved.
+- **No credential actor for an unresolved island.** This removes the producer verified at
+  `6821909` (refusal → logout → unconditional clear).
+- **Resolution is cache invalidation.** While a session exists, the saved island is a cache of its
+  label.
+- **The four session races are split to #447,** with a clean boundary.
+
+**Struck:** dt-1793276474. Landed in arrival order: Maxwell, then Noether, Carnot and Tesla together. **Bundle:** v3 + this file (rounds 1–2) + the #439 ledger + the same three source files (106KB).
+
+---
+
+## MaxwellMergeSlam's Design Strike
+
+**Verdict:** SOUND
+
+**Summary:** v3 removes the second producer (credential actors built for a guess) rather than fencing it. Resolution then runs while every credential actor is inert, so nothing can race it. The leak paths I traced (placement across boots, downgrade and re-upgrade, concurrent resume and answer) all end in either a recorded label or nothing presented. *Weight this lowest: it's the author instance, and its round-2 SOUND was wrong.*
+
+**Producer first:** The bad outcome is a credential presented to, or cleared by, an island that didn't issue it. There are two producers, and both are removed:
+- **A session without an owner.** One item holds island and tokens. The legacy pair is placed once, before the settle, and durably (owner-unknown included). So no session this build holds lacks a stated owner.
+- **Actors for a guessed island.** None exist while unresolved: inert provider, unconnected transport, waiting auth controller. So the refusal-triggers-logout-triggers-clear path verified at `6821909` has nothing to run on.
+
+The door's comparison remains as an assertion after resolution: it can't fire falsely, because the provider is built for the resolved label. That's the right residue: a check whose producer is gone stays as a tripwire, not a load-bearing guard.
+
+**Fatal flaws:**
+- none
+
+**What holds:**
+- **2b ordering.**
+  - Placement runs before the settle, and once any `aiko_session` exists it never runs again. So no saved island this build wrote can become a placement input.
+  - The case I tried hardest: a downgrade to an older build that signs in, then a re-upgrade. Placement then reads the saved island the older build itself used, which is correct by the older build's own rule.
+- **2d.** Resolution is the only writer while unresolved, and it's serialised. A resume and an answer kick racing each other produce the same result twice, never two results.
+- **2a's four-state table.** It makes the replacement rules explicit, and "unreadable data" is no longer a permanent trap.
+- **Section 0 cites the verified call chain** (`auth_controller.dart:204-205` → `_teardownResources` → `_clearCredentialAndUnpair`). So the design shows the producer, rather than asserting one.
+- **The #447 split is clean.** The four races don't involve the guess or the label, and v3 neither widens nor narrows them.
+
+**If RECAST, what to fold back:** (build notes, none fatal)
+- **2d, a Keychain that's permanently unreadable** (-34018, a broken entitlement). "Unresolved" would keep the neutral screen up forever. After the first resume whose read throws something other than the lock, show an error state ("can't reach secure storage", with the report-a-problem button), not an endless splash. Sign-in would fail there anyway; the person deserves a reason.
+- **2d, resolution runs only while unresolved.** Say so. Once resolved, a resume doesn't re-run it; only `switchIsland` changes the island.
+- **2d, push-token registration** (`push_providers.dart` reads `configProvider`) is a credential actor too. It waits for resolution, as the transport does, and re-runs once the backend is built for L.
+- **Build cost, named.** The default "unresolved" makes every test that builds the real provider graph inert unless it overrides resolution. Add one test-support helper that resolves to a given island, rather than overriding at 46 sites.
+
+Rocky: "Yo Adrian, I did it." But ask the other three first.
+
+
+---
+
+## NoetherNullPointer's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The conserved quantity is *"a stored session's owner is a property of the session itself"* — v3 conserves it for every session this build writes and quarantines the legacy residue, but the durability of the quarantine is *asserted*, not enforced, and two crash windows re-open the very read path the design exists to close.
+
+**Producer first:**
+The harm is a credential presented to an island that did not mint it: the island answers 401, the app reads that as a revocation, and a working session dies. The producer is a stored session with **no recorded owner**, which forces an inference, after which the app presents the inferred-owner credential to whatever island it happens to be on. The trigger (a reinstall, a locked phone, a 401) is external; the producer is ours.
+
+- **For sessions this build writes, the producer is deleted, not guarded.** 2a puts the island in the same Keychain item as the tokens, so a session cannot exist without an owner. Right shape.
+- **The second producer — a credential actor built for a guessed island — is also deleted.** 2d builds no token provider, transport, or auth flow until a readable Keychain names an island. That is what actually closes #439's harm (the door's refusal → `_markUnauthenticated` → teardown → unconditional clear), and it removes the guess's ability to *present* and to *bury*. This is the round-1 Tesla finding struck at the producer, not at the door. Good.
+- **For the legacy residue, an inference remains (2b steps 2–3), and the design owns it as a named tradeoff.** It is a better guard on the same coupling, but the alternative — treat every unlabelled pair as owner-unknown — is a *simpler* design that deletes the inference outright; the design rejects it because it reverses Nick's decision. That is a product cost, honestly priced. Not a fatal flaw.
+- **What is load-bearing and unenforced:** the quarantine is a *check* — the durable `owner-unknown` marker in `aiko_session` — and 2b's guarantee "once `aiko_session` exists, placement never runs again" rests entirely on that marker being durable. It is not structurally guaranteed. That is the strike.
+
+**Fatal flaws:**
+
+- **The sign-out fallback deletes `aiko_session` before the legacy items, so it can resurrect the session it just killed (2a, vs. 2b).** Class: crash window / broken invariant. 2a: "If that write fails, it deletes `aiko_session`, then the legacy items, so a sign-out never leaves a credential behind." The order is backwards. If the tombstone write fails *and* both items exist (a crash between a prior write's `aiko_session` write and its legacy delete leaves exactly that), deleting `aiko_session` first and dying before the legacy delete leaves **legacy-only** — no `aiko_session`, a live pair. The next boot finds no `aiko_session`, finds the pair, and 2b's placement re-runs and re-places the signed-out session. This directly contradicts both "once `aiko_session` exists, placement never runs again" and "a sign-out never leaves a credential behind." **Delete the legacy items first, then `aiko_session`.** Then a crash leaves `aiko_session` present — the allowed failure (still signed in) — and placement can never re-run. The round-2 Tesla finding named this ordering; v3 keeps the dangerous one.
+
+- **A failed placement write lets the settle mint the island the next placement consumes (2b/2d).** Class: missing failure mode. 2b promises the answer is written into `aiko_session` "before boot returns"; 2d's boot "can't throw out of `main`." If the marker write throws, boot catches it and falls through to step 3, where "no presentable session" makes the settle save an island — but `aiko_session` was never written. The next boot finds no `aiko_session`, finds the legacy pair, and step 2 places it on **the island the settle just saved** — precisely v2's leak, resurrected by a write failure rather than a read failure. 2d already treats a thrown *read* as unresolved ("nothing is saved or written"); a thrown *write* must be the same branch. **A failed marker write ⇒ unresolved ⇒ the settle does not save.**
+
+- **Adoption is a write on the resolution path with no stated fencing (2d, vs. 2c).** Class: un-fenced side effect. "If L differs from the guess, the island becomes L and is saved." 2c enumerates what the generation covers and what advances it; adoption is neither listed nor excluded. While unresolved no provider exists, so it cannot race a *provider* operation — but it is a mutation of persisted island state that a sign-in or switch (#447, and explicitly outside this design's lease) can race. State that adoption runs inside the vault, and that a resolution that finds the generation moved by a `setTokens`/sign-out discards its write.
+
+- **`-34018` is durable garbage classified as a transient wait (2d).** Class: wrong error class. 2a correctly splits malformed/unknown-version data (durable, sign-in-replaceable) from a locked read (transient). But 2d files "any thrown read, `-34018` included" under unresolved — a missing entitlement is permanent, so the app waits on the neutral screen forever. Either give it its own replaceable state (as 2a does for malformed), or say why a broken entitlement is allowed to be a permanent no-op.
+
+**What holds:**
+- **2a, one item.** Island and tokens inseparable kills the torn label/token record of #439 round 2; no accessibility change is needed, so design 23's delete-then-add trap is out of reach.
+- **2d, the resolution gate.** No credential actor for an unresolved island deletes the producer that #439's `6821909` teardown-clear path (door refusal → `onUnauthenticated` → `_clearCredentialAndUnpair`) turned into credential loss. This is the round-1 Tesla finding struck at the source.
+- **2b, the durable owner-unknown marker.** In the *normal* path it makes v2's leak — the pair re-placed on the settle's own island — unrepresentable. The design is one write-failure away from correct.
+- **2a/2c, the tombstone.** "The legacy pair is read only when no `aiko_session` item exists at all" makes the crash-order question in sign-out moot in the normal path.
+- **2c, the generation.** Covering the cache fill, refresh commit, rejection clear, shared `_inFlight`, and `onUnauthenticated` is the right shape for the round-1 Noether finding.
+- **The named tradeoffs** (the placement inference, the URL identity, the rollback) are honestly owned; the inference's alternative is a real product cost, not a defect.
+
+**If RECAST, what to fold back:**
+- In 2a, reverse the sign-out fallback's order: **delete the legacy items first, then `aiko_session`.** State the crash residue: `aiko_session` present (still signed in) is the allowed failure; legacy-only after a signed-out new item is not a representable state.
+- In 2b/2d, a failed `aiko_session` write during placement is **unresolved** — the settle must not save. Make the invariant explicit: the settle saves only after a *durable* marker, a true absence, or a tombstone; a failed write is not a true absence.
+- In 2d, state that adoption is a vault operation and is discarded if the generation moved (a sign-in or sign-out) before it commits; add a test where a sign-out races an adoption.
+- In 2a/2d, give `-34018` (and any permanent entitlement failure) its own replaceable state, or justify treating a permanent failure as an indefinite wait.
+- Add a §6 case: reinstall, legacy pair, crash between the sign-out fallback's two deletes — next boot presents nothing and a 401 clears nothing.
+
+---
+
+## CarnotCodeCarver's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** v3 removes the guessed credential actor and makes quarantine durable. But sign-out's fallback reintroduces the crash resurrection the tombstone was meant to eliminate. Dijkstra: "Simplicity is prerequisite for reliability." No real engine matches the Carnot cycle; a reviewer's job is to say how far short we are.
+
+**Producer first:** The harm is a signed-out credential returning on the next launch, potentially receiving a newly inferred owner. A failed Keychain write or process death is the trigger. Our producer is deleting aiko_session while legacy credentials remain eligible for migration. Remove that intermediate state: retain the authoritative session item until legacy fallback has been retired. The tombstone remains justified because process death prevents atomic changes across independent Keychain items; the unsafe fallback ordering does not.
+
+**Fatal flaws:**
+- Make resurrection after sign-out impossible: on tombstone-write failure, retire the legacy items before deleting aiko_session; then recovery needs no additional resurrection check. Section 2a currently specifies the reverse. Concrete execution: placement writes aiko_session; the process dies before legacy cleanup; next launch obeys the session item; sign-out's tombstone write fails; fallback deletes aiko_session; the process dies before deleting legacy. Next boot migrates the supposedly signed-out pair. Serialization and an in-memory generation cannot protect the next process. This is the original multi-item deletion defect returning through the failure path, not one of #447's deferred races.
+
+**What holds:**
+- One session item structurally removes torn ownership/token combinations for newly written sessions.
+- Durable owner-unknown placement before settlement closes v2's second-launch credential leak.
+- Withholding credential actors until readable resolution removes the guessed provider's destructive logout path while preserving native wake capture.
+- Generation-scoped publication and mutation address obsolete provider work; the four separately scoped lifecycle races need not be pulled back into this design.
+- Legacy placement inference and URL identity are explicitly accepted tradeoffs, rather than hidden guarantees.
+
+**If RECAST, what to fold back:**
+- Keep tombstone-first sign-out. If that write fails, delete legacy credentials first and delete aiko_session last. If legacy retirement fails, preserve the authoritative item and report sign-out failure.
+- Define successful sign-out at its durable commit point. Before that point, retaining the prior session is an allowed failure; promising that arbitrary storage failures never leave credentials behind is unsatisfiable.
+- Add the exact crash test: migrated record plus surviving legacy pair, failed tombstone write, process death after each fallback deletion, then reboot. No completed sign-out may restore or re-place the legacy session.
+- Correct the ledger's inherited delete-session-first build note so implementation does not revive the unsafe ordering.
+
+
+---
+
+

@@ -1,16 +1,23 @@
 # Design 26: a session knows its island
 
-**Status:** v3, 2026-10-29, for `/design-temper` round 3, the last of at most 3.
-- v1 was struck RECAST 4/4; v2 was struck RECAST 3/1.
-- Both records, and what each round folded, are in `26-TEMPER.md`.
-- The design recasts the credential half of PR #439
-  (https://github.com/nickmeinhold/aiko_chat_app/pull/439), whose cage-match stopped at round 2.
+**Status:** v3, 2026-10-29, tempered over 3 rounds (RECAST 4/4, then 3/1, then 3/1) and
+**converged at the cap**. Build to v3 plus the five **v3.1 requirements** in `26-TEMPER.md`
+(Round 3), which override v3 where they differ:
+- the sign-out fallback deletes the legacy items first;
+- a failed placement write leaves the island unresolved;
+- owner-unknown is discardable, not "never deleted";
+- a non-lock Keychain error shows an error state;
+- resolution is the only writer while unresolved.
+
+The build is its own PR, and #439 rebases on it. The design recasts the credential half of PR #439
+(https://github.com/nickmeinhold/aiko_chat_app/pull/439).
 
 **Product decisions (Nick, 2026-10-29):**
 - **A reinstall keeps the person signed in.** Every session this design writes records its island,
   so it survives any reinstall. The one exception is a session an OLDER build wrote, on an install
-  whose preferences a reinstall wiped. Nothing can place it, so it's **quarantined, never
-  presented** (section 2b). It isn't deleted, and it expires on its own.
+  whose preferences a reinstall wiped. Nothing can place it, so it's **owner-unknown: never
+  presented** (section 2b). A sign-in, a switch or a sign-out may discard it (v3.1 requirement 3),
+  and it expires on its own.
 - **Scope.** Four session races that exist on `main` without #436 are split into their own
   design: https://github.com/nickmeinhold/aiko_chat_app/issues/447. They are:
   - a sign-in committing after a sign-out;
@@ -118,8 +125,9 @@ Two guarantees:
   next launch it was placed on the island the settle had just saved.
 
 **Owner-unknown costs nothing to keep:**
-- it's never presented, never refreshed, and never cleared by a 401;
-- a sign-in replaces it;
+- it's never presented and never refreshed;
+- a sign-in, a switch or a sign-out may discard it (v3.1 requirement 3); nothing is lost,
+  because nothing could ever use it;
 - its own `exp` ends it within 30 days, with or without #427's rotation.
 
 ### 2c. The vault, and the door
