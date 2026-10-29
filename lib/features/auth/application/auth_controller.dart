@@ -390,7 +390,18 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// gateway (which stores only the public key and mints the account). Routes on
   /// the SAME outcome — typically a [PendingHandle] so the new user claims a
   /// handle before landing in chat. Cancellation restores the prior state.
+  ///
+  /// The island is asked FIRST, because the ceremony can't be taken back: the
+  /// phone saves the passkey before `register/finish` answers, so a refusal
+  /// there leaves a credential the island will never accept (#436). Only an
+  /// explicit "no" stops here, and it raises the same [RegistrationClosed] the
+  /// island would have, so the login screen has one path for both. The island
+  /// can't make this check itself: `register/start` is also add-a-device's
+  /// start, and the app calls it without a bearer either way.
   Future<void> registerWithPasskey() => _ingress((prior) async {
+    if (await _rest.passkeyCreatesAccounts() == false) {
+      throw const RegistrationClosed();
+    }
     final challenge = await _rest.startPasskeyRegistration();
     final String attestation;
     try {

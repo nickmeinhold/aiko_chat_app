@@ -7,7 +7,7 @@ import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show PasskeyAlreadyRegistered;
+    show PasskeyAlreadyRegistered, RegistrationClosed;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -261,6 +261,56 @@ void main() {
       expect(c.read(authControllerProvider).value, isNotNull);
     });
 
+    // #436 part 2. The ceremony saves a passkey on the phone before the island
+    // can refuse, so the island is asked first and a "no" must stop everything
+    // before the platform sheet: no challenge, no ceremony, no orphan.
+    test('island says it takes no new accounts → RegistrationClosed, and no '
+        'ceremony is started', () async {
+      final rest = FakeRestApi()..createsAccounts = false;
+      final passkey = FakePasskeyAuthClient();
+      final c = makeContainer(rest: rest, passkey: passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await c.read(authControllerProvider.notifier).registerWithPasskey();
+
+      expect(c.read(authControllerProvider).error, isA<RegistrationClosed>());
+      expect(c.read(authControllerProvider).value, isNull);
+      expect(passkey.registerCalls, 0, reason: 'no passkey is created');
+      expect(rest.passkeyRegisterStartCalls, 0, reason: 'no challenge either');
+    });
+
+    test(
+      'island that does not say (null) → registers exactly as before',
+      () async {
+        final rest = FakeRestApi(); // createsAccounts null: an older island
+        final passkey = FakePasskeyAuthClient();
+        final c = makeContainer(rest: rest, passkey: passkey);
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+
+        await c.read(authControllerProvider.notifier).registerWithPasskey();
+
+        expect(rest.createsAccountsCalls, 1, reason: 'it did ask');
+        expect(passkey.registerCalls, 1, reason: 'absence is not a refusal');
+        expect(rest.passkeyRegisterFinishCalls, 1);
+        expect(c.read(authControllerProvider).hasError, isFalse);
+      },
+    );
+
+    test('island says yes → registers', () async {
+      final rest = FakeRestApi()..createsAccounts = true;
+      final passkey = FakePasskeyAuthClient();
+      final c = makeContainer(rest: rest, passkey: passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await c.read(authControllerProvider.notifier).registerWithPasskey();
+
+      expect(passkey.registerCalls, 1);
+      expect(rest.passkeyRegisterFinishCalls, 1);
+    });
+
     test('user dismisses the sheet → no-op, finish not called', () async {
       final rest = FakeRestApi();
       final passkey = FakePasskeyAuthClient(
@@ -320,6 +370,25 @@ void main() {
         const AuthTokens(accessToken: 'access', refreshToken: 'refresh'),
       ),
     );
+
+    // The trap the island's cage-match caught: register/start is ALSO
+    // add-a-device's start. A closed island refuses new ACCOUNTS, never a
+    // second passkey on an existing one, so the #436 gate must not reach here.
+    test('a closed island still lets a signed-in user add a passkey', () async {
+      final rest = FakeRestApi()..createsAccounts = false;
+      final passkey = FakePasskeyAuthClient();
+      final c = signedIn(rest, passkey);
+      addTearDown(c.dispose);
+      expect(await c.read(authControllerProvider.future), isNotNull);
+
+      final added = await c
+          .read(authControllerProvider.notifier)
+          .addPasskeyToCurrentAccount();
+
+      expect(added, isTrue);
+      expect(rest.addPasskeyCalls, 1);
+      expect(rest.createsAccountsCalls, 0, reason: 'add never asks');
+    });
 
     test(
       'links via the AUTHED add endpoint without disturbing the session',

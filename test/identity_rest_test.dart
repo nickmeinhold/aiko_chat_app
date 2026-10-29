@@ -10,6 +10,8 @@
 // social_rest_test.dart via the social ingress; the routing is unchanged — it is
 // now reached through the passkey finish, which shares the same single door.)
 
+import 'dart:io' show SocketException;
+
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart';
 import 'package:aiko_chat_app/features/chat/data/gateway_rest_api.dart';
@@ -303,6 +305,83 @@ void main() {
         api.finishPasskeyRegistration('st', '{"id":"c"}'),
         throwsA(allOf(isA<Unauthorized>(), isNot(isA<RegistrationClosed>()))),
       );
+    });
+  });
+
+  // #436 part 2: asking BEFORE the ceremony. `creates_accounts` rides on the
+  // passkey entry of `GET /v1/auth/providers` (island PR #433). Only a real
+  // boolean is an answer; every "can't tell" is null, which the app reads as
+  // "carry on as before", so an island older than the field changes nothing.
+  group('passkeyCreatesAccounts ← /v1/auth/providers', () {
+    ResponseBody providers(String passkeyExtra) => jsonBody(
+      200,
+      '{"providers":[{"slug":"passkey","display_name":"Passkey",'
+      '"kind":"passkey"$passkeyExtra}]}',
+    );
+
+    test('creates_accounts false → false, read from the right path', () async {
+      String? path;
+      final api = apiWith((o) {
+        path = o.path;
+        return providers(',"creates_accounts":false');
+      });
+      expect(await api.passkeyCreatesAccounts(), isFalse);
+      expect(path, '/v1/auth/providers');
+    });
+
+    test('creates_accounts true → true', () async {
+      final api = apiWith((_) => providers(',"creates_accounts":true'));
+      expect(await api.passkeyCreatesAccounts(), isTrue);
+    });
+
+    test('an island older than the field → null, not false', () async {
+      // Byte-for-byte what both live islands (v0.18.0) answered on 2026-10-28.
+      final api = apiWith(
+        (_) => jsonBody(
+          200,
+          '{"providers":[{"slug":"passkey","display_name":"Passkey","kind":"passkey"},'
+          '{"slug":"apple","display_name":"Apple","kind":"native"}]}',
+        ),
+      );
+      expect(await api.passkeyCreatesAccounts(), isNull);
+    });
+
+    test('the flag on ANOTHER provider is not the passkey door', () async {
+      final api = apiWith(
+        (_) => jsonBody(
+          200,
+          '{"providers":[{"slug":"apple","creates_accounts":false},'
+          '{"slug":"passkey","creates_accounts":true}]}',
+        ),
+      );
+      expect(await api.passkeyCreatesAccounts(), isTrue);
+    });
+
+    test('a string "false" is an odd body, not a refusal → null', () async {
+      final api = apiWith((_) => providers(',"creates_accounts":"false"'));
+      expect(await api.passkeyCreatesAccounts(), isNull);
+    });
+
+    test('no passkey entry → null', () async {
+      final api = apiWith(
+        (_) => jsonBody(200, '{"providers":[{"slug":"apple"}]}'),
+      );
+      expect(await api.passkeyCreatesAccounts(), isNull);
+    });
+
+    test('a 404 → null, never a throw', () async {
+      final api = apiWith((_) => jsonBody(404, '{"detail":"Not Found"}'));
+      expect(await api.passkeyCreatesAccounts(), isNull);
+    });
+
+    test('a non-object body → null, never a throw', () async {
+      final api = apiWith((_) => jsonBody(200, '[]'));
+      expect(await api.passkeyCreatesAccounts(), isNull);
+    });
+
+    test('a network failure → null, never a throw', () async {
+      final api = apiWith((_) => throw const SocketException('offline'));
+      expect(await api.passkeyCreatesAccounts(), isNull);
     });
   });
 

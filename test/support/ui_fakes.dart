@@ -82,6 +82,17 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<GatewayCapabilities?> getCapabilities() async => null;
 
+  /// What [passkeyCreatesAccounts] answers. `null` (the default) is an island
+  /// that doesn't say, which leaves registration exactly as it was.
+  bool? createsAccounts;
+  int createsAccountsCalls = 0;
+
+  @override
+  Future<bool?> passkeyCreatesAccounts() async {
+    createsAccountsCalls++;
+    return createsAccounts;
+  }
+
   @override
   Future<AppUser> me() async {
     meCalls++;

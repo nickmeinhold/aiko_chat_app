@@ -194,6 +194,8 @@ class FakeChatRestApi implements ChatRestApi {
   @override
   Future<GatewayCapabilities?> getCapabilities() async => null;
   @override
+  Future<bool?> passkeyCreatesAccounts() async => null;
+  @override
   Future<AppUser> me() => throw UnimplementedError();
   @override
   Future<void> deleteAccount() => throw UnimplementedError();
