@@ -1,8 +1,9 @@
 # Design 26: a session knows its island
 
-**Status:** draft, 2026-10-29, for `/design-temper`. It recasts the credential half of PR #439
-(https://github.com/nickmeinhold/aiko_chat_app/pull/439), whose cage-match stopped at round 2
-on two round-cap stop signals. The ledger is at
+**Status:** v2, 2026-10-29, for `/design-temper` round 2 of at most 3. v1 was struck RECAST 4/4
+(`26-TEMPER.md`); v2 folds flaws 1–6, 9 and 10, and records 7 and 8 as named tradeoffs. It recasts
+the credential half of PR #439 (https://github.com/nickmeinhold/aiko_chat_app/pull/439), whose
+cage-match stopped at round 2 on two round-cap stop signals; the ledger is at
 https://github.com/nickmeinhold/aiko_chat_app/pull/439#issuecomment-6495723068.
 **Product decision (Nick, 2026-10-29):** a reinstall keeps the person signed in. The design
 records the island that issued every session it writes, so those survive any reinstall. The one
@@ -54,145 +55,172 @@ These were verified in code and need no re-deriving:
   any session is recorded.
 - **Refresh writes.** An access-token refresh writes the pair back (`_doRefresh`).
 
-## 2. The design
+## 2. The design (v2)
 
-### 2a. One record
+### 2a. One record, and a durable end to the old format
 
-The session becomes a single Keychain item, `aiko_session`, holding
-`{"v":1,"island":…,"access":…,"refresh":…}`, written and deleted as one item, with the same
-accessibility as today.
-- **No accessibility change.** That keeps it clear of design 23's "delete-then-add" trap.
-- **Atomic.** One item can't show one island's label beside another island's tokens. The
-  label-first/delete-last ordering from round 2 goes away.
-- **Old format.** The two legacy items are read only to migrate them (2b).
-- **`clear()`** deletes `aiko_session` and both legacy items.
-- **`write(tokens, island:)`** writes `aiko_session`, then deletes the legacy items. If the
-  process dies between the two, both formats exist, and reads prefer `aiko_session`.
+The session is one Keychain item, `aiko_session`, with today's accessibility (design 23's
+delete-then-add trap stays out of reach). It holds one of:
+- a **record**: `{"v":1,"island":…,"access":…,"refresh":…}`;
+- a **tombstone**: `{"v":1,"signedOut":true}`, written by sign-out.
 
-### 2b. Who owns an old session
+**The legacy pair** (`aiko_access_token`, `aiko_refresh_token`) is read **only when no
+`aiko_session` item exists at all**: neither a record nor a tombstone. Once this build has
+written either one, the old format is retired for good, and crash order can't bring it back:
+- sign-out writes the tombstone (one item), then deletes the legacy items;
+- a crash between the two leaves a tombstone, and the legacy pair is never read again.
 
-A session an older build wrote has no island. Its owner can be known only from THIS install's
-own preferences, and only two facts in them can establish it:
-1. **The saved island** (`aiko_island_base_url`). An older build always used it when it had one,
-   and switching islands cleared the tokens, so it's that session's island.
-2. **No saved island, but a cached user.** The cached user lives and dies with the tokens, so it
-   proves the older build that wrote this session ran *here*, with nothing saved, which means on
-   its compiled default. That's `kLegacyDefaultIslandBaseUrl` on a store build, and the
-   `--dart-define` island on a dev build.
+**The three-key format from PR #439's branch never shipped.** On a dev device that ran it,
+`aiko_tokens_island` is a real label for the legacy pair beside it and is read as one (2b).
 
-**Neither fact:** the session **can't be placed**. A reinstall wiped this install's preferences,
-and any island would be a guess. It's never presented, and boot deletes it once the Keychain is
-readable. The sovereign identity key is a different item and is untouched. The person signs in
-again with their passkey.
+### 2b. Placing an old session, once
 
-This is one pure function, `ownerOfLegacySession(prefs)`, returning an island or "unplaceable",
-used everywhere below. **It never reads the island the app is currently pointed at.** In round 2
-the app was pointed at a guess (the settle's in-memory island on a locked launch), and that guess
-was what got the old session presented to the wrong island.
+When the legacy pair is read (no `aiko_session` item exists), its island is, in order:
+1. `aiko_tokens_island`, if present (dev devices that ran #439's branch only);
+2. on a store build, **the saved island**, if there is one. An older build used it, and a switch
+   cleared the tokens, so it is that pair's island;
+3. on a store build with no saved island, **`kLegacyDefaultIslandBaseUrl` if a cached user exists**.
+   The cached user lives and dies with the tokens, so it proves an older store build ran HERE on
+   its compiled default. This is checked: the cached-user store (`f65906b`, #71) is an ancestor of
+   every tagged release;
+4. otherwise **unplaceable**, and always unplaceable on a dev build: the current `--dart-define`
+   says nothing about which island an older dev build used.
 
-Nick's decision is about what this design writes. Every session this build writes carries its
-island, so every future reinstall keeps its session. The only sessions that fall back to signing
-in are older builds' sessions that lost their preferences: a one-time residue that shrinks to
-nothing as installs open this build, because the door labels a legacy session on its first read
-(2c).
+**This runs once per install, inside the vault (2c), and its answer is recorded:** a placed pair
+is rewritten as a record. It never reads the island currently on screen.
 
-### 2c. The door
+**An unplaceable pair is quarantined, not deleted:**
+- it's never presented;
+- a 401 never clears it;
+- a sign-in replaces it.
 
-`DefaultTokenProvider` presents a stored session only if it is this island's:
-1. read the session (one item read; fall back to the legacy pair);
-2. if it's legacy, its owner is `ownerOfLegacySession(prefs)`. If that's this island, migrate
-   it in place (write `aiko_session` tagged with the owner), then present it. If it's another
-   island, or unplaceable, don't present it;
-3. if it's tagged with another island, don't present it, and don't delete it.
+It expires on its own. Island refresh tokens are fixed at 30 days from sign-in (island
+`security.py`; app #427 isn't built), and the tokens carry no `iss` that could place them. So
+quarantine costs nothing, and a delete would only be an irreversible step on something that
+expires anyway. This survives refresh-token rotation (#427): rotation changes a token only when it's refreshed,
+and a quarantined session is never presented, so it's never refreshed and keeps the fixed `exp`
+in its token.
 
-Explicit sign-out (`clearTokens`) still clears everything, whoever issued it.
-`_clearCredentialAndUnpair` depends on that: a signed-out app must never leave a live
-credential for the next cold start.
+### 2c. One session authority
 
-Because ownership is decided when a token is *read*, a read that only succeeds after Face ID,
-later in the same process, gets the same answer as a read at boot. No flag carries "boot
-couldn't read" through the process. That's what removes round 2's finding 2 and the `decided`
-default that couldn't report its own absence (finding 4).
+`SecureTokenStore` becomes the **vault**, the single authority over the session. Every operation
+that reads a session to publish it, or writes one, runs **serially** inside the vault, and every
+replacement or clear advances its **generation**.
 
-### 2d. Boot: choose the island to show
+`DefaultTokenProvider`, built per island, holds no authority of its own. Each of its operations
+captures the vault's generation when it starts and loses its effect if the generation has
+moved by the time it finishes. That applies to every one of them:
+- a cache fill (a read started before a sign-in can't publish the old pair after it);
+- a refresh's commit (it can't bring a signed-out session back);
+- a rejection's clear (it can't delete the next session);
+- the shared `_inFlight` (a new session never joins the old session's refresh);
+- `onUnauthenticated` (a stale rejection can't sign the new session out).
 
-`main()` resolves the island before `runApp`, awaited, and nothing it does can stop the app
-starting:
-- **an island is saved:** done (the door migrates any legacy session lazily);
-- **a tagged session:** save its island;
-- **a legacy session with an owner:** save that island and migrate the session;
-- **an unplaceable legacy session:** delete it, then let the settle decide as for no session;
-- **no session:** the settle decides (fresh install → Enspyr; a signed-out older build with a
-  passkey hint for imagineering → imagineering), and saves its answer;
-- **the Keychain refuses (locked):** the settle picks an island **for this launch only** and
-  saves nothing. The door still won't present another island's session (2c). The guess picks
-  the screen; it can't move a credential.
-- **every write's result is checked**, and an exception never escapes `main()`. A failed save
-  leaves the decision to the next launch, where the session's own label answers it.
+**The door** presents a session only if its island is this provider's island. A session for
+another island is left alone: not presented, not cleared by a 401. The door never writes. The
+one write on a read path is 2b's placement, and it runs inside the vault, serialised with
+sign-in and sign-out.
 
-The settle's in-memory choice for a locked launch still uses the prefs evidence (a cached user,
-or a passkey hint for the old default). That matters to the largest group: existing users whose
-first launch after the update is a call on a locked phone. They land on imagineering, Face ID
-unlocks the session, and the door migrates it and presents it there.
+**Explicit sign-out** writes the tombstone, whoever issued the session (`_clearCredentialAndUnpair`
+depends on that).
 
-### 2e. Keychain errors are not all "locked"
+### 2d. The island follows a readable session
 
-The boot read distinguishes `errSecInteractionNotAllowed` (-25308, locked) from everything else
-(for example -34018, a broken entitlement). "Locked" is quiet: it's expected. Anything else is
-reported to telemetry, so a permanently unreadable Keychain is visible, not silent.
+**Boot** (`main()`, before `runApp`, awaited; nothing it does can stop the app starting) reads
+the vault:
+- **a session for island L:** L is the island, saved if it isn't already;
+- **positively no session** (absent, a tombstone, or quarantined): the settle decides
+  (fresh → Enspyr; a signed-out older build with a passkey hint for the old default →
+  imagineering) and saves;
+- **unreadable** (locked, thrown, malformed, an entitlement error, all one branch): **nothing is
+  saved and nothing is deleted.** The island shown for this launch is a guess, from the prefs
+  evidence (`ranAnOlderBuild`). It is marked a guess.
 
-### 2f. A session's refresh ends with the session
+The fact "this island is a guess" lives in the provider graph (`islandResolutionProvider`), not
+local to `main`. Its default, for anything that never ran boot, is **unresolved: don't save.**
+That fixes #439 round 2's finding 4 in the right direction.
 
-A refresh in flight belongs to the session that started it. `DefaultTokenProvider` keeps a
-generation number, which `setTokens` and `clearTokens` advance. A refresh that completes in a
-later generation is discarded:
-- a success doesn't rewrite the store, so a refresh can't bring a signed-out session back;
-- a rejection doesn't clear the store, so it can't delete the next session.
+**When the vault later reads a session for island L** (the first read after Face ID) and the
+island shown is a guess other than L, the app **adopts L**: the shown island becomes L and is
+saved, with no token cleared, because the session IS the truth. The backend rebuilds for L, and
+L's provider presents the session.
 
-This predates #436 (round 2, finding 3) and rides along because it's the same door.
+**A guess can't write over a session.** A sign-in replaces the record only when the vault holds
+nothing, a tombstone, a quarantined pair, or a session for the same island. `switchIsland`
+reads the label first:
+- if it equals the destination, it retargets without clearing;
+- otherwise it's an explicit discard, read first and then cleared, as today's teardown is;
+- if the vault is unreadable, the switch waits; it neither clears nor saves.
+
+**Considered and rejected: no guess at all.** Hold the whole app until the Keychain answers.
+That would delete the guess, and with it the need for adoption and the write rule. But the root
+builds the transport at startup (`main.dart:95` → `transportWakeProvider` → `configProvider`),
+19 files read the island, and the call-answer path (design 23) listens for native events from
+the first frame. A gate in front of it risks the path design 23 just hardened. **Open to the
+temper.**
+
+### 2e. Keychain errors
+
+`errSecInteractionNotAllowed` (-25308, locked) is expected and quiet. Every other failure
+(-34018 entitlement, a malformed record, an exception) takes the same unreadable branch, and is
+reported to telemetry so a permanently unreadable Keychain is visible.
 
 ## 3. What goes away
 
-- **`pinIslandForSurvivingTokens`'s inference.** Boot reads the session's label, or applies 2b.
-- **`IslandBoot` as a process-wide flag**, and its `decided` default that couldn't report its own
-  absence. The door decides per read. Boot keeps one local fact: "the Keychain refused, so don't
-  save this launch's guess".
-- **The label-first/delete-last ordering** in `SecureTokenStore`.
-- **"Untagged means mine"** at the door.
+- **The door's write** (v1's lazy "migrate in place"). Placement is the vault's, serialised.
+- **`IslandBoot.decided` as a default.** The default is now "unresolved: don't save".
+- **The label-first/delete-last ordering** in `SecureTokenStore`. One item, plus a tombstone.
+- **Deleting an unplaceable session.** It's quarantined.
+- **Generation checks on the refresh write only.** The generation covers every operation.
 
 ## 4. What stays
 
-- The once-per-install settle and its saved answer: the trap where a fresh install's own sign-in
-  reads as older-build evidence stays closed.
-- `ranAnOlderBuild` (prefs evidence), now only for the island shown on a launch with no
-  readable session.
+- The once-per-install settle and its saved answer, now saved only after a positive "no
+  session" read.
+- `ranAnOlderBuild`, now only to pick the guess on an unreadable launch.
 - `prod.json` pinned to `kDefaultIslandBaseUrl` by test.
+- Explicit sign-out clears whatever is stored.
 
-## 5. Residuals, named
+## 5. Residuals and named tradeoffs
 
-- **An unplaceable legacy session signs the person out once.** That's an older build's session on
-  an install whose preferences a reinstall wiped. Before #436 it would have been restored on
-  imagineering, which was right for imagineering users and a credential leak for anyone on
-  another island (Enspyr via the picker on 0.0.8, for example). Now it's cleared:
-  - imagineering users who reinstall before ever opening this build sign in again, and must
-    switch to imagineering first, because a fresh install starts on Enspyr;
-  - this is the one place the design trades a sign-in for safety; it applies once per install;
-  - **open to the temper:** is that cost acceptable, or is there a fact that can place these
-    sessions that this note missed?
+- **The legacy placement (2b, steps 2–3) is an inference.** NAMED TRADEOFF, owner: app tab.
+  - *Why it stays.* It runs once per install and its answer is recorded. Without it, every
+    existing signed-in user is signed out by the update, which reverses Nick's decision.
+  - *What it rests on.* Two checked invariants: a switch clears the tokens, and the cached user
+    is present on every tagged release. Releases 0.0.1 to 0.0.5 can't be checked by tag. An
+    install that never opened a cache-writing build is unplaceable, which is the safe direction.
+- **The island's identity is its URL.** NAMED RESIDUAL. A host move must migrate the saved island
+  and the label in the same release, owned by whoever moves the host. The durable fix is
+  cross-repo: an `iss` claim carrying a stable island id in the island's JWTs, so every future
+  token names its issuer. That goes to the island tab, which co-owns identity.
+- **Rollback.** An older build reads only the legacy pair, which this build retires. A rollback
+  (in practice an internal tester sideloading) starts signed out.
+- **Quarantine relies on a quarantined token's own `exp`.** It holds under #427's rotation,
+  because a quarantined session is never refreshed (2b). It would stop holding if the island ever
+  honoured expired refresh tokens.
 - **A dev build's sessions are labelled with the dev island.** A store build installed over that
-  Keychain pins the dev island. The label is telling the truth. Dev machines only.
+  Keychain follows it. The label is telling the truth.
 
-## 6. Tests to write (each must fail on PR #439 at `6821909` for the reason it names)
+## 6. Tests to write (outcomes under adversarial orderings and crash states, not storage-call counts)
 
-- A crash between the label write and the pair write can't relabel a foreign pair: there's one
-  item, so test that a write is one storage operation.
-- A legacy session on a reinstall (no preferences): it's never presented, to Enspyr or
-  imagineering, including on a read after unlock in a locked-boot process, and the next readable
-  boot deletes it.
-- The same sequence on an updating install (preferences present, cached user present): it is
-  presented to imagineering, after Face ID, in the same process.
-- A refresh that completes after `clearTokens` doesn't restore the session, and one rejected
-  after a new `setTokens` doesn't clear it.
-- Boot with a throwing `setString` still reaches `runApp`.
-- A non-locked Keychain error reaches telemetry; a locked one doesn't.
-- Mutation-check every one.
+Each must fail on PR #439 at `6821909`, or on v1 as written, for the reason it names.
+
+- **Resurrection.** For every point a process can die inside sign-out, the next launch presents
+  nothing.
+- **Stale cache.** A read started before `setTokens` can't publish the old pair after it.
+- **Stale refresh.** A refresh that completes after `clearTokens` doesn't restore the session. One
+  rejected after a new `setTokens` doesn't clear the new session or fire `onUnauthenticated`. A
+  new session never joins the old one's in-flight refresh.
+- **A locked reinstall.** For a labelled session for imagineering, after a locked boot the guess
+  is Enspyr. The first readable read adopts imagineering and presents there. A sign-in attempted
+  on the guess before that read can't replace the session.
+- **An updating install.** With a legacy pair, a cached user and no saved island, it's placed on
+  imagineering once and recorded. A crash during placement re-places it on the next read, with
+  the same answer.
+- **A reinstall's legacy pair** (no preferences) is never presented, isn't cleared by a 401, and
+  is replaced by a sign-in.
+- **A dev build's legacy pair** is unplaceable unless `aiko_tokens_island` is present.
+- **Boot.** A throwing `setString` or Keychain read still reaches `runApp`. An unreadable launch
+  saves nothing, and nothing that never ran boot saves either.
+- **Telemetry.** A non-locked Keychain error reaches it; a locked one doesn't.
+- **Mutation-check every one.**
