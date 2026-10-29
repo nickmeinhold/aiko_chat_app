@@ -34,7 +34,7 @@
 ## Disposition
 - **Do not build design 25. Do not merge app #443 as-is.** Recommend the island withholds a stranger's call invitation from fanout and history: a call sentinel in a DM is visible to recipient R only if R had posted there first. That closes harm 1 for every installed app on deploy.
 - App #443 is then superseded. Its harm-2 lessons are recorded here. Its stranger tests would be the island's to write.
-- **Open question for Nick:** withhold the attempt entirely (recommended), or deliver it stamped as a non-ringing missed call. Stamping needs an app release to take effect and leaves old apps ringing.
+- ~~**Open question for Nick:** withhold the attempt entirely (recommended), or deliver it stamped as a non-ringing missed call.~~ **DECIDED (Nick, 2026-10-29 14:16): withhold, and keep the missed call.** The island holds a stranger's call invitation until it is too old to ring, judged on the caller's signed timestamp, then delivers it. Every app version already renders a call invitation as a centred "X started a call · 14:05" line (`chat_screen.dart`) and refuses to ring one past the freshness window. So it lands as a missed call everywhere, with no app release and no stamp.
 
 <!-- Each section below was written when that family returned, before the others
      finished. Arrival order, NOT a ranking. Round 6 replaces this header with the

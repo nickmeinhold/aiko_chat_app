@@ -1,6 +1,6 @@
 # Design 25: first contact asks native first
 
-**Status:** recast for `/design-temper`, 2026-10-29. Escalated from the cage-match of [app #443](https://github.com/nickmeinhold/aiko_chat_app/pull/443) after two rounds, when Round 9.8's stop signals fired (the round-2 ledger is on the PR).
+**Status:** NOT BUILT. Superseded on 2026-10-29: the design temper (`25-TEMPER.md`) moved the fix to the island, and Nick chose that the island **withholds** a stranger's call invitation, delivering it only once it is too old to ring, so every app version shows it as a missed call and none rings. It was escalated from the cage-match of [app #443](https://github.com/nickmeinhold/aiko_chat_app/pull/443) after two rounds, when Round 9.8's stop signals fired. Kept for its harm-2 analysis.
 **Amends:** design 23, requirement 2.
 
 ## The producer question, first
