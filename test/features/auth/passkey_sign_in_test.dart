@@ -246,7 +246,11 @@ void main() {
         expect(user?.username, 'nicka');
         expect(user?.displayName, 'Nick');
         expect(user?.handleAuto, isFalse);
-        expect(c.read(owedHandleProvider), isNull, reason: 'nothing left owed');
+        expect(
+          _nothingOwed(c.read(owedHandleProvider)),
+          isTrue,
+          reason: 'nothing left owed',
+        );
       },
     );
 
@@ -263,7 +267,7 @@ void main() {
       final user = c.read(authControllerProvider).value;
       expect(user, isNotNull, reason: 'the account exists; never fail sign-in');
       expect(user!.username, startsWith('aiko-'));
-      final owed = c.read(owedHandleProvider);
+      final owed = c.read(owedHandleProvider).forAccount(user.userId);
       expect(
         owed?.userId,
         user.userId,
@@ -278,7 +282,7 @@ void main() {
           .read(authControllerProvider.notifier)
           .chooseHandle('nicka2', 'Nick');
       expect(c.read(authControllerProvider).value?.username, 'nicka2');
-      expect(c.read(owedHandleProvider), isNull);
+      expect(_nothingOwed(c.read(owedHandleProvider)), isTrue);
     });
 
     // A TERMINAL answer to the first payment is not a refusal. Shown as one, it
@@ -301,7 +305,9 @@ void main() {
 
       expect(c.read(authControllerProvider).value, isNull);
       expect(store.current, isNull, reason: 'the dead tokens are cleared');
-      final owed = c.read(owedHandleProvider);
+      final owed = c
+          .read(owedHandleProvider)
+          .forAccount(FakeRestApi.newAccountUser.userId);
       expect(owed?.handle, 'nicka', reason: 'still owed by that account');
       expect(owed?.failure, isNull, reason: 'never filed as a refusal');
     });
@@ -344,7 +350,7 @@ void main() {
       await register(c);
 
       expect(c.read(authControllerProvider).value, isNull);
-      final owed = c.read(owedHandleProvider);
+      final owed = c.read(owedHandleProvider).draft;
       expect(owed?.handle, 'nicka', reason: 'the choice survives');
       expect(owed?.userId, isNull, reason: 'unbound: never a gate');
     });
@@ -359,18 +365,81 @@ void main() {
         await c.read(authControllerProvider.future);
         await c
             .read(owedHandleProvider.notifier)
-            .set(
-              const OwedHandle(
-                handle: 'robin',
-                displayName: 'Robin',
-              ).bindTo('someone-else'),
+            .owe(
+              'someone-else',
+              const OwedHandle(handle: 'robin', displayName: 'Robin'),
+            );
+
+        await register(c);
+
+        final owed = c.read(owedHandleProvider).forAccount('someone-else');
+        expect(owed?.userId, 'someone-else');
+        expect(owed?.handle, 'robin');
+      },
+    );
+
+    // ROUND 2's SCENARIO (Noether, Carnot, Tesla): A's PATCH failed, A signed
+    // out, and B on the same device started a sign-up and cancelled it. With
+    // one slot the cancel erased A's debt, which is A's only gate on an island
+    // without handle_auto. The ceremony now touches only the device's draft.
+    test(
+      'a CANCELLED sign-up by someone else never erases a debt an account owes',
+      () async {
+        final rest = FakeRestApi();
+        final c = makeContainer(
+          rest: rest,
+          passkey: FakePasskeyAuthClient(
+            registerThrows: const AuthCeremonyCancelled(),
+          ),
+        );
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+        await c
+            .read(owedHandleProvider.notifier)
+            .owe(
+              'account-a',
+              const OwedHandle(handle: 'robin', displayName: 'Robin'),
+            );
+
+        await register(c);
+
+        expect(rest.passkeyRegisterStartCalls, 1, reason: 'start succeeded');
+        expect(
+          c.read(owedHandleProvider).forAccount('account-a')?.handle,
+          'robin',
+        );
+        expect(c.read(owedHandleProvider).draft, isNull);
+      },
+    );
+
+    test(
+      'a COMPLETED sign-up owes its own debt beside another account\'s',
+      () async {
+        final rest = FakeRestApi()..updateProfileThrows = const HandleTaken();
+        final c = makeContainer(rest: rest, passkey: FakePasskeyAuthClient());
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+        await c
+            .read(owedHandleProvider.notifier)
+            .owe(
+              'account-a',
+              const OwedHandle(handle: 'robin', displayName: 'Robin'),
             );
 
         await register(c);
 
         final owed = c.read(owedHandleProvider);
-        expect(owed?.userId, 'someone-else');
-        expect(owed?.handle, 'robin');
+        expect(
+          owed.forAccount('account-a')?.handle,
+          'robin',
+          reason: 'untouched',
+        );
+        expect(
+          owed.forAccount(FakeRestApi.newAccountUser.userId)?.handle,
+          'nicka',
+          reason: 'the new account owes its own',
+        );
+        expect(owed.draft, isNull, reason: 'the draft became that debt');
       },
     );
 
@@ -384,7 +453,7 @@ void main() {
         await c.read(authControllerProvider.future);
         await register(c);
         expect(c.read(authControllerProvider).value, isNull);
-        expect(c.read(owedHandleProvider), isNull);
+        expect(_nothingOwed(c.read(owedHandleProvider)), isTrue);
       }
       final cancelled = makeContainer(
         rest: FakeRestApi(),
@@ -395,7 +464,7 @@ void main() {
       addTearDown(cancelled.dispose);
       await cancelled.read(authControllerProvider.future);
       await register(cancelled);
-      expect(cancelled.read(owedHandleProvider), isNull);
+      expect(_nothingOwed(cancelled.read(owedHandleProvider)), isTrue);
     });
 
     test(
@@ -428,7 +497,7 @@ void main() {
           'passkey-prov',
           reason: 'pending state drives the router to /claim-handle',
         );
-        expect(c.read(owedHandleProvider), isNull);
+        expect(_nothingOwed(c.read(owedHandleProvider)), isTrue);
       },
     );
 
@@ -756,3 +825,5 @@ void main() {
     );
   });
 }
+
+bool _nothingOwed(OwedHandles o) => o.draft == null && o.debts.isEmpty;

@@ -97,10 +97,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       // still on its auto-assigned handle. Either way it is held on
       // /choose-handle: a handle is required before chat (decided 2026-08-02).
       final user = auth.value;
-      final owed = ref.read(owedHandleProvider);
+      // This account's own debt: a draft, or another account's, never gates.
       final owesHandle =
           user != null &&
-          ((owed != null && owed.userId == user.userId) ||
+          (ref.read(owedHandleProvider).forAccount(user.userId) != null ||
               user.handleAuto == true);
       // A verified-but-handle-less identity (only meaningful while logged out —
       // see [pendingHandleProvider]).

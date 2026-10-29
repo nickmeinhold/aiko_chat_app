@@ -128,21 +128,22 @@ class _ChooseHandleScreenState extends ConsumerState<ChooseHandleScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
-    final owed = ref.watch(owedHandleProvider);
+    final owedHandles = ref.watch(owedHandleProvider);
     final signedIn = auth.value != null;
     final busy = auth.isLoading || _saving;
+    // ONLY WHAT BELONGS TO WHOEVER IS HERE (Tesla, cage-match #440 rounds 1-2).
+    // Signed in: this account's own debt, never another account's, and never
+    // the device's draft, which may be someone else's abandoned sign-up.
+    // Signed out: the device's draft. A lost `register/finish` reply therefore
+    // costs a retype once signed in: the price of never showing one person's
+    // choice to another, chosen over the pre-fill round 1 asked for.
+    final owed = signedIn
+        ? owedHandles.forAccount(auth.value?.userId)
+        : owedHandles.draft;
 
     // Pre-fill from what was chosen before, exactly once, so a refused or
     // interrupted sign-up picks up where it left off.
-    // ONLY A DRAFT THAT BELONGS HERE. One bound to another account on this
-    // device was pre-filled for whoever stood at the screen, and one tap of
-    // Continue gave them that person's chosen handle (Tesla, cage-match #440).
-    // An unbound draft is this device's own interrupted sign-up, including a
-    // lost `register/finish` reply, so it pre-fills either way.
-    final mine =
-        owed != null &&
-        (owed.userId == null || owed.userId == auth.value?.userId);
-    if (!_prefilled && mine) {
+    if (!_prefilled && owed != null) {
       _handle.text = owed.handle;
       if (owed.displayName != owed.handle) {
         _displayName.text = owed.displayName;

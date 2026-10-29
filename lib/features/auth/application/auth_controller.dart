@@ -59,14 +59,14 @@ class PendingHandleNotifier extends Notifier<PendingHandle?> {
   void clear() => state = null;
 }
 
-/// The handle a new account still owes the island, if any (see [OwedHandle]).
-/// Read by the router: while it names the signed-in account, that account is
-/// held on `/choose-handle`.
-final owedHandleProvider = NotifierProvider<OwedHandleNotifier, OwedHandle?>(
+/// The handles owed on this device (see [OwedHandles]): a sign-up's draft and
+/// accounts' debts. Read by the router: while the signed-in account owes one,
+/// it is held on `/choose-handle`.
+final owedHandleProvider = NotifierProvider<OwedHandleNotifier, OwedHandles>(
   OwedHandleNotifier.new,
 );
 
-class OwedHandleNotifier extends Notifier<OwedHandle?> {
+class OwedHandleNotifier extends Notifier<OwedHandles> {
   /// Fail-open like the passkey hint: no prefs (a test container) means the
   /// record lives in memory only, and it can never fail a sign-in.
   OwedHandleStore? get _store {
@@ -78,22 +78,42 @@ class OwedHandleNotifier extends Notifier<OwedHandle?> {
   }
 
   @override
-  OwedHandle? build() => _store?.read();
+  OwedHandles build() => _store?.read() ?? OwedHandles.empty;
 
-  Future<void> set(OwedHandle owed) async {
-    state = owed;
-    await _store?.write(owed);
+  Future<void> _publish(OwedHandles next) async {
+    state = next;
+    await _store?.write(next);
   }
 
-  /// Remember why the island refused it, for the screen. Not persisted.
-  void refused(Object failure) {
-    final owed = state;
-    if (owed != null) state = owed.refusedWith(failure);
+  /// The sign-up in progress on this device. The ceremony writes and clears
+  /// ONLY this, so it can never reach a debt an account owes.
+  Future<void> draft(OwedHandle owed) => _publish(
+    state.withDraft(
+      OwedHandle(handle: owed.handle, displayName: owed.displayName),
+    ),
+  );
+
+  Future<void> clearDraft() => _publish(state.withDraft(null));
+
+  /// The ceremony made [userId]: its draft becomes that account's debt.
+  Future<void> bindDraft(String userId) {
+    final draft = state.draft;
+    if (draft == null) return Future.value();
+    return _publish(state.withDraft(null).withDebt(userId, draft));
   }
 
-  Future<void> clear() async {
-    state = null;
-    await _store?.clear();
+  /// [userId] owes [owed] (a handle chosen on `/choose-handle`).
+  Future<void> owe(String userId, OwedHandle owed) =>
+      _publish(state.withDebt(userId, owed));
+
+  /// The island has [userId]'s handle.
+  Future<void> paid(String userId) => _publish(state.withDebt(userId, null));
+
+  /// Remember why the island refused [userId]'s debt, for the screen. Not
+  /// persisted.
+  void refused(String userId, Object failure) {
+    final debt = state.forAccount(userId);
+    if (debt != null) state = state.withDebt(userId, debt.refusedWith(failure));
   }
 }
 
@@ -452,51 +472,46 @@ class AuthController extends AsyncNotifier<AppUser?> {
       throw const RegistrationClosed();
     }
     final owed = ref.read(owedHandleProvider.notifier);
-    // `register/start` FIRST: it makes nothing, so if it fails no record has
-    // been touched. Writing the draft ahead of it let a failed start erase a
-    // debt another account on this device still owed (Tesla, cage-match #440).
+    // EVERYTHING the ceremony writes or clears is this device's DRAFT, never an
+    // account's debt (see [OwedHandles]): a second person's sign-up on this
+    // device can no longer overwrite or erase what another account owes.
     final challenge = await _rest.startPasskeyRegistration(name: handle);
     // Written BEFORE the ceremony, which can't be taken back: if the app dies
     // after the island makes the account, this is how the next launch knows a
     // handle is still owed.
-    await owed.set(OwedHandle(handle: handle, displayName: displayName));
+    await owed.draft(OwedHandle(handle: handle, displayName: displayName));
     final String attestation;
     try {
       attestation = await _passkey.register(challenge.optionsJson);
     } on AuthCeremonyCancelled {
-      await owed.clear();
+      await owed.clearDraft();
       return prior; // user dismissed the sheet — no-op, restore prior state
     } catch (_) {
       // No credential reached the island, so no account can exist.
-      await owed.clear();
+      await owed.clearDraft();
       rethrow;
     }
     await _markPasskeySeen();
-    // NOT cleared if this throws. A reply lost after the island made the
-    // account looks exactly like a refusal from here, and clearing deleted the
-    // only record of the handle the user chose (Carnot + Noether, cage-match
-    // #440). Kept unbound, the draft never gates anyone; it pre-fills the
-    // screen, and the island's `handle_auto` holds the account if it exists.
+    // The draft is NOT cleared if this throws. A reply lost after the island
+    // made the account looks exactly like a refusal from here (Carnot + Noether,
+    // cage-match #440). A draft never gates anyone; it pre-fills the next
+    // signed-out sign-up, and the island's `handle_auto` holds the account if
+    // it exists.
     final outcome = await _rest.finishPasskeyRegistration(
       challenge.state,
       attestation,
     );
     switch (outcome) {
       case Authenticated(:final session):
-        // Bind the debt to the account BEFORE the session is published, so a
+        // Bind the draft to the account BEFORE the session is published, so a
         // kill from here on still lands the next launch on /choose-handle.
-        await owed.set(
-          OwedHandle(
-            handle: handle,
-            displayName: displayName,
-          ).bindTo(session.user.userId),
-        );
+        await owed.bindDraft(session.user.userId);
         final user = await _applyOutcome(outcome, prior);
         return user == null ? null : _payOwedHandle(user);
       case PendingHandle():
         // An island that still asks for the handle itself: its claim screen
         // does, so this app owes nothing of its own.
-        await owed.clear();
+        await owed.clearDraft();
         return _applyOutcome(outcome, prior);
     }
   });
@@ -518,15 +533,15 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// with the session still published. Null means one was settled.
   Future<AppUser?> _payOwedHandle(AppUser user) async {
     final owedNotifier = ref.read(owedHandleProvider.notifier);
-    final owed = ref.read(owedHandleProvider);
-    if (owed == null || owed.userId != user.userId) return user;
+    final owed = ref.read(owedHandleProvider).forAccount(user.userId);
+    if (owed == null) return user;
     try {
       final updated = await _rest.updateProfile(
         handle: owed.handle,
         displayName: owed.displayName,
       );
       await _writeCachedUser(updated);
-      await owedNotifier.clear();
+      await owedNotifier.paid(user.userId);
       return updated;
     } on AccountSuspended {
       // BEFORE `on Unauthorized`, its supertype. Rethrown into [_ingress],
@@ -542,7 +557,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
       _becomeUnauthenticated();
       return null;
     } catch (e) {
-      owedNotifier.refused(e);
+      owedNotifier.refused(user.userId, e);
       return user;
     }
   }
@@ -557,11 +572,12 @@ class AuthController extends AsyncNotifier<AppUser?> {
     final userId = state.value?.userId;
     if (userId == null) return null;
     final owed = ref.read(owedHandleProvider.notifier);
-    await owed.set(
-      OwedHandle(handle: handle, displayName: displayName).bindTo(userId),
+    await owed.owe(
+      userId,
+      OwedHandle(handle: handle, displayName: displayName),
     );
     final updated = await saveProfile(handle: handle, displayName: displayName);
-    if (updated != null) await owed.clear();
+    if (updated != null) await owed.paid(userId);
     return updated;
   }
 

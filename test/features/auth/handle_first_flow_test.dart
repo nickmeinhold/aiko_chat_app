@@ -24,7 +24,7 @@ import '../../support/fake_chat_transport.dart';
 import '../../support/test_helpers.dart';
 import '../../support/ui_fakes.dart';
 
-const _owedKey = 'aiko_owed_handle';
+const _owedKey = 'aiko_owed_handles';
 final _screen = find.byKey(const Key('choose-handle-screen'));
 final _field = find.byKey(const Key('choose-handle-field'));
 final _submit = find.byKey(const Key('choose-handle-submit'));
@@ -198,9 +198,12 @@ void main() {
     await testPrefs.setString(
       _owedKey,
       jsonEncode({
-        'handle': 'nicka',
-        'display_name': 'Nick',
-        'user_id': FakeRestApi.defaultUser.userId,
+        'debts': {
+          FakeRestApi.defaultUser.userId: {
+            'handle': 'nicka',
+            'display_name': 'Nick',
+          },
+        },
       }),
     );
     await app(tester, FakeRestApi(), signedIn: true);
@@ -216,9 +219,9 @@ void main() {
     await testPrefs.setString(
       _owedKey,
       jsonEncode({
-        'handle': 'nicka',
-        'display_name': 'Nick',
-        'user_id': 'someone-else',
+        'debts': {
+          'someone-else': {'handle': 'nicka', 'display_name': 'Nick'},
+        },
       }),
     );
     await app(tester, FakeRestApi(), signedIn: true);
@@ -247,9 +250,9 @@ void main() {
     await testPrefs.setString(
       _owedKey,
       jsonEncode({
-        'handle': 'robin',
-        'display_name': 'Robin',
-        'user_id': 'someone-else',
+        'debts': {
+          'someone-else': {'handle': 'robin', 'display_name': 'Robin'},
+        },
       }),
     );
     await app(
@@ -283,6 +286,56 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('the device DRAFT is never pre-filled for a signed-in account', (
+    tester,
+  ) async {
+    // A draft is a sign-up nobody finished: possibly someone else's on a
+    // shared device (Tesla, cage-match #440 round 2). Signed in, only this
+    // account's own debt pre-fills.
+    await testPrefs.setString(
+      _owedKey,
+      jsonEncode({
+        'draft': {'handle': 'robin', 'display_name': 'Robin'},
+      }),
+    );
+    await app(
+      tester,
+      FakeRestApi(user: FakeRestApi.newAccountUser),
+      signedIn: true,
+    );
+
+    expect(_screen, findsOneWidget);
+    expect(tester.widget<TextField>(_field).controller?.text, isEmpty);
+  });
+
+  testWidgets('a device draft never GATES a signed-in account', (tester) async {
+    // handle_auto unreported (null), so only a record could hold this account,
+    // and a draft is no account's record.
+    await testPrefs.setString(
+      _owedKey,
+      jsonEncode({
+        'draft': {'handle': 'robin', 'display_name': 'Robin'},
+      }),
+    );
+    await app(tester, FakeRestApi(), signedIn: true);
+    expect(find.byType(ChatScreen), findsOneWidget);
+  });
+
+  testWidgets('a signed-out sign-up picks up the device draft (a lost reply, '
+      'retried)', (tester) async {
+    await testPrefs.setString(
+      _owedKey,
+      jsonEncode({
+        'draft': {'handle': 'nicka', 'display_name': 'Nick'},
+      }),
+    );
+    await app(tester, FakeRestApi());
+    await tester.tap(find.text('Create a passkey'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Create passkey as @nicka'), findsOneWidget);
   });
 
   testWidgets('an island that does not report handle_auto gates nobody', (
