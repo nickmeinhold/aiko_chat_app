@@ -82,7 +82,15 @@ class OwedHandleNotifier extends Notifier<OwedHandles> {
 
   Future<void> _publish(OwedHandles next) async {
     state = next;
-    await _store?.write(next);
+    // A write that THROWS must not fail a sign-in either. `bindDraft` runs
+    // after `register/finish` has made the account and before the session is
+    // adopted, so an escaping prefs exception aborted a registration the
+    // island had already committed (Carnot, cage-match #440 round 3). The
+    // router reads [state], so the cost of a lost write is at most being asked
+    // again on the next launch.
+    try {
+      await _store?.write(next);
+    } catch (_) {}
   }
 
   /// The sign-up in progress on this device. The ceremony writes and clears

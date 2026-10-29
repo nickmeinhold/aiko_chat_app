@@ -16,6 +16,7 @@ import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
         Unauthorized;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/fake_chat_transport.dart';
 import '../../support/fakes.dart';
@@ -29,6 +30,7 @@ void main() {
     required FakeRestApi rest,
     required FakePasskeyAuthClient passkey,
     InMemoryTokenStore? store,
+    SharedPreferences? prefs,
   }) {
     final tokenStore = store ?? InMemoryTokenStore();
     late final ProviderContainer container;
@@ -44,6 +46,8 @@ void main() {
         restApiProvider.overrideWithValue(rest),
         transportProvider.overrideWithValue(FakeChatTransport()),
         passkeyAuthClientProvider.overrideWithValue(passkey),
+        // Opt-in only, so the default keeps the prefs-less coverage above.
+        if (prefs != null) sharedPreferencesProvider.overrideWithValue(prefs),
         cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
@@ -382,6 +386,27 @@ void main() {
     // out, and B on the same device started a sign-up and cancelled it. With
     // one slot the cancel erased A's debt, which is A's only gate on an island
     // without handle_auto. The ceremony now touches only the device's draft.
+    test('a prefs write that THROWS cannot fail a registration the island '
+        'committed', () async {
+      // bindDraft runs after register/finish made the account and before the
+      // session is adopted, so an escaping exception left the user signed out
+      // beside an account and a saved passkey (Carnot, cage-match #440 r3).
+      final c = makeContainer(
+        rest: FakeRestApi(),
+        passkey: FakePasskeyAuthClient(),
+        prefs: _ThrowingPrefs(),
+      );
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+
+      final user = c.read(authControllerProvider).value;
+      expect(user, isNotNull, reason: 'signed in despite the disk');
+      expect(user!.username, 'nicka');
+      expect(_nothingOwed(c.read(owedHandleProvider)), isTrue);
+    });
+
     test(
       'a CANCELLED sign-up by someone else never erases a debt an account owes',
       () async {
@@ -827,3 +852,20 @@ void main() {
 }
 
 bool _nothingOwed(OwedHandles o) => o.draft == null && o.debts.isEmpty;
+
+/// SharedPreferences whose every write throws, as a full or failing disk does.
+/// Reads find nothing.
+class _ThrowingPrefs implements SharedPreferences {
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    final name = invocation.memberName.toString();
+    if (name.contains('"set') ||
+        name.contains('"remove') ||
+        name.contains('"clear')) {
+      return Future<bool>.error(StateError('disk full'));
+    }
+    if (name.contains('"getKeys')) return <String>{};
+    if (name.contains('"containsKey')) return false;
+    return null;
+  }
+}
