@@ -223,3 +223,232 @@ Tesla: "If you want the secrets of the universe, think in energy, frequency and 
 - In §2a, `clear()` deletes the legacy items first and `aiko_session` last. State the crash residue: signed-in is the allowed failure; legacy-only after a signed-out new item is not a representable state.
 - In §1 and §5, record whether the access token names its island. If it does, `ownerOfLegacySession` reads that and the unplaceable branch is gone. If it does not, quarantine instead of delete: never present to a guess, never clear on a 401 until the item is labeled with the island that rejected it. The one-time sign-in cost is then a choice the person makes, not a boot delete they cannot undo.
 
+
+
+---
+---
+
+# Round 2: v2 at `4575b05`
+
+**Overall verdict:** RECAST (Noether, Carnot, Tesla RECAST; Maxwell SOUND). **Maxwell's SOUND was
+wrong:** it missed flaw 1 below, a real leak, which is the author-instance-can't-grade-its-own-
+homework case this temper exists for. Temper round 2 of at most 3.
+
+## Fatal flaws (deduped, most severe first)
+
+1. **Quarantine isn't durable, so the next launch places the pair on the island the settle just
+   saved.** Raised by Tesla and Noether; verified against v2's own text.
+   - **The path:** an unplaceable pair stays in the legacy items. §2d counts "quarantined" as no
+     session, so the settle saves Enspyr. On the next launch §2a still finds no `aiko_session`,
+     re-reads the pair, and §2b step 2 places it on the saved island, which is the settle's own
+     Enspyr. An imagineering session is labelled Enspyr and presented there.
+   - **FOLD:** placement runs before the settle and writes a durable owner-unknown state into
+     `aiko_session` before boot returns. The legacy pair is never read again. An island the
+     settle saved is never an input to placement.
+2. **A credential actor for a guessed island can bury a foreign session through the logout
+   event.** Raised by Tesla and Carnot, plus Noether's "adoption is an unfenced write".
+   - **Verified in code, and it defeats PR #439's `6821909` too.** When the door refuses, the
+     refresh with nothing of its own calls `_markUnauthenticated(clearStore: false)`. That fires
+     `onUnauthenticated`, which reaches `authEventsProvider`, then `_becomeUnauthenticated`
+     (`auth_controller.dart:204-205`), then `_teardownResources`, then
+     `_clearCredentialAndUnpair`, which clears the store unconditionally.
+   - **FOLD:** no credential actor exists for an unresolved island. The token provider is inert
+     (presents nothing, fires nothing) until resolution, which happens once, in one serialised
+     operation, after the vault becomes readable: confirm the guess, or adopt the label. Native
+     wake capture stays independent. The answer path needs credentials only after Face ID
+     (design 23), which is exactly when resolution can run. This replaces v2's adoption fences and
+     guess write rule.
+3. **Lifecycle authority stops at the vault.** Raised by Carnot. All of these happen outside it:
+   - a sign-in's commit isn't leased from the attempt's start, so a login that succeeds after a
+     sign-out or a switch restores the session;
+   - `authEventsProvider` carries `void`, so a stale event can tear down its successor;
+   - the WSS "unauthenticated" signal is a second logout source;
+   - `switchIsland` isn't one operation, so a switch can read A, a sign-in can install B, and
+     the switch then clears B.
+
+   These are pre-existing in kind: they exist on `main` today, without #436. **DISPOSITION:
+   Nick's call (see below).**
+4. **A malformed record is a permanent trap.** Raised by Tesla. Locked is transient. Malformed
+   data, or a record version this parser doesn't know, is durable, and v2 handles them the same
+   way, so a reinstall keeps the trap. **FOLD:** split the branch. Transient refusal: wait, save
+   nothing, write nothing. Durable garbage: a state a sign-in may replace. Telemetry on both.
+5. **Old-build evidence after this build has run.** Raised by Noether. A cached user that
+   outlived its tokens across a crash reads as an older build. **FOLD:** any `aiko_session` item
+   (record, tombstone or owner-unknown) proves this build ran, and the settle then ignores the
+   old-build evidence.
+6. **The header contradicts §5 again.** Raised by Noether and Tesla. v2's header still says
+   "cleared"; §5 says quarantined. **FOLD:** fix the header. This is the second time a design-26
+   headline has lagged its body.
+7. **The island's identity is its URL.** Raised by Noether, who argues it undermines the core
+   invariant. **DISPOSITION unchanged:** named residual, plus the cross-repo follow-up (an `iss`
+   claim carrying a stable island id).
+
+Maxwell's build notes also fold into v3:
+- only a new session or a sign-out advances the generation;
+- adoption has one trigger;
+- a sign-out whose tombstone write fails falls back to deleting;
+- while a session exists, the saved island is a cache of its label.
+
+## Process
+
+The class repeats for the third time: who may end or replace a session. Each pass widens the
+authority (the vault, then the provider, then the auth attempt, the events and the switch). The
+#439-specific harm and the session-lifecycle defects separate cleanly:
+- **#439 needs** flaws 1, 2, 4, 5 and 6: the labelled record, the tombstone, the durable
+  owner-unknown state, an inert credential actor until the island is resolved, and split error
+  classes.
+- **`main` already has** flaw 3's races. They are worth one session authority of their own, and
+  that's a design in its own right.
+
+Round 3 is the last allowed. Whether flaw 3 rides in v3 or becomes its own design is Nick's
+call.
+
+**Struck:** dt-1793275571. Landed in arrival order: Maxwell, then Noether, Carnot and Tesla together. **Bundle:** v2 + this file (round 1) + the #439 ledger + the same three source files (76KB).
+
+---
+
+## MaxwellMergeSlam's Design Strike
+
+**Verdict:** SOUND
+
+**Summary:** v2 folds every round-1 fatal flaw at its producer, not with a better guard:
+- one vault serialises authority;
+- a tombstone retires the old format durably;
+- quarantine replaces an irreversible delete;
+- the guess loses the ability to write.
+
+What's left are three places the design is silent, which the build must pin down, not fatal flaws.
+
+**Producer first:** The bad outcome is a session presented to, cleared by, or overwritten from an island that didn't issue it, or a signed-out session brought back. Each producer from round 1 is removed, not guarded:
+- **Concurrent writers** → the vault serialises every publishing read and every write, and every operation is generation-scoped. That removes resurrection, stale cache fills, stale clears and a shared `_inFlight` together, rather than one check each.
+- **Legacy fallback after sign-out** → a tombstone makes "legacy pair read after a sign-out" unrepresentable.
+- **Irreversible delete** → quarantine, which costs nothing because a quarantined token is never refreshed and keeps its own `exp`.
+- **The guess as a writer** → the write rule plus adoption; the guess picks a screen and can't replace a session.
+
+The door's island comparison remains, with v1's stated reason, which v2 keeps and sharpens: the synchronous config can't read the async Keychain on a locked launch, and gating the root on the Keychain is rejected with a reason (2d) the temper can challenge.
+
+**Fatal flaws:**
+- none
+
+**What holds:**
+- **2a, tombstone.** "The legacy pair is read only when no `aiko_session` item exists at all" makes the crash-order question in sign-out moot. Every intermediate state is either a tombstone (never legacy again) or a live session (signed-in, the allowed failure). John McClane: "Now I have a machine gun. Ho-ho-ho." One item, and the old format is dead for good.
+- **2b, placement.** Runs once, inside the vault, recorded; never reads the island on screen. Dev builds don't trust the current define. It names the inference it still makes, as a tradeoff with its owner and the evidence (`f65906b` ancestor of every tag).
+- **2b, quarantine.** The expiry argument is right, including the correction about #427: rotation needs a refresh, a quarantined session never gets one, so its `exp` stands.
+- **2c.** The generation covers the shared `_inFlight` and `onUnauthenticated`, not only the store. That closes Noether's round-1 finding, which the round-2 cage-match ledger had also carried (#439 round 2, finding 3).
+- **2d.** "Unresolved: don't save" as the default for anything that never ran boot is the right direction for #439 round 2's finding 4. A missing boot can now only fail to save, never save a guess.
+- **2d, the rejected alternative.** Its reason is concrete and checkable (`main.dart:95` → `transportWakeProvider` → `configProvider`; the answer path's native listener from the first frame).
+
+**If RECAST, what to fold back:** (build notes; none of these is a fatal flaw)
+- **2c, which operations advance the generation.** Only a NEW session (`setTokens`) and a sign-out (tombstone) do. 2b's placement and a refresh commit are the same session and must NOT advance it, or they cancel that session's own in-flight work: a placement during a token read would spuriously drop the read it was serving.
+- **2d, who triggers adoption.** The vault publishes the island of the last session it read, a `sessionIsland` signal. `IslandConfigController` adopts it only while its state is marked a guess. A non-guess island is never changed by a read; only `switchIsland` changes it. Say this, so the build doesn't invent a second path.
+- **2a/2c, a sign-out whose tombstone write fails.** Fall back to deleting `aiko_session`, then the legacy items, in that order. "A sign-out must never leave a credential behind" (`_clearCredentialAndUnpair`) has to survive the tombstone's own failure.
+- **Framing, for the next reader.** While a session exists, the saved island is a synchronous CACHE of its label. When signed out, it's the person's choice. Adoption is cache invalidation, and a reinstall is a cold cache. Naming it so stops a future change treating the two as peers.
+
+
+---
+
+## NoetherNullPointer's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The conserved quantity is *“a stored session’s owner is a property of the session itself”*; v2 conserves it for every session this build writes, but the legacy population’s quarantine is not representable in the one-item format, and adoption is an unaccounted write on the read path, so the invariant still leaks through the cracks.
+
+**Producer first:**  
+The harm is a live session on island X being presented to island Y, answered with 401, and deleted. The producer is a stored session with **no recorded owner**, forcing an inference; the inference then presents the credential to whatever island the app happens to be on.  
+- For sessions **this build writes**, the design **deletes the producer** by putting the island in the same Keychain item as the tokens (`2a`). That is the right move, not a guard.  
+- For **legacy sessions**, the unlabelled pair is external residue already on disk; it cannot be deleted. The design’s quarantine (`2b`) is the correct structural answer: never present it, never clear it on 401, replace only by sign-in. That makes the residue unable to produce the harm — **provided quarantine is durable**.  
+- But `2a` defines `aiko_session` as holding only a **record** or a **tombstone**. Quarantine is neither. If it is not written as a durable marker, the legacy pair will be read again on the next launch, re-running placement and potentially placing it differently as prefs change. The producer leaks back.  
+- Adoption (`2d`) is a second write on a read path: “the shown island becomes L and is saved.” `2c` says “the one write on a read path is 2b’s placement.” If adoption is not serialised inside the vault and fenced by generation, a sign-out or switch can race it, saving an island for a session that no longer exists.  
+- The cached-user evidence (`2b` step 3) rests on “the cached user lives and dies with the tokens,” but that is asserted, not structurally enforced. A crash between clearing tokens and clearing the cached user leaves stale evidence; `ranAnOlderBuild` then misclassifies and the settle saves the wrong island.
+
+**Fatal flaws:**
+- **Quarantine is not representable in the one-item format (`2a` vs `2b`).** Class: unrepresentable state / incomplete invariant. The design says an unplaceable pair is quarantined, but the storage format has no quarantine variant. Without a durable marker, “runs once per install” is false; the pair can be re-read and re-placed.
+- **Adoption is an unaccounted write on a read path (`2c` vs `2d`).** Class: missing write authority / un-fenced side effect. `2c` claims the only read-path write is placement; `2d` adds adoption. If adoption is not serialised inside the vault and generation-fenced, it can save an island for a session that a concurrent sign-out has already cleared.
+- **The cached-user invariant is asserted, not enforced (`2b` step 3).** Class: broken invariant / unstated crash window. If the cached user outlives the tokens across a crash, the settle can misclassify a signed-out current build as an older build and save the legacy default.
+- **The island’s identity is its URL (`5`).** Class: named residual that undermines the core invariant. A host move breaks every labelled session unless both the saved island and the session label are migrated in the same release. This is a manual process, not a design guarantee; the durable fix is a stable island id in the JWT (`iss`) or in the session record.
+- **The top-level product decision says an unplaceable reinstall session is “cleared (section 5)”, but section 5 says it is quarantined.** Class: contradictory design statement. One of the two must go; the design cannot both delete and quarantine.
+
+**What holds:**
+- One Keychain item for the session, with island and tokens inseparable (`2a`). This deletes the producer for every session this build writes.
+- The door decides per read and never writes (`2c`). A foreign session is left alone; a 401 clears only the session it was issued for.
+- Explicit sign-out writes the tombstone whoever issued the session (`2c`).
+- Generation fencing covers cache fills, refresh commits, rejection clears, shared `_inFlight`, and `onUnauthenticated` (`2c`).
+- Quarantine is the right direction for unplaceable legacy pairs — it just needs a durable representation.
+- The “no guess at all” alternative was correctly rejected for risking design 23’s call-answer path (`2d`).
+
+**If RECAST, what to fold back:**
+- In `2a`, add a third variant to `aiko_session`: `{"v":1,"quarantined":true}` (or explicitly state that quarantine writes a tombstone). Placement must write this marker once, so the legacy pair is never read again.
+- In `2c`, state that **adoption is a vault operation**, serialised with sign-in and sign-out, and generation-fenced. Remove the claim that placement is the only write on a read path.
+- In `2b`/`4`, either clear the cached user inside the vault atomically with the session, or stop using `ranAnOlderBuild` when a tombstone or quarantine marker is present. The evidence must be as durable as the session it places.
+- In `5`, if ADR-0008 provides a stable island id, put it in the session record and stop keying identity on the URL. Otherwise, name the host-move owner and add a migration test that proves the saved island and the session label move together.
+- Resolve the top-level “cleared” vs section 5 “quarantined” contradiction: pick one and make it consistent everywhere.
+
+---
+
+## CarnotCodeCarver's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The single record and tombstone remove real entropy. The remaining losses come from lifecycle authority stopping at the vault while login, routing and island changes continue outside it. Dijkstra: "Simplicity is prerequisite for reliability." No real engine matches the Carnot cycle; a reviewer's job is to say how far short we are.
+
+**Producer first:** The harms are credential disclosure to another island, loss of a surviving session, and restoration after sign-out. Reinstall, unlock and delayed replies are triggers. The producers are constructing island-specific machinery before ownership is resolved, allowing delayed authentication work to obtain fresh mutation authority, and delivering session changes through unscoped application events. The first producer can be removed by separating native wake capture from authenticated backend activation. Delayed replies cannot be prevented, but their authority can expire structurally with the session or authentication attempt that created them. Legacy placement remains an inference; retaining it requires historical provenance because the tokens themselves cannot establish ownership.
+
+**Fatal flaws:**
+- Make wrong-island work during unresolved boot impossible: keep native wake capture running independently, and activate island-specific authentication and transport only after readable session resolution. Then guessed-backend adoption and guess-specific replacement rules become unnecessary. Section 2d rejects gating the whole app, but that is the wrong option frame: preserving the first-frame native listener does not establish that an authenticated backend must exist then. Nineteen readers measure coupling, not a requirement to retain it.
+- The generation starts too late for sign-in. A login request starts on island L; the person signs out; its successful response later calls setTokens. If setTokens captures the generation when that operation begins, it receives current authority and restores the session. The same failure crosses an island switch. Section 2c covers refresh because its network work belongs to the provider operation, but never binds the originating login/register/passkey attempt to its eventual commit. Serial storage operations cannot distinguish an obsolete successful login from a newly intended one.
+- Suppressing stale onUnauthenticated calls does not suppress stale event delivery. A rejection can validly enqueue an event, a new session can commit, and the broadcast listener can process the old event afterward. The supplied authEventsProvider carries void, so the consumer cannot identify which session ended. WSS unauthenticated events are another declared logout source outside the proposed vault coverage. Either can tear down the replacement session despite a correct vault.
+- The island transition is still specified as separate actions: read label, decide, clear or retarget, then save and rebuild. Serializing individual vault operations does not serialize that ceremony. A switch can read session A, a concurrent login can install B, and the switch can then unconditionally clear B. Likewise, delayed adoption or preference persistence can publish an obsolete island after a later transition. The design must make the entire transition's authority explicit, including application state and persistence.
+
+**What holds:**
+- One atomic Keychain record structurally prevents torn ownership and token combinations.
+- A tombstone durably disables legacy fallback after a completed sign-out write.
+- Unreadable storage preserves credentials and preferences; telemetry distinguishes operational failure from expected locking.
+- Quarantine avoids both speculative credential presentation and unnecessary deletion.
+- The historic store-build placement tradeoff and URL identity residual are now explicit; neither needs to be rediscovered as an unnamed flaw.
+
+**If RECAST, what to fold back:**
+- Replace the whole-app-gate comparison with a concrete dependency design: native event capture remains active, session resolution remains explicit, and authenticated backend activation waits. Demonstrate the locked incoming-call sequence.
+- Give each authentication attempt authority before its first network await. Sign-out, replacement, switch and disposal revoke that authority; a late response cannot acquire it again through setTokens.
+- Move terminal session transitions into the shared authority. Publish session-identified observations afterward, so REST and WSS notifications cannot independently sign out a successor.
+- Define one ordered island-transition operation covering the observed session, discard or adoption decision, configuration publication and preference persistence. Avoid holding its serialization lock across network work.
+- Add adversarial outcomes for login success after logout or switch, queued REST/WSS rejection after replacement, and switch/adoption racing a new session. Specify sign-out crash guarantees from its durable commit point; a crash before that point can legitimately retain the prior session.
+
+
+---
+
+## Tesla, the Arc-Prophet's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The one-item session is true ore, and it still shatters on the boot after a legacy reinstall, because the settle writes an owner for the session quarantine just declared had none.
+
+Tesla: "If you want the secrets of the universe, think in energy, frequency and vibration."
+
+**Producer first:** The harm is a live refresh token presented to an island that did not mint it. That island answers 401, the app deletes the credential, and the person loses the session a reinstall was supposed to keep. The same family has a second harm: a labelled session tombstoned by a logout the person never asked for. The trigger (locked phone, process death, 401) is outside. The producers are ours.
+
+- **Door match (§2c).** Guards showing island X's token to island Y. The producer is a presenter built for an island the session item did not name. It can be removed. Build the presenter only after the vault has named an island, and only for that island. Design 23 already connects the call after Face ID, and Face ID is the same edge that makes the vault readable. The door check then becomes unnecessary. v2 still builds the presenter for the guess and checks at the door.
+- **Write rule (§2d).** Guards a sign-in or switch on the guess replacing a labelled session. The producer is that same guess, still holding a writer. Remove the writer while resolution is unresolved or a guess, and the rule is idle.
+- **Generation (§2c).** Guards a refresh, a cache fill, or `onUnauthenticated` that outlives its session. The reply already in flight cannot be unsent, so a vault that drops the commit when the generation has moved is structural and stays. Generation advances on replacement or clear only. Adoption is neither, so a guess-provider logout in the current generation keeps its authority. The fence does not cover the transition §2d adds.
+- **Quarantine (§2b).** The unowned legacy pair was written by an older build. That residue is external and cannot be deleted. The producer of the harm is this build reading the pair again and assigning an owner. That producer can be removed: the first unplaceable result writes a durable owner-unknown marker into `aiko_session` in the same vault turn, and the legacy pair is never read again. "Never present" then becomes a property of the item. v2 leaves the legacy keys as a live input whenever `aiko_session` is absent.
+- **Placement steps 2–3 (§2b, §5).** For an island an older switch saved before this build, the inference is the accepted tradeoff. For an island this build's settle saves after declaring the pair unplaceable, the producer is ours. The settle is minting the evidence placement consumes. Stop it from doing that.
+- **Don't-save on unreadable (§2d).** The locked branch is removed as a producer: a refused read saves nothing. The quarantined branch is still a producer. §2d files owner-unknown under "positively no session" and the settle then saves an owner.
+
+**Fatal flaws:**
+- Make presentation of a quarantined legacy token to the fresh default impossible: the first unplaceable result writes a durable owner-unknown marker into `aiko_session` before boot returns, and the legacy pair is never read again. The settle's saved URL is not an input to placement. The door match, the per-read "never present," and step 2's trust in a pref this boot just wrote then become unnecessary. As written, the glass rings on the later boot. §2b reads the legacy pair whenever `aiko_session` is absent, and it records an answer only for a placed pair (rewritten as a record). An unplaceable pair stays in the old keys. §2d treats quarantined as positively no session, and the settle saves. A reinstall has emptied prefs, so `ranAnOlderBuild` is false and the saved island becomes the fresh default, Enspyr (§2d). Any once-per-install memo dies with the process. The next launch finds no `aiko_session`, finds a saved island, and §2b step 2 places the pair there. Step 2's premise — an older build used that saved island, and a switch cleared the tokens — is false of an island the settle wrote because placement failed. There is no mark on the pref that can tell the two apart once the process is gone. The legacy population's home is `kLegacyDefaultIslandBaseUrl`. The wiped-prefs settle writes Enspyr. So the unlabelled session a reinstall leaves in the Keychain, the one the product decision exists to keep, is welded to Enspyr and handed over. The door is satisfied, because the label and the presenter now agree. The 401 clears a credential that was valid on the island that minted it, and the bearer has already crossed the trust boundary named in the header. This is round 1 of [PR #439](https://github.com/nickmeinhold/aiko_chat_app/pull/439) one octave up: the refusal to guess manufactures the evidence the guess needed. The header already hears two futures at once — "nothing can place it, so it's cleared (section 5)" — while §2b says quarantined and left in place. §6's reinstall test stops on the first launch. The burn is the launch after the settle has saved.
+- Make a guess-driven tombstone impossible: while `islandResolutionProvider` is unresolved or a guess, the graph builds no `TokenProvider`, arms no `onUnauthenticated`, and accepts no sign-in, switch, or sign-out against the vault. §2d's write rule and the adoption-versus-generation fence then become unnecessary. §2d adopts L when a later read sees a labelled session and the shown island is a different guess. §2c advances generation on replacement or clear, and adoption does neither. The provider that asked was built for the guess and is still inside the current generation when the read returns. The code this design recasts treats "nothing of ours" as `_markUnauthenticated` (`token_provider.dart`). The bundle's auth path reconciles that event into one logout (`providers.dart`, `authEventsProvider`), and §2c's explicit sign-out writes a tombstone whoever issued the session. A foreign label is left alone on the vault read and can still be buried by the logout that follows it. The call-answer path does not need this presenter early: design 23 connects after Face ID, the same moment the vault becomes readable. §2d's rejected alternative, holding the whole app, answered a larger question and left the writer in the room. Withhold the credential actor. Let the screen be a guess. The session stays asleep until its own label speaks.
+- A malformed `aiko_session` is a durable resident of a store that survives reinstall, and §2d / §2e tune it to the same pitch as a locked phone. `errSecInteractionNotAllowed` is transient: the phone will open. Malformed is permanent. The item exists, so §2a will not fall through to the legacy pair. The write rule replaces a record only for absent, tombstone, quarantine, or the same island. `switchIsland` waits while the vault is unreadable. Sign-in cannot overwrite bytes the rule refuses to classify. Reinstall keeps the Keychain, so it keeps the trap, and every later boot is a guess that saves nothing and adopts nothing. A later record whose `v` this parser calls malformed falls down the same well. Split the branch. Transient refusal: save nothing, write nothing, wait. Durable garbage: a state sign-in is allowed to replace. Telemetry on both.
+
+**What holds:**
+- One Keychain item at design 23's accessibility (§2a). A crash can no longer fasten one island's label to another's tokens. Round 2's torn triple dies here.
+- The tombstone written before the legacy delete (§2a). A crash inside sign-out leaves a marker that keeps the old pair unread. That retirement is real for sign-out. Quarantine never enters it.
+- A labelled session presented only by a provider built for its own label, left in place, surviving that provider's 401 (§2c). The read path learned.
+- A dev-build legacy pair stays unplaceable unless `aiko_tokens_island` is present (§2b). The current define is no longer historical evidence.
+- The don't-save default when boot never ran, and the locked launch saving nothing (§2d). It holds for a labelled session. Filed under the same "no session" head, it is also what poisons the unlabelled one.
+- The URL-identity residual (§5) is honestly owned. It stays named.
+- The update-path inference for a saved island an older switch wrote (§5) holds on the two invariants it names. It holds for that island alone.
+
+**If RECAST, what to fold back:**
+- In §2b and §2d, an unplaceable result writes a durable owner-unknown marker into `aiko_session` before boot returns. Legacy keys become unread once that marker is durable. Crash residue: marker present, legacy still there, legacy unread. The settle may save an island only after a marker, a true absence, or a tombstone. Placement step 2 ignores any saved island written after an unplaceable result in this install. Add the §6 case: reinstall, legacy pair, process death after the settle saves, next launch presents nothing, and a 401 clears nothing.
+- In §2c and §2d, unresolved and guess build no token provider and emit no auth-logout. Adoption rebuilds the presenter for L after the read, with the guess provider already unable to call `onUnauthenticated` or `clearTokens`. Answer the open question in the smaller gate: the shell may show a guess; the credential actor waits for the vault. Design 23's call still connects on the Face ID edge.
+- In §2e, locked and entitlement-unwritable stay "save nothing, write nothing." Malformed and unknown `v` are replaceable by sign-in. Put that state on the write rule's positive list.
+
