@@ -325,12 +325,12 @@ class _Gateway {
       'PYTHONUNBUFFERED': '1',
     };
 
-    // Migrate BEFORE serving — exactly as the container entrypoint does
-    // (entrypoint.sh: `python -m aiko_gateway.migrate` then uvicorn). The island's
-    // db.py fail-closes on an unmigrated schema ("no alembic_version table"), so a
-    // direct uvicorn boot against a fresh sqlite file dies at startup. Running the
-    // real migrate step keeps this harness a faithful mirror of the prod boot
-    // sequence (migrate → serve) rather than a divergent serve-only shortcut.
+    // Build the island, then migrate, BEFORE serving: the prod sequence.
+    // Since island PR#405 nothing that starts or migrates an island may create its
+    // database (migrate refuses a missing file: MIGRATE_REFUSE_NO_DATABASE). An
+    // island is born from `scripts/build_seed.py`, which `docker build` runs into
+    // the image and the island's own tests import. So: seed (the image build) →
+    // migrate (entrypoint.sh) → uvicorn.
     await _migrate(gatewayDir, python, gatewayEnv, dbFile);
 
     // Seed the canonical `general` channel (EMPTY). In prod, channels appear via
@@ -479,28 +479,35 @@ class _Gateway {
     Map<String, String> env,
     File dbFile,
   ) async {
-    ProcessResult result;
-    try {
-      result = await Process.run(
-        python,
-        ['-m', 'aiko_gateway.migrate'],
-        workingDirectory: gatewayDir,
-        environment: env,
-      ).timeout(const Duration(seconds: 60));
-    } catch (e) {
-      await _bestEffortDelete(dbFile);
-      throw StateError(
-        'Gateway migrate step failed to run (python=$python).\n$e',
-      );
-    }
-    if (result.exitCode != 0) {
-      await _bestEffortDelete(dbFile);
-      throw StateError(
-        'Gateway migrate step exited ${result.exitCode} — schema not built.\n'
-        'python=$python\ngatewayDir=$gatewayDir\n'
-        '--- migrate stdout ---\n${result.stdout}\n'
-        '--- migrate stderr ---\n${result.stderr}',
-      );
+    // Seed first (creates the file, O_EXCL, and builds it to head), then the
+    // entrypoint's migrate (a no-op at head, run so the prod sequence is whole).
+    for (final (step, args) in const [
+      ('seed', ['scripts/build_seed.py']),
+      ('migrate', ['-m', 'aiko_gateway.migrate']),
+    ]) {
+      ProcessResult result;
+      try {
+        result = await Process.run(
+          python,
+          args,
+          workingDirectory: gatewayDir,
+          environment: env,
+        ).timeout(const Duration(seconds: 60));
+      } catch (e) {
+        await _bestEffortDelete(dbFile);
+        throw StateError(
+          'Gateway $step step failed to run (python=$python).\n$e',
+        );
+      }
+      if (result.exitCode != 0) {
+        await _bestEffortDelete(dbFile);
+        throw StateError(
+          'Gateway $step step exited ${result.exitCode}: schema not built.\n'
+          'python=$python\ngatewayDir=$gatewayDir\n'
+          '--- $step stdout ---\n${result.stdout}\n'
+          '--- $step stderr ---\n${result.stderr}',
+        );
+      }
     }
   }
 
