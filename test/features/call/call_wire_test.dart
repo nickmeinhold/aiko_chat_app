@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:aiko_chat_app/features/call/domain/call_invite.dart'
+    show kCallInviteClockSkewTolerance, kCallInviteFreshness;
 import 'package:aiko_chat_app/features/call/domain/call_wire.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -26,6 +28,23 @@ const kRejects = <String, String>{
 };
 
 void main() {
+  // MIRROR PIN, shared with the island: aiko-chat-island
+  // `tests/test_call_hold.py::test_the_hold_outlasts_the_apps_freshness_with_
+  // the_documented_margin` pins these same two numbers. The island holds a
+  // stranger's call invite for `call_hold.HOLD_MS` (60 s) past
+  // max(signed_at, receipt), then delivers it so it arrives too old to ring:
+  // a missed call on every app version (Nick, 2026-10-29; design 25). The hold
+  // is sized against THIS window. Widening either constant here can make it too
+  // short, and a stranger's late invite would ring. So move the island's
+  // `HOLD_MS` FIRST, then update these goldens on both sides, the way the
+  // call/2 vectors below change.
+  group('the window the island\'s stranger-call hold is sized against', () {
+    test('freshness is 10 s and clock-skew tolerance is 5 s', () {
+      expect(kCallInviteFreshness, const Duration(seconds: 10));
+      expect(kCallInviteClockSkewTolerance, const Duration(seconds: 5));
+    });
+  });
+
   group('golden vectors (shared with the island)', () {
     test('the valid invite parses to its id', () {
       expect(

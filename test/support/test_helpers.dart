@@ -183,8 +183,8 @@ Future<void> pumpApp(WidgetTester tester, ProviderContainer container) async {
 /// [FakeRestApi.finishPasskeyAuthentication] defaults to an [Authenticated]
 /// session and the injected [FakePasskeyAuthClient] returns a canned assertion
 /// without hitting a platform channel, so tapping "Already have a passkey?"
-/// immediately navigates to chat (the register button would instead land on the
-/// claim-handle screen — first-passkey-creates-account).
+/// immediately navigates to chat (the register button would instead open Pick
+/// your handle: the handle comes before the passkey, #436).
 Future<void> signIn(WidgetTester tester) async {
   // Tap the sign-in ingress WHATEVER IT IS CALLED. The login screen now swaps
   // which action is primary based on whether a passkey ceremony has already

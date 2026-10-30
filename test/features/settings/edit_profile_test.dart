@@ -52,6 +52,19 @@ void main() {
     expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
   });
 
+  testWidgets('a typed "@" is not saved into the handle', (tester) async {
+    final rest = await openEditProfile(tester);
+
+    await tester.enterText(find.byType(TextField).at(0), '@nick2'); // handle
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(rest.user.username, 'nick2');
+  });
+
   testWidgets('a taken handle shows an inline error and stays put', (
     tester,
   ) async {

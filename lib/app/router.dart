@@ -22,6 +22,7 @@ import 'package:go_router/go_router.dart';
 import '../features/chat/presentation/conversation_details_screen.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/chat/data/chat_rest_api.dart' show AccountSuspended;
+import '../features/auth/presentation/choose_handle_screen.dart';
 import '../features/auth/presentation/claim_handle_screen.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/auth/presentation/suspended_screen.dart';
@@ -45,6 +46,8 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.listen(authControllerProvider, (_, _) => refresh.value++);
   // A new identity awaiting its handle is a redirect trigger too.
   ref.listen(pendingHandleProvider, (_, _) => refresh.value++);
+  // So is an account that still owes the handle it chose (#436).
+  ref.listen(owedHandleProvider, (_, _) => refresh.value++);
   // A ban on this island (→ /suspended) is a redirect trigger too.
   ref.listen(suspendedProvider, (_, _) => refresh.value++);
   // Accepting the Terms is a redirect trigger (gate → login/chat).
@@ -79,13 +82,26 @@ final routerProvider = Provider<GoRouter>((ref) {
         // /suspended holds through a rebuild/restore too — a ban is
         // terminal-for-this-island, so a flagged user must not flash to /splash
         // while auth re-resolves (cage-match Tesla).
-        if (loc == '/login' || loc == '/claim-handle' || loc == '/suspended') {
+        if (loc == '/login' ||
+            loc == '/claim-handle' ||
+            loc == '/choose-handle' ||
+            loc == '/suspended') {
           return null;
         }
         return loc == '/splash' ? null : '/splash';
       }
 
       final loggedIn = auth.value != null;
+      // An account that still owes a chosen handle (#436): the one this device
+      // signed up and couldn't yet apply, or one the island itself reports as
+      // still on its auto-assigned handle. Either way it is held on
+      // /choose-handle: a handle is required before chat (decided 2026-08-02).
+      final user = auth.value;
+      // This account's own debt: a draft, or another account's, never gates.
+      final owesHandle =
+          user != null &&
+          (ref.read(owedHandleProvider).forAccount(user.userId) != null ||
+              user.handleAuto == true);
       // A verified-but-handle-less identity (only meaningful while logged out —
       // see [pendingHandleProvider]).
       final pendingHandle = ref.read(pendingHandleProvider) != null;
@@ -117,8 +133,12 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       // Restore finished: leave the splash for the right destination.
       if (loc == '/splash') {
-        if (loggedIn) return '/';
+        if (loggedIn) return owesHandle ? '/choose-handle' : '/';
         return pendingHandle ? '/claim-handle' : '/login';
+      }
+
+      if (owesHandle) {
+        return loc == '/choose-handle' ? null : '/choose-handle';
       }
 
       if (loggedIn) {
@@ -128,6 +148,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         // link must bounce to chat, not sit on the ban screen while live).
         return (loc == '/login' ||
                 loc == '/claim-handle' ||
+                loc == '/choose-handle' ||
                 loc == '/eula' ||
                 loc == '/suspended')
             ? '/'
@@ -143,6 +164,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       // island's /login (via the loading → /splash → /login redirect).
       if (loc == '/settings/island') return null;
 
+      // Handle-first sign-up starts here, signed out: the handle is chosen
+      // before the passkey exists, so the passkey can be named after it.
+      if (loc == '/choose-handle' && !pendingHandle) return null;
+
       // Logged out: a pending identity must claim a handle first;
       // otherwise the login screen.
       if (pendingHandle) return loc == '/claim-handle' ? null : '/claim-handle';
@@ -156,6 +181,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/claim-handle',
         builder: (_, _) => const ClaimHandleScreen(),
+      ),
+      GoRoute(
+        path: '/choose-handle',
+        builder: (_, _) => const ChooseHandleScreen(),
       ),
       GoRoute(path: '/', builder: (_, _) => const ChatScreen()),
       GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
