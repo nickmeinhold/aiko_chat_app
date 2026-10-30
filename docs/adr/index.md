@@ -27,6 +27,7 @@ The pipeline: ADR (why) → RFC/spec (what) → code (derived, verified against 
 | 0007 | Porting Aiko Services to other languages | Reserved (Andy's research in progress) | Andy |
 | 0008 | Island self-description and the operator attestation | Draft (island-side half is a blocking dependency) | Nick |
 | 0009 | A signing key belongs to one island account; continuity across islands is a link | Accepted 2026-10-24 (amends ADR-0004's "same key on any island") | Nick |
+| 0010 | Aiko's ground, beside Block's Buzz | Draft (2026-10-28; Part 2 amended 2026-10-29) | Nick |
 
 ## The RFC series (protocol specifications)
 
