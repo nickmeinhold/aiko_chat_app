@@ -14,10 +14,16 @@
 /// can't drift — a single source of truth for "where the island lives".
 library;
 
-/// The hardcoded last-resort island: the live production island. Used when
-/// nothing is persisted AND no `--dart-define` was supplied (i.e. a bare
+/// The hardcoded last-resort island: the island a FRESH install starts on. Used
+/// when nothing is persisted AND no `--dart-define` was supplied (i.e. a bare
 /// `flutter run` or a release build that didn't pass `dart_defines/prod.json`).
-const kDefaultIslandBaseUrl = 'https://chat.imagineering.cc';
+/// Enspyr since 2026-10-28, because it is the island that creates accounts
+/// (#436); see [settleUnsavedIsland] for why changing this moves nobody.
+const kDefaultIslandBaseUrl = 'https://chat.enspyr.co';
+
+/// What [kDefaultIslandBaseUrl] was before 2026-10-28. An install that ran one
+/// of those builds without ever choosing an island stays here.
+const kLegacyDefaultIslandBaseUrl = 'https://chat.imagineering.cc';
 
 class IslandConfig {
   /// HTTP(S) base for the REST API, e.g. `http://localhost:8095`. No trailing

@@ -922,6 +922,7 @@ class GatewayRestApi implements ChatRestApi {
 }) {
   final bare = Dio(BaseOptions(baseUrl: baseUrl));
   final tokens = DefaultTokenProvider(
+    island: baseUrl,
     store: store,
     onUnauthenticated: onUnauthenticated,
     remoteRefresh: (rt) async {

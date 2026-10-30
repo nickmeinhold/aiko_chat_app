@@ -98,8 +98,120 @@ class IslandConfigController extends Notifier<IslandConfig> {
     if (persisted != null && persisted.trim().isNotEmpty) {
       return IslandConfig.normalized(persisted);
     }
-    return IslandConfig.fromEnvironment();
+    return settleUnsavedIsland(
+      prefs,
+      save: ref.watch(islandBootProvider) == IslandBoot.decided,
+    );
   }
+}
+
+/// What the boot step ([pinIslandForSurvivingTokens], run in `main`) learned
+/// from the Keychain. Anything that never ran it (tests, tooling) reads
+/// [IslandBoot.decided].
+enum IslandBoot {
+  /// The Keychain answered, or wasn't needed: the settle may save.
+  decided,
+
+  /// The Keychain refused the read (a locked phone). The island stays unsaved
+  /// for this launch, so a later launch that can read the tokens still decides.
+  undecided,
+}
+
+final islandBootProvider = Provider<IslandBoot>((_) => IslandBoot.decided);
+
+/// The island an install with NO saved choice is on, decided once and SAVED.
+///
+/// Until 2026-10-28 an install that never opened the picker saved nothing and
+/// re-read the compiled default on every launch. Changing that default would
+/// have moved every such install to another island on update, still holding
+/// the first island's tokens and push registration, skipping the teardown
+/// [AuthController.switchIsland] does first. So:
+///
+/// - an install with evidence it ran an older build stays where that build
+///   was ([kLegacyDefaultIslandBaseUrl]);
+/// - a fresh install gets [kDefaultIslandBaseUrl];
+/// - either way the answer is saved, so the NEXT default change can only ever
+///   reach fresh installs. Re-checking evidence on later launches instead
+///   would be wrong: a fresh install's first sign-in creates the same evidence.
+///
+/// Only when this build resolves to [kDefaultIslandBaseUrl]. A dev build aimed
+/// elsewhere by `--dart-define` keeps following its define, unsaved, as before.
+///
+/// Tokens are not consulted here: by the time this runs, the boot step has
+/// pinned the island they were minted on, or the Keychain refused and [save]
+/// is false. Within a launch this also runs before any session is recorded,
+/// by construction rather than by a guard: a session is an island's answer,
+/// and every REST client and token provider is built from [configProvider].
+IslandConfig settleUnsavedIsland(SharedPreferences prefs, {bool save = true}) {
+  final env = IslandConfig.fromEnvironment();
+  if (env.httpBaseUrl != kDefaultIslandBaseUrl) return env;
+  final settled = ranAnOlderBuild(prefs)
+      ? kLegacyDefaultIslandBaseUrl
+      : kDefaultIslandBaseUrl;
+  // Not awaited, like [readAndAdopt]: the in-memory value is set synchronously.
+  // A write that never reaches disk leaves the decision to the next launch, when
+  // this build's own session would read as old-build evidence. It doesn't get
+  // that far: the boot step pins the island the session's tokens were minted on
+  // first, and an island minted nothing on cannot be misread.
+  if (save) {
+    unawaited(
+      prefs.setString(islandBaseUrlPrefKey, settled).catchError((_) => false),
+    );
+  }
+  return IslandConfig.normalized(settled);
+}
+
+/// Evidence in prefs that an older build ran here: a session (the cached user
+/// lives and dies with the tokens) or a passkey made on the old default. Read
+/// synchronously, which matters because a VoIP wake on a locked phone can be
+/// the first launch after an update, and the Keychain may refuse a read then.
+bool ranAnOlderBuild(SharedPreferences prefs) =>
+    CachedUserStore(prefs).read() != null ||
+    PasskeyHintStore(prefs).seenFor(kLegacyDefaultIslandBaseUrl);
+
+/// The boot half of the settle, and the only half that can read the Keychain.
+///
+/// iOS keeps the Keychain across an uninstall but not UserDefaults, so a
+/// reinstall can hold tokens with nothing in prefs. Tokens are a session on the
+/// island that minted them, so that island is pinned before anything resolves
+/// one: the island stored with them ([SecureTokenStore.readIsland]), or, for
+/// tokens an older build wrote without one, the island older builds started on.
+/// Guessing "tokens mean the old default" instead pinned every reinstall of an
+/// Enspyr account to imagineering (cage-match #439 round 1).
+///
+/// A Keychain that refuses the read (a locked phone) gives no answer, and none
+/// is invented: this returns [IslandBoot.undecided], and the settle then picks
+/// an island for this launch without saving it.
+///
+/// Run once at boot, before `runApp`. It costs nothing after the first launch,
+/// because an island is saved by then.
+Future<IslandBoot> pinIslandForSurvivingTokens(
+  SharedPreferences prefs, {
+  required Future<({bool held, String? mintedOn})> Function() keychain,
+}) async {
+  final saved = readAndAdopt(
+    prefs,
+    key: islandBaseUrlPrefKey,
+    legacyKey: kLegacyIslandBaseUrlPrefKey,
+    isUsable: (v) => v.trim().isNotEmpty,
+  );
+  if (saved != null && saved.trim().isNotEmpty) return IslandBoot.decided;
+  if (IslandConfig.fromEnvironment().httpBaseUrl != kDefaultIslandBaseUrl) {
+    return IslandBoot.decided;
+  }
+  final ({bool held, String? mintedOn}) found;
+  try {
+    found = await keychain();
+  } catch (_) {
+    return IslandBoot.undecided;
+  }
+  if (!found.held) return IslandBoot.decided;
+  final mintedOn = found.mintedOn;
+  final island = mintedOn != null && mintedOn.trim().isNotEmpty
+      ? IslandConfig.normalized(mintedOn).httpBaseUrl
+      : kLegacyDefaultIslandBaseUrl;
+  await prefs.setString(islandBaseUrlPrefKey, island);
+  return IslandBoot.decided;
 }
 
 // --- credentials -----------------------------------------------------------

@@ -13,6 +13,7 @@
 // must surface its raw text ("Sign-in failed: …"), never the generic message —
 // so a new failure mode is never invisible again.
 
+import 'package:aiko_chat_app/app/config.dart';
 import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/core/network/network_status.dart';
@@ -56,6 +57,7 @@ void main() {
         passkeyAuthClientProvider.overrideWithValue(passkey),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
+            island: 'https://island.test',
             store: tokenStore,
             remoteRefresh: (_) async => 'access2',
             onUnauthenticated: () {},
@@ -114,6 +116,7 @@ void main() {
         // cold-start restore never settles — the run hangs rather than fails.
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
+            island: 'https://island.test',
             store: InMemoryTokenStore(),
             remoteRefresh: (_) async => 'access2',
             onUnauthenticated: () {},
@@ -196,7 +199,7 @@ void main() {
         final hint = c.read(passkeyHintStoreProvider);
         expect(hint.seenFor(c.read(configProvider).httpBaseUrl), isTrue);
         expect(
-          hint.seenFor('https://chat.enspyr.co'),
+          hint.seenFor(kLegacyDefaultIslandBaseUrl),
           isFalse,
           reason:
               'a passkey is scoped to a relying party; one island must never vouch '
@@ -229,6 +232,7 @@ void main() {
         passkeyAuthClientProvider.overrideWithValue(FakePasskeyAuthClient()),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
+            island: 'https://island.test',
             store: InMemoryTokenStore(),
             remoteRefresh: (_) async => 'access2',
             onUnauthenticated: () {},
