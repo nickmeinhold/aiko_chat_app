@@ -54,6 +54,10 @@ class _FakeSecureStorage extends FlutterSecureStorage {
 
 const _legacyKey = 'aiko_sov_private_seed';
 
+/// Alice's scoped slot. The v1 name (`aiko_sov_private_seed_alice`) and its
+/// migration are pinned in `sovereign_key_keychain_class_test.dart`.
+const _scopedKey = 'aiko_sov_seed_v2_island_account_alice';
+
 Future<String> _pubOf(SovereignKeyStore s) async =>
     base64Encode((await s.loadOrCreate()).rawPublicKey);
 
@@ -150,14 +154,12 @@ void main() {
 
   group('a corrupt SCOPED seed is named, not silently re-minted', () {
     test('it throws a StateError rather than a bare FormatException', () async {
-      storage.items['aiko_sov_private_seed_alice'] = 'nope';
+      storage.items[_scopedKey] = 'nope';
       await expectLater(storeFor('alice').loadOrCreate(), throwsStateError);
     });
 
     test('a wrong-LENGTH scoped seed is rejected too', () async {
-      storage.items['aiko_sov_private_seed_alice'] = base64Encode(
-        List<int>.filled(16, 7),
-      );
+      storage.items[_scopedKey] = base64Encode(List<int>.filled(16, 7));
       await expectLater(storeFor('alice').loadOrCreate(), throwsStateError);
     });
 
@@ -165,7 +167,7 @@ void main() {
     // corruption rather than a store that rejects everything.
     test('POSITIVE CONTROL: a valid scoped seed loads', () async {
       final pair = await Ed25519().newKeyPair();
-      storage.items['aiko_sov_private_seed_alice'] = base64Encode(
+      storage.items[_scopedKey] = base64Encode(
         await pair.extractPrivateKeyBytes(),
       );
       expect(
@@ -196,7 +198,7 @@ void main() {
     // measuring the no-session case rather than a store that never writes at all.
     test('POSITIVE CONTROL: a real id persists', () async {
       await storeFor('alice').loadOrCreate();
-      expect(storage.items.containsKey('aiko_sov_private_seed_alice'), isTrue);
+      expect(storage.items.containsKey(_scopedKey), isTrue);
     });
   });
 
@@ -253,7 +255,7 @@ void main() {
       expect(keys[1].rawPublicKey, hasLength(32));
       final onDisk = base64Encode(
         (await (await Ed25519().newKeyPairFromSeed(
-          base64Decode(storage.items['aiko_sov_private_seed_alice']!),
+          base64Decode(storage.items[_scopedKey]!),
         )).extractPublicKey()).bytes,
       );
       expect(
@@ -284,10 +286,10 @@ void main() {
     test(
       'a failed load evicts the memo so the same instance can retry',
       () async {
-        storage.items['aiko_sov_private_seed_alice'] = 'corrupt';
+        storage.items[_scopedKey] = 'corrupt';
         final store = storeFor('alice');
         await expectLater(store.loadOrCreate(), throwsStateError);
-        storage.items.remove('aiko_sov_private_seed_alice');
+        storage.items.remove(_scopedKey);
         await expectLater(store.loadOrCreate(), completes);
       },
     );
