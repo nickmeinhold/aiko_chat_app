@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_rest_api.dart';
+import '../../auth/domain/handle_input.dart';
 
 /// Edit the mutable identity labels — handle + display name. Identity is the
 /// key; these are labels on top of it (handle unique-at-a-time + change
@@ -40,7 +41,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   Future<void> _save() async {
     final user = ref.read(authControllerProvider).value;
     if (user == null) return;
-    final newHandle = _handle.text.trim();
+    final newHandle = normalizeHandle(_handle.text);
     final newName = _displayName.text.trim();
     // Client-side symmetry with the island's PatchMeReq validator, which 422s a
     // provided-but-blank handle AND display_name (cage-match #114, Tesla+Wu): guard

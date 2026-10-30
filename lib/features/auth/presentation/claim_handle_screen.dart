@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/providers.dart';
 import '../../../core/diagnostics/report_problem_button.dart';
 import '../application/auth_controller.dart';
+import '../domain/handle_input.dart';
 import 'auth_error_text.dart';
 
 /// Shown once, right after a NEW identity is verified (first-passkey-creates-
@@ -31,7 +32,7 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
   }
 
   void _submit() {
-    final handle = _handle.text.trim();
+    final handle = normalizeHandle(_handle.text);
     if (handle.isEmpty) return;
     final displayName = _displayName.text.trim().isEmpty
         ? handle

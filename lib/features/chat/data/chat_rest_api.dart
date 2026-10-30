@@ -164,6 +164,23 @@ class AccountSuspended extends Unauthorized {
   String toString() => 'AccountSuspended';
 }
 
+/// The island is not creating new accounts: `403 {"detail":"registration is
+/// closed"}`, raised by the island's single account-creation gate
+/// (`_require_may_provision_account`) with the same wording on every door that
+/// creates a user. A refinement of [Unauthorized] for the same reason as
+/// [AccountSuspended]: routers on the base type keep treating it as terminal,
+/// and only the copy changes.
+///
+/// It was a plain [Unauthorized] until #436, so a would-be new user read
+/// "couldn't verify that passkey, create a new one" and looped. The phone
+/// stores each passkey BEFORE `register/finish` answers, so every loop left one
+/// more credential the island will never accept.
+class RegistrationClosed extends Unauthorized {
+  const RegistrationClosed() : super(403);
+  @override
+  String toString() => 'RegistrationClosed';
+}
+
 /// The gateway ANSWERED and refused this specific action for an **authorization**
 /// reason — a plain `403` whose body is NOT the ban phrase (e.g. the island's
 /// `ModeratorUser` gate on an operator endpoint, `deps.py:63 "not a moderator"`,
@@ -293,7 +310,12 @@ abstract interface class ChatRestApi {
   /// WebAuthn creation options + a binding [PasskeyChallenge.state]. No prior
   /// session is required — the matching [finishPasskeyRegistration] mints the
   /// account.
-  Future<PasskeyChallenge> startPasskeyRegistration();
+  ///
+  /// [name] labels the passkey in the user's password manager: their handle
+  /// (#436), sent as `{"name": …}`. It is only a label on their own phone and
+  /// grants nothing. An island older than the label ignores the body and keeps
+  /// its random `aiko-…` one.
+  Future<PasskeyChallenge> startPasskeyRegistration({String? name});
 
   /// Complete registration: hand back the device's attestation [credentialJson]
   /// with the [state] from [startPasskeyRegistration]. Returns an
@@ -353,6 +375,17 @@ abstract interface class ChatRestApi {
   /// back to the transitional carriage allowlist, never flipping a known host
   /// off. Token-less: capability discovery must work before/without a session.
   Future<GatewayCapabilities?> getCapabilities();
+
+  /// Will this island's PASSKEY door create a NEW account right now? Read from
+  /// `creates_accounts` on the passkey entry of the public `GET
+  /// /v1/auth/providers` (island PR #433). Only `false` stops anything: the
+  /// caller must then not start a registration ceremony, because the phone
+  /// saves the passkey before the island can refuse, leaving one it will never
+  /// accept (#436). `null` means the island didn't say (older than the field,
+  /// a 404, no network, an odd body) and reads as "carry on as before": absence
+  /// is not a refusal. Token-less and never throws, like [getCapabilities].
+  /// Sign-in and add-a-device work whatever this says.
+  Future<bool?> passkeyCreatesAccounts();
 
   Future<AppUser> me();
 

@@ -4,12 +4,19 @@ import 'package:aiko_chat_app/app/providers.dart';
 import 'package:aiko_chat_app/core/auth/token_provider.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/auth/data/auth_exceptions.dart';
+import 'package:aiko_chat_app/features/auth/data/owed_handle_store.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show PasskeyAlreadyRegistered;
+    show
+        AccountSuspended,
+        HandleTaken,
+        PasskeyAlreadyRegistered,
+        RegistrationClosed,
+        Unauthorized;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/fake_chat_transport.dart';
 import '../../support/fakes.dart';
@@ -23,6 +30,7 @@ void main() {
     required FakeRestApi rest,
     required FakePasskeyAuthClient passkey,
     InMemoryTokenStore? store,
+    SharedPreferences? prefs,
   }) {
     final tokenStore = store ?? InMemoryTokenStore();
     late final ProviderContainer container;
@@ -38,6 +46,8 @@ void main() {
         restApiProvider.overrideWithValue(rest),
         transportProvider.overrideWithValue(FakeChatTransport()),
         passkeyAuthClientProvider.overrideWithValue(passkey),
+        // Opt-in only, so the default keeps the prefs-less coverage above.
+        if (prefs != null) sharedPreferencesProvider.overrideWithValue(prefs),
         cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
@@ -212,16 +222,291 @@ void main() {
   });
 
   group('register (first passkey creates account)', () {
+    Future<void> register(ProviderContainer c) => c
+        .read(authControllerProvider.notifier)
+        .registerWithPasskey(handle: 'nicka', displayName: 'Nick');
+
+    // THE behaviour #436 is about, against what the island really answers (a
+    // live session under an auto-assigned `aiko-…` handle). It went missing
+    // twice while the fake answered a PendingHandle the island no longer sends.
     test(
-      'attestation → finish → parks a PendingHandle, stays logged out',
+      'a new account ends up with the handle it chose, never on aiko-…',
       () async {
-        final rest = FakeRestApi(); // default register outcome = PendingHandle
+        final rest = FakeRestApi(); // the island's real answer, by default
+        final passkey = FakePasskeyAuthClient();
+        final c = makeContainer(rest: rest, passkey: passkey);
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+
+        await register(c);
+
+        expect(
+          rest.lastPasskeyRegisterName,
+          'nicka',
+          reason: 'the passkey is labelled with the handle',
+        );
+        expect(rest.updateProfileCalls, 1, reason: 'the handle is applied');
+        final user = c.read(authControllerProvider).value;
+        expect(user?.username, 'nicka');
+        expect(user?.displayName, 'Nick');
+        expect(user?.handleAuto, isFalse);
+        expect(
+          _nothingOwed(c.read(owedHandleProvider)),
+          isTrue,
+          reason: 'nothing left owed',
+        );
+      },
+    );
+
+    test('the island refuses the handle → signed in, but the handle is still '
+        'owed, bound to this account, with the reason', () async {
+      final rest = FakeRestApi()..updateProfileThrows = const HandleTaken();
+      final passkey = FakePasskeyAuthClient();
+      final c = makeContainer(rest: rest, passkey: passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+
+      final user = c.read(authControllerProvider).value;
+      expect(user, isNotNull, reason: 'the account exists; never fail sign-in');
+      expect(user!.username, startsWith('aiko-'));
+      final owed = c.read(owedHandleProvider).forAccount(user.userId);
+      expect(
+        owed?.userId,
+        user.userId,
+        reason: 'this is what the router reads',
+      );
+      expect(owed?.handle, 'nicka');
+      expect(owed?.failure, isA<HandleTaken>());
+
+      // Picking again from /choose-handle pays it.
+      rest.updateProfileThrows = null;
+      await c
+          .read(authControllerProvider.notifier)
+          .chooseHandle('nicka2', 'Nick');
+      expect(c.read(authControllerProvider).value?.username, 'nicka2');
+      expect(_nothingOwed(c.read(owedHandleProvider)), isTrue);
+    });
+
+    // A TERMINAL answer to the first payment is not a refusal. Shown as one, it
+    // left the dead (or banned) session published on /choose-handle until a
+    // retry happened to go through `saveProfile`, which settles both.
+    test('a dead session on the first payment SIGNS OUT — not a reason on '
+        '/choose-handle', () async {
+      final rest = FakeRestApi()..updateProfileThrows = const Unauthorized(401);
+      final store = InMemoryTokenStore();
+      final c = makeContainer(
+        rest: rest,
+        passkey: FakePasskeyAuthClient(),
+        store: store,
+      );
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+      await pumpEventQueue(); // the teardown is unawaited, as in saveProfile
+
+      expect(c.read(authControllerProvider).value, isNull);
+      expect(store.current, isNull, reason: 'the dead tokens are cleared');
+      final owed = c
+          .read(owedHandleProvider)
+          .forAccount(FakeRestApi.newAccountUser.userId);
+      expect(owed?.handle, 'nicka', reason: 'still owed by that account');
+      expect(owed?.failure, isNull, reason: 'never filed as a refusal');
+    });
+
+    test(
+      'a ban on the first payment goes through the suspended door',
+      () async {
+        final rest = FakeRestApi()
+          ..updateProfileThrows = const AccountSuspended();
+        final store = InMemoryTokenStore();
+        final c = makeContainer(
+          rest: rest,
+          passkey: FakePasskeyAuthClient(),
+          store: store,
+        );
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+
+        await register(c);
+
+        expect(c.read(suspendedProvider), isTrue);
+        final auth = c.read(authControllerProvider);
+        expect(auth.hasError, isFalse, reason: 'settled, not left as an error');
+        expect(auth.value, isNull);
+        expect(store.current, isNull);
+      },
+    );
+
+    test('a reply LOST after the island made the account keeps the chosen '
+        'handle, unbound', () async {
+      // Indistinguishable from "no account" here, so it must not be treated as
+      // one. Unbound, the draft gates nobody; it pre-fills /choose-handle, and
+      // the island's handle_auto holds the account that does exist.
+      final rest = FakeRestApi()
+        ..finishPasskeyRegistrationReplyLost = StateError('connection reset');
+      final c = makeContainer(rest: rest, passkey: FakePasskeyAuthClient());
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+
+      expect(c.read(authControllerProvider).value, isNull);
+      final owed = c.read(owedHandleProvider).draft;
+      expect(owed?.handle, 'nicka', reason: 'the choice survives');
+      expect(owed?.userId, isNull, reason: 'unbound: never a gate');
+    });
+
+    test(
+      'a failed register/start never touches a debt another account owes',
+      () async {
+        final rest = FakeRestApi()
+          ..startPasskeyRegistrationThrows = StateError('offline');
+        final c = makeContainer(rest: rest, passkey: FakePasskeyAuthClient());
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+        await c
+            .read(owedHandleProvider.notifier)
+            .owe(
+              'someone-else',
+              const OwedHandle(handle: 'robin', displayName: 'Robin'),
+            );
+
+        await register(c);
+
+        final owed = c.read(owedHandleProvider).forAccount('someone-else');
+        expect(owed?.userId, 'someone-else');
+        expect(owed?.handle, 'robin');
+      },
+    );
+
+    // ROUND 2's SCENARIO (Noether, Carnot, Tesla): A's PATCH failed, A signed
+    // out, and B on the same device started a sign-up and cancelled it. With
+    // one slot the cancel erased A's debt, which is A's only gate on an island
+    // without handle_auto. The ceremony now touches only the device's draft.
+    test('a prefs write that THROWS cannot fail a registration the island '
+        'committed', () async {
+      // bindDraft runs after register/finish made the account and before the
+      // session is adopted, so an escaping exception left the user signed out
+      // beside an account and a saved passkey (Carnot, cage-match #440 r3).
+      final c = makeContainer(
+        rest: FakeRestApi(),
+        passkey: FakePasskeyAuthClient(),
+        prefs: _ThrowingPrefs(),
+      );
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+
+      final user = c.read(authControllerProvider).value;
+      expect(user, isNotNull, reason: 'signed in despite the disk');
+      expect(user!.username, 'nicka');
+      expect(_nothingOwed(c.read(owedHandleProvider)), isTrue);
+    });
+
+    test(
+      'a CANCELLED sign-up by someone else never erases a debt an account owes',
+      () async {
+        final rest = FakeRestApi();
+        final c = makeContainer(
+          rest: rest,
+          passkey: FakePasskeyAuthClient(
+            registerThrows: const AuthCeremonyCancelled(),
+          ),
+        );
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+        await c
+            .read(owedHandleProvider.notifier)
+            .owe(
+              'account-a',
+              const OwedHandle(handle: 'robin', displayName: 'Robin'),
+            );
+
+        await register(c);
+
+        expect(rest.passkeyRegisterStartCalls, 1, reason: 'start succeeded');
+        expect(
+          c.read(owedHandleProvider).forAccount('account-a')?.handle,
+          'robin',
+        );
+        expect(c.read(owedHandleProvider).draft, isNull);
+      },
+    );
+
+    test(
+      'a COMPLETED sign-up owes its own debt beside another account\'s',
+      () async {
+        final rest = FakeRestApi()..updateProfileThrows = const HandleTaken();
+        final c = makeContainer(rest: rest, passkey: FakePasskeyAuthClient());
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+        await c
+            .read(owedHandleProvider.notifier)
+            .owe(
+              'account-a',
+              const OwedHandle(handle: 'robin', displayName: 'Robin'),
+            );
+
+        await register(c);
+
+        final owed = c.read(owedHandleProvider);
+        expect(
+          owed.forAccount('account-a')?.handle,
+          'robin',
+          reason: 'untouched',
+        );
+        expect(
+          owed.forAccount(FakeRestApi.newAccountUser.userId)?.handle,
+          'nicka',
+          reason: 'the new account owes its own',
+        );
+        expect(owed.draft, isNull, reason: 'the draft became that debt');
+      },
+    );
+
+    test('nothing is owed when the island made no account', () async {
+      for (final rest in [
+        FakeRestApi()..createsAccounts = false, // refused before the ceremony
+        FakeRestApi()..startPasskeyRegistrationThrows = StateError('down'),
+      ]) {
+        final c = makeContainer(rest: rest, passkey: FakePasskeyAuthClient());
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+        await register(c);
+        expect(c.read(authControllerProvider).value, isNull);
+        expect(_nothingOwed(c.read(owedHandleProvider)), isTrue);
+      }
+      final cancelled = makeContainer(
+        rest: FakeRestApi(),
+        passkey: FakePasskeyAuthClient(
+          registerThrows: const AuthCeremonyCancelled(),
+        ),
+      );
+      addTearDown(cancelled.dispose);
+      await cancelled.read(authControllerProvider.future);
+      await register(cancelled);
+      expect(_nothingOwed(cancelled.read(owedHandleProvider)), isTrue);
+    });
+
+    test(
+      'an island that still asks for the handle itself (PendingHandle) parks '
+      'it for the claim screen, and the app owes nothing of its own',
+      () async {
+        final rest = FakeRestApi()
+          ..passkeyRegisterOutcome = const PendingHandle(
+            provisioningToken: 'passkey-prov',
+            suggestedName: null,
+          );
         final passkey = FakePasskeyAuthClient(attestation: 'attest-json');
         final c = makeContainer(rest: rest, passkey: passkey);
         addTearDown(c.dispose);
         await c.read(authControllerProvider.future);
 
-        await c.read(authControllerProvider.notifier).registerWithPasskey();
+        await register(c);
 
         expect(rest.passkeyRegisterStartCalls, 1);
         expect(passkey.registerCalls, 1);
@@ -237,6 +522,7 @@ void main() {
           'passkey-prov',
           reason: 'pending state drives the router to /claim-handle',
         );
+        expect(_nothingOwed(c.read(owedHandleProvider)), isTrue);
       },
     );
 
@@ -256,9 +542,59 @@ void main() {
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
 
       expect(c.read(authControllerProvider).value, isNotNull);
+    });
+
+    // #436 part 2. The ceremony saves a passkey on the phone before the island
+    // can refuse, so the island is asked first and a "no" must stop everything
+    // before the platform sheet: no challenge, no ceremony, no orphan.
+    test('island says it takes no new accounts → RegistrationClosed, and no '
+        'ceremony is started', () async {
+      final rest = FakeRestApi()..createsAccounts = false;
+      final passkey = FakePasskeyAuthClient();
+      final c = makeContainer(rest: rest, passkey: passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+
+      expect(c.read(authControllerProvider).error, isA<RegistrationClosed>());
+      expect(c.read(authControllerProvider).value, isNull);
+      expect(passkey.registerCalls, 0, reason: 'no passkey is created');
+      expect(rest.passkeyRegisterStartCalls, 0, reason: 'no challenge either');
+    });
+
+    test(
+      'island that does not say (null) → registers exactly as before',
+      () async {
+        final rest = FakeRestApi(); // createsAccounts null: an older island
+        final passkey = FakePasskeyAuthClient();
+        final c = makeContainer(rest: rest, passkey: passkey);
+        addTearDown(c.dispose);
+        await c.read(authControllerProvider.future);
+
+        await register(c);
+
+        expect(rest.createsAccountsCalls, 1, reason: 'it did ask');
+        expect(passkey.registerCalls, 1, reason: 'absence is not a refusal');
+        expect(rest.passkeyRegisterFinishCalls, 1);
+        expect(c.read(authControllerProvider).hasError, isFalse);
+      },
+    );
+
+    test('island says yes → registers', () async {
+      final rest = FakeRestApi()..createsAccounts = true;
+      final passkey = FakePasskeyAuthClient();
+      final c = makeContainer(rest: rest, passkey: passkey);
+      addTearDown(c.dispose);
+      await c.read(authControllerProvider.future);
+
+      await register(c);
+
+      expect(passkey.registerCalls, 1);
+      expect(rest.passkeyRegisterFinishCalls, 1);
     });
 
     test('user dismisses the sheet → no-op, finish not called', () async {
@@ -270,7 +606,7 @@ void main() {
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
 
       final state = c.read(authControllerProvider);
       expect(state.hasError, isFalse);
@@ -294,11 +630,11 @@ void main() {
       addTearDown(c.dispose);
       await c.read(authControllerProvider.future);
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
       expect(c.read(authControllerProvider).value, isNotNull);
       final callsAfterLogin = passkey.registerCalls;
 
-      await c.read(authControllerProvider.notifier).registerWithPasskey();
+      await register(c);
       expect(
         passkey.registerCalls,
         callsAfterLogin,
@@ -320,6 +656,25 @@ void main() {
         const AuthTokens(accessToken: 'access', refreshToken: 'refresh'),
       ),
     );
+
+    // The trap the island's cage-match caught: register/start is ALSO
+    // add-a-device's start. A closed island refuses new ACCOUNTS, never a
+    // second passkey on an existing one, so the #436 gate must not reach here.
+    test('a closed island still lets a signed-in user add a passkey', () async {
+      final rest = FakeRestApi()..createsAccounts = false;
+      final passkey = FakePasskeyAuthClient();
+      final c = signedIn(rest, passkey);
+      addTearDown(c.dispose);
+      expect(await c.read(authControllerProvider.future), isNotNull);
+
+      final added = await c
+          .read(authControllerProvider.notifier)
+          .addPasskeyToCurrentAccount();
+
+      expect(added, isTrue);
+      expect(rest.addPasskeyCalls, 1);
+      expect(rest.createsAccountsCalls, 0, reason: 'add never asks');
+    });
 
     test(
       'links via the AUTHED add endpoint without disturbing the session',
@@ -351,6 +706,11 @@ void main() {
           reason: 'finishes via the authed add endpoint',
         );
         expect(rest.lastAddPasskeyState, 'reg-state');
+        expect(
+          rest.lastPasskeyRegisterName,
+          FakeRestApi.defaultUser.username,
+          reason: 'the new passkey is labelled with the signed-in handle',
+        );
         expect(rest.lastAddPasskeyCredential, 'attest-json');
         expect(
           rest.passkeyRegisterFinishCalls,
@@ -489,4 +849,23 @@ void main() {
       },
     );
   });
+}
+
+bool _nothingOwed(OwedHandles o) => o.draft == null && o.debts.isEmpty;
+
+/// SharedPreferences whose every write throws, as a full or failing disk does.
+/// Reads find nothing.
+class _ThrowingPrefs implements SharedPreferences {
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    final name = invocation.memberName.toString();
+    if (name.contains('"set') ||
+        name.contains('"remove') ||
+        name.contains('"clear')) {
+      return Future<bool>.error(StateError('disk full'));
+    }
+    if (name.contains('"getKeys')) return <String>{};
+    if (name.contains('"containsKey')) return false;
+    return null;
+  }
 }

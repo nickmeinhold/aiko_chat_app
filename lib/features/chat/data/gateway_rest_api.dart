@@ -120,8 +120,33 @@ class GatewayRestApi implements ChatRestApi {
   }
 
   @override
-  Future<PasskeyChallenge> startPasskeyRegistration() =>
-      _passkeyStart('/v1/auth/passkey/register/start');
+  Future<bool?> passkeyCreatesAccounts() async {
+    // Same contract as getCapabilities: every "can't tell" path is null and
+    // nothing throws. Only a real boolean on the passkey entry is an answer; a
+    // string "false" is an odd body, not a refusal.
+    try {
+      final r = await _bare.get('/v1/auth/providers');
+      final data = r.data is String ? jsonDecode(r.data as String) : r.data;
+      final providers = data is Map ? data['providers'] : null;
+      if (providers is! List) return null;
+      for (final p in providers) {
+        if (p is Map && p['slug'] == 'passkey') {
+          final says = p['creates_accounts'];
+          return says is bool ? says : null;
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<PasskeyChallenge> startPasskeyRegistration({String? name}) =>
+      _passkeyStart(
+        '/v1/auth/passkey/register/start',
+        body: name == null ? null : {'name': name},
+      );
 
   @override
   Future<IdentityOutcome> finishPasskeyRegistration(
@@ -185,8 +210,11 @@ class GatewayRestApi implements ChatRestApi {
   /// `options` is the WebAuthn options object. We re-encode `options` to the
   /// opaque JSON string the device authenticator consumes, and carry `state`
   /// untouched to the `finish` call (server-side challenge binding).
-  Future<PasskeyChallenge> _passkeyStart(String path) => _mapNetwork(() async {
-    final r = await _bare.post(path);
+  Future<PasskeyChallenge> _passkeyStart(
+    String path, {
+    Map<String, dynamic>? body,
+  }) => _mapNetwork(() async {
+    final r = await _bare.post(path, data: body);
     final m = _map(r.data);
     final options = m['options'];
     final state = m['state'];
@@ -245,8 +273,28 @@ class GatewayRestApi implements ChatRestApi {
   static Never _throwIfAuthTerminal(DioException e) {
     final code = e.response?.statusCode;
     if (_isSuspended(e)) throw const AccountSuspended();
+    if (_isRegistrationClosed(e)) throw const RegistrationClosed();
     if (code == 401 || code == 403) throw Unauthorized(code);
     throw e;
+  }
+
+  /// True iff this is the island's closed-registration refusal, `403
+  /// {"detail":"registration is closed"}` (#436). Keyed on the body like
+  /// [_isSuspended], so an unrelated 403 on the same door stays a plain
+  /// [Unauthorized].
+  static bool _isRegistrationClosed(DioException e) =>
+      e.response?.statusCode == 403 &&
+      (_detail(e)?.toLowerCase().contains('registration is closed') ?? false);
+
+  /// The `detail` string of an error body, whether dio decoded it to a Map or
+  /// left it a raw JSON String; null for anything else.
+  static String? _detail(DioException e) {
+    final data = e.response?.data;
+    final Object? body = data is String && data.isNotEmpty
+        ? _tryJson(data)
+        : data;
+    final detail = body is Map ? body['detail'] : null;
+    return detail is String ? detail : null;
   }
 
   /// True iff this is the island's account-ban response — `403 {"detail":
@@ -260,16 +308,9 @@ class GatewayRestApi implements ChatRestApi {
   /// hiccup falls through to the generic mapping — on the bare login door that is
   /// 401/403 → Unauthorized; on the authed door a plain 403 → Forbidden (A3). A
   /// suspended user hitting the login door then sees the re-auth copy, never a crash.
-  static bool _isSuspended(DioException e) {
-    if (e.response?.statusCode != 403) return false;
-    final data = e.response?.data;
-    final Object? body = data is String && data.isNotEmpty
-        ? _tryJson(data)
-        : data;
-    final detail = body is Map ? body['detail'] : null;
-    return detail is String &&
-        detail.toLowerCase().contains('account suspended');
-  }
+  static bool _isSuspended(DioException e) =>
+      e.response?.statusCode == 403 &&
+      (_detail(e)?.toLowerCase().contains('account suspended') ?? false);
 
   static Object? _tryJson(String s) {
     try {

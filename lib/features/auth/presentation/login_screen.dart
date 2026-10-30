@@ -26,6 +26,14 @@ final loginActionProvider = NotifierProvider<LoginActionController, AuthAction>(
   LoginActionController.new,
 );
 
+/// What the active island says about creating accounts through the passkey
+/// door ([ChatRestApi.passkeyCreatesAccounts]). Rebuilds with [restApiProvider],
+/// so changing island asks the new one; auto-disposed, so coming back to the
+/// login wall asks again rather than trusting an old answer.
+final passkeyCreatesAccountsProvider = FutureProvider.autoDispose<bool?>(
+  (ref) => ref.watch(restApiProvider).passkeyCreatesAccounts(),
+);
+
 /// The passkey sign-in screen — the app's sole ingress after social sign-in was
 /// removed. First-passkey-creates-account: ONE prominent "Create a passkey"
 /// (register a new passkey + account) plus a secondary "Already have a passkey?"
@@ -62,16 +70,20 @@ class LoginScreen extends ConsumerWidget {
     } catch (_) {
       passkeySeenHere = false;
     }
+    // Only an explicit "no" from the island changes the screen. Loading, an
+    // island older than the field, or no network all leave it as it was; a tap
+    // on Create in that window still can't leave a passkey behind, because
+    // registerWithPasskey asks the island again before any ceremony.
+    final closedHere = ref.watch(passkeyCreatesAccountsProvider).value == false;
 
     void passkeySignIn() {
       ref.read(loginActionProvider.notifier).set(AuthAction.signIn);
       ref.read(authControllerProvider.notifier).signInWithPasskey();
     }
 
-    void passkeyRegister() {
-      ref.read(loginActionProvider.notifier).set(AuthAction.createAccount);
-      ref.read(authControllerProvider.notifier).registerWithPasskey();
-    }
+    // Handle first (#436): the handle is chosen before the passkey exists, so
+    // the passkey is named after it. The ceremony runs from that screen.
+    void passkeyRegister() => context.push('/choose-handle');
 
     return Scaffold(
       // No AppBar — a passkey-first ingress doesn't need a Material title bar;
@@ -122,8 +134,28 @@ class LoginScreen extends ConsumerWidget {
                         // sign-in there would strand a returning user holding a
                         // valid passkey — trading this rejection for a worse bug.
                         // `seen == false` means "no evidence", never "no passkey".
+                        //
+                        // A CLOSED island offers no Create at all: it is the
+                        // button that can only fail, and each failure leaves a
+                        // passkey on the phone the island will never accept
+                        // (#436). Sign-in leads, and the way to an island that
+                        // does take accounts is "Change island" below.
                         if (!kIsWeb) ...[
-                          if (passkeySeenHere) ...[
+                          if (closedHere) ...[
+                            FilledButton.icon(
+                              onPressed: busy ? null : passkeySignIn,
+                              icon: const Icon(Icons.fingerprint),
+                              label: const Text('Sign in with your passkey'),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              "$islandHost isn't taking new accounts right "
+                              'now. To create one, change island below.',
+                              key: const Key('login-registration-closed'),
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ] else if (passkeySeenHere) ...[
                             FilledButton.icon(
                               onPressed: busy ? null : passkeySignIn,
                               icon: const Icon(Icons.fingerprint),
