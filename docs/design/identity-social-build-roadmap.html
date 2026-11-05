@@ -1,0 +1,170 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Identity &amp; Social — build roadmap</title>
+<style>
+:root{
+  --bg:#e7e0cf; --bg-panel:#f3eee1; --text:#16303a; --text-dim:#586d70;
+  --line:#c8bda3; --sea:#c4d0c9; --sea-2:#aebfb8;
+  --beacon:#bd7016; --signal:#227687; --alert:#b8402a;
+  --font-display:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,ui-serif,serif;
+  --font-body:ui-sans-serif,"Avenir Next","Segoe UI",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#0a1720; --bg-panel:#102430; --text:#dce9eb; --text-dim:#83999f; --line:#204049; --sea:#123039; --sea-2:#0d2530; --beacon:#f0b649; --signal:#57c9d8; --alert:#ec7357; }
+}
+:root[data-theme="light"]{ --bg:#e7e0cf; --bg-panel:#f3eee1; --text:#16303a; --text-dim:#586d70; --line:#c8bda3; --sea:#c4d0c9; --sea-2:#aebfb8; --beacon:#bd7016; --signal:#227687; --alert:#b8402a; }
+:root[data-theme="dark"]{ --bg:#0a1720; --bg-panel:#102430; --text:#dce9eb; --text-dim:#83999f; --line:#204049; --sea:#123039; --sea-2:#0d2530; --beacon:#f0b649; --signal:#57c9d8; --alert:#ec7357; }
+*{box-sizing:border-box}
+body{margin:0; background:var(--bg); color:var(--text); font-family:var(--font-body); line-height:1.55; -webkit-font-smoothing:antialiased; overflow-x:hidden}
+.wrap{max-width:1120px; margin:0 auto; padding:0 20px}
+.topbar{display:flex; justify-content:space-between; align-items:center; gap:12px; padding:16px 20px; max-width:1120px; margin:0 auto; font-family:var(--font-mono); font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-dim)}
+.topbar .brand{color:var(--text)} .topbar .brand b{color:var(--beacon); font-weight:600}
+.theme-toggle{background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:999px; padding:6px 12px; cursor:pointer; font-family:var(--font-mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase}
+.theme-toggle:hover{color:var(--text)}
+.hero{padding:26px 0 6px}
+.eyebrow{font-family:var(--font-mono); font-size:12px; letter-spacing:.28em; text-transform:uppercase; color:var(--signal); margin:0 0 12px}
+h1{font-family:var(--font-display); font-weight:600; font-size:clamp(1.9rem,5vw,3rem); line-height:1.05; margin:0; text-wrap:balance}
+.lede{max-width:64ch; margin:12px 0 0; color:var(--text-dim); font-size:1.02rem}
+
+/* decisions strip */
+.decisions{display:flex; flex-wrap:wrap; gap:8px; margin:20px 0 6px}
+.chip{font-family:var(--font-mono); font-size:11px; letter-spacing:.02em; color:var(--text); background:var(--bg-panel); border:1px solid var(--line); border-radius:999px; padding:6px 12px}
+.chip b{color:var(--beacon); font-weight:600}
+
+/* legend */
+.legend{display:flex; flex-wrap:wrap; gap:16px; margin:14px 0 4px; font-family:var(--font-mono); font-size:11px; color:var(--text-dim)}
+.legend .k{display:inline-flex; align-items:center; gap:7px}
+.dot{width:11px; height:11px; border-radius:3px; display:inline-block}
+.dot.now{background:var(--beacon)} .dot.island{background:var(--signal)} .dot.rock{background:var(--alert)} .dot.done{background:var(--text-dim)}
+
+/* board */
+.boardwrap{overflow-x:auto; margin:14px 0 6px; padding-bottom:6px}
+.board{min-width:920px; display:grid; grid-template-columns:120px repeat(4,1fr); gap:12px}
+.colhead{font-family:var(--font-mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-dim); padding:6px 4px; align-self:end; text-align:center}
+.lanelabel{font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text); writing-mode:horizontal-tb; display:flex; align-items:center; padding:0 4px}
+.lanelabel .sub{color:var(--text-dim); font-size:9.5px}
+.cell{min-height:96px; display:flex}
+.card{flex:1; background:var(--bg-panel); border:1px solid var(--line); border-left-width:3px; border-radius:10px; padding:11px 12px; display:flex; flex-direction:column; gap:5px}
+.card.now{border-left-color:var(--beacon)}
+.card.island{border-left-color:var(--signal)}
+.card.rock{border-left-color:var(--alert)}
+.card.done{border-left-color:var(--text-dim); opacity:.72}
+.card .n{font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; color:var(--text-dim); display:flex; justify-content:space-between; gap:6px}
+.card .n .ref{color:var(--text-dim)}
+.card h3{margin:0; font-size:.98rem; font-weight:600; line-height:1.25}
+.card p{margin:0; font-size:.8rem; color:var(--text-dim)}
+.card .dep{margin-top:auto; font-family:var(--font-mono); font-size:9.5px; letter-spacing:.04em; color:var(--text-dim)}
+.card .dep b{color:var(--signal)}
+.card.now .tag{color:var(--beacon)} .card.rock .tag{color:var(--alert)}
+.tag{font-family:var(--font-mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; font-weight:600}
+.empty{flex:1; border:1px dashed var(--line); border-radius:10px; opacity:.4}
+
+.crit{margin:16px 0 4px; padding:14px 16px; border-radius:12px; background:var(--sea-2); border:1px solid var(--line); font-size:.94rem}
+.crit b{color:var(--text)} .crit .path{font-family:var(--font-mono); font-size:.86rem; color:var(--text)}
+.crit .path .i{color:var(--signal)} .crit .path .a{color:var(--beacon)}
+
+.footer{margin:22px 0 44px; padding-top:14px; border-top:1px solid var(--line); font-family:var(--font-mono); font-size:11px; letter-spacing:.05em; color:var(--text-dim); display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap}
+
+@media (max-width:640px){ .lanelabel{font-size:10px} }
+</style>
+
+<div class="topbar">
+  <div class="brand">Aiko · <b>identity &amp; social roadmap</b></div>
+  <button class="theme-toggle" id="themeBtn">◑ theme</button>
+</div>
+
+<div class="wrap">
+  <header class="hero">
+    <p class="eyebrow">from one afternoon of decisions → a sequenced build</p>
+    <h1>Identity, naming &amp; engagement — what unlocks what</h1>
+    <p class="lede">Everything decided today, laid out by dependency. Two lanes: what <b>we</b> build in the app, and what the <b>island</b> must ship for it to work. Only two boxes need no one else — start there; the island is the bottleneck for the rest.</p>
+  </header>
+
+  <div class="decisions">
+    <span class="chip">identity = <b>your key</b>, not your name</span>
+    <span class="chip">handle · <b>required at signup</b> · unique-at-a-time · <b>changeable</b> (+cooldown)</span>
+    <span class="chip">display name · <b>editable anytime</b> · non-unique</span>
+    <span class="chip">avatar v1 · key-derived · <b>Blockie</b></span>
+    <span class="chip">mentions · <b>bind to key</b>, render live handle · picker-only</span>
+    <span class="chip">notifications · in-app now · <b>push = the rock</b></span>
+  </div>
+
+  <div class="legend">
+    <span class="k"><span class="dot now"></span> ship now — app only, no dependency</span>
+    <span class="k"><span class="dot island"></span> island handoff (bottleneck)</span>
+    <span class="k"><span class="dot rock"></span> the rock — a project, not a sprint</span>
+    <span class="k"><span class="dot done"></span> already built</span>
+  </div>
+
+  <div class="boardwrap">
+    <div class="board">
+      <!-- header row -->
+      <div class="colhead" style="text-align:left">lane ↓ · phase →</div>
+      <div class="colhead">0 · Foundation</div>
+      <div class="colhead">1 · Editing</div>
+      <div class="colhead">2 · Social</div>
+      <div class="colhead">3 · Engagement</div>
+
+      <!-- APP lane -->
+      <div class="lanelabel">App&nbsp;<span class="sub">(us)</span></div>
+      <div class="cell"><div class="card now">
+        <div class="n"><span>② avatar</span><span class="ref">#2514</span></div>
+        <h3>Blockie mark</h3><p>Dart <code>MarkPainter(pubkey)</code> — everyone gets a face.</p>
+        <div class="dep tag">▶ ship now · no deps</div>
+      </div></div>
+      <div class="cell"><div class="card island">
+        <div class="n"><span>③ profile edit</span><span class="ref">#2513</span></div>
+        <h3>Edit name / change handle</h3><p>Settings UI over the PATCH endpoints.</p>
+        <div class="dep">needs <b>① + H2</b></div>
+      </div></div>
+      <div class="cell"><div class="card island">
+        <div class="n"><span>④ mentions</span><span class="ref">#2516</span></div>
+        <h3>@ compose &amp; render</h3><p>Key-bound; autocomplete; live handle at render.</p>
+        <div class="dep">needs <b>① + H3</b></div>
+      </div></div>
+      <div class="cell"><div class="card now">
+        <div class="n"><span>⑤ notif v0</span><span class="ref">app</span></div>
+        <h3>In-app badge &amp; list</h3><p>"You were @'d" while the app is open.</p>
+        <div class="dep">needs <b>④</b></div>
+      </div></div>
+
+      <!-- ISLAND lane -->
+      <div class="lanelabel">Island&nbsp;<span class="sub">(handoff)</span></div>
+      <div class="cell"><div class="card island">
+        <div class="n"><span>① handle@signup</span><span class="ref">H1</span></div>
+        <h3>register/finish → <code>pending</code></h3><p>Return a provisioning token so the claim screen fires.</p>
+        <div class="dep">app claim screen <b>already built ✓</b></div>
+      </div></div>
+      <div class="cell"><div class="card island">
+        <div class="n"><span>H2 endpoints</span><span class="ref">H2</span></div>
+        <h3>PATCH display_name / handle</h3><p>Uniqueness re-check + old-handle release cooldown.</p>
+        <div class="dep">pairs with <b>③</b></div>
+      </div></div>
+      <div class="cell"><div class="card island">
+        <div class="n"><span>H3 directory</span><span class="ref">H3</span></div>
+        <h3>@query→key + mention wire</h3><p>Member lookup; key-refs on the message (signed).</p>
+        <div class="dep">pairs with <b>④</b></div>
+      </div></div>
+      <div class="cell"><div class="card rock">
+        <div class="n"><span>⑥ push v2</span><span class="ref">#1970</span></div>
+        <h3>APNs / FCM · the rock</h3><p>Background delivery, per-island creds, federation (doc 07).</p>
+        <div class="dep tag">separate project</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="crit">
+    <b>Critical path:</b> <span class="path"><span class="i">① handle@signup (island)</span> → <span class="a">③ / ④ app</span> → <span class="a">⑤ in-app notif</span> → <span class="i">⑥ push (the rock)</span></span>. The island gates everything except the two gold boxes. So the fastest real progress = <b>we ship ② Blockie + ⑤ in-app notifications now</b> (zero island dependency) while H1–H3 queue on the island side.
+  </div>
+
+  <div class="footer">
+    <span>app tasks · #2513 #2514 #2516 · island · H1 H2 H3 #1970 · design · doc 07 notifications-federation-ready</span>
+    <span>identity = key · name = label · face = key · record = log</span>
+  </div>
+</div>
+
+<script>
+document.getElementById("themeBtn").addEventListener("click", ()=>{ const r=document.documentElement; const c=r.getAttribute("data-theme")||(matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light"); r.setAttribute("data-theme", c==="dark"?"light":"dark"); });
+</script>
+
+</body></html>
