@@ -1,6 +1,8 @@
 # Design 16 — the CallKit ring, client half
 
 **Status:** RECAST — struck 4/4 families 2026-09-01, verdict in [`16-callkit-ring-TEMPER.md`](16-callkit-ring-TEMPER.md).
+**SUPERSEDED by [`16-callkit-ring-v2.md`](16-callkit-ring-v2.md)** (2026-09-09) — the recast.
+This file is kept as the record that earned v2, not as a design to build from.
 **Do not build from this document as written.** Twelve fatal flaws stand; §2, §3 and §4 are
 under recast, and the temper adopts a hard gate: no `CXProviderDelegate` line until flaw 5
 (is ringing a capability of an established relationship?) is decided — reversibility is lost
