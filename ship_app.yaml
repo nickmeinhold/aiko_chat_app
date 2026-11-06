@@ -1,4 +1,4 @@
-# The release route: `ship_app ios|macos [--dry-run]` (enspyrco/cli-tools,
+# The release route: `ship_app ios|macos|android [--dry-run]` (enspyrco/cli-tools,
 # ship_app/README.md). Committing this file makes asc AND gplay refuse an
 # upload that didn't come through ship_app, so tool/ship.dart is no longer a
 # route, for any platform.
