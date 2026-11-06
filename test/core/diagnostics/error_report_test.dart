@@ -60,6 +60,38 @@ void main() {
     },
   );
 
+  group('describeApp — the report names the commit a release came from', () {
+    test('a stamped build carries its commit beside the version', () {
+      expect(
+        describeApp(
+          name: 'Aiko Chat',
+          version: '0.0.9',
+          build: '20',
+          commit: '1a2b3c4',
+        ),
+        'Aiko Chat 0.0.9+20 (1a2b3c4)',
+      );
+    });
+
+    test('a local build (no GIT_SHA) says nothing it does not know', () {
+      expect(
+        describeApp(
+          name: 'Aiko Chat',
+          version: '0.0.9',
+          build: '20',
+          commit: '',
+        ),
+        'Aiko Chat 0.0.9+20',
+      );
+    });
+
+    test('a test run is unstamped, so kGitSha is empty here', () {
+      // `flutter test` passes no --dart-define, so this pins the fallback the
+      // local-build case above relies on.
+      expect(kGitSha, isEmpty);
+    });
+  });
+
   group('formatErrorReport', () {
     test(
       'includes time, island, network, every device fact, and the error',

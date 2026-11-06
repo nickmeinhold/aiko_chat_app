@@ -20,5 +20,10 @@
 	<string>export</string>
 	<key>generateAppStoreInformation</key>
 	<false/>
+	<!-- Keep the build number pubspec gives. Absent means true, and then Xcode
+	     silently renumbers a build App Store Connect already holds (aiko #429).
+	     ship_app refuses this plist without it. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
 </dict>
 </plist>
