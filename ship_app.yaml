@@ -12,7 +12,9 @@ ios:
                                # -allowProvisioningUpdates, which export mode doesn't pass
   export_options: ios/ExportOptions.plist
 macos:                         # asc mas-package builds from macos/ExportOptions.plist
-# No android: section yet: this moves iOS and macOS first. Until one is added,
-# Android has no release route at all (gplay refuses outside ship_app too).
+android:
+  track: production            # required: a production upload is a submission
+                               # No data_safety: the upload leaves Play's Data safety
+                               # form as it was set in the Console.
 # No declarations: section yet. How it treats merge commits (aiko merges PRs
 # with merge commits) is still being decided with cli-tools.
