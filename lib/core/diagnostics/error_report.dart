@@ -22,6 +22,29 @@ abstract interface class DiagnosticsSource {
   Future<Map<String, String>> collect();
 }
 
+/// The commit this build was compiled from, stamped by the release tool
+/// (`ship_app.yaml`, `defines.commit: GIT_SHA`), or empty in a local build.
+///
+/// READ HERE ON PURPOSE. ship_app proves a release came from the commit it
+/// claims by finding this string in the compiled Dart, and a define nothing
+/// reads is tree-shaken out, so the proof needs a reader that ships. The
+/// problem report is the natural one: "which commit?" is the first question a
+/// maintainer asks of a report, and the version alone can't answer it (two
+/// builds can share a version: aiko #429).
+const kGitSha = String.fromEnvironment('GIT_SHA');
+
+/// The report's `App` line: `Aiko Chat 0.0.9+20 (1a2b3c4)`, with no
+/// parenthesis when [commit] is empty (a local build). Pure, so it's tested
+/// without the `package_info_plus` channel.
+String describeApp({
+  required String name,
+  required String version,
+  required String build,
+  required String commit,
+}) => commit.isEmpty
+    ? '$name $version+$build'
+    : '$name $version+$build ($commit)';
+
 /// The real source: `package_info_plus` for the app version, `device_info_plus`
 /// for hardware/OS. Uses [defaultTargetPlatform] (not `dart:io`) so it never
 /// pulls `dart:io` into a would-be web build.
@@ -32,7 +55,12 @@ class PlatformDiagnosticsSource implements DiagnosticsSource {
   Future<Map<String, String>> collect() async {
     final out = <String, String>{};
     final pkg = await PackageInfo.fromPlatform();
-    out['App'] = '${pkg.appName} ${pkg.version}+${pkg.buildNumber}';
+    out['App'] = describeApp(
+      name: pkg.appName,
+      version: pkg.version,
+      build: pkg.buildNumber,
+      commit: kGitSha,
+    );
 
     if (kIsWeb) {
       out['Platform'] = 'web';
