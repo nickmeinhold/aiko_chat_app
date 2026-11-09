@@ -34,6 +34,13 @@ abstract interface class TokenProvider {
 class DefaultTokenProvider implements TokenProvider {
   final SecureTokenStore _store;
 
+  /// The island this provider presents tokens to (#436). Tokens it writes are
+  /// stored with it, and tokens stored with ANOTHER island are never sent here:
+  /// they are a session there, which a wrong island would answer with a 401 and
+  /// a cleared credential. Untagged tokens (an older build wrote them) are taken
+  /// as this island's, as before #436.
+  final String _island;
+
   /// refreshToken -> new access token. Throws on failure (invalid/expired RT).
   final Future<String> Function(String refreshToken) _remoteRefresh;
 
@@ -45,16 +52,27 @@ class DefaultTokenProvider implements TokenProvider {
   Future<String?>? _inFlight;
 
   DefaultTokenProvider({
+    required String island,
     required SecureTokenStore store,
     required Future<String> Function(String refreshToken) remoteRefresh,
     void Function()? onUnauthenticated,
-  }) : _store = store,
+  }) : _island = island,
+       _store = store,
        _remoteRefresh = remoteRefresh,
        _onUnauthenticated = onUnauthenticated;
 
+  bool _isOwn(String? mintedOn) => mintedOn == null || mintedOn == _island;
+
+  /// The stored tokens, if they are this island's to present.
+  Future<AuthTokens?> _readOwn() async {
+    final tokens = await _store.read();
+    if (tokens == null) return null;
+    return _isOwn(await _store.readIsland()) ? tokens : null;
+  }
+
   @override
   Future<String?> currentAccessToken() async {
-    _cache ??= await _store.read();
+    _cache ??= await _readOwn();
     return _cache?.accessToken;
   }
 
@@ -68,10 +86,12 @@ class DefaultTokenProvider implements TokenProvider {
       _inFlight ??= _doRefresh().whenComplete(() => _inFlight = null);
 
   Future<String?> _doRefresh() async {
-    _cache ??= await _store.read();
+    _cache ??= await _readOwn();
     final refreshToken = _cache?.refreshToken;
     if (refreshToken == null) {
-      await _markUnauthenticated();
+      // Nothing of ours to refresh. Tokens minted on another island stay: they
+      // are that island's session, not this one's to delete.
+      await _markUnauthenticated(clearStore: _isOwn(await _store.readIsland()));
       return null;
     }
     try {
@@ -81,7 +101,7 @@ class DefaultTokenProvider implements TokenProvider {
         refreshToken: refreshToken,
       ); // RT not rotated
       _cache = updated;
-      await _store.write(updated);
+      await _store.write(updated, island: _island);
       return newAccess;
     } on RefreshRejected {
       // Refresh token genuinely rejected -> logout.
@@ -92,8 +112,8 @@ class DefaultTokenProvider implements TokenProvider {
     // clear tokens. The caller retries later with the still-valid refresh token.
   }
 
-  Future<void> _markUnauthenticated() async {
-    await _store.clear();
+  Future<void> _markUnauthenticated({bool clearStore = true}) async {
+    if (clearStore) await _store.clear();
     _cache = null;
     _onUnauthenticated?.call();
   }
@@ -101,10 +121,11 @@ class DefaultTokenProvider implements TokenProvider {
   /// Adopt tokens after a successful login/register.
   Future<void> setTokens(AuthTokens tokens) async {
     _cache = tokens;
-    await _store.write(tokens);
+    await _store.write(tokens, island: _island);
   }
 
-  /// Explicit logout.
+  /// Explicit logout. Clears whatever is stored, whichever island minted it: a
+  /// sign-out must never leave a credential behind for the next cold start.
   Future<void> clearTokens() async {
     _cache = null;
     await _store.clear();

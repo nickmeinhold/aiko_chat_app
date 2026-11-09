@@ -25,6 +25,7 @@ void main() {
     final t = GatewayTransport(
       wsBaseUrl: 'ws://host',
       tokens: DefaultTokenProvider(
+        island: 'https://island.test',
         store: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
@@ -78,6 +79,7 @@ void main() {
       final t = GatewayTransport(
         wsBaseUrl: 'ws://host',
         tokens: DefaultTokenProvider(
+          island: 'https://island.test',
           store: InMemoryTokenStore(
             const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
           ),
@@ -109,6 +111,7 @@ void main() {
     final t = GatewayTransport(
       wsBaseUrl: 'ws://host',
       tokens: DefaultTokenProvider(
+        island: 'https://island.test',
         store: _HangingStore(),
         remoteRefresh: (_) async => 'access1',
       ),

@@ -44,6 +44,7 @@ void main() {
         cacheProvider.overrideWith((ref) => cache),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
+            island: 'https://island.test',
             store: InMemoryTokenStore(seededTokens),
             remoteRefresh: (_) async => 'access2',
             onUnauthenticated: () =>

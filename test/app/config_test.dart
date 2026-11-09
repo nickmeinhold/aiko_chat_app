@@ -5,6 +5,9 @@
 // "already connected" UI both lean on `https://x/` and `https://x` resolving
 // equal, so that's pinned here.
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:aiko_chat_app/app/config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,11 +43,28 @@ void main() {
   });
 
   group('IslandConfig.fromEnvironment', () {
-    test('defaults to the live production gateway with no --dart-define', () {
-      // The test runner passes no GATEWAY_BASE_URL, so this exercises the
-      // hardcoded last-resort default (the #4 "default to prod" requirement).
-      expect(IslandConfig.fromEnvironment().httpBaseUrl, kDefaultIslandBaseUrl);
-      expect(kDefaultIslandBaseUrl, 'https://chat.imagineering.cc');
+    test(
+      'defaults to the island fresh installs start on, with no --dart-define',
+      () {
+        // The test runner passes no ISLAND_BASE_URL, so this exercises the
+        // hardcoded last-resort default. Enspyr since 2026-10-28 (#436): the
+        // island that creates accounts.
+        expect(
+          IslandConfig.fromEnvironment().httpBaseUrl,
+          kDefaultIslandBaseUrl,
+        );
+        expect(kDefaultIslandBaseUrl, 'https://chat.enspyr.co');
+        expect(kLegacyDefaultIslandBaseUrl, 'https://chat.imagineering.cc');
+      },
+    );
+
+    test('prod.json agrees with the compiled default', () {
+      // A store build passes dart_defines/prod.json. If the two disagreed, the
+      // pin in settleUnsavedIsland (which only acts when the build resolves to
+      // kDefaultIslandBaseUrl) would silently never run on a store build.
+      final json =
+          jsonDecode(File('dart_defines/prod.json').readAsStringSync()) as Map;
+      expect(json['ISLAND_BASE_URL'], kDefaultIslandBaseUrl);
     });
   });
 

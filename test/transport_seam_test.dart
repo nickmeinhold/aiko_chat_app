@@ -30,6 +30,7 @@ void main() {
       var calls = 0;
       final gate = Completer<void>();
       final tp = DefaultTokenProvider(
+        island: 'https://island.test',
         store: InMemoryTokenStore(_seed),
         remoteRefresh: (rt) async {
           calls++;
@@ -49,6 +50,7 @@ void main() {
     test('a second refresh AFTER the first completes does run again', () async {
       var calls = 0;
       final tp = DefaultTokenProvider(
+        island: 'https://island.test',
         store: InMemoryTokenStore(_seed),
         remoteRefresh: (rt) async {
           calls++;
@@ -65,6 +67,7 @@ void main() {
     test('success caches new access token + writes store', () async {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
+        island: 'https://island.test',
         store: store,
         remoteRefresh: (rt) async => 'access1',
       );
@@ -85,6 +88,7 @@ void main() {
         final store = InMemoryTokenStore(_seed);
         var unauth = 0;
         final tp = DefaultTokenProvider(
+          island: 'https://island.test',
           store: store,
           onUnauthenticated: () => unauth++,
           remoteRefresh: (rt) async => throw const RefreshRejected(),
@@ -101,6 +105,7 @@ void main() {
         final store = InMemoryTokenStore(_seed);
         var unauth = 0;
         final tp = DefaultTokenProvider(
+          island: 'https://island.test',
           store: store,
           onUnauthenticated: () => unauth++,
           remoteRefresh: (rt) async => throw Exception('network down'),
@@ -116,6 +121,7 @@ void main() {
     test('401 once -> refresh -> retry succeeds with new token', () async {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
+        island: 'https://island.test',
         store: store,
         remoteRefresh: (rt) async => 'access1',
       );
@@ -140,6 +146,7 @@ void main() {
     test('persistent 401 -> retried once then propagates', () async {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
+        island: 'https://island.test',
         store: store,
         remoteRefresh: (rt) async => 'access1',
       );
@@ -326,6 +333,7 @@ void main() {
       String body = '{}',
     }) {
       final tokens = DefaultTokenProvider(
+        island: 'https://island.test',
         store: InMemoryTokenStore(_seed),
         remoteRefresh: remoteRefresh,
       );
@@ -399,6 +407,7 @@ void main() {
 
   group('GatewayTransport demux + send', () {
     DefaultTokenProvider tokens() => DefaultTokenProvider(
+      island: 'https://island.test',
       store: InMemoryTokenStore(_seed),
       remoteRefresh: (rt) async => 'access1',
     );
@@ -791,6 +800,7 @@ void main() {
       final t = GatewayTransport(
         wsBaseUrl: 'ws://host',
         tokens: DefaultTokenProvider(
+          island: 'https://island.test',
           store: InMemoryTokenStore(_seed),
           remoteRefresh: (rt) async => throw const RefreshRejected(),
         ),

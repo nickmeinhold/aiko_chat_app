@@ -8,6 +8,7 @@ import 'core/logging/boot_telemetry.dart';
 import 'app/font_licences.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
+import 'services/secure_token_store.dart';
 import 'features/call/application/call_end_announcer.dart';
 import 'features/call/presentation/ring_overlay.dart';
 import 'features/call/presentation/system_call_navigator.dart';
@@ -41,9 +42,20 @@ Future<void> main() async {
   // unconditionally, which its internal platform guard already prevents.
   await FcmTokenSource.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
+  final tokenStore = SecureTokenStore();
+  final islandBoot = await pinIslandForSurvivingTokens(
+    prefs,
+    keychain: () async => (
+      held: await tokenStore.read() != null,
+      mintedOn: await tokenStore.readIsland(),
+    ),
+  );
   runApp(
     ProviderScope(
-      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        islandBootProvider.overrideWithValue(islandBoot),
+      ],
       child: const AikoChatApp(),
     ),
   );
