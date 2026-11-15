@@ -87,7 +87,7 @@ void main() {
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
               store: store,
-              remoteRefresh: (_) async => 'a2',
+              remoteRefresh: (_) async => RefreshResult('a2'),
               onUnauthenticated: () =>
                   container.read(authEventsProvider).add(null),
             ),
@@ -207,7 +207,7 @@ void main() {
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
               store: store,
-              remoteRefresh: (_) async => 'a2',
+              remoteRefresh: (_) async => RefreshResult('a2'),
               onUnauthenticated: () =>
                   container.read(authEventsProvider).add(null),
             ),
@@ -258,7 +258,7 @@ void main() {
             tokenProviderProvider.overrideWithValue(
               DefaultTokenProvider(
                 store: store,
-                remoteRefresh: (_) async => 'a2',
+                remoteRefresh: (_) async => RefreshResult('a2'),
                 onUnauthenticated: () =>
                     container.read(authEventsProvider).add(null),
               ),
@@ -335,7 +335,7 @@ void main() {
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
               store: store,
-              remoteRefresh: (_) async => 'a2',
+              remoteRefresh: (_) async => RefreshResult('a2'),
               onUnauthenticated: () =>
                   container.read(authEventsProvider).add(null),
             ),

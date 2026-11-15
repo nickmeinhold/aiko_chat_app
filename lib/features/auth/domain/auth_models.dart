@@ -93,8 +93,8 @@ class AuthTokens {
     refreshToken: j['refresh_token'] as String,
   );
 
-  /// Apply a `/auth/refresh` response — only the access token changes; the
-  /// existing refresh token is preserved (the gateway does not rotate it).
+  /// Swap in a fresh access token, keeping this refresh token — the stored one
+  /// a rotating refresh falls back to when it can't persist the rotated token.
   AuthTokens withRefreshedAccess(String newAccessToken) =>
       AuthTokens(accessToken: newAccessToken, refreshToken: refreshToken);
 

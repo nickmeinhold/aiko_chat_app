@@ -64,7 +64,7 @@ void main() {
           refreshCalls++;
           // The first refresh runs in Doze: the network is blocked.
           if (refreshCalls == 1) throw Exception('network blocked');
-          return 'access1';
+          return RefreshResult('access1');
         },
       ),
       channelFactory: island.connect,
@@ -99,7 +99,7 @@ void main() {
         store: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
-        remoteRefresh: (_) async => 'access${++refreshCalls}',
+        remoteRefresh: (_) async => RefreshResult('access${++refreshCalls}'),
       ),
       channelFactory: island.connect,
       clock: () => now,
@@ -139,7 +139,7 @@ void main() {
           store: InMemoryTokenStore(
             const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
           ),
-          remoteRefresh: (_) async => 'access0',
+          remoteRefresh: (_) async => RefreshResult('access0'),
         ),
         channelFactory: island.connect,
         logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
@@ -176,7 +176,7 @@ void main() {
           store: InMemoryTokenStore(
             const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
           ),
-          remoteRefresh: (_) async => 'access0',
+          remoteRefresh: (_) async => RefreshResult('access0'),
         ),
         channelFactory: island.connect,
         logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
@@ -202,7 +202,7 @@ void main() {
         store: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
-        remoteRefresh: (_) async => 'access0',
+        remoteRefresh: (_) async => RefreshResult('access0'),
       ),
       channelFactory: island.connect,
     );
@@ -216,7 +216,7 @@ void main() {
     'flight is not orphaned by the timer that refresh would have armed',
     () async {
       final island = _Island();
-      final gate = Completer<String>();
+      final gate = Completer<RefreshResult>();
       var refreshCalls = 0;
       final states = <ConnectionState>[];
       final t = GatewayTransport(
@@ -245,7 +245,7 @@ void main() {
       expect(island.attempts, 2);
       final live = island.sockets.last;
 
-      gate.complete('access0'); // the stale refresh returns
+      gate.complete(RefreshResult('access0')); // the stale refresh returns
       // The old timer fired after 1s; give it ample time to misbehave.
       await Future<void>.delayed(const Duration(milliseconds: 1500));
 
@@ -269,7 +269,7 @@ void main() {
       wsBaseUrl: 'ws://host',
       tokens: DefaultTokenProvider(
         store: _GatedStore(read.future),
-        remoteRefresh: (_) async => 'access0',
+        remoteRefresh: (_) async => RefreshResult('access0'),
       ),
       channelFactory: island.connect,
     );
@@ -295,7 +295,7 @@ void main() {
         store: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
-        remoteRefresh: (_) async => 'access0',
+        remoteRefresh: (_) async => RefreshResult('access0'),
       ),
       channelFactory: island.connect,
       logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
@@ -327,7 +327,7 @@ void main() {
         store: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
-        remoteRefresh: (_) async => 'access0',
+        remoteRefresh: (_) async => RefreshResult('access0'),
       ),
       channelFactory: (_) =>
           ch = FakeWebSocketChannel(readyGate: handshake.future),
@@ -358,7 +358,7 @@ void main() {
           ),
           remoteRefresh: (_) async {
             refreshCalls++;
-            return 'access1';
+            return RefreshResult('access1');
           },
         ),
         channelFactory: (_) => FakeWebSocketChannel(
@@ -379,7 +379,7 @@ void main() {
   test('ROUND-2 CLASS: a stale REJECTED refresh does not tear down the '
       'socket a kick connected meanwhile', () async {
     final island = _Island();
-    final gate = Completer<String>();
+    final gate = Completer<RefreshResult>();
     final states = <ConnectionState>[];
     final t = GatewayTransport(
       wsBaseUrl: 'ws://host',
@@ -413,7 +413,7 @@ void main() {
   test('ROUND-2 CLASS: dispose while a failure refresh is in flight — the '
       'late result publishes nothing into closed controllers', () async {
     final island = _Island();
-    final gate = Completer<String>();
+    final gate = Completer<RefreshResult>();
     final t = GatewayTransport(
       wsBaseUrl: 'ws://host',
       tokens: DefaultTokenProvider(
@@ -447,7 +447,7 @@ void main() {
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
         remoteRefresh: (_) =>
-            Completer<String>().future, // isolate the corpse case
+            Completer<RefreshResult>().future, // isolate the corpse case
       ),
       channelFactory: island.connect,
       logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
@@ -476,7 +476,7 @@ void main() {
       wsBaseUrl: 'ws://host',
       tokens: DefaultTokenProvider(
         store: store,
-        remoteRefresh: (_) async => 'access0',
+        remoteRefresh: (_) async => RefreshResult('access0'),
       ),
       channelFactory: island.connect,
     );
@@ -492,7 +492,7 @@ void main() {
   test('ROUND-2 CLASS: a stale TRANSIENT refresh arms no timer and leaves the '
       'backoff alone once a kick has connected', () async {
     final island = _Island();
-    final gate = Completer<String>();
+    final gate = Completer<RefreshResult>();
     final rec = _Recorder();
     final t = GatewayTransport(
       wsBaseUrl: 'ws://host',
@@ -534,7 +534,7 @@ void main() {
         store: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
-        remoteRefresh: (_) async => 'access${++refreshCalls}',
+        remoteRefresh: (_) async => RefreshResult('access${++refreshCalls}'),
       ),
       channelFactory: island.connect,
       clock: () => now,
@@ -582,7 +582,7 @@ void main() {
         store: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
-        remoteRefresh: (_) async => 'access0',
+        remoteRefresh: (_) async => RefreshResult('access0'),
       ),
       channelFactory: island.connect,
     );

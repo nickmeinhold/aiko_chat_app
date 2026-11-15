@@ -88,15 +88,6 @@ class GatewayRestApi implements ChatRestApi {
       _authed = authed;
 
   @override
-  Future<String> refresh(String refreshToken) async {
-    final r = await _bare.post(
-      '/v1/auth/refresh',
-      data: {'refresh_token': refreshToken},
-    );
-    return _map(r.data)['access_token'] as String;
-  }
-
-  @override
   Future<GatewayCapabilities?> getCapabilities() async {
     // Best-effort + token-less on the bare client. A 404 (endpoint not deployed
     // yet), a network error, or a non-object body all yield `null` = "unknown",
@@ -930,8 +921,7 @@ class GatewayRestApi implements ChatRestApi {
           '/v1/auth/refresh',
           data: {'refresh_token': rt},
         );
-        return ((r.data as Map).cast<String, dynamic>())['access_token']
-            as String;
+        return RefreshResult.fromJson((r.data as Map).cast<String, dynamic>());
       } on DioException catch (e) {
         final code = e.response?.statusCode;
         if (code == 401 || code == 403) throw const RefreshRejected();

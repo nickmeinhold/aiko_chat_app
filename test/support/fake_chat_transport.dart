@@ -189,9 +189,6 @@ class FakeChatRestApi implements ChatRestApi {
   }
 
   @override
-  Future<String> refresh(String refreshToken) => throw UnimplementedError();
-
-  @override
   Future<GatewayCapabilities?> getCapabilities() async => null;
   @override
   Future<bool?> passkeyCreatesAccounts() async => null;

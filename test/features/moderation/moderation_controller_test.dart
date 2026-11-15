@@ -32,7 +32,7 @@ ProviderContainer _loggedInContainer(FakeRestApi rest) {
       tokenProviderProvider.overrideWithValue(
         DefaultTokenProvider(
           store: InMemoryTokenStore(),
-          remoteRefresh: (_) async => 'access2',
+          remoteRefresh: (_) async => RefreshResult('access2'),
           onUnauthenticated: () => container.read(authEventsProvider).add(null),
         ),
       ),

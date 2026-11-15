@@ -34,7 +34,7 @@ void main() {
         remoteRefresh: (rt) async {
           calls++;
           await gate.future;
-          return 'access1';
+          return RefreshResult('access1');
         },
       );
       final f1 = tp.refreshAccessToken();
@@ -52,7 +52,7 @@ void main() {
         store: InMemoryTokenStore(_seed),
         remoteRefresh: (rt) async {
           calls++;
-          return 'access$calls';
+          return RefreshResult('access$calls');
         },
       );
       expect(await tp.refreshAccessToken(), 'access1');
@@ -66,7 +66,7 @@ void main() {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
         store: store,
-        remoteRefresh: (rt) async => 'access1',
+        remoteRefresh: (rt) async => RefreshResult('access1'),
       );
       final t = await tp.refreshAccessToken();
       expect(t, 'access1');
@@ -117,7 +117,7 @@ void main() {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
         store: store,
-        remoteRefresh: (rt) async => 'access1',
+        remoteRefresh: (rt) async => RefreshResult('access1'),
       );
       var call = 0;
       final headersSeen = <String?>[];
@@ -141,7 +141,7 @@ void main() {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
         store: store,
-        remoteRefresh: (rt) async => 'access1',
+        remoteRefresh: (rt) async => RefreshResult('access1'),
       );
       var call = 0;
       final dio = Dio(BaseOptions(baseUrl: 'http://x'));
@@ -321,7 +321,7 @@ void main() {
     // Full backend WITH the AuthInterceptor in play (apiWith above skips it), so
     // the interceptor's transient-vs-terminal refresh taxonomy is exercised.
     GatewayRestApi backend({
-      required Future<String> Function(String) remoteRefresh,
+      required Future<RefreshResult> Function(String) remoteRefresh,
       required int statusCode,
       String body = '{}',
     }) {
@@ -370,7 +370,7 @@ void main() {
     test('a plain (non-suspended) 403 → Forbidden, NOT Unauthorized — an authZ '
         'denial must not log the user out (A3 taxonomy unbundle)', () async {
       final api = backend(
-        remoteRefresh: (_) async => 'unused',
+        remoteRefresh: (_) async => RefreshResult('unused'),
         statusCode: 403,
       );
       await expectLater(
@@ -384,7 +384,7 @@ void main() {
     test('a ban-403 (body {"detail":"account suspended"}) → AccountSuspended '
         '(still terminal, unchanged by the unbundle)', () async {
       final api = backend(
-        remoteRefresh: (_) async => 'unused',
+        remoteRefresh: (_) async => RefreshResult('unused'),
         statusCode: 403,
         body: '{"detail":"account suspended"}',
       );
@@ -400,7 +400,7 @@ void main() {
   group('GatewayTransport demux + send', () {
     DefaultTokenProvider tokens() => DefaultTokenProvider(
       store: InMemoryTokenStore(_seed),
-      remoteRefresh: (rt) async => 'access1',
+      remoteRefresh: (rt) async => RefreshResult('access1'),
     );
 
     test('connect passes token in query; frames demux to typed streams', () async {

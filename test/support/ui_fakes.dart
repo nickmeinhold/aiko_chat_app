@@ -77,9 +77,6 @@ class FakeRestApi implements ChatRestApi {
   );
 
   @override
-  Future<String> refresh(String refreshToken) async => 'access2';
-
-  @override
   Future<GatewayCapabilities?> getCapabilities() async => null;
 
   /// What [passkeyCreatesAccounts] answers. `null` (the default) is an island

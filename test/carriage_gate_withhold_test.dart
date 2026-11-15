@@ -27,7 +27,7 @@ void main() {
   final seed = AuthTokens(accessToken: 'a0', refreshToken: 'r0');
   DefaultTokenProvider tokens() => DefaultTokenProvider(
     store: InMemoryTokenStore(seed),
-    remoteRefresh: (rt) async => 'access1',
+    remoteRefresh: (rt) async => RefreshResult('access1'),
   );
 
   OriginEnvelope validEnvelope(String id) => OriginEnvelope(
