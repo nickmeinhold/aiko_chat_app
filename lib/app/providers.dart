@@ -109,7 +109,9 @@ class IslandConfigController extends Notifier<IslandConfig> {
 /// `backendProvider` rebuilds per island are doors onto ONE session. Tests
 /// override this with an `InMemoryTokenStore`.
 final sessionVaultProvider = Provider<SessionVault>((ref) {
-  final log = ref.watch(rootLoggerProvider).child('vault');
+  // READ, never watch: a watched input that changed would build a second
+  // vault, with its own lane, lease and flight, over the same two slots.
+  final log = ref.read(rootLoggerProvider).child('vault');
   return SessionVault(
     KeychainSlots(),
     // Lazy: asked only when an older build's token pair is found.
