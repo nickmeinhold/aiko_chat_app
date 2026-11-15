@@ -125,6 +125,11 @@ class GatewayTransport implements ChatTransport {
   /// [kRefreshFloor].
   DateTime? _lastRefreshOk;
 
+  /// The credential the latest connect presented: what a failure refreshes.
+  /// A failure before any connect read one has nothing to refresh, and backs
+  /// off instead.
+  Credential? _presented;
+
   GatewayTransport({
     required String wsBaseUrl,
     required TokenProvider tokens,
@@ -332,18 +337,20 @@ class GatewayTransport implements ChatTransport {
       // channel) used to leave `_connecting` set forever, and every later
       // connect, kick and timer returned at the guard above (Noether, round 2).
       _obs?.info('connect.token.read');
-      String? token = await _tokens.currentAccessToken();
-      if (token == null) _obs?.info('connect.token.refresh');
-      if (epoch == _epoch) token ??= await _safeRefresh();
+      final credential = await _tokens.current();
       if (epoch != _epoch) return _abandoned('token');
-      _obs?.info('connect.token.done', fields: {'has': token != null});
-      if (token == null) {
+      _obs?.info('connect.token.done', fields: {'has': credential != null});
+      // No session to present: there is nothing a refresh could start from.
+      if (credential == null) {
         _connecting = false;
         _setUnauthenticated();
         return;
       }
+      _presented = credential;
 
-      final ch = _channelFactory(Uri.parse('$_wsBaseUrl/v1/ws?token=$token'));
+      final ch = _channelFactory(
+        Uri.parse('$_wsBaseUrl/v1/ws?token=${credential.accessToken}'),
+      );
       await ch.ready; // throws on connect failure
       if (epoch != _epoch) {
         // Disconnected while connecting: this socket belongs to no one.
@@ -393,10 +400,15 @@ class GatewayTransport implements ChatTransport {
   Future<void> _onConnectFailure() async {
     final epoch = _epoch;
     final last = _lastRefreshOk;
-    if (last == null || _clock().difference(last) >= kRefreshFloor) {
+    final presented = _presented;
+    if (presented != null &&
+        (last == null || _clock().difference(last) >= kRefreshFloor)) {
       _obs?.info('failure.refresh.start');
       try {
-        final refreshed = await _tokens.refreshAccessToken();
+        // A session replaced since this connect throws [SessionSuperseded],
+        // which lands with the transient errors below: reconnect, and the
+        // next connect reads whichever session is current.
+        final refreshed = await _tokens.refresh(presented);
         // A success is stamped even when stale: the token is stored either way.
         if (refreshed != null) _lastRefreshOk = _clock();
         // Then stand down if a newer attempt owns the transport — whatever the
@@ -459,25 +471,6 @@ class GatewayTransport implements ChatTransport {
     // outlive its owner — kicks, success and disconnect cancel it, and a stale
     // failure abandons before arming one — so the guard needs no bypass.
     _reconnectTimer = Timer(Duration(seconds: seconds), _openSocket);
-  }
-
-  /// Returns a fresh token on success, null on definitive auth failure; a
-  /// transient refresh error is swallowed to null here ONLY at initial connect
-  /// (we have no token at all, so we can't proceed regardless).
-  ///
-  /// Reached only when [TokenProvider.currentAccessToken] is null, which with
-  /// [DefaultTokenProvider] means NO stored tokens (`AuthTokens.accessToken` is
-  /// non-null): its refresh then finds no refresh token and returns null
-  /// without throwing. So the transient-swallow and a missed `_lastRefreshOk`
-  /// stamp here are unreachable today; raised and rejected in cage-match rounds
-  /// 1-2. A TokenProvider that can hold a refresh token without an access token
-  /// must revisit this.
-  Future<String?> _safeRefresh() async {
-    try {
-      return await _tokens.refreshAccessToken();
-    } catch (_) {
-      return null;
-    }
   }
 
   void _onFrame(dynamic raw) {

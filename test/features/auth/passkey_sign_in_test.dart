@@ -51,8 +51,9 @@ void main() {
         cachedUserStoreProvider.overrideWithValue(InMemoryCachedUserStore()),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
-            store: tokenStore,
-            remoteRefresh: (_) async => 'access2',
+            island: kTestIsland,
+            vault: tokenStore,
+            remoteRefresh: (_) async => RefreshResult('access2'),
             onUnauthenticated: () =>
                 container.read(authEventsProvider).add(null),
           ),

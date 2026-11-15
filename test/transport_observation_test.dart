@@ -25,10 +25,11 @@ void main() {
     final t = GatewayTransport(
       wsBaseUrl: 'ws://host',
       tokens: DefaultTokenProvider(
-        store: InMemoryTokenStore(
+        island: kTestIsland,
+        vault: InMemoryTokenStore(
           const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
         ),
-        remoteRefresh: (_) async => 'access1',
+        remoteRefresh: (_) async => RefreshResult('access1'),
       ),
       channelFactory: (_) {
         final f = FakeWebSocketChannel();
@@ -73,12 +74,13 @@ void main() {
     'failure.refresh.start — no reconnect is ever scheduled (#392)',
     () async {
       final rec = _Recorder();
-      final hang = Completer<String>();
+      final hang = Completer<RefreshResult>();
       final fakes = <FakeWebSocketChannel>[];
       final t = GatewayTransport(
         wsBaseUrl: 'ws://host',
         tokens: DefaultTokenProvider(
-          store: InMemoryTokenStore(
+          island: kTestIsland,
+          vault: InMemoryTokenStore(
             const AuthTokens(accessToken: 'access0', refreshToken: 'r0'),
           ),
           remoteRefresh: (_) => hang.future,
@@ -109,8 +111,9 @@ void main() {
     final t = GatewayTransport(
       wsBaseUrl: 'ws://host',
       tokens: DefaultTokenProvider(
-        store: _HangingStore(),
-        remoteRefresh: (_) async => 'access1',
+        island: kTestIsland,
+        vault: _HangingStore(),
+        remoteRefresh: (_) async => RefreshResult('access1'),
       ),
       channelFactory: (_) => FakeWebSocketChannel(),
       logger: AikoLogger(subsystem: 'aiko.transport', sink: rec),
@@ -132,5 +135,5 @@ void main() {
 
 class _HangingStore extends InMemoryTokenStore {
   @override
-  Future<AuthTokens?> read() => Completer<AuthTokens?>().future;
+  Future<Credential?> present(String island) => Completer<Credential?>().future;
 }

@@ -198,10 +198,10 @@ class _StaticTokenProvider implements TokenProvider {
   _StaticTokenProvider(this._token);
 
   @override
-  Future<String?> currentAccessToken() async => _token;
+  Future<Credential?> current() async => Credential(_token, 0);
 
   @override
-  Future<String?> refreshAccessToken() async => _token;
+  Future<Credential?> refresh(Credential stale) async => Credential(_token, 0);
 }
 
 /// Buffers a broadcast stream so a wait can match events that may have already
