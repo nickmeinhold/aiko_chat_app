@@ -12,9 +12,9 @@ import '../../support/fakes.dart';
 /// - presenting CURRENT rotates it: it becomes PREVIOUS, a new CURRENT is
 ///   minted;
 /// - presenting PREVIOUS is a retry, with no time limit, and PREVIOUS never
-///   moves. Outside a 30 s window the retry mints a fresh CURRENT (inside it,
-///   re-issues the same one). Modelled as always outside: locked refreshes are
-///   an access-TTL apart, and minting is the harder case for the client;
+///   moves; the retry mints a fresh CURRENT (no clock: the island dropped its
+///   30 s re-issue window, because two holders refreshing inside it stayed
+///   phase-locked and were never detected);
 /// - presenting anything else means two holders: the session ends, and every
 ///   token of it is dead from then on.
 class _RotatingIsland {
@@ -43,6 +43,13 @@ class _RotatingIsland {
 class _LockableStore extends InMemoryTokenStore {
   _LockableStore(super.initial);
   var locked = false;
+  var refuseClear = false;
+
+  @override
+  Future<void> clear() async {
+    if (refuseClear) throw Exception('-25308 errSecInteractionNotAllowed');
+    await super.clear();
+  }
 
   @override
   Future<void> write(AuthTokens tokens) async {
@@ -92,6 +99,25 @@ class _HalfWriteStore extends InMemoryTokenStore {
       ),
     );
     throw Exception('-25308 on the second item');
+  }
+}
+
+/// Holds the first read open until released, so a logout can land during it.
+class _SlowReadStore extends InMemoryTokenStore {
+  _SlowReadStore(super.initial);
+  final _reading = Completer<void>();
+  final _finish = Completer<void>();
+  Future<void> get reading => _reading.future;
+  void finishRead() => _finish.complete();
+
+  @override
+  Future<AuthTokens?> read() async {
+    final snapshot = current;
+    if (!_reading.isCompleted) {
+      _reading.complete();
+      await _finish.future;
+    }
+    return snapshot;
   }
 }
 
@@ -159,15 +185,21 @@ void main() {
     expect(island.presented, ['r0', 'r0']);
     expect(store.current, _signedIn, reason: 'nothing could be written');
 
-    // Killed before unlock; relaunched after it, with only the Keychain.
-    store.locked = false;
+    // Killed before unlock; relaunched after it, with only the Keychain. A
+    // new store object: the session is keyed on the store, so reusing this one
+    // would carry the in-memory session across the "restart" and test nothing.
+    final relaunched = _LockableStore(store.current);
     final restarted = DefaultTokenProvider(
-      store: store,
+      store: relaunched,
       remoteRefresh: island.refresh,
       onUnauthenticated: () => signedOut = true,
     );
     expect(await restarted.refreshAccessToken(), 'a3');
-    expect(store.current?.refreshToken, 'r3', reason: 'unlocked: it sticks');
+    expect(
+      relaunched.current?.refreshToken,
+      'r3',
+      reason: 'unlocked: it sticks',
+    );
     expect(await restarted.refreshAccessToken(), 'a4');
     expect(island.presented, ['r0', 'r0', 'r0', 'r3']);
     expect(signedOut, isFalse);
@@ -332,6 +364,40 @@ void main() {
     expect(island.presented, ['r0', 'r1']);
     expect(store.current?.refreshToken, 'r2');
     expect(signedOut, isFalse);
+  });
+
+  test('a logout landing during the first Keychain read stays logged '
+      'out', () async {
+    // Carnot, PR #452 round 2: a read that captured the old tokens, finishing
+    // after the logout, reinstalled them.
+    final store = _SlowReadStore(_signedIn);
+    final tp = DefaultTokenProvider(
+      store: store,
+      remoteRefresh: (_) async => const RefreshResult('a1'),
+    );
+    final reading = tp.currentAccessToken();
+    await store.reading;
+    final loggingOut = tp.clearTokens();
+    store.finishRead();
+    await Future.wait([reading, loggingOut]);
+
+    expect(await tp.currentAccessToken(), isNull);
+    expect(store.current, isNull);
+  });
+
+  test('a rejected token ends the session even when the Keychain refuses '
+      'the delete', () async {
+    final store = _LockableStore(_signedIn)..refuseClear = true;
+    var signedOut = false;
+    final tp = DefaultTokenProvider(
+      store: store,
+      remoteRefresh: (_) async => throw const RefreshRejected(),
+      onUnauthenticated: () => signedOut = true,
+    );
+
+    expect(await tp.refreshAccessToken(), isNull, reason: 'not a throw');
+    expect(signedOut, isTrue);
+    expect(await tp.currentAccessToken(), isNull);
   });
 
   test('RefreshResult.fromJson reads the rotated token, or its absence', () {

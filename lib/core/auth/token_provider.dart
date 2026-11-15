@@ -52,6 +52,11 @@ abstract interface class TokenProvider {
 /// one lane through which every change to the session commits.
 class _Session {
   AuthTokens? cache;
+
+  /// Whether [cache] has been loaded from the store yet. Kept apart from
+  /// `cache == null`, which also means "logged out": a read that started
+  /// before a logout must not reinstall the tokens the logout just removed.
+  var loaded = false;
   Future<String?>? inFlight;
   Future<void> _lane = Future<void>.value();
 
@@ -97,13 +102,16 @@ class DefaultTokenProvider implements TokenProvider {
     return _session.cache?.accessToken;
   }
 
-  // Read into a local, then `??=`: `cache ??= await _store.read()` tests
-  // `cache` BEFORE the await and assigns AFTER it, so a sign-in landing
-  // during the Keychain read would be overwritten by the old tokens.
+  // The first read of the store goes through the lane like every other
+  // change, so a sign-in or logout queued during it lands after it, and once
+  // anything has set the session, the store is never read over it again.
   Future<void> _warm() async {
-    if (_session.cache != null) return;
-    final stored = await _store.read();
-    _session.cache ??= stored;
+    if (_session.loaded) return;
+    await _session.commit(() async {
+      if (_session.loaded) return;
+      _session.cache = await _store.read();
+      _session.loaded = true;
+    });
   }
 
   @override
@@ -182,21 +190,34 @@ class DefaultTokenProvider implements TokenProvider {
     }
   }
 
+  // The island has ended this session; the app ends it too, even when a
+  // locked Keychain refuses the delete. A throw here would reach the caller as
+  // a TRANSIENT error, and the rejected tokens, still on disk, would be read
+  // back and rejected again until unlock. The next sign-in overwrites them.
   Future<void> _markUnauthenticated() async {
     _session.cache = null;
-    await _store.clear();
+    _session.loaded = true;
+    try {
+      await _store.clear();
+    } catch (_) {
+      // Left on disk: rejected tokens the next sign-in overwrites.
+    }
     _onUnauthenticated?.call();
   }
 
-  /// Adopt tokens after a successful login/register.
+  /// Adopt tokens after a successful login/register. Stored first, like a
+  /// rotation: if the write throws, the sign-in fails visibly instead of
+  /// leaving memory holding a session the disk never took.
   Future<void> setTokens(AuthTokens tokens) => _session.commit(() async {
-    _session.cache = tokens;
     await _store.write(tokens);
+    _session.cache = tokens;
+    _session.loaded = true;
   });
 
   /// Explicit logout.
   Future<void> clearTokens() => _session.commit(() async {
     _session.cache = null;
+    _session.loaded = true;
     await _store.clear();
   });
 }
