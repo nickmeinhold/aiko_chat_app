@@ -38,6 +38,18 @@ void main() {
     );
   });
 
+  test('a blank new key does not hide the pre-rename key behind it', () async {
+    expect(
+      legacySessionIsland(
+        await prefs({
+          islandBaseUrlPrefKey: '  ',
+          kLegacyIslandBaseUrlPrefKey: 'https://chat.enspyr.co',
+        }),
+      ),
+      'https://chat.enspyr.co',
+    );
+  });
+
   test('no saved island, but a cached user: a session ran on the compiled '
       'default', () async {
     expect(

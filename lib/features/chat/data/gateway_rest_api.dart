@@ -42,7 +42,19 @@ class AuthInterceptor extends Interceptor {
     // the request was made under. Reading the current one here instead would
     // send it as whoever signed in since.
     if (options.extra['retried'] == true) return handler.next(options);
-    final credential = await _tokens.current();
+    final Credential? credential;
+    try {
+      credential = await _tokens.current();
+    } catch (e, st) {
+      // The vault throws when the Keychain refuses its first read (a locked
+      // phone): "not known yet". Dio discards this callback's future, so an
+      // escaping throw would leave the request pending forever. Fail it as
+      // transient instead: the session isn't known to be dead.
+      options.extra['auth_transient'] = true;
+      return handler.reject(
+        DioException(requestOptions: options, error: e, stackTrace: st),
+      );
+    }
     if (credential != null) {
       options.headers['Authorization'] = 'Bearer ${credential.accessToken}';
       // Kept with the request so a 401 refreshes THIS session, not whichever

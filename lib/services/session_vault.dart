@@ -130,8 +130,11 @@ class SessionVault {
   StoredSession? _state;
 
   /// The slot holding [_state] on disk (null: neither), and its sequence.
+  /// Meaningful only once [_layoutKnown]: until the slots are read, a null
+  /// [_liveSlot] means "not read", not "empty".
   int? _liveSlot;
   int _seq = 0;
+  bool _layoutKnown = false;
 
   int _lease = 0;
   Future<Credential?>? _flight;
@@ -149,7 +152,11 @@ class SessionVault {
   /// for it. Throws when the Keychain refuses the first read (a locked phone):
   /// that is "not known yet", not "signed out".
   Future<Credential?> present(String island) async {
-    final s = _state ?? await _serial(_load);
+    if (_state == null) await _serial(_load);
+    // Read after the await, not from the load's result: a sign-out queued
+    // behind the load runs before this resumes, and the load's record would
+    // then go out stamped with the sign-out's lease.
+    final s = _state;
     return s is SessionRecord && s.island == island
         ? Credential(s.tokens.accessToken, _lease)
         : null;
@@ -271,20 +278,9 @@ class SessionVault {
   Future<void> signOut() => _serial(() => _end(quiet: false));
 
   Future<void> _end({required bool quiet}) async {
-    // A sign-out writes into the slot that ISN'T live, with a higher sequence,
-    // so it must know which slot that is. Unread, it could overwrite the live
-    // record with a lower sequence that the next read discards.
-    var known = _state != null;
-    if (!known) {
-      try {
-        await _load();
-        known = true;
-      } catch (_) {}
-    }
     _state = const SignedOut();
     _advance();
     try {
-      if (!known) throw StateError('vault unread');
       await _put(const SignedOut());
     } catch (_) {
       // v3.1 requirement 1. Couldn't write the sign-out, so remove what it
@@ -292,10 +288,13 @@ class SessionVault {
       // one before the live one. A crash part-way then leaves the newest
       // record readable (the allowed failure: still signed in), never a legacy
       // pair or an older record that the next launch would read as current.
+      // With the slots unread there is no telling stale from live, so they
+      // are left alone: the same allowed failure, reached without a gamble.
       try {
         for (final k in _legacyKeys) {
           await _slots.delete(k);
         }
+        if (!_layoutKnown) throw StateError('vault unread');
         final live = _liveSlot;
         for (final i in live == null ? [0, 1] : [1 - live, live]) {
           await _slots.delete(_slotKeys[i]);
@@ -354,9 +353,10 @@ class SessionVault {
       if (p == null) continue;
       if (best == null || p.seq > parsed[best]!.seq) best = i;
     }
-    if (best == null) return null;
     _liveSlot = best;
     _seq = [for (final p in parsed) ?p?.seq].fold(0, (a, b) => a > b ? a : b);
+    _layoutKnown = true;
+    if (best == null) return null;
     final winner = parsed[best]!.session;
     if (winner is UnreadableData) _report?.call('vault.unreadable');
     return winner;
@@ -364,7 +364,12 @@ class SessionVault {
 
   /// Write [session] without touching the live slot, then retire what it
   /// replaced. Throws only if the new record may not have landed.
+  ///
+  /// Learns the slot layout itself when nothing has read it yet: a write
+  /// that guessed would land beside a record it can't see, under a sequence
+  /// that record may beat on the next launch.
   Future<void> _put(StoredSession session) async {
+    if (!_layoutKnown) await _readSlots();
     final target = _liveSlot == 0 ? 1 : 0;
     final seq = _seq + 1;
     // The target holds nothing live: empty, or a record the live one replaced

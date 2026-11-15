@@ -392,6 +392,38 @@ void main() {
       expect(await door.current(), isNull);
     });
 
+    test('a cold read that a sign-out overtakes presents nothing, not the '
+        'ended session under the sign-out\'s lease', () async {
+      final vault = InMemoryTokenStore(_signedIn);
+      final read = vault.present(_island);
+      final out = vault.signOut();
+      expect(await read, isNull);
+      await out;
+    });
+
+    test('a Keychain that refuses the first read fails the request: it does '
+        'not leave it pending, and does not call it a logout', () async {
+      final keychain = InMemorySlots({
+        'aiko_session.0': _record(_island, _signedIn),
+      })..fault = (op, _) => throw Exception('-25308');
+      final door = _door(
+        InMemoryTokenStore.withSlots(keychain),
+        (_) async => const RefreshResult('a1'),
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'http://x'));
+      dio.interceptors.add(AuthInterceptor(door, dio));
+      dio.httpClientAdapter = FakeHttpAdapter((_) => jsonBody(200, '{}'));
+      final failed = await dio
+          .get('/v1/channels')
+          .then<DioException?>(
+            (_) => null,
+            onError: (Object e) => e as DioException,
+          )
+          .timeout(const Duration(seconds: 5));
+      expect(failed, isNotNull);
+      expect(failed!.requestOptions.extra['auth_transient'], isTrue);
+    });
+
     test('a hung refresh does not hold the next session hostage', () async {
       final hung = Completer<RefreshResult>();
       var calls = 0;
@@ -694,6 +726,54 @@ void main() {
       });
       await InMemoryTokenStore.withSlots(keychain).signOut();
       expect(await keychain.relaunch().present(_island), isNull);
+    });
+
+    // The sign-out above, refused: memory ends the session without having
+    // read where it lives on disk. The next write must still find out.
+    for (final live in ['aiko_session.0', 'aiko_session.1']) {
+      test('a sign-out the Keychain refused before anything read it, then a '
+          'sign-in: the next launch has the sign-in ($live live)', () async {
+        // Nothing works while locked, deletes included: the sign-out leaves
+        // the old record exactly where it was.
+        final keychain = _Keychain({
+          live: _record(_island, _signedIn, seq: 7),
+        }, deletesWhileLocked: false);
+        final vault = InMemoryTokenStore.withSlots(keychain);
+        keychain.locked = true;
+        await expectLater(vault.signOut(), throwsA(anything));
+        keychain.locked = false;
+        await vault.adopt(
+          _island,
+          const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
+        );
+        expect(
+          (await keychain.relaunch().present(_island))?.accessToken,
+          'b0',
+          reason: 'the account signed out of must not come back',
+        );
+      });
+    }
+
+    test('a sign-out that can\'t read the slots deletes neither: a crash '
+        'between two blind deletes could leave the older record', () async {
+      final keychain = _Keychain({
+        'aiko_session.0': _record(_island, _signedIn, seq: 2),
+        'aiko_session.1': _record(
+          _island,
+          const AuthTokens(accessToken: 'old', refreshToken: 'r-old'),
+        ),
+      });
+      final vault = InMemoryTokenStore.withSlots(keychain);
+      keychain.locked = true; // reads fail; deletes still work
+      // Dies after the legacy pair's three deletes: a blind [0, 1] sweep
+      // would have removed the newer slot and not yet the older.
+      keychain.crashAfter(4);
+      await expectLater(vault.signOut(), throwsA(anything));
+      expect(
+        (await keychain.relaunch().present(_island))?.accessToken,
+        'a0',
+        reason: 'still signed in is allowed; an older session is not',
+      );
     });
   });
 }

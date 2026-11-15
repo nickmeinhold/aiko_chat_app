@@ -132,12 +132,16 @@ String? legacySessionIsland(SharedPreferences prefs) {
   if (IslandConfig.fromEnvironment().httpBaseUrl != kDefaultIslandBaseUrl) {
     return null;
   }
-  final saved =
-      prefs.getString(islandBaseUrlPrefKey) ??
-      prefs.getString(kLegacyIslandBaseUrlPrefKey);
-  if (saved != null && saved.trim().isNotEmpty) {
-    return IslandConfig.normalized(saved).httpBaseUrl;
+  // The rule [IslandConfigController] resolves by: a blank key is no choice,
+  // so it must not hide the pre-rename key behind it.
+  String? usable(String key) {
+    final v = prefs.getString(key);
+    return v != null && v.trim().isNotEmpty ? v : null;
   }
+
+  final saved =
+      usable(islandBaseUrlPrefKey) ?? usable(kLegacyIslandBaseUrlPrefKey);
+  if (saved != null) return IslandConfig.normalized(saved).httpBaseUrl;
   if (CachedUserStore(prefs).read() != null) return kDefaultIslandBaseUrl;
   return null;
 }
