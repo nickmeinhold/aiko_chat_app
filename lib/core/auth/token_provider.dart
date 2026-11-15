@@ -115,21 +115,37 @@ class DefaultTokenProvider implements TokenProvider {
   }
 
   @override
-  // NOT async: `??=` assigns the in-flight future in the SAME synchronous step
-  // as the null-check, before any await — so a second caller arriving during
-  // the refresh cannot start a second one (design 02, finding 2). The slot is
-  // the SESSION's, so this holds across rebuilt providers too. It is cleared
-  // on BOTH success and failure so a failed refresh doesn't pin a dead future.
-  Future<String?> refreshAccessToken() => _session.inFlight ??= _doRefresh()
-      .whenComplete(() => _session.inFlight = null);
+  // NOT async: the slot is checked and assigned in the SAME synchronous step,
+  // before any await — so a second caller arriving during the refresh cannot
+  // start a second one (design 02, finding 2). The slot is the SESSION's, so
+  // this holds across rebuilt providers too. It is cleared on BOTH success and
+  // failure so a failed refresh doesn't pin a dead future, and a sign-in or
+  // logout empties it so a hung refresh can't hold the next session hostage.
+  Future<String?> refreshAccessToken() {
+    final joined = _session.inFlight;
+    if (joined != null) return joined;
+    late final Future<String?> flight;
+    flight = _doRefresh().whenComplete(() {
+      // Only its own slot: a sign-in or logout may have started a new flight.
+      if (identical(_session.inFlight, flight)) _session.inFlight = null;
+    });
+    return _session.inFlight = flight;
+  }
 
   Future<String?> _doRefresh() async {
     await _warm();
     final presented = _session.cache;
     final refreshToken = presented?.refreshToken;
     if (refreshToken == null) {
-      await _session.commit(_markUnauthenticated);
-      return null;
+      return _session.commit(() async {
+        // Decided in the lane: a sign-in may be writing right now, and an
+        // empty session seen BEFORE it must not end the one it is creating.
+        if (!identical(_session.cache, presented)) {
+          return _session.cache?.accessToken;
+        }
+        await _markUnauthenticated();
+        return null;
+      });
     }
     final RefreshResult result;
     try {
@@ -179,9 +195,12 @@ class DefaultTokenProvider implements TokenProvider {
     });
   }
 
-  // A write can die halfway (access token written, refresh token not), so
-  // after a failed write the disk, not [presented], says what the island
-  // will see after a restart. A locked Keychain may refuse the read too.
+  // SecureTokenStore.write is two Keychain items, access token first, so a
+  // write can throw after the REFRESH token landed (a lock between the two, or
+  // a reorder of them). Then the disk, not [presented], is what the island
+  // will see after a restart. A locked Keychain may refuse this read too, and
+  // falling back to [presented] is then a guess: only a one-record store
+  // format (design 26's vault) makes the tear impossible.
   Future<AuthTokens?> _readOrNull() async {
     try {
       return await _store.read();
@@ -212,12 +231,14 @@ class DefaultTokenProvider implements TokenProvider {
     await _store.write(tokens);
     _session.cache = tokens;
     _session.loaded = true;
+    _session.inFlight = null;
   });
 
   /// Explicit logout.
   Future<void> clearTokens() => _session.commit(() async {
     _session.cache = null;
     _session.loaded = true;
+    _session.inFlight = null;
     await _store.clear();
   });
 }

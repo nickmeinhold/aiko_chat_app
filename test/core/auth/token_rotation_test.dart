@@ -400,6 +400,98 @@ void main() {
     expect(await tp.currentAccessToken(), isNull);
   });
 
+  test('a refresh with no session, landing while a sign-in writes, does not '
+      'sign the new session out', () async {
+    // Noether + Carnot, PR #452 round 3.
+    final store = _GatedStore(null);
+    var signedOut = false;
+    final tp = DefaultTokenProvider(
+      store: store,
+      remoteRefresh: (_) async => const RefreshResult('a1'),
+      onUnauthenticated: () => signedOut = true,
+    );
+    await tp.currentAccessToken(); // loaded: logged out
+
+    store.holdNextWrite();
+    const fresh = AuthTokens(accessToken: 'b0', refreshToken: 's0');
+    final signingIn = tp.setTokens(fresh);
+    await store.writing;
+    final refreshing = tp.refreshAccessToken(); // e.g. a 401 from before
+    store.releaseWrite();
+    await signingIn;
+
+    expect(await refreshing, 'b0');
+    expect(signedOut, isFalse);
+    expect(store.current, fresh);
+  });
+
+  for (final viaLogout in [true, false]) {
+    test(
+      'a hung refresh does not hold the next session hostage '
+      '(${viaLogout ? 'logout, then sign-in' : 'sign-in over it'})',
+      () async {
+        final hung = Completer<RefreshResult>();
+        var calls = 0;
+        final tp = DefaultTokenProvider(
+          store: InMemoryTokenStore(_signedIn),
+          remoteRefresh: (_) {
+            calls++;
+            return calls == 1
+                ? hung.future
+                : Future.value(const RefreshResult('b1', refreshToken: 's1'));
+          },
+        );
+        unawaited(tp.refreshAccessToken()); // never answers
+        await Future<void>.delayed(Duration.zero);
+        if (viaLogout) {
+          await tp.clearTokens();
+          // Logged out: a refresh answers null at once, not the hung future.
+          expect(
+            await tp.refreshAccessToken().timeout(const Duration(seconds: 1)),
+            isNull,
+          );
+        }
+        await tp.setTokens(
+          const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
+        );
+
+        expect(await tp.refreshAccessToken(), 'b1');
+        expect(calls, 2);
+      },
+    );
+  }
+
+  test(
+    'the old flight finishing does not empty the new flight\'s slot',
+    () async {
+      final old = Completer<RefreshResult>();
+      final next = Completer<RefreshResult>();
+      var calls = 0;
+      final tp = DefaultTokenProvider(
+        store: InMemoryTokenStore(_signedIn),
+        remoteRefresh: (_) {
+          calls++;
+          return calls == 1 ? old.future : next.future;
+        },
+      );
+      final first = tp.refreshAccessToken();
+      await Future<void>.delayed(Duration.zero);
+      await tp.setTokens(
+        const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
+      );
+      final second = tp.refreshAccessToken();
+      await Future<void>.delayed(Duration.zero);
+
+      old.complete(const RefreshResult('a1', refreshToken: 'r1'));
+      await first;
+      final third = tp.refreshAccessToken(); // must JOIN the second flight
+      next.complete(const RefreshResult('b1', refreshToken: 's1'));
+
+      expect(await Future.wait([second, third]), ['b1', 'b1']);
+      expect(calls, 2);
+    },
+  );
+
   test('RefreshResult.fromJson reads the rotated token, or its absence', () {
     final rotated = RefreshResult.fromJson({
       'access_token': 'a1',
