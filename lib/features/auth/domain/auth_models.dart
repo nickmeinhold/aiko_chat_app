@@ -2,7 +2,8 @@
 ///
 /// Wire shapes (verified against gateway rest/auth.py):
 ///   register/login -> {access_token, refresh_token, user: UserView}
-///   refresh        -> {access_token}   (refresh token NOT rotated)
+///   refresh        -> {access_token, refresh_token?}   (rotated from island
+///                     #420; an older island omits refresh_token)
 ///   me / UserView  -> {user_id, username, display_name, aiko_username, is_moderator}
 library;
 
@@ -80,7 +81,8 @@ class AppUser {
 }
 
 /// JWT pair. The access token is short-lived (~15min); the refresh token is
-/// long-lived and is NOT rotated on refresh, so it persists across refreshes.
+/// long-lived, and an island that rotates it (island #420) returns a new one
+/// with every refresh: see `DefaultTokenProvider` for the order it is stored in.
 class AuthTokens {
   final String accessToken;
   final String refreshToken;

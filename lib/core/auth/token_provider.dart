@@ -42,12 +42,37 @@ abstract interface class TokenProvider {
   Future<String?> refreshAccessToken();
 }
 
+/// The ONE session behind a [SecureTokenStore]. `backendProvider` rebuilds
+/// [DefaultTokenProvider] (island switch, config change) while the store, and
+/// so the Keychain session, stays the same. Instances that each kept their own
+/// cache and their own single-flight were several authorities over one
+/// session: one could rotate while another still presented the old token,
+/// which the island reads as two holders and ends (island #420). So every
+/// instance over a store shares this: one cache, one refresh in flight, and
+/// one lane through which every change to the session commits.
+class _Session {
+  AuthTokens? cache;
+  Future<String?>? inFlight;
+  Future<void> _lane = Future<void>.value();
+
+  /// Run [change] after every change queued before it, so a refresh's commit,
+  /// a sign-in and a logout can never interleave their reads and writes.
+  Future<T> commit<T>(Future<T> Function() change) {
+    final run = _lane.then((_) => change());
+    _lane = run.then<void>((_) {}, onError: (_) {});
+    return run;
+  }
+}
+
 /// Default impl. The remote refresh call is injected as [_remoteRefresh] and
 /// MUST use a token-less HTTP client (the refresh endpoint is unauthenticated),
 /// so this provider never depends on the interceptor-wrapped REST client —
 /// avoiding a provider cycle (design 02, finding 6).
 class DefaultTokenProvider implements TokenProvider {
   final SecureTokenStore _store;
+  final _Session _session;
+
+  static final _sessions = Expando<_Session>('session');
 
   /// refreshToken -> new access token (+ rotated refresh token). Throws on
   /// failure (invalid/expired RT).
@@ -57,124 +82,121 @@ class DefaultTokenProvider implements TokenProvider {
   /// tokens). Wired to flip auth state → router redirect to login.
   final void Function()? _onUnauthenticated;
 
-  AuthTokens? _cache;
-  Future<String?>? _inFlight;
-
-  // Every refresh is numbered as it is SENT, process-wide: `backendProvider`
-  // rebuilds this provider, and an old instance's refresh can still be out
-  // when the new one sends. Two retries of PREVIOUS more than 30 s apart get
-  // DIFFERENT currents from the island, and storing the older response last
-  // would present a token that is neither — session ended. So only the
-  // newest-sent response that has come back may be stored; an older one is
-  // dropped even when it succeeded. Single-flight already orders refreshes
-  // within one instance; this orders them across instances.
-  static var _sent = 0;
-  static var _newestAnswered = 0;
-
   DefaultTokenProvider({
     required SecureTokenStore store,
     required Future<RefreshResult> Function(String refreshToken) remoteRefresh,
     void Function()? onUnauthenticated,
   }) : _store = store,
+       _session = _sessions[store] ??= _Session(),
        _remoteRefresh = remoteRefresh,
        _onUnauthenticated = onUnauthenticated;
 
   @override
   Future<String?> currentAccessToken() async {
     await _warm();
-    return _cache?.accessToken;
+    return _session.cache?.accessToken;
   }
 
-  // Read into a local, then `??=`: `_cache ??= await _store.read()` tests
-  // `_cache` BEFORE the await and assigns AFTER it, so a sign-in landing
+  // Read into a local, then `??=`: `cache ??= await _store.read()` tests
+  // `cache` BEFORE the await and assigns AFTER it, so a sign-in landing
   // during the Keychain read would be overwritten by the old tokens.
   Future<void> _warm() async {
-    if (_cache != null) return;
+    if (_session.cache != null) return;
     final stored = await _store.read();
-    _cache ??= stored;
+    _session.cache ??= stored;
   }
 
   @override
   // NOT async: `??=` assigns the in-flight future in the SAME synchronous step
   // as the null-check, before any await — so a second caller arriving during
   // the refresh cannot start a second one (design 02, finding 2). The slot is
-  // cleared on BOTH success and failure so a failed refresh doesn't pin a dead
-  // future forever.
-  Future<String?> refreshAccessToken() =>
-      _inFlight ??= _doRefresh().whenComplete(() => _inFlight = null);
+  // the SESSION's, so this holds across rebuilt providers too. It is cleared
+  // on BOTH success and failure so a failed refresh doesn't pin a dead future.
+  Future<String?> refreshAccessToken() => _session.inFlight ??= _doRefresh()
+      .whenComplete(() => _session.inFlight = null);
 
   Future<String?> _doRefresh() async {
     await _warm();
-    final presented = _cache;
+    final presented = _session.cache;
     final refreshToken = presented?.refreshToken;
     if (refreshToken == null) {
-      await _markUnauthenticated();
+      await _session.commit(_markUnauthenticated);
       return null;
     }
-    final seq = ++_sent;
     final RefreshResult result;
     try {
       result = await _remoteRefresh(refreshToken);
     } on RefreshRejected {
-      // A sign-in or logout landed while this refresh was out: the rejection
-      // belongs to a session that is no longer ours, so it must not end the
-      // new one.
-      if (!identical(_cache, presented)) return _cache?.accessToken;
-      // Refresh token genuinely rejected -> logout.
-      await _markUnauthenticated();
-      return null;
+      return _session.commit(() async {
+        // A sign-in or logout landed while this refresh was out: the
+        // rejection belongs to a session that is no longer ours, so it must
+        // not end the new one.
+        if (!identical(_session.cache, presented)) {
+          return _session.cache?.accessToken;
+        }
+        // Refresh token genuinely rejected -> logout.
+        await _markUnauthenticated();
+        return null;
+      });
     }
     // Any other error (network/timeout/5xx) propagates: transient, do NOT
     // clear tokens. The caller retries later with the still-valid refresh token.
 
-    // Same check on success: writing these back would revert a fresh sign-in
-    // to the old session, or resurrect one the user just logged out of.
-    if (!identical(_cache, presented)) return _cache?.accessToken;
+    return _session.commit(() async {
+      // Writing these back after a sign-in or logout would revert the fresh
+      // session to the old one, or resurrect one the user just logged out of.
+      if (!identical(_session.cache, presented)) {
+        return _session.cache?.accessToken;
+      }
+      final rotated = AuthTokens(
+        accessToken: result.accessToken,
+        // An island that predates rotation omits the field: keep ours.
+        refreshToken: result.refreshToken ?? refreshToken,
+      );
+      // Store FIRST, adopt SECOND (island #420: presenting anything but
+      // CURRENT or PREVIOUS ends the session). If the write fails — the
+      // Keychain is WhenUnlocked, so a locked phone throws — present what is
+      // ACTUALLY on disk: the island treats PREVIOUS as a retry. Adopting the
+      // rotated token in memory instead would rotate again from an unwritten
+      // token, and a restart before unlock would present one the island has
+      // already discarded.
+      try {
+        await _store.write(rotated);
+        _session.cache = rotated;
+      } catch (_) {
+        _session.cache = (await _readOrNull() ?? presented!)
+            .withRefreshedAccess(result.accessToken);
+      }
+      return result.accessToken;
+    });
+  }
 
-    // A newer refresh (from a rebuilt provider) already answered: what it
-    // stored, or kept, is the token the island expects next. Adopt the store.
-    if (seq < _newestAnswered) {
-      _cache = await _store.read();
-      return _cache?.accessToken;
-    }
-    _newestAnswered = seq;
-
-    final rotated = AuthTokens(
-      accessToken: result.accessToken,
-      // An island that predates rotation omits the field: keep ours.
-      refreshToken: result.refreshToken ?? refreshToken,
-    );
-    // Store FIRST, adopt SECOND (island #420's rule: presenting anything older
-    // than the previous token ends the session). If the write fails — the
-    // Keychain is WhenUnlocked, so a locked phone throws — keep presenting the
-    // STORED token: the island treats previous as a retry. Adopting the
-    // rotated one in memory instead would rotate again from an unwritten
-    // token, and a restart before unlock would present a token two
-    // generations back.
+  // A write can die halfway (access token written, refresh token not), so
+  // after a failed write the disk, not [presented], says what the island
+  // will see after a restart. A locked Keychain may refuse the read too.
+  Future<AuthTokens?> _readOrNull() async {
     try {
-      await _store.write(rotated);
-      _cache = rotated;
+      return await _store.read();
     } catch (_) {
-      _cache = presented!.withRefreshedAccess(result.accessToken);
+      return null;
     }
-    return result.accessToken;
   }
 
   Future<void> _markUnauthenticated() async {
+    _session.cache = null;
     await _store.clear();
-    _cache = null;
     _onUnauthenticated?.call();
   }
 
   /// Adopt tokens after a successful login/register.
-  Future<void> setTokens(AuthTokens tokens) async {
-    _cache = tokens;
+  Future<void> setTokens(AuthTokens tokens) => _session.commit(() async {
+    _session.cache = tokens;
     await _store.write(tokens);
-  }
+  });
 
   /// Explicit logout.
-  Future<void> clearTokens() async {
-    _cache = null;
+  Future<void> clearTokens() => _session.commit(() async {
+    _session.cache = null;
     await _store.clear();
-  }
+  });
 }

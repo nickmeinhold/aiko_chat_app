@@ -51,6 +51,50 @@ class _LockableStore extends InMemoryTokenStore {
   }
 }
 
+/// Holds one write open until released, so a test can land a sign-in while
+/// a refresh's Keychain write is still in progress.
+class _GatedStore extends InMemoryTokenStore {
+  _GatedStore(super.initial);
+  var _armed = false;
+  final _release = Completer<void>();
+  final _writing = Completer<void>();
+  Future<void> get writing => _writing.future;
+
+  void holdNextWrite() => _armed = true;
+  void releaseWrite() => _release.complete();
+
+  @override
+  Future<void> write(AuthTokens tokens) async {
+    if (_armed) {
+      _armed = false;
+      _writing.complete();
+      await _release.future;
+    }
+    await super.write(tokens);
+  }
+}
+
+/// [SecureTokenStore.write] is two Keychain writes, so a write can throw with
+/// one of them landed. This one lands the REFRESH token and loses the access
+/// token: the shape where the disk disagrees with the token the refresh
+/// presented, and only a re-read finds out.
+class _HalfWriteStore extends InMemoryTokenStore {
+  _HalfWriteStore(super.initial);
+  var loseAccessHalf = false;
+
+  @override
+  Future<void> write(AuthTokens tokens) async {
+    if (!loseAccessHalf) return super.write(tokens);
+    await super.write(
+      AuthTokens(
+        accessToken: current!.accessToken,
+        refreshToken: tokens.refreshToken,
+      ),
+    );
+    throw Exception('-25308 on the second item');
+  }
+}
+
 const _signedIn = AuthTokens(accessToken: 'a0', refreshToken: 'r0');
 
 void main() {
@@ -200,35 +244,94 @@ void main() {
     expect(store.current, fresh);
   });
 
-  test('a rebuilt provider\'s refresh answers first; the old instance\'s '
-      'older response, landing last, is dropped', () async {
-    final store = InMemoryTokenStore(
-      const AuthTokens(accessToken: 'a0', refreshToken: 'P'),
-    );
-    final r1 = Completer<RefreshResult>();
-    final r1Sent = Completer<void>();
-    final old = DefaultTokenProvider(
+  test('a rebuilt provider joins the old instance\'s refresh instead of '
+      'sending its own', () async {
+    final store = InMemoryTokenStore(_signedIn);
+    final gate = Completer<RefreshResult>();
+    var calls = 0;
+    Future<RefreshResult> remote(String _) {
+      calls++;
+      return gate.future;
+    }
+
+    final old = DefaultTokenProvider(store: store, remoteRefresh: remote);
+    final rebuilt = DefaultTokenProvider(store: store, remoteRefresh: remote);
+    final a = old.refreshAccessToken();
+    final b = rebuilt.refreshAccessToken();
+    gate.complete(const RefreshResult('a1', refreshToken: 'r1'));
+
+    expect(await Future.wait([a, b]), ['a1', 'a1']);
+    expect(calls, 1, reason: 'one session, one refresh on the wire');
+  });
+
+  test('two instances refreshing one after the other present one chain, so '
+      'neither ends the session', () async {
+    // Carnot, PR #452 round 1: with a cache per instance, B rotates P->C1,
+    // then A presents its cached P (a retry that mints C2), and B's C1 is
+    // dead on B's next refresh.
+    final island = _RotatingIsland();
+    final store = InMemoryTokenStore(_signedIn);
+    var signedOut = false;
+    DefaultTokenProvider provider() => DefaultTokenProvider(
       store: store,
-      remoteRefresh: (_) {
-        r1Sent.complete();
-        return r1.future;
-      },
+      remoteRefresh: island.refresh,
+      onUnauthenticated: () => signedOut = true,
     );
-    final rebuilt = DefaultTokenProvider(
+    final a = provider();
+    final b = provider();
+    await a.currentAccessToken();
+    await b.currentAccessToken();
+
+    await b.refreshAccessToken();
+    await a.refreshAccessToken();
+    await b.refreshAccessToken();
+    expect(island.presented, ['r0', 'r1', 'r2']);
+    expect(signedOut, isFalse);
+  });
+
+  test('a sign-in landing while a refresh is WRITING is not overwritten by '
+      'it', () async {
+    final store = _GatedStore(_signedIn);
+    final tp = DefaultTokenProvider(
       store: store,
-      remoteRefresh: (_) async => const RefreshResult('a2', refreshToken: 'C2'),
+      remoteRefresh: (_) async => const RefreshResult('a1', refreshToken: 'r1'),
+    );
+    await tp.currentAccessToken();
+
+    store.holdNextWrite();
+    final refreshing = tp.refreshAccessToken();
+    await store.writing; // the refresh's write is now in progress
+    const fresh = AuthTokens(accessToken: 'b0', refreshToken: 's0');
+    final signingIn = tp.setTokens(fresh);
+    store.releaseWrite();
+    await Future.wait([refreshing, signingIn]);
+
+    expect(store.current, fresh);
+    expect(await tp.currentAccessToken(), 'b0');
+  });
+
+  test('a write that dies halfway: the next refresh presents what is on '
+      'disk, not what it presented last', () async {
+    final island = _RotatingIsland();
+    final store = _HalfWriteStore(_signedIn);
+    var signedOut = false;
+    final tp = DefaultTokenProvider(
+      store: store,
+      remoteRefresh: island.refresh,
+      onUnauthenticated: () => signedOut = true,
     );
 
-    // R1 goes out from the old instance and stalls; 40 s later the rebuilt
-    // instance sends R2. Both present P, so the island mints C1 then C2.
-    final stale = old.refreshAccessToken();
-    await r1Sent.future;
-    expect(await rebuilt.refreshAccessToken(), 'a2');
-    r1.complete(const RefreshResult('a1', refreshToken: 'C1'));
+    store.loseAccessHalf = true; // r1 reaches the disk; the write throws
+    await tp.refreshAccessToken();
+    store.loseAccessHalf = false;
+    await tp.refreshAccessToken();
 
-    expect(await stale, 'a2', reason: 'adopts what the newer refresh stored');
-    expect(store.current?.refreshToken, 'C2');
-    expect(await old.currentAccessToken(), 'a2');
+    // Presenting r0 again would be a retry that mints r2 and discards r1,
+    // leaving the disk holding a token the island no longer pairs: the next
+    // restart would end the session.
+    expect(island.presented, ['r0', 'r1']);
+    expect(store.current?.refreshToken, 'r2');
+    expect(signedOut, isFalse);
   });
 
   test('RefreshResult.fromJson reads the rotated token, or its absence', () {
