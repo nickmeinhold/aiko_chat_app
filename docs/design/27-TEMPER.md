@@ -275,3 +275,207 @@ Tesla: "If you want the secrets of the universe, think in energy, frequency and 
 - Add the two orderings that actually hum. A refresh commits, the lease stays still, the pinned pre-rotation retry gets a 401, and the refreshed session is still the one presented. `SessionEnded` is in flight, unpair and disconnect are awaiting, a sign-in that read the post-end lease commits, and the new credential is not unpaired and the new socket is not closed.
 - Keep §2b, §2d, the listener deletion, and the unfenced `signOut`. Those already resonate.
 
+
+
+---
+
+# Round 2 — dt-1794797382, v2 @ d9cfd18
+
+**Round-2 verdict:** RECAST, 4 of 4, none DISSOLVE. All four seated (bundle 136 KB, Carnot returned).
+Bundle: v2 + this record (round 1) + `session_vault.dart` + `auth_controller.dart`.
+
+Every family says v2 removed round 1's producers. The findings are narrower, and they converge on
+**one shape: the controller still has several unsequenced writers of what it shows** (`state`,
+`pendingHandle`, `suspended`, the cached user), and "an end is running" is a value any of them
+can overwrite. Round 1 fenced the *vault*. Round 2 says the *controller* needs the same thing.
+
+## Round-2 flaws (deduped, all checked against the source)
+
+A. **The ceremony still writes `state` itself.** Raised by Noether and Tesla; Carnot covered it in
+   his publication inventory. CONFIRMED: `_ingress` assigns `state = await
+   AsyncValue.guard(...)` (`:356`), and `claimHandle` does the same (`:677`). §2b's `_publish`
+   drop is then overwritten by the returned user.
+B. **The ban checks the wrong things, and its flag isn't atomic with its end.** Raised by all
+   four. A ban is about the *account*, so it must compare the lease only (a refresh keeps the
+   lease and rotates the token). The flag must also be set from the result of the lane, not from
+   a synchronous `isCurrent` taken outside it (Tesla: `_fly` writes `_state` only after `_put`).
+   CONFIRMED that `settleBan()` (`:940-943`, called from `moderation_controller.dart:134,219`)
+   creates an `AccountSuspended` with no credential, a ninth door.
+C. **"An end is running" lives in `state.isLoading`, which other writers overwrite.** Raised by
+   Maxwell and Carnot. Overlapping ends both run cleanup (Carnot). A `signOut` that throws
+   latches `/splash` with no release (Tesla).
+D. **Sibling state is unfenced.** Raised by Noether, Carnot and Tesla. `pendingHandle` is set by
+   a late `PendingHandle` outcome. Teardown clears `suspended` unconditionally (CONFIRMED
+   `:726`), which is the opposite of what §2d needs. The cached user is written by a late
+   `_writeCachedUser` from A over B's (Carnot).
+E. **A late delete ends the person who signed in since.** Tesla raised it; Carnot covered it in
+   his inventory. CONFIRMED: `deleteAccount` awaits the island, then tears down (`:1020-1030`),
+   so §2h's "admission closed since its first step" is false.
+F. **The switch doesn't go through the common door**, and its error path has no screen (Carnot,
+   Tesla).
+G. **Test 12 tests one schedule and certifies the other** (Tesla). Noether asks to make #452 a
+   prerequisite, which is task 89's alternative for Nick.
+H. **Small items:** `_restoreSession` doesn't `adopt` (Maxwell). `_clearCredentialAndUnpair`
+   must lose its `clearTokens()` (Noether). Emit `SessionEnded` after the lane turn returns, so
+   a handler can't wait on the lane from inside it (Tesla).
+
+## Disposition: one fold that removes A-F together
+
+**The controller gets its own transition lane**: the vault's pattern, lifted one layer. Every
+change to what the app shows runs as one serial transition, and every write to `state`,
+`pendingHandle`, `suspended` and the cached user happens only inside one:
+- a sign-in's commit;
+- an end of any kind;
+- a switch;
+- a ban;
+- a delete's completion.
+
+Each transition is issued for a lease, captured before the network call, and it starts by
+checking that lease. Network work stays outside the lane, and only commits enter it.
+Admission is "the lane is idle". It's released in a `finally`, so a throwing end can't latch
+`/splash`.
+
+That removes:
+- A: ceremonies return `void`, and their commit is a transition.
+- C: no flag can be overwritten, and overlapping ends queue.
+- D: each transition writes the whole picture once.
+- E: a delete captures its lease at send, and its completion is a fenced transition.
+- F: the switch is one transition.
+
+B gets the lease-only predicate for account outcomes, with the flag set from the lane result.
+G splits test 12. Carnot's scope object stays not adopted: the lane *is* the single owner of
+transitions he asked for, without a new type.
+
+Round 3 is the cap. If v3 doesn't converge, report it provisional, as design 26 did.
+
+## NoetherNullPointer's Design Strike
+
+**Verdict:** RECAST
+
+**Summary:** The design conserves “every terminal outcome names the session it may end,” but it lets a ban’s authority ride on a rotated access token and lets a pending-handle ceremony write identity state without a lease — so a stale 403 and a late provisioning token still cross the fence.
+
+**Producer first:** The harm is a stale outcome ending, replacing, or redirecting a session it does not own. The producers are: (1) `_ingress` and `claimHandle` still assigning `state` directly from a ceremony’s return, so a ceremony that adopted before a sign-out can have its dropped `_publish` overwritten by the returned user; (2) `_settleSuspension` applying `isCurrent` (lease + access token) to `AccountSuspended`, so a 403 on an access token that rotated during a refresh is dropped and the banned session survives; (3) the `PendingHandle` branch writing `pendingHandleProvider` with no lease check, so a sign-out during the ceremony can be overwritten by a late provisioning token; (4) the refresh retry after timeout sending the same refresh token without an attempt id, so a late abandoned reply can rotate the island’s current token and force the next refresh to end the session. Each producer can be removed: (1) make `_publish` the only writer of `AppUser?` and delete direct `state =` assignments in `_ingress`/`claimHandle`; (2) ban checks lease only, or `endIf` ignores access token for bans; (3) pending writes carry the lease and drop if it moved; (4) do not retry a timed-out refresh until #452’s attempt id exists. Checks are not the answer; the writes must be unable to land.
+
+**Fatal flaws:**
+- **The one publish door is bypassed by `_ingress`/`claimHandle`** (design 27 §2b, §2c; flaw class: unremoved producer). The design says every show goes through `_publish(user, lease)`, but `_ingress` still does `state = await AsyncValue.guard(() => ceremony(prior))` and `claimHandle` still assigns `state` directly. If `_applyOutcome` adopts, then a sign-out moves the lease, `_publish` drops the user — and `_ingress` writes the returned user anyway. The fence is decorative until those direct writes are deleted.
+- **Ban settlement uses the wrong fence predicate** (design 27 §2d; flaw class: wrong invariant). `isCurrent(credential)` requires both lease and access token. A 403 `AccountSuspended` is about the account, not the token. If a refresh commits between the banned request and settlement, the lease is unchanged but the access token is new; `isCurrent` is false, the ban is dropped, and the user stays signed in. Even if the flag is set, `endIf(credential)` re-checks `isCurrent` and fails to end. Bans must fence on lease alone.
+- **`PendingHandle` is unfenced identity state** (design 27 §2b; flaw class: unguarded sibling write). `_applyOutcome`’s `PendingHandle` branch sets `pendingHandleProvider` without reading the lease. A sign-out or switch during the ceremony clears pending, then the late ceremony re-sets it. The router then drives a logged-out user to `/claim-handle`. The design’s one-door publish covers `AppUser?`, not this sibling state. Fold it into the same lease-fenced door.
+- **The refresh-timeout residual is the design’s own harm** (design 27 §2f; flaw class: named residual that violates the invariant). The lease never moves on refresh, so the client fence cannot see a late abandoned reply. The island rotates, the app’s stored token becomes neither CURRENT nor PREVIOUS, and the next refresh ends the session. Shipping the deadline before #452 is a logout machine under slow links. Make #452 a prerequisite, or on timeout do not re-send the refresh token until the attempt id exists.
+- **Two hidden second enders / missing state resets** (design 27 §2c, §2d; flaw class: incomplete removal). `_clearCredentialAndUnpair` currently calls `_tokens.clearTokens()`; if that remains, the teardown advances the lease again and the `_publish(null, lease: <end lease>)` drops. Also, `_settleSuspension` “with none” says “flag only” but does not reset `state` from `AsyncError(AccountSuspended)` to clean `AsyncData(null)`, so the router may not land on `/suspended` cleanly. State both explicitly.
+
+**What holds:**
+- The lease as a monotonic in-memory fencing token, never advanced by refresh, is the right shape.
+- Deleting the transport’s logout listener and the `StreamController<void>` is the correct producer deletion.
+- `adopt(..., since:)` in the serial lane fences the credential commit for sign-ins that actually reach adopt.
+- `_endSession` holding `loading` from first step to last closes the sign-in-during-teardown window for new ceremonies.
+- §2e’s switch order (end on disk before island move) and the named tradeoff are sound.
+- §3’s table of enders is the right audit surface.
+
+**If RECAST, what to fold back:**
+- Make `_publish` the only writer of `AppUser?`; delete direct `state =` assignments from `_ingress` and `claimHandle`. They orchestrate, they do not publish.
+- Split ban settlement from `Unauthorized`: `AccountSuspended` checks only `credential.lease == vault.lease` (or add `endIfLease`), and `endIf` for a ban ignores the access-token half.
+- Fence `pendingHandleProvider` with the same lease door: the ceremony captures the lease before its first network call and the pending write drops if the lease moved.
+- Make #452 a prerequisite for the refresh deadline, or on timeout do not retry the refresh token until the attempt id exists. Update test 12 to include a late abandoned reply landing after a successful retry.
+- In `_settleSuspension` with no credential, explicitly reset `state = AsyncValue.data(null)` synchronously before flagging.
+- State that `_clearCredentialAndUnpair` no longer calls `clearTokens()`; the ender is only `endIf`/`signOut`.
+
+## CarnotCodeCarver's Design Strike (round 2)
+
+**Verdict:** RECAST
+
+**Summary:** Credential fencing improves substantially, but loading is still a shared presentation value masquerading as exclusive ownership. Old completions and overlapping ends can reopen admission or mutate shared resources. Dijkstra: "Simplicity is prerequisite for reliability." No real engine matches the Carnot cycle; a reviewer's job is to say how far short we are. The remaining entropy is in controller ownership.
+
+**Producer first:** The harms are B losing its socket or cached identity to A's cleanup, an abandoned ceremony redirecting the current island, and admission reopening before a switch finishes. Late responses and storage delays are triggers. Our producers are independently completing operations that write shared controller state, sibling routing providers, cache and singleton resources without owning those destinations. Remove those producers through revocable attempt ownership and a single owner of session transitions. Credential comparisons remain necessary: remote outcomes cannot be prevented from arriving after replacement, and the vault must decide whether they still have authority.
+
+**Fatal flaws:**
+- Make stale work unable to reopen admission or clean up replacement resources: give one transition exclusive ownership until cleanup and configuration settlement finish, and retire ceremony publication authority synchronously when that transition starts; then state.isLoading admission checks become unnecessary. §2c blocks new ceremony starts but neither serializes competing ends nor revokes already running ceremonies. Two logout calls can both enter cleanup; the faster one publishes logged-out, B signs in, and the slower cleanup clears B's cache or disconnects its socket. The same overlap exists between a signal-driven cleanup and a person's end. A lease check at the final publish cannot undo those effects.
+- The publication inventory still omits non-adopting outcomes. §2b handles authenticated success and SessionSuperseded, but cancellation, ordinary errors, PendingHandle and credential-free bans can complete without adopt ever checking the captured lease. A ceremony starts on island A; a switch begins; its late PendingHandle installs A's provisioning token, or its credential-free ban flags the destination suspended. Cancellation or AsyncError publication can also replace loading during teardown. §2d's assertion that a new sign-in requires a tap overlooks ceremonies already in flight. These outcomes need the originating attempt's revocable publication authority, including sibling providers.
+- The fenced UI publish leaves the durable identity producer running. An adopted A can still be awaiting _writeCachedUser when logout clears the cache and B subsequently signs in. A's delayed write can replace B's cached identity; A's delayed failure fallback can clear B's successful write. Dropping A's final _publish does neither rollback nor isolation. refreshUser and saveProfile also retain userId-based fences, which cannot distinguish successive sessions of the same account. Make cached identity part of the owning session record or serialize its mutation under session ownership; the existing asynchronous cache writes remain outside both fences.
+- Suspension has contradictory ownership. §2d flags suspended before _endSession, while the supplied _teardownResources clears suspended unconditionally. The design does not specify removal of that clear or a replacement transition that preserves the ban. Following the stated shared teardown therefore converts a current ban into ordinary login, restoring the loop suspension routing exists to prevent.
+- The switch is not actually specified through the common teardown door. §2e lists signOut, unpair, preference save, invalidation and publication, but omits cached-user clearing, pending-handle clearing and explicit transport detachment. §2c simultaneously says every end uses _endSession, whose final logged-out publication would reopen admission before the switch saves its destination. Config invalidation may dispose some resources, but the bundle does not establish that it clears all routing and identity state. Define one transition whose ownership spans both cleanup and destination settlement.
+
+**What holds:**
+- Deleting the transport's logout authority removes a duplicate producer.
+- Required credential provenance and atomic endIf comparison correctly distinguish stale access-token failures from current-session failures.
+- adopt(since:) fences late credential adoption, and a lease-fenced publish closes the authenticated-success presentation gap.
+- Persisting the end before moving the island preserves the accepted placement invariant and Nick's switch decision.
+- The refresh deadline now has a defined scope, cancellation behavior and an explicitly acknowledged server-ordering residual. That accepted residual is not a new reason to reject this revision.
+- Returning the ended credential by value and separating personal sign-out notifications are sound improvements.
+
+**If RECAST, what to fold back:**
+- Introduce explicit ownership for transitions and attempts. Concurrent ends join or queue behind the owner; only the owner releases admission after cleanup and island settlement. A session-scope object is one implementation, not a requirement.
+- Retire an attempt's authority synchronously on end or switch. Route success, cancellation, errors, PendingHandle, credential-free suspension and sibling routing mutations through that authority.
+- Bind cached identity to its session and island, and prevent retired work from writing or clearing the replacement's cache. Include refreshUser, saveProfile and _payOwedHandle in this ownership inventory.
+- Make suspension a terminal transition outcome preserved through cleanup, rather than a flag that generic teardown immediately clears.
+- Specify switch cleanup and final publication as one transition; retain the accepted durable-end-before-preference order.
+- Add adversarial schedules for overlapping ends, late PendingHandle/error/cancellation during a switch, stale cache write and fallback-clear after B commits, and a current ban surviving complete teardown.
+
+
+## MaxwellMergeSlam's Design Strike (round 2)
+
+**Verdict:** RECAST (small)
+
+**Summary:** v2 removes the producers round 1 named, but §2c's "closed admission" is stored in `state.isLoading`, a value that any publish can overwrite, so the door v2 relies on can be opened by the same race it was built to remove.
+
+**Producer first:** v2 adds one new check, `_ingress` and `claimHandle` refusing while an end runs. The harm is a sign-in landing inside a teardown. The producer v2 removes is "the login screen is up while the teardown runs", and it removes it correctly by holding `loading` until step 4. But it represents "an end is running" as `state.isLoading`, and `state` has several writers: `_publish(null, lease)` from a superseded signal, `_settleSuspension`'s synchronous `data(null)`, and the switch's own publish. So the closed door is a value, not an ownership. Make it impossible: admission is an explicit count owned by `_endSession` and `switchIsland` (`_ending++` at step 1, `--` in a `finally` after step 4), and `_ingress`/`claimHandle` refuse while `_ending > 0`. Then no publish can reopen the door, and `isLoading` goes back to being presentation only.
+
+**Fatal flaws:**
+- **Make "admission reopens mid-end" impossible: an explicit end count, not `state.isLoading`.** (§2c, coupling to remove.) Here's the schedule. A refresh rejection's `SessionEnded(n)` and a switch run together. The signal's `_endSession` reaches step 4 and calls `_publish(null, lease: n)`. That lands, because the switch hasn't reached `signOut()` yet, so `vault.lease == n`. `state` is now `data(null)` with the switch still at step 3, so `_ingress`'s guard passes and a ceremony can start on the old island's config. §2b's lease fence would later supersede that ceremony's `adopt`, so no credential leaks. But the person sees `/login` flash mid-switch and starts a ceremony that's bound to fail. The design's claim "no sign-in can start between steps 1 and 4" is false as written.
+- **A ban is about the account, so it must not use §2a's access-token currency.** (§2d, wrong reuse.) `isCurrent` requires the access token to match, which is right for a 401 (Tesla's flaw 7). But a 403 ban on a request carrying the pre-rotation token, under the same lease, is about the same account, and v2 drops it as "a session that already ended". The ban is then lost until the next authed call happens to 403 again. Fold: bans compare the lease only (`c.lease == vault.lease`). 401s compare both. State why: a token can be stale, but an account ban can't be.
+- **`_restoreSession` doesn't `adopt`**, so "publish with the lease `adopt` returned" doesn't apply to it. (§2b, wording that a builder would mis-implement.) Restore publishes with the lease of the credential `present()` returned. Say so, or a builder will thread a lease that doesn't exist.
+
+**What holds:**
+- Producer 2 (show-before-done) is the right second producer, and both halves of the fix are removals: §2b's publish door makes a stale publish a no-op, and §2c's ordering removes the shared window.
+- §2a's split is clean: `endIf` for signals, unfenced `signOut()` for the person, and `SessionEnded` only for ends the person didn't ask for. It resolves Tesla's §2c/§2f contradiction without a cause flag.
+- The ended credential carried by value, with no `currentAccessToken()` in the teardown, removes flaw 5 rather than guarding it.
+- `NotSignedIn` as a separate type makes the "missing stamp" state unrepresentable.
+- §2f now tells the truth: lost replies are safe, a late landing is a named residual, #452 is the fix, and the bound sits on the request alone.
+- §3's table leaves no unlisted ender. `deleteAccount` and the ban have doors.
+
+**If RECAST, what to fold back:**
+- §2c: "admission closed" becomes `_ending`, a counter incremented at step 1 and decremented in `finally`. `_ingress` and `claimHandle` check it. `state.isLoading` is presentation only. Add test: a signal end and a switch run together, and no ceremony starts until both finish.
+- §2d: bans check the lease only, and the reason is stated. Add test: a ban on a pre-rotation token under the same lease still settles.
+- §2b: `_restoreSession` publishes with its presented credential's lease.
+
+
+
+
+## Tesla, the Arc-Prophet's Design Strike (round 2)
+
+**Verdict:** RECAST
+
+**Summary:** The lease is still the right name for a session, but three account-level endings were tuned to the access-token frequency that only a 401 sings in, so a refresh hides a living ban and a late delete shakes whoever signed in while it was in flight.
+
+**Producer first:** The harm is a person signed out of a session they just entered, shown as signed in after the vault has let go, or left inside an account the island has already banned or deleted. The triggers stay outside us: a late 401, a late 403, a late 204, a keychain refusal, a refresh that rotates. The producers are ours.
+
+A 401 applied to whatever session is current is deleted by keeping the only application inside `endIf`, comparing the access token on the lane. That compare stays. The island's 401 is untrusted input and will keep arriving after a rotation; nothing in the client stops the byte from landing. `adopt(since:)` stays for the same reason: the island has already minted the ceremony's session, so the single writer can only refuse the late write.
+
+The screen showing a user the vault has already released is a second writer sitting behind `_publish`. `_ingress` and `claimHandle` assign `state` from `AsyncValue.guard` on the ceremony's return (§2b, and `auth_controller.dart` as it stands). That assignment is removable. One compare then remains, at the only door, because the island's `AppUser` is born outside the vault and can outlive it. A second check beside the guard is the wrong shape.
+
+A ban or a successful delete applied to the wrong session, or dropped on the right one, is `isCurrent` and unfenced `signOut` used on an outcome they do not name. A 401 is about the access token that was presented. A ban and a delete are about the account, which survives the rotation that keeps the lease still. Both mis-wirings are removable: an account outcome carries the lease captured when the request was sent, and the vault commits flag-and-end in one turn of the lane, or commits neither. `signOut()` stays unfenced for a tap that has already closed admission synchronously — logout and the switch. It is the wrong tool for a reply that outlives that tap.
+
+The refresh deadline guards a different harm, a hung `_flight` that never reconnects. Clearing the flight on cancel deletes that producer. The logout that can follow is a second producer: posting the same refresh token again after the abandoned attempt may have rotated. That post can be withheld until the attempt id in [aiko-chat-island#452](https://github.com/nickmeinhold/aiko-chat-island/issues/452). It was kept on purpose, as one forced sign-in. The check I will not forgive is test 12, which certifies the schedule where that logout cannot happen.
+
+**Fatal flaws:**
+- Make the resurrected face impossible: stop returning the user into `AsyncValue.guard`. §2b sends `_applyOutcome`, `claimHandle` and `_restoreSession` through `_publish`, and correctly says a sign-out in the `_writeCachedUser` gap moves the lease so the publish drops. The same section leaves the ceremony returning that user, and today's `_ingress` and `claimHandle` assign `state` from the guard when the future completes (`auth_controller.dart`, the guard assignment after `ceremony(prior)`, and `claimHandle`'s identical assignment). The drop and the assignment are the same write done twice, and the second one does not look at the lease. The vault is signed out; the screen shows A. Test 3 only catches this if it awaits the whole ingress. A unit test of `_publish` alone goes green and the resurrection ships. `claimHandle` is worse on the error path: §2b teaches only `_ingress` to swallow `SessionSuperseded`, so a claim that loses the race writes `AsyncError` over the logged-out state the end just published. `refreshUser` and `saveProfile` still assign `AsyncData` from their own returns (§2b's door list omits them). One door means the ceremony returns `void`.
+- Make a living ban look ended, and the flag sticks when the end no-ops (§2d, §0 row 7). `isCurrent` requires the access token the vault would present now. That half is right for temper flaw 7, a 401 on a token a refresh has already replaced: the lease did not move, and ending would kill the session that rotated. A ban is the other frequency. Refresh keeps the lease and replaces the access token, and the account is still banned. §2d reads a failed `isCurrent` as "that session has already ended" and drops the ban, so a 403 for the pre-rotation token leaves a suspended account in chat until some later call happens to 403 again. The flag is worse. It is set from a synchronous `isCurrent` outside the lane, and `endIf` re-checks later inside the lane. Those two reads are not one moment. `_fly` writes `_state` only after `await _put`, so during the keychain write the controller still sees the old access token, flags `/suspended`, and queues `endIf`. The commit lands first, `endIf` returns null, no `SessionEnded` fires, and the flag is up on a session that is very much alive. Dismiss clears the flag and the vault walks them back in. `settleBan` is the ninth door §3's table forgot: it fabricates an `AccountSuspended` with no credential, and §2d's "with none, flag only" branch then does not end the session that is standing there.
+- Make a late delete unable to end the successor (§2h, §3). `deleteAccount` sends the request while admission is open — the person is still signed in, which the request needs — and only on the island's 204 enters `_endSession` via unfenced `signOut()`. §2h says the deletion can only end the session that sent it, "because admission has been closed since its first step." The step that closes admission is inside `_endSession`, which runs after the await. A refresh rejection in that interval publishes logged-out and opens admission; a sign-in adopts; the 204 then means "whoever is here now." That is the producer this design exists to remove, wearing the person's door. Close it by capture: the lease (not the access token) taken at send, `endIf` on success, teardown only if that call ended something. A 204 for an account already left is a no-op. A refresh in between still matches, because the account's lease did not move.
+- A `signOut` that throws latches `/splash`, so the sentence the person must see has no screen (§2c, §2e, §2g). The end sets `loading` as its first step and publishes logged-out as its fourth. §2g's disk failure rethrows from step 2, and the numbered steps have no release after that. The router stays on `/splash`, which has no "try again", while memory is ended and disk will restore the session on the next launch — the bug §2g says it is showing, played an octave higher. §2e has the same split: step 3 says the switch stops on `vault.end_unsaved`, and the invariant says the error is on `/login`, where the router lands only after a logged-out publish. Test 11 demands `/login`. The steps and the test name two different apps. The same end-picture omits `pendingHandle`. Today's teardown clears it because an uncleared pending outranks `/login` and wedges the router on `/claim-handle`. §2c's replacement steps never clear it.
+- Test 12 mutes the residual §2f just named. "Two timeouts in a row followed by a success stay signed in" is true when the cancel happens before the bytes leave. The shatter is the other timing, which §2f itself writes down: attempt A is already on the wire, retry B rotates first, A's late landing mints over the token the app stored, the next refresh is `RefreshReused`, the session ends. A test that cancels before send goes green and certifies the logout machine as transient. Split the schedule. Pre-send cancels stay signed in. An on-wire abandon followed by a retry is asserted as the one forced passkey sign-in, until [aiko-chat-island#452](https://github.com/nickmeinhold/aiko-chat-island/issues/452).
+
+**What holds:**
+- §0's diagnosis holds under load. Terminal outcomes were travelling without the session they were born under, and showing a new state before the last step finished is the second producer. Stamping the credential, and closing admission synchronously before any await of an end the person asked for, is the right shape.
+- The access-token half of `isCurrent` holds for a 401. A refresh leaves the lease still, so a corpse token that carries the current lease must not end the session that rotated. Test 7 plays the note that round 1 found missing. `NotSignedIn` as its own type holds: a missing stamp can no longer read as "end nothing."
+- `adopt(..., since:)` inside the lane holds. The lease is read before the network call, the lane is not held across it, and the compare happens at the commit. A ceremony that read the pre-end lease cannot land after the end.
+- Deleting the transport listener holds. A rejected socket refresh already ends inside `vault.refresh` and can emit once. A socket with no credential is not an end. `disconnect()` staying a synchronous detach holds as a fact about the transport; the new session's channel is safe while admission stays shut until that detach has returned.
+- Unfenced `signOut()` holds for `logout` and for the switch. The person means whatever is here at the commit, and §2c closes admission in the same synchronous turn, before the vault is touched. Capturing the lease at the tap would be a second mechanism for a window that close already removes. `signOut` emitting nothing holds with that, once the failure path actually reaches a screen: the person's disk error must not be eaten by `SessionEnded`.
+- §2e's order holds. The island moves only after the end is on disk. A failed tombstone leaves the old record on the old island. A failed save after a landed tombstone leaves them signed out where they were. [aiko_chat_app#447](https://github.com/nickmeinhold/aiko_chat_app/issues/447) race 4 is still not a harm: a session on the island being left is part of what the switch asked to end, and §2b fences a commit that arrives after that end.
+- The in-process lease, the abandoned island session, and the deadline living on the refresh request alone (the shared bare client stays untouched) all hold. Carnot's session-scope object still does not need to come back: the credential is carried by value, and this round's leaks are mistuned outcomes and a second writer, not a singleton the lease cannot name.
+
+**If RECAST, what to fold back:**
+- §2b: the ceremony returns `void`. `_ingress` and `claimHandle` await it for control flow only. `SessionSuperseded` is swallowed on both doors and writes nothing. `_publish` is the only assignment of auth state, including `refreshUser`, `saveProfile` and the optimistic branch of `_restoreSession`. Test 3 awaits the ingress, not the door in isolation.
+- §2d and §0 row 7: split the predicate. A 401 ends only when the access token is still the one presented. A ban ends when the lease is still current, even if the access token has rotated. Flag and `endIf` are one turn of the lane: the vault returns whether it ended the session, and the flag is set only from that result. A failed re-check leaves no flag. `settleBan` takes the credential of the call that learned the ban and is a row in §3. A sign-in ban with no credential flags and publishes logged-out, and leaves no `AsyncError`.
+- §2h: capture the lease at send, close nothing by `signOut`. On 204, `endIf` that lease. Teardown runs only when it ended something. A successor adopted during the request has a newer lease and is untouched. Say this in §3, where `deleteAccount` currently points at `signOut()`.
+- §2c, §2e, §2g: `signOut`'s throw still publishes logged-out with "Couldn't finish signing out. Try again", and does not save the island or invalidate config. `/splash` is released on that path. Every end publishes a full logged-out picture: pending handle cleared; the suspended flag cleared on logout, switch and signal ends; the ban path sets the flag from the lane result and the later publish leaves it set. Emit `SessionEnded` after the serial turn returns, so a handler that touches the vault cannot wait on the lane from inside the lane.
+- §2f / test 12: two sentences, two schedules. Cancels before the bytes leave, then a success, stay signed in. A request already on the wire, then a retry that wins, is the named one-time sign-in. Do not let one test assert both.
+
