@@ -1,310 +1,314 @@
 # Design 27: one session authority
 
-**Status:** draft v2, 2026-11-16. v1 was struck RECAST 4/4 (`27-TEMPER.md`, run dt-1794795469).
-This version folds its flaws 1-9. It's due for temper round 2 of at most 3. Opens PR B of
-design 26 (task 77).
+**Status:** draft v3, 2026-11-16. v1 and v2 were each struck RECAST 4/4 (`27-TEMPER.md`, runs
+dt-1794795469 and dt-1794797382). This version folds round 2. Round 3 is the cap.
+Opens PR B of design 26 (task 77).
 **Closes:** https://github.com/nickmeinhold/aiko_chat_app/issues/447, two cases deferred to it
 from the cage-match of https://github.com/nickmeinhold/aiko_chat_app/pull/453 (round 2), and that
 PR's deferred refresh deadline (round 1).
 **Builds on:** the session vault (design 26 §2c, merged as `f7f4c2d`).
-**Decided by Nick (2026-11-16):** §2e's switch order, and that #447 race 4 as written is not a
+**Decided by Nick (2026-11-16):** §2f's switch order, and that #447 race 4 as written is not a
 harm.
 
 **Touches a trust boundary:** which session an operation is allowed to end, restore, replace or
 *show*.
 
-## 0. The producer question: what lets an operation from an ended session still change the current one?
+## 0. The producer question
 
 **The harm.** An operation that started under one session does one of these:
-- ends a later session (a stale logout signs out the person who signed in since);
-- brings back an earlier one (a late sign-in revives a session the person left);
-- *shows* one that isn't there (the screen says signed in, and the vault says signed out);
+- ends a later session;
+- brings back an earlier one;
+- shows one that isn't there (or hides a ban that is);
 - sends a session to an island that didn't issue it.
 
-**What produces it.** Two things, and v1 named only the first.
+**What produces it.** One shape, at two layers.
 
-1. **Terminal outcomes travel without saying which session they belong to.** Each place below
-   hands on an outcome that once named a session, but drops the name on the way:
+**At the vault: outcomes that don't name their session.** Each place below hands on an outcome
+that once named a session, but drops the name on the way.
 
-| # | Where | What it carries | What it should carry |
+| # | Where | Carries today | Should carry |
 |---|---|---|---|
 | 1 | A sign-in's late `setTokens` (#447 race 1) | tokens | the lease the attempt started under |
 | 2 | `authEventsProvider` (#447 race 2) | `void` | the session the vault ended |
-| 3 | The transport's `ConnectionState.unauthenticated` (#447 race 3) | a state | nothing: it isn't an end |
-| 4 | `Unauthorized` from `_authedCall` (Carnot, #453 round 2) | a status code | the credential that got the 401 |
-| 5 | `_restoreSession`'s `on Unauthorized` → `clearTokens` | nothing | the same as 4 |
-| 6 | `switchIsland` moving the island (Noether, #453 round 2) | an order of steps | "the end is on disk" before "the island moved" |
-| 7 | **A ban**: `AccountSuspended` → `_settleSuspension` (temper flaw 2) | `state.error` | the credential that got the 403 |
+| 3 | The transport's `unauthenticated` (#447 race 3) | a state | nothing: it isn't an end |
+| 4 | `Unauthorized` from `_authedCall` | a status code | the credential that got the 401 |
+| 5 | `_restoreSession`'s `on Unauthorized` | nothing | the same as 4 |
+| 6 | `switchIsland` moving the island | an order of steps | "the end is on disk" before "the island moved" |
+| 7 | A ban: `AccountSuspended` → `_settleSuspension` | `state.error` | the lease of the call that learned it |
+| 8 | `settleBan()` from moderation (`:940-943`) | a made-up `AccountSuspended` | the same as 7 |
+| 9 | `deleteAccount`'s completion (`:1020-1030`) | "whoever is here now" | the lease captured when it was sent |
 
-2. **The app shows a new state before its last step has finished** (temper flaws 1 and 3). Two
-   shapes:
-   - **An end publishes signed out, then tears down.** `logout()` and `_becomeUnauthenticated`
-     put the login screen up first, then await the unpair, the cache clear and the disconnect
-     (`auth_controller.dart:810-813`, `:1041-1044`). A sign-in that lands in that gap gets its
-     own credential unpaired and its socket closed.
-   - **A sign-in commits, then publishes, with a wait in between.** `_applyOutcome` awaits
-     `setTokens`, then `_writeCachedUser`, then returns the user that `_ingress` publishes
-     (`:658-662`, `:356`). A sign-out in that gap leaves the screen showing a user the vault
-     no longer holds.
+**At the controller: writers of what the app shows, with nothing ordering them.** The controller
+holds four pieces of session state: `state`, `pendingHandle`, `suspended`, and the cached user.
+Fifteen lines in ten methods write `state` (`grep -n "state = "` in `auth_controller.dart`):
 
-**Removing them.**
-1. Every outcome that isn't the person's own action carries the credential it was about. The
-   vault applies it only while that credential is still current.
-2. **Nothing new can be admitted until an end is complete, and nothing is shown unless it's
-   still current.** Every end holds `loading` from its first step to its last. Every publish
-   goes through one door that checks the lease.
+- `:355-356` `_ingress`;
+- `:399` `_settleSuspension`;
+- `:673-674` `claimHandle`;
+- `:811` `logout`;
+- `:852`, `:860` `refreshUser`;
+- `:912`, `:918` `saveProfile`;
+- `:941` `settleBan`;
+- `:978`, `:1009` `switchIsland`;
+- `:1028` `deleteAccount`;
+- `:1043` `_becomeUnauthenticated`.
 
-Neither part needs a new object: it's the vault with no unfenced door for signals, and the
-controller with one door for what it shows.
+Each of those is an async path that can finish after another has started. v2 gave them one
+publish door, but the ceremonies still assigned their own return values, the sibling state
+stayed unfenced, and "an end is running" was itself a writable value (round 2, flaws A-F).
+
+**Removing both.** The vault already has the answer to the first: a serial lane, and a lease
+checked at every commit. **The controller gets the same: a transition lane.** Every write to the
+four pieces of session state happens inside one transition, and every transition is issued for
+a lease and checks it first. Neither layer gets a new kind of object. The controller simply
+does what the vault already does.
 
 ### A hazard I suspected, and checked: it doesn't happen
 
-The no-credential path in row 3 looked like design 26's harm still reaching `main`: the door for
-a guessed island returns null, the transport calls `_setUnauthenticated()`
-(`gateway_transport.dart:343-347`), and the controller's teardown writes signed out over another
-island's record. **It can't fire at boot.** The transport's only `connect()` comes from
-`chatRepositoryProvider` (`chat_providers.dart:733`), which needs a signed-in user. The wake
-kicks are ignored until something has asked to connect (`reconnectNow`'s `_wantConnected`
-guard). Row 3 is still closed, for race 3's sake, by deletion (§2c).
+The no-credential path in row 3 can't fire at boot. The transport's only `connect()` comes from
+`chatRepositoryProvider` (`chat_providers.dart:733`), which needs a signed-in user, and the wake
+kicks are ignored until something has asked to connect. Row 3 is still closed by deletion (§2d).
 
 ## 1. Facts this rests on
 
-- **The vault is the only writer** of the session (design 26 §2c). Every end goes through
-  `_end`, and every new session through `adopt`.
-- **A `Credential` already names its session.** It carries `(accessToken, lease)`
-  (`session_vault.dart:161`). `vault.refresh` already compares both: a stale lease is
-  superseded, and a stale access token gets the newer credential (`:186-191`).
-- **The lease is in memory only.** It starts at 0 in each process and advances on `adopt` and
-  on `_end`, never on a refresh. Nothing persists one.
-- **A switch saves the new island before it ends the session** today (`switchIsland`).
-  Design 26's placement rule 2 reads that saved island.
-- **The auth controller listens to `ConnectionState.unauthenticated`** as its own logout trigger
-  (`auth_controller.dart:197-201`).
-- **`_ingress` refuses to start while `state.isLoading`** (`:353`). `claimHandle` has no such
-  guard (`:677`).
-- **The transport's `disconnect()` doesn't await the close.** It detaches the channel
-  synchronously and closes it without waiting (`gateway_transport.dart:214-226`), so a teardown
-  that calls it finishes in local time.
-- **`buildGatewayBackend`'s bare Dio has no timeouts and is shared.** The refresh uses it, and
-  so does `GatewayRestApi` for its unauthenticated calls (`gateway_rest_api.dart:944,964`).
-- **Island refresh rotation** (`aiko-chat-island/src/aiko_gateway/domain/auth_session.py`):
-  - presenting CURRENT (`:163-166`) moves it to previous and mints a new current;
-  - presenting PREVIOUS (`:167-170`) mints a new current and leaves previous alone;
-  - anything else ends the session.
-
-  Lost replies are therefore always recoverable. A request that lands *after* a later one is
-  not (§2f).
+- **The vault is the only writer** of the session. It serialises every change in `_serial`
+  (`session_vault.dart:145`).
+- **A `Credential` is `(accessToken, lease)`** (`:161`). The lease advances on `adopt` and on
+  `_end`, never on a refresh. `refresh` already supersedes a stale lease and returns the newer
+  credential for a stale access token (`:186-191`).
+- **`_fly` writes `_state` only after `await _put`** (`:241-242`), so a read taken outside the
+  lane can see the pre-rotation token while a rotation is committing.
+- **The transport's `disconnect()` detaches synchronously** and closes without waiting
+  (`gateway_transport.dart:214-226`).
+- **The router listens to `state`, `pendingHandle` and `suspended`**, and today's settlement
+  writes them in one synchronous run for that reason (`auth_controller.dart:397-399`).
+- **`_teardownResources` clears `suspended` unconditionally** (`:726`).
+- **The bare Dio is shared**: the refresh uses it, and so do `GatewayRestApi`'s unauthenticated
+  calls (`gateway_rest_api.dart:944,964`).
+- **Island rotation** (`aiko-chat-island/src/aiko_gateway/domain/auth_session.py`): presenting
+  CURRENT (`:163-166`) moves it to previous; presenting PREVIOUS (`:167-170`) mints a new current
+  and leaves previous alone; anything else ends the session. Lost replies are recoverable. A
+  request that lands after a later one is not (§2g).
 
 ## 2. The design
 
-### 2a. The vault: one fenced end for signals, one unfenced end for the person
+### 2a. The vault
 
-- **`int get lease`**: the current lease. Read synchronously.
-- **`bool isCurrent(Credential c)`**: synchronous. True when `c.lease == lease` and `c`'s access
-  token is the one the vault would present now. The access-token half matters (temper flaw 7):
-  a refresh doesn't move the lease, so a 401 on an access token already rotated away must not
-  end the session that rotated it.
-- **`Future<Credential?> endIf(Credential presented)`**: runs in the serial lane. Ends the
-  session only if `isCurrent(presented)` holds there. Returns the credential it ended, or null.
-- **`Future<Credential?> signOut()`**: the person's own sign-out, or a switch. It stays
-  unfenced, because it means "whatever is here now". It returns the credential it ended.
-  (v1's "capture the lease at the tap" proposal was withdrawn: §2c's closed admission removes
-  the window it was for.)
-- **`adopt(island, tokens, {required int since})`** throws `SessionSuperseded` when the lease
-  has moved since `since`. It returns the new lease.
-- **`Stream<SessionEnded> ended`**: emitted for every end the person didn't ask for. That's a
-  refresh rejection inside `_fly`, and every `endIf` that ended something. `SessionEnded`
-  carries the lease the vault advanced *to* and the credential it ended, by value. **`signOut()`
-  emits nothing**, because the person's path renders its own outcome (§2g, temper flaw 6).
-  `authEventsProvider`'s `StreamController<void>` is replaced by this stream.
+- **`int get lease`**: read synchronously.
+- **`Future<Credential?> endIf(Credential presented)`**, for a **token outcome** (a 401). In the
+  lane, it ends the session only if both the lease and the access token are still current, and
+  returns the credential it ended. The access token matters because a refresh doesn't move the
+  lease: a 401 on a rotated-away token must not end the session that rotated it.
+- **`Future<Credential?> endIfLease(int lease)`**, for an **account outcome** (a ban, a
+  deletion). It ends the session if the lease is still current, whatever the access token is.
+  A refresh keeps the account. Only a new session or an end changes whose account it is.
+- **`Future<Credential?> signOut()`**: unfenced, the person's own. Returns what it ended.
+- **`adopt(island, tokens, {required int since})`**: throws `SessionSuperseded` if the lease has
+  moved. Returns the new lease.
+- **`Stream<SessionEnded> ended`**: one event per end the person didn't ask for (a refresh
+  rejection in `_fly`, an `endIf`/`endIfLease` that ended something). It carries the lease
+  advanced *to* and the ended credential by value. **It's emitted after the lane turn returns**,
+  so a handler that calls back into the vault never waits on the lane from inside it.
+  `signOut()` emits nothing. `StreamController<void>` for auth events goes away.
 
-### 2b. A sign-in commits only on the lease it started under, and shows only what's current (race 1, flaw 3)
+### 2b. The controller's transition lane
 
-Each sign-in ceremony (passkey sign-in, register, handle claim, link-to-existing) reads
-`vault.lease` **before its first network call** and passes it to `adopt`. If the person signed
-out, switched island, or finished another sign-in in the meantime, the lease has moved and
-`adopt` throws `SessionSuperseded`.
+```text
+_transition(lease, body):  queued behind every earlier transition;
+                           runs body only if vault.lease == lease (else drops, writes nothing);
+                           body may await the vault's lane, never the other way round.
+```
 
-**What the controller shows goes through one door**, `_publish(AppUser? user, {required int
-lease})`. It lands only while `vault.lease == lease`, and otherwise drops without writing
-anything. `_applyOutcome`, `claimHandle` and `_restoreSession` publish through it, with the lease
-`adopt` returned. A sign-out in the gap after `adopt` moves the lease, so the publish drops.
-The same rule covers a superseded attempt: `_ingress` recognises `SessionSuperseded` and leaves
-`state` exactly as the superseding action left it. It writes no `AsyncError` (Noether, flaw 3).
+**Rule 1. Only a transition writes session state.** All four pieces (`state`, `pendingHandle`,
+`suspended`, the cached user) are written only inside `_transition`. They're always written
+together as one **picture**, in one synchronous run at the end of the body, so the router never
+sees half of one (today's atomicity, kept).
 
-Reading the lease early is safe: the read is synchronous, and nothing holds the lane across the
-network call.
+**Rule 2. Network work stays outside.** A ceremony, a profile save or a deletion does its network
+call first, then queues one transition to commit what came back. The lane is held only for local
+work: a keychain write, a preferences write, a cache write, a synchronous socket detach. So it's
+held for milliseconds.
 
-### 2c. An end holds the door shut until it's finished (temper flaws 1, 4, 5)
+**Rule 3. An attempt is retired by the next transition.** A sign-in ceremony gets an attempt id
+when its *begin* transition runs. Any later end, switch or sign-in clears the current attempt as
+part of its own picture. The ceremony's *commit* transition runs only if its attempt is still
+current, so success, cancellation, error, `PendingHandle` and a sign-in ban are all dropped
+together once the attempt is retired. This is Carnot's "revocable attempt authority" without a
+new type.
 
-Every end, signal or person, goes through one controller method, `_endSession(...)`:
-1. `state = loading`. The router parks on `/splash`, and `_ingress` and `claimHandle` refuse
-   to start (`claimHandle` gains `_ingress`'s guard).
-2. End in the vault (`endIf`, `signOut`), or receive the credential a `SessionEnded` carries.
-3. Tear down **with that credential, by value**:
-   - unpair with it. The teardown never calls `currentAccessToken()`, which would read the
-     signed-out vault and get null (Noether, flaw 5);
+**Admission** is "no attempt is current". A tap during a transition queues its begin behind it,
+and the begin re-checks admission when it runs, so nothing is refused or lost.
+
+**Deadlock check:** the vault never awaits the controller, and its events fire after its lane
+turn. The controller's lane may await the vault's. There's no cycle.
+
+### 2c. A sign-in (#447 race 1; round 2 flaw A)
+
+1. *Begin transition*: check admission, take an attempt id, read `vault.lease`, and publish
+   `loading`.
+2. Outside the lane: the ceremony's network calls and the authenticator sheet. **The ceremony
+   returns its outcome, not a state.** Nothing assigns the guard's result to `state`.
+3. *Commit transition*, for the begin's lease and attempt:
+   - **Authenticated** → `adopt(..., since:)`, write the cached user, then picture
+     `(user, pending: none, suspended: false)`. `SessionSuperseded` is dropped and writes
+     nothing.
+   - **`PendingHandle`** → picture `(logged out, pending: it)`.
+   - **Cancelled** → picture `(prior)`.
+   - **Error** → picture `(AsyncError)`.
+   - **A ban at sign-in** (no session to end) → picture `(logged out, suspended: true)`.
+
+`claimHandle` is the same shape, with its begin requiring the pending handle. `_restoreSession`
+is a transition issued at boot for lease 0. It publishes with the lease of the credential
+`present()` returned. Restore doesn't `adopt`.
+
+### 2d. Ends (#447 races 2-3; rows 2-5; round 2 flaws C-D)
+
+An **end transition** for lease L, through any door:
+1. End in the vault: `signOut()`, `endIf`, or `endIfLease`. For a `SessionEnded` the vault has
+   already ended it, and the event carries the credential. If nothing was ended, stop and write
+   nothing.
+2. Tear down with the ended credential **by value**:
+   - unpair with it (never `currentAccessToken()`);
    - clear the cached user;
-   - `disconnect()`, which returns without awaiting the close.
+   - `disconnect()`.
 
-   `_teardownResources` ends nothing.
-4. `_publish(null, lease: <the lease the end advanced to>)`.
+   `_teardownResources` ends nothing and no longer clears `suspended`, and
+   `_clearCredentialAndUnpair` loses its `clearTokens()`.
+3. Picture `(logged out, pending: none, attempt: retired, suspended: <the outcome's>)`.
+   `suspended` is `true` for a ban and `false` for everything else, so a ban survives its own
+   teardown (round 2: Carnot, Tesla).
 
-No sign-in can start between steps 1 and 4, so there's no newer session for the teardown to
-touch. That's the whole fix for flaw 1, and it's a removal, not a check: the gap the teardown
-used to share with a sign-in no longer exists. Steps 2-3 are local work (a keychain write, a
-preferences write, a cache clear, a synchronous detach), so `/splash` lasts milliseconds, not
-seconds.
+**The doors.**
+- **`vault.ended`**: an end transition for the event's lease, with steps 2-3.
+- **A 401** anywhere in the controller (`_restoreSession`, `refreshUser`, `saveProfile`,
+  `_payOwedHandle`): `Unauthorized` carries a required `Credential`, set by `_authedCall` from
+  the credential the request carried. A request with no credential raises `NotSignedIn`
+  instead. The door is an end transition via `endIf(e.credential)`.
+- **The transport's `unauthenticated`**: not a door. The controller stops listening. A rejected
+  socket refresh already ended in `vault.refresh` and emitted `SessionEnded`. A socket with no
+  credential ended nothing.
+- **Overlapping ends queue.** The second finds the lease already moved and drops.
 
-**Signals.**
-- **`vault.ended`**: the controller handles a `SessionEnded` only while `vault.lease` still
-  equals its lease. Otherwise a later end or sign-in has superseded it, and it's dropped.
-- **`Unauthorized`** carries a required `Credential`, set by `_authedCall` from the credential
-  the failing request carried. A request with no credential raises a distinct `NotSignedIn`, not
-  `Unauthorized` with a null lease: a missing stamp can't read as "end nothing" (Tesla, flaw 7).
-  Every `on Unauthorized` in the controller (`_restoreSession`, `refreshUser`, `saveProfile`,
-  `_payOwedHandle`) calls `vault.endIf(e.credential)` and nothing else. If it ended something,
-  the resulting `SessionEnded` drives `_endSession`. That's one teardown path, not two.
-- **The transport stops being a logout trigger.** Its `unauthenticated` state stays, as a UI fact
-  about the socket, but the controller stops listening to it:
-  - **A socket refresh that was rejected** went through `vault.refresh`, which ended the session
-    and emitted `SessionEnded`. The controller already hears it through the one channel.
-  - **A socket with no credential** isn't the end of anything, so it now goes nowhere.
+### 2e. Account outcomes: a ban and a deletion (rows 7-9; round 2 flaws B, E)
 
-### 2d. A ban names its session (row 7, temper flaw 2)
+- **A ban on an authed call.** `AccountSuspended` carries the request's credential, and the door
+  is an end transition via `endIfLease(credential.lease)`. **The flag comes from the result**:
+  `suspended: true` is in step 3's picture only if `endIfLease` ended something. A ban that
+  arrives on a pre-rotation token under the same lease still settles. A ban for an account
+  already left ends nothing and flags nothing.
+- **`settleBan(lease)`**: the moderation controller reads `vault.lease` before it sends the
+  action whose response is the ban (`moderation_controller.dart:134,219`). It's the same end
+  transition.
+- **`deleteAccount()`**: reads `vault.lease` before it sends. On the island's success, it runs an
+  end transition via `endIfLease(lease)`. A successor adopted while the request was out has a
+  newer lease and is untouched.
 
-`AccountSuspended` is already a subtype of `Unauthorized`, so it carries the same credential.
-`_settleSuspension(credential)`:
-- **with a credential**: if `!vault.isCurrent(credential)`, the ban was about a session that has
-  already ended. It's dropped, with no flag and no end. Otherwise, as today: clear pending and
-  flag `/suspended` synchronously (the router atomicity the existing comment protects), then
-  `_endSession` via `endIf(credential)`;
-- **with none** (a ban answering a sign-in ceremony, which carries no credential): flag only.
-  There's no session to end.
+### 2f. A switch is one transition (row 6; Nick's decision; round 2 flaw F)
 
-The check and the flag are adjacent synchronous statements, and the end's `endIf` re-checks in
-the lane. A sign-in can't land between them, because it needs a tap, and admission is closed
-from the flag onward.
+One transition for the current lease:
+1. No-op guard.
+2. **`vault.signOut()`, awaited**, then unpair with what it returned, clear the cache, and
+   `disconnect()`.
+   - If `signOut()` throws (`vault.end_unsaved`), the switch stops: the island isn't saved, the
+     config isn't invalidated, and the picture is `(logged out, error: "couldn't finish signing
+     out")`. The transition ends there, and its `finally` releases the lane.
+3. **Then** save the new island. If that fails, the picture is `(logged out, error)`, still on
+   the old island.
+4. `invalidate(configProvider)`, then picture `(logged out)`.
 
-### 2e. A switch is one ordered operation (race 4, row 6; Nick's decision)
+**One invariant for every failure:** the app is signed out, and the live config and the saved
+preference both still name the old island. The error renders on `/login`, because that picture
+is what the router reads. Nick accepted the tradeoff (a failed save now signs out, task 84) and
+that race 4 is not a harm (task 85). Admission is closed for the whole transition.
 
-1. No-op guard, as today.
-2. `state = loading` (admission closed, as §2c).
-3. **`vault.signOut()`, awaited.** Then unpair with the credential it returned. If it throws
-   (`vault.end_unsaved`), the switch **stops here**: the island doesn't move and nothing is
-   saved. In memory the session has already ended (the vault ends it whatever the disk does).
-4. **Then** save the new island. If that fails, the app is signed out on the old island.
-5. `invalidate(configProvider)`, then `_publish(null, ...)`.
+### 2g. The refresh has a bound (task 79; round 1 flaw 8; round 2 flaw G)
 
-**One invariant covers every failure** (Noether, flaw 6): *the app is signed out, and the live
-config and the saved preference both still name the old island.* The error is shown on
-`/login`, where the router lands, and not on a picker that has since unmounted. If step 3 failed,
-the next launch restores the old record on the old island, and only there.
+- **The bound goes on the refresh request alone** (per-request options), not on the shared bare
+  client. It's one whole-request deadline, long relative to realistic stalls (of the order of
+  the island's own request timeout).
+- **A timeout cancels the request**, which aborts its connection. The flight ends, `_flight`
+  clears, and the transport schedules a reconnect. A reply for an abandoned attempt is never
+  adopted.
 
-This gives up one thing from today's order: a failed *save* used to leave the session intact,
-and now it leaves the person signed out where they were. Nick accepted this (task 84). The old
-order's failure mode was a moved island with the session still on disk, which is what turns
-Noether's case into one island's token sent to another.
+**NAMED RESIDUAL until island #452.** If the request was already on the wire, it can land after
+its retry succeeded. The island then mints over the stored token, and the next refresh reads as
+reuse. That costs one passkey sign-in, not a loop. The real fix is the attempt id in
+https://github.com/nickmeinhold/aiko-chat-island/issues/452. Scheduling it, or holding the
+deadline until it lands (Noether's alternative), is Nick's call (task 89). No bound at all is
+task 79's harm: a hung refresh stops reconnection forever.
 
-**#447's race 4 as written is not a harm** (Nick agreed, task 85). The person asked to leave the
-island, and a session B on that island is part of what they asked to end. Admission is closed
-from step 2 in any case. The harm next to it, a sign-in that commits after the switch's end, is
-fenced by §2b.
+### 2h. The person's sign-out says when it couldn't
 
-### 2f. The refresh has a bound (task 79; temper flaw 8)
+`logout()` is an end transition via `signOut()`. If `signOut()` throws, the picture is
+`(logged out, error: "couldn't finish signing out. Try again")`. Retrying calls `signOut()`
+again, which writes the tombstone or deletes the slots. No `SessionEnded` fires for the person's
+own end, so nothing replaces that message with a bare login screen.
 
-- **The bound goes on the refresh request alone**, via per-request options on the `post`. It does
-  not go on the shared bare client, so passkey ceremonies keep their own timing. It's one
-  whole-request deadline, set long relative to realistic stalls (of the order of the island's own
-  request timeout), not 15 s per phase.
-- **A timeout cancels the request**, which aborts its connection, so bytes not yet sent never
-  arrive. It's transient by the existing taxonomy: the flight ends, `_flight` clears, and the
-  transport schedules its reconnect.
-- **A reply for an abandoned attempt is never adopted.** The cancelled future's result is
-  discarded, and only the current flight commits.
+## 3. Who writes what
 
-**NAMED RESIDUAL until island #452.** Lost replies are always recoverable (§1). But a request
-already on the wire when it was abandoned can land after its retry succeeded. The island then
-mints over the app's new token, and the app's next refresh reads as reuse. The session ends,
-which costs one passkey sign-in, not a loop. The real fix is the attempt id in
-https://github.com/nickmeinhold/aiko-chat-island/issues/452, which makes a repeated attempt
-idempotent. Scheduling it is Nick's call (task 89). No bound at all is worse: a hung refresh
-stops reconnection forever (task 79).
+| Door | Vault call | Emits `SessionEnded` | Picture |
+|---|---|---|---|
+| sign-in commit | `adopt(since:)` | no | user / pending / prior / error / banned |
+| `_restoreSession` | `present()` | no | user, or logged out |
+| `logout()` | `signOut()` | no | logged out (± error) |
+| `switchIsland()` | `signOut()` | no | logged out (± error), then the new island |
+| `deleteAccount()` success | `endIfLease(sent)` | yes, if ended | logged out |
+| a ban (authed, or `settleBan`) | `endIfLease(sent)` | yes, if ended | logged out + suspended |
+| a 401 | `endIf(credential)` | yes, if ended | logged out |
+| refresh rejected (REST or WSS) | `_fly`, in the vault | yes | logged out |
+| `refreshUser` / `saveProfile` success | none | no | user, for the lease at send |
+| transport `unauthenticated` | none | no | none |
+| `_teardownResources` | none | no | none: it only tears down |
 
-`test/transport_observation_test.dart:75` flips from pinning the stuck flight to expecting
-`reconnect.scheduled`.
-
-### 2g. The person's sign-out says when it couldn't sign out (temper flaw 6)
-
-`logout()` is `_endSession` via `signOut()`. If `signOut()` rethrows, the session has ended in
-memory but not on disk, and the next launch would restore it. That's a state the app shows: the
-login screen says "Couldn't finish signing out. Try again", and retrying calls `signOut()` again,
-which writes the tombstone or deletes the slots. No `SessionEnded` fires for this end, so no
-listener can replace that message with a bare login screen.
-
-### 2h. Account deletion ends through the same door
-
-`deleteAccount()`, on the island's success, is `_endSession` via `signOut()`. A deletion that's
-already been sent can only end the session that sent it, because admission has been closed
-since its first step.
-
-## 3. Who ends a session
-
-| Path | Ends with | Emits `SessionEnded` |
-|---|---|---|
-| `logout()` (the person) | `signOut()` | no: it renders its own outcome (§2g) |
-| `switchIsland()` | `signOut()` | no |
-| `deleteAccount()` success | `signOut()` | no |
-| Refresh rejected (REST or WSS) | the vault's `_fly`, in the lane | yes |
-| A 401 in the controller | `endIf(credential)` | yes, if it ended something |
-| A ban with a credential | `endIf(credential)` | yes, if it ended something |
-| A ban at sign-in | nothing: no session | no |
-| A transport `unauthenticated` | nothing | no |
-| `_teardownResources` | nothing: it only tears down | no |
-
-**What goes away:** `clearTokens()` as a way for anything but the person to end a session; the
-`connectionStateProvider` listener as a logout trigger; `StreamController<void>` for auth events;
-saving the island before the end is on disk; publishing logged-out before the teardown finishes;
-`currentAccessToken()` in the teardown.
+**What goes away:** every `state =`, `pendingHandle` and `suspended` write outside `_transition`;
+`clearTokens()` for anything but the vault's own ends; the `connectionStateProvider` listener as
+a logout trigger; `StreamController<void>`; saving the island before the end is on disk;
+`currentAccessToken()` in the teardown; `_clearSuspended()` in the teardown; the
+`state.isLoading` admission guard; the made-up `AccountSuspended` in `settleBan`.
 
 ## 4. Named tradeoffs, residuals and alternatives
 
-- **A failed save during a switch now signs out** instead of leaving the session intact (§2e).
-  NAMED TRADEOFF, owner app tab. Accepted by Nick.
-- **A refresh abandoned at the deadline can land late and end the session** (§2f). NAMED
-  RESIDUAL until island #452. Nick decides whether to schedule it (task 89).
-- **A sign-in abandoned by a lease move leaves a session open on the island** that the app never
-  adopted. It's never presented, and it ages out. Revoking it would need a logout-by-token
-  endpoint on the island. NAMED RESIDUAL.
-- **The lease is in-process.** A crash mid-switch can leave the old record, with its island:
+- **A failed save during a switch now signs out** (§2f). NAMED TRADEOFF, accepted by Nick.
+- **A refresh abandoned on the wire can land late and end the session** (§2g). NAMED RESIDUAL
+  until island #452 (task 89).
+- **A sign-in abandoned by a retired attempt leaves a session open on the island.** It's never
+  presented, and it ages out. NAMED RESIDUAL.
+- **The lease is in-process.** A crash mid-switch can leave the old record on the old island:
   design 26's allowed failure.
-- **Carnot's session-scope object** (one owner for the transport, the pairing and the identity,
-  retired before cleanup) was considered and NOT ADOPTED. §2b's publish door, §2c's closed
-  admission and the credential carried by value give the same isolation without a new object.
-  If round 2 finds a shared-resource leak these don't cover, it comes back. Owner: app tab.
+- **The owed-handle debt store** (`:84`, `:124`) is per account, not per session, and stays
+  outside the lane. It's keyed by `userId` and holds no credential.
+- **Carnot's session-scope object**: NOT ADOPTED. The transition lane is the single owner of
+  transitions it asked for, and the vault already owns the credentials. Owner: app tab.
 
 ## 5. Tests (observable outcomes under adversarial orderings; mutation-check each)
 
-1. **A transport `unauthenticated` alone** (no `SessionEnded`) leaves the session and the UI
-   state alone.
-2. **A late sign-in after a sign-out** commits nothing: the vault is still signed out, and the
-   state is still logged out.
-3. **A sign-out between `adopt` and the publish** leaves the state logged out, not showing A.
-4. **A queued `SessionEnded` for lease n, delivered after a sign-in**, leaves the new session and
-   its UI state alone.
-5. **A signal end while a sign-in tries to start**: the ceremony refuses until the end is
-   complete. The new session's credential is never unpaired, and its socket is never closed.
-6. **Carnot's case:** A refreshes, B signs in, A's pinned retry gets a 401. B stays signed in.
-7. **Tesla's case:** a refresh commits (the lease doesn't move), then a 401 arrives for the
-   pre-rotation access token. The refreshed session stays.
-8. **A stale ban:** A's 403 lands after B signed in. B is neither suspended nor signed out.
-9. **A WSS refresh rejection** logs out exactly once, through `SessionEnded`.
-10. **The teardown unpairs with the ended credential**, never null.
-11. **A switch whose sign-out fails** leaves the saved island and the live config unchanged, and
-    the error shows on `/login`. The next boot restores the old record on the old island only.
-12. **A hung refresh** times out, the transport schedules a reconnect, and a later refresh starts
-    a new flight. **Two timeouts in a row** followed by a success stay signed in. A reply that
-    arrives for an abandoned attempt is not adopted.
-13. **A person's sign-out whose disk write fails** shows "couldn't finish signing out", and
-    retrying writes the end.
-14. **`claimHandle` during an end** refuses to start.
+Each test drives the real controller and awaits the whole door, not a helper on its own.
+
+1. A transport `unauthenticated` alone changes nothing.
+2. A late sign-in after a sign-out commits nothing and shows nothing.
+3. A sign-out between `adopt` and the cached-user write leaves the app logged out, with no cached
+   A (awaiting the whole `_ingress`).
+4. A late `PendingHandle`, cancellation or error from an attempt retired by an end writes
+   nothing.
+5. A queued `SessionEnded` for lease n, delivered after a sign-in, leaves the new session alone.
+6. A signal end and a sign-in tap together: the tap queues, and B's credential is never
+   unpaired and B's socket never closed.
+7. Two overlapping ends: one teardown runs, and the second drops.
+8. Carnot's case: A refreshes, B signs in, A's pinned retry 401s. B stays.
+9. Tesla's 401 case: a refresh commits, then a 401 for the pre-rotation token arrives. The
+   session stays.
+10. **A ban on a pre-rotation token under the same lease settles**: signed out, and suspended.
+11. A stale ban (A's 403 after B signed in) neither suspends nor ends B.
+12. A ban survives its own teardown: the router lands on `/suspended`.
+13. `settleBan` with a captured lease behaves as 10 and 11.
+14. A delete whose success lands after B signed in leaves B alone.
+15. A WSS refresh rejection logs out exactly once.
+16. A switch whose sign-out throws: the island and config are unchanged, the error shows on
+    `/login`, and the lane is released (a following tap runs).
+17. A person's sign-out whose disk write fails shows "couldn't finish", and retrying writes the
+    end.
+18. **The refresh bound, schedule one:** cancels before the bytes leave, twice, then a success.
+    Still signed in.
+19. **The refresh bound, schedule two:** an attempt on the wire is abandoned, its retry wins,
+    then the late attempt lands at a fake island. The app signs out once and doesn't loop.
+    This is the named residual, asserted as such.
