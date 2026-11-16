@@ -157,7 +157,7 @@ void main() {
       overrides: [
         sharedPreferencesProvider.overrideWithValue(prefs),
         authControllerProvider.overrideWith(() => _FixedAuthController(null)),
-        secureTokenStoreProvider.overrideWithValue(InMemoryTokenStore()),
+        sessionVaultProvider.overrideWithValue(InMemoryTokenStore()),
       ],
     );
 

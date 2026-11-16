@@ -60,9 +60,9 @@ class _RecordingTokenStore extends InMemoryTokenStore {
   final List<String> log;
 
   @override
-  Future<void> clear() async {
+  Future<void> signOut() async {
     log.add('clearTokens');
-    return super.clear();
+    return super.signOut();
   }
 }
 
@@ -73,9 +73,9 @@ class _ThrowingClearTokenStore extends InMemoryTokenStore {
   bool failClears = false;
 
   @override
-  Future<void> clear() async {
+  Future<void> signOut() async {
     if (failClears) throw Exception('keychain unavailable');
-    return super.clear();
+    return super.signOut();
   }
 }
 

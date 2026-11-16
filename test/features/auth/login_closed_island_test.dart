@@ -36,8 +36,9 @@ void main() {
         passkeyAuthClientProvider.overrideWithValue(FakePasskeyAuthClient()),
         tokenProviderProvider.overrideWithValue(
           DefaultTokenProvider(
-            store: InMemoryTokenStore(),
-            remoteRefresh: (_) async => 'access2',
+            island: kTestIsland,
+            vault: InMemoryTokenStore(),
+            remoteRefresh: (_) async => RefreshResult('access2'),
             onUnauthenticated: () {},
           ),
         ),

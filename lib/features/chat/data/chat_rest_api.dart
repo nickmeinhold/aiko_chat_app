@@ -365,10 +365,6 @@ abstract interface class ChatRestApi {
     required String displayName,
   });
 
-  /// Exchange a refresh token for a fresh access token (the refresh token is
-  /// NOT rotated by the gateway). Returns the new access token.
-  Future<String> refresh(String refreshToken);
-
   /// Fetch the gateway's advertised capabilities from the public `GET
   /// /capabilities` endpoint (task #1896). Returns `null` when the endpoint is
   /// absent (404) or unreachable — the caller treats null as "unknown" and falls

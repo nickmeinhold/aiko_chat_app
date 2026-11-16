@@ -32,7 +32,7 @@ import '../features/chat/data/chat_rest_api.dart';
 import '../features/chat/data/gateway_rest_api.dart';
 import '../features/chat/data/transport/chat_transport.dart';
 import '../features/chat/data/transport/gateway_transport.dart';
-import '../services/secure_token_store.dart';
+import '../services/session_vault.dart';
 import '../services/sovereign_key_store.dart';
 import 'config.dart';
 
@@ -104,10 +104,49 @@ class IslandConfigController extends Notifier<IslandConfig> {
 
 // --- credentials -----------------------------------------------------------
 
-/// The encrypted JWT store. Tests override this with an `InMemoryTokenStore`.
-final secureTokenStoreProvider = Provider<SecureTokenStore>(
-  (ref) => SecureTokenStore(),
-);
+/// The session vault: the one owner of the stored session, and of every
+/// change to it. App-scoped and never rebuilt, so the token providers that
+/// `backendProvider` rebuilds per island are doors onto ONE session. Tests
+/// override this with an `InMemoryTokenStore`.
+final sessionVaultProvider = Provider<SessionVault>((ref) {
+  // READ, never watch: a watched input that changed would build a second
+  // vault, with its own lane, lease and flight, over the same two slots.
+  final log = ref.read(rootLoggerProvider).child('vault');
+  return SessionVault(
+    KeychainSlots(),
+    // Lazy: asked only when an older build's token pair is found.
+    placeLegacy: () => legacySessionIsland(ref.read(sharedPreferencesProvider)),
+    report: (event) => log.warning(event),
+  );
+});
+
+/// Which island an older build's token pair (stored without one) was minted
+/// on, or null when nothing can say: design 26 §2b, placement rules 2-4.
+///
+/// An older build presented its tokens to the island it resolved at launch:
+/// the saved choice, else the compiled default. That is evidence only on a
+/// store build, where the compiled default is [kDefaultIslandBaseUrl]. A dev
+/// build's `--dart-define` says nothing about the island an older dev build
+/// was given. And with no saved choice, the default counts only if a cached
+/// user shows a session ran here: the cached user lives and dies with the
+/// tokens in prefs, which a reinstall wipes while the Keychain survives it.
+String? legacySessionIsland(SharedPreferences prefs) {
+  if (IslandConfig.fromEnvironment().httpBaseUrl != kDefaultIslandBaseUrl) {
+    return null;
+  }
+  // The rule [IslandConfigController] resolves by: a blank key is no choice,
+  // so it must not hide the pre-rename key behind it.
+  String? usable(String key) {
+    final v = prefs.getString(key);
+    return v != null && v.trim().isNotEmpty ? v : null;
+  }
+
+  final saved =
+      usable(islandBaseUrlPrefKey) ?? usable(kLegacyIslandBaseUrlPrefKey);
+  if (saved != null) return IslandConfig.normalized(saved).httpBaseUrl;
+  if (CachedUserStore(prefs).read() != null) return kDefaultIslandBaseUrl;
+  return null;
+}
 
 /// This ACCOUNT's sovereign Ed25519 signing-key store
 /// (sovereign-message-signing). Distinct from the JWT store: this proves
@@ -173,11 +212,11 @@ final authEventsProvider = Provider<StreamController<void>>((ref) {
 final backendProvider =
     Provider<({ChatRestApi api, DefaultTokenProvider tokens})>((ref) {
       final config = ref.watch(configProvider);
-      final store = ref.watch(secureTokenStoreProvider);
+      final vault = ref.watch(sessionVaultProvider);
       final events = ref.watch(authEventsProvider);
       return buildGatewayBackend(
         baseUrl: config.httpBaseUrl,
-        store: store,
+        vault: vault,
         // Lazy: only fires at runtime on a definitive RT rejection, long after
         // the auth controller exists — pushing onto the event sink (no cycle).
         onUnauthenticated: () => events.add(null),

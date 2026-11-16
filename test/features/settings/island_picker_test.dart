@@ -81,13 +81,14 @@ void main() {
       container = ProviderContainer(
         overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
-          secureTokenStoreProvider.overrideWithValue(store),
+          sessionVaultProvider.overrideWithValue(store),
           restApiProvider.overrideWithValue(FakeRestApi()),
           transportProvider.overrideWithValue(transport),
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
-              store: store,
-              remoteRefresh: (_) async => 'a2',
+              island: kTestIsland,
+              vault: store,
+              remoteRefresh: (_) async => RefreshResult('a2'),
               onUnauthenticated: () =>
                   container.read(authEventsProvider).add(null),
             ),
@@ -123,11 +124,7 @@ void main() {
 
         // Session torn down — the JWT for the old gateway is gone before any call
         // could fire it at the new host.
-        expect(
-          await h.store.read(),
-          isNull,
-          reason: 'tokens cleared on switch',
-        );
+        expect(h.store.current, isNull, reason: 'tokens cleared on switch');
         expect(
           h.transport.disconnectCalls,
           greaterThanOrEqualTo(1),
@@ -201,13 +198,14 @@ void main() {
       container = ProviderContainer(
         overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
-          secureTokenStoreProvider.overrideWithValue(store),
+          sessionVaultProvider.overrideWithValue(store),
           restApiProvider.overrideWithValue(FakeRestApi()),
           transportProvider.overrideWithValue(transport),
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
-              store: store,
-              remoteRefresh: (_) async => 'a2',
+              island: kTestIsland,
+              vault: store,
+              remoteRefresh: (_) async => RefreshResult('a2'),
               onUnauthenticated: () =>
                   container.read(authEventsProvider).add(null),
             ),
@@ -252,13 +250,14 @@ void main() {
         container = ProviderContainer(
           overrides: [
             sharedPreferencesProvider.overrideWithValue(prefs),
-            secureTokenStoreProvider.overrideWithValue(store),
+            sessionVaultProvider.overrideWithValue(store),
             restApiProvider.overrideWithValue(FakeRestApi()),
             transportProvider.overrideWithValue(FakeChatTransport()),
             tokenProviderProvider.overrideWithValue(
               DefaultTokenProvider(
-                store: store,
-                remoteRefresh: (_) async => 'a2',
+                island: kTestIsland,
+                vault: store,
+                remoteRefresh: (_) async => RefreshResult('a2'),
                 onUnauthenticated: () =>
                     container.read(authEventsProvider).add(null),
               ),
@@ -297,11 +296,7 @@ void main() {
             .read(authControllerProvider.notifier)
             .switchIsland('$kDefaultIslandBaseUrl/');
 
-        expect(
-          await h.store.read(),
-          isNotNull,
-          reason: 'tokens kept — no logout',
-        );
+        expect(h.store.current, isNotNull, reason: 'tokens kept — no logout');
         expect(h.transport.disconnectCalls, 0, reason: 'no teardown on no-op');
         expect(
           h.container.read(authControllerProvider).value,
@@ -329,13 +324,14 @@ void main() {
       container = ProviderContainer(
         overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
-          secureTokenStoreProvider.overrideWithValue(store),
+          sessionVaultProvider.overrideWithValue(store),
           restApiProvider.overrideWithValue(FakeRestApi()),
           transportProvider.overrideWithValue(transport),
           tokenProviderProvider.overrideWithValue(
             DefaultTokenProvider(
-              store: store,
-              remoteRefresh: (_) async => 'a2',
+              island: kTestIsland,
+              vault: store,
+              remoteRefresh: (_) async => RefreshResult('a2'),
               onUnauthenticated: () =>
                   container.read(authEventsProvider).add(null),
             ),
@@ -513,10 +509,14 @@ class _ThrowingDisconnectTransport extends FakeChatTransport {
   }
 }
 
-/// A token store whose `clear` throws — to drive the security-critical
-/// token-clear failure path of `switchIsland` (Carnot final re-review).
+/// A token store whose Keychain refuses every write and delete, so the vault
+/// can neither record a sign-out nor remove the session — to drive the
+/// security-critical token-clear failure path of `switchIsland` (Carnot final
+/// re-review).
 class _ThrowingClearStore extends InMemoryTokenStore {
-  _ThrowingClearStore(AuthTokens initial) : super(initial);
-  @override
-  Future<void> clear() async => throw Exception('keychain delete boom');
+  _ThrowingClearStore(AuthTokens initial) : super(initial) {
+    slots.fault = (op, key) {
+      if (op != 'read') throw Exception('keychain $op boom');
+    };
+  }
 }

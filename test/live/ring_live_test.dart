@@ -64,13 +64,13 @@ class _StaticTokens implements TokenProvider {
 
   // The interface is exactly two methods; there is nothing else to stub.
   @override
-  Future<String?> currentAccessToken() async => _token;
+  Future<Credential?> current() async => Credential(_token, 0);
 
   /// Returns the SAME token rather than refreshing. This test is minutes long
   /// and the token lives hours — and a stub that silently re-mints would hide a
   /// genuine expiry behind an apparent success.
   @override
-  Future<String?> refreshAccessToken() async => _token;
+  Future<Credential?> refresh(Credential stale) async => Credential(_token, 0);
 }
 
 Future<Map<String, dynamic>> _login(String host, String u, String p) async {

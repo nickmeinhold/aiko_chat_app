@@ -11,7 +11,7 @@ import '../../notifications/domain/device_platform.dart';
 import '../../notifications/domain/apns_environment.dart';
 import '../../notifications/domain/token_kind.dart';
 import '../../../core/auth/token_provider.dart';
-import '../../../services/secure_token_store.dart';
+import '../../../services/session_vault.dart';
 import '../domain/channel.dart';
 import '../domain/channel_member.dart';
 import '../domain/gateway_capabilities.dart';
@@ -26,6 +26,8 @@ import 'chat_rest_api.dart';
 /// [TokenProvider] (which uses a token-less client), never this interceptor —
 /// no cycle (design 02, finding 6).
 class AuthInterceptor extends Interceptor {
+  static const _credentialKey = 'aiko_credential';
+
   final TokenProvider _tokens;
   final Dio _authedDio;
 
@@ -36,8 +38,29 @@ class AuthInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    final token = await _tokens.currentAccessToken();
-    if (token != null) options.headers['Authorization'] = 'Bearer $token';
+    // A retry carries the credential its refresh returned, for the session
+    // the request was made under. Reading the current one here instead would
+    // send it as whoever signed in since.
+    if (options.extra['retried'] == true) return handler.next(options);
+    final Credential? credential;
+    try {
+      credential = await _tokens.current();
+    } catch (e, st) {
+      // The vault throws when the Keychain refuses its first read (a locked
+      // phone): "not known yet". Dio discards this callback's future, so an
+      // escaping throw would leave the request pending forever. Fail it as
+      // transient instead: the session isn't known to be dead.
+      options.extra['auth_transient'] = true;
+      return handler.reject(
+        DioException(requestOptions: options, error: e, stackTrace: st),
+      );
+    }
+    if (credential != null) {
+      options.headers['Authorization'] = 'Bearer ${credential.accessToken}';
+      // Kept with the request so a 401 refreshes THIS session, not whichever
+      // one is current by then (PR #452, round 3).
+      options.extra[_credentialKey] = credential;
+    }
     handler.next(options);
   }
 
@@ -45,29 +68,36 @@ class AuthInterceptor extends Interceptor {
   void onError(DioException err, ErrorInterceptorHandler handler) async {
     final is401 = err.response?.statusCode == 401;
     final alreadyRetried = err.requestOptions.extra['retried'] == true;
-    if (!is401 || alreadyRetried) {
+    final presented = err.requestOptions.extra[_credentialKey];
+    if (!is401 || alreadyRetried || presented is! Credential) {
       handler.next(err);
       return;
     }
-    String? newToken;
+    Credential? fresh;
     try {
-      newToken = await _tokens.refreshAccessToken();
+      fresh = await _tokens.refresh(presented);
     } catch (_) {
       // TRANSIENT refresh failure (network/timeout/5xx) — the session is NOT
       // known-dead. Mark the forwarded 401 so `_authedCall` does NOT translate
       // it to terminal `Unauthorized` (which would log the user out on a network
       // blip — the exact failure design 02's refresh taxonomy exists to prevent).
+      // [SessionSuperseded] lands here too, and for the same reason: the
+      // session that replaced this request's is fine, and the request, made
+      // for the one that's gone, fails without being retried as the new one.
       err.requestOptions.extra['auth_transient'] = true;
       handler.next(err); // surface original error as transient
       return;
     }
-    if (newToken == null) {
+    if (fresh == null) {
       handler.next(err); // refresh token rejected -> session is unauthenticated
       return;
     }
-    final req = err.requestOptions..extra['retried'] = true;
+    final req = err.requestOptions
+      ..extra['retried'] = true
+      ..extra[_credentialKey] = fresh
+      ..headers['Authorization'] = 'Bearer ${fresh.accessToken}';
     try {
-      // Re-issue the whole request; onRequest re-attaches the (now fresh) token.
+      // Re-issue the whole request, pinned to the refreshed credential.
       final response = await _authedDio.fetch(req);
       handler.resolve(response);
     } on DioException catch (e) {
@@ -86,15 +116,6 @@ class GatewayRestApi implements ChatRestApi {
   GatewayRestApi({required Dio bare, required Dio authed})
     : _bare = bare,
       _authed = authed;
-
-  @override
-  Future<String> refresh(String refreshToken) async {
-    final r = await _bare.post(
-      '/v1/auth/refresh',
-      data: {'refresh_token': refreshToken},
-    );
-    return _map(r.data)['access_token'] as String;
-  }
 
   @override
   Future<GatewayCapabilities?> getCapabilities() async {
@@ -917,12 +938,13 @@ class GatewayRestApi implements ChatRestApi {
 /// interceptor uses the provider. One-directional — no provider cycle.
 ({ChatRestApi api, DefaultTokenProvider tokens}) buildGatewayBackend({
   required String baseUrl,
-  required SecureTokenStore store,
+  required SessionVault vault,
   void Function()? onUnauthenticated,
 }) {
   final bare = Dio(BaseOptions(baseUrl: baseUrl));
   final tokens = DefaultTokenProvider(
-    store: store,
+    vault: vault,
+    island: baseUrl,
     onUnauthenticated: onUnauthenticated,
     remoteRefresh: (rt) async {
       try {
@@ -930,8 +952,7 @@ class GatewayRestApi implements ChatRestApi {
           '/v1/auth/refresh',
           data: {'refresh_token': rt},
         );
-        return ((r.data as Map).cast<String, dynamic>())['access_token']
-            as String;
+        return RefreshResult.fromJson((r.data as Map).cast<String, dynamic>());
       } on DioException catch (e) {
         final code = e.response?.statusCode;
         if (code == 401 || code == 403) throw const RefreshRejected();

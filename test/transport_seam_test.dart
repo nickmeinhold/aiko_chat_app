@@ -30,33 +30,44 @@ void main() {
       var calls = 0;
       final gate = Completer<void>();
       final tp = DefaultTokenProvider(
-        store: InMemoryTokenStore(_seed),
+        island: kTestIsland,
+        vault: InMemoryTokenStore(_seed),
         remoteRefresh: (rt) async {
           calls++;
           await gate.future;
-          return 'access1';
+          return RefreshResult('access1');
         },
       );
-      final f1 = tp.refreshAccessToken();
-      final f2 = tp.refreshAccessToken();
-      final f3 = tp.refreshAccessToken();
+      final stale = (await tp.current())!;
+      final f1 = tp.refresh(stale);
+      final f2 = tp.refresh(stale);
+      final f3 = tp.refresh(stale);
       gate.complete();
       final results = await Future.wait([f1, f2, f3]);
       expect(calls, 1, reason: 'only one refresh should hit the network');
-      expect(results, ['access1', 'access1', 'access1']);
+      expect(
+        [for (final c in results) c?.accessToken],
+        ['access1', 'access1', 'access1'],
+      );
     });
 
-    test('a second refresh AFTER the first completes does run again', () async {
+    test('a refresh of the NEW credential runs again; a late one of the old '
+        'credential gets the new one without a network call', () async {
       var calls = 0;
       final tp = DefaultTokenProvider(
-        store: InMemoryTokenStore(_seed),
+        island: kTestIsland,
+        vault: InMemoryTokenStore(_seed),
         remoteRefresh: (rt) async {
           calls++;
-          return 'access$calls';
+          return RefreshResult('access$calls');
         },
       );
-      expect(await tp.refreshAccessToken(), 'access1');
-      expect(await tp.refreshAccessToken(), 'access2');
+      final c0 = (await tp.current())!;
+      final c1 = (await tp.refresh(c0))!;
+      expect(c1.accessToken, 'access1');
+      expect((await tp.refresh(c0))?.accessToken, 'access1');
+      expect(calls, 1, reason: 'c0 was already replaced: nothing to refresh');
+      expect((await tp.refresh(c1))?.accessToken, 'access2');
       expect(calls, 2);
     });
   });
@@ -65,11 +76,12 @@ void main() {
     test('success caches new access token + writes store', () async {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
-        store: store,
-        remoteRefresh: (rt) async => 'access1',
+        island: kTestIsland,
+        vault: store,
+        remoteRefresh: (rt) async => RefreshResult('access1'),
       );
-      final t = await tp.refreshAccessToken();
-      expect(t, 'access1');
+      final t = await tp.refresh((await tp.current())!);
+      expect(t?.accessToken, 'access1');
       expect(await tp.currentAccessToken(), 'access1');
       expect(store.current?.accessToken, 'access1');
       expect(
@@ -85,11 +97,12 @@ void main() {
         final store = InMemoryTokenStore(_seed);
         var unauth = 0;
         final tp = DefaultTokenProvider(
-          store: store,
+          island: kTestIsland,
+          vault: store,
           onUnauthenticated: () => unauth++,
           remoteRefresh: (rt) async => throw const RefreshRejected(),
         );
-        expect(await tp.refreshAccessToken(), isNull);
+        expect(await tp.refresh((await tp.current())!), isNull);
         expect(store.current, isNull, reason: 'logout clears tokens');
         expect(unauth, 1);
       },
@@ -101,11 +114,13 @@ void main() {
         final store = InMemoryTokenStore(_seed);
         var unauth = 0;
         final tp = DefaultTokenProvider(
-          store: store,
+          island: kTestIsland,
+          vault: store,
           onUnauthenticated: () => unauth++,
           remoteRefresh: (rt) async => throw Exception('network down'),
         );
-        await expectLater(tp.refreshAccessToken(), throwsA(isA<Exception>()));
+        final stale = (await tp.current())!;
+        await expectLater(tp.refresh(stale), throwsA(isA<Exception>()));
         expect(store.current, _seed, reason: 'transient failure keeps tokens');
         expect(unauth, 0, reason: 'a network blip must NOT log out');
       },
@@ -116,8 +131,9 @@ void main() {
     test('401 once -> refresh -> retry succeeds with new token', () async {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
-        store: store,
-        remoteRefresh: (rt) async => 'access1',
+        island: kTestIsland,
+        vault: store,
+        remoteRefresh: (rt) async => RefreshResult('access1'),
       );
       var call = 0;
       final headersSeen = <String?>[];
@@ -140,8 +156,9 @@ void main() {
     test('persistent 401 -> retried once then propagates', () async {
       final store = InMemoryTokenStore(_seed);
       final tp = DefaultTokenProvider(
-        store: store,
-        remoteRefresh: (rt) async => 'access1',
+        island: kTestIsland,
+        vault: store,
+        remoteRefresh: (rt) async => RefreshResult('access1'),
       );
       var call = 0;
       final dio = Dio(BaseOptions(baseUrl: 'http://x'));
@@ -321,12 +338,13 @@ void main() {
     // Full backend WITH the AuthInterceptor in play (apiWith above skips it), so
     // the interceptor's transient-vs-terminal refresh taxonomy is exercised.
     GatewayRestApi backend({
-      required Future<String> Function(String) remoteRefresh,
+      required Future<RefreshResult> Function(String) remoteRefresh,
       required int statusCode,
       String body = '{}',
     }) {
       final tokens = DefaultTokenProvider(
-        store: InMemoryTokenStore(_seed),
+        island: kTestIsland,
+        vault: InMemoryTokenStore(_seed),
         remoteRefresh: remoteRefresh,
       );
       ResponseBody handler(RequestOptions _) => jsonBody(statusCode, body);
@@ -370,7 +388,7 @@ void main() {
     test('a plain (non-suspended) 403 → Forbidden, NOT Unauthorized — an authZ '
         'denial must not log the user out (A3 taxonomy unbundle)', () async {
       final api = backend(
-        remoteRefresh: (_) async => 'unused',
+        remoteRefresh: (_) async => RefreshResult('unused'),
         statusCode: 403,
       );
       await expectLater(
@@ -384,7 +402,7 @@ void main() {
     test('a ban-403 (body {"detail":"account suspended"}) → AccountSuspended '
         '(still terminal, unchanged by the unbundle)', () async {
       final api = backend(
-        remoteRefresh: (_) async => 'unused',
+        remoteRefresh: (_) async => RefreshResult('unused'),
         statusCode: 403,
         body: '{"detail":"account suspended"}',
       );
@@ -399,8 +417,9 @@ void main() {
 
   group('GatewayTransport demux + send', () {
     DefaultTokenProvider tokens() => DefaultTokenProvider(
-      store: InMemoryTokenStore(_seed),
-      remoteRefresh: (rt) async => 'access1',
+      island: kTestIsland,
+      vault: InMemoryTokenStore(_seed),
+      remoteRefresh: (rt) async => RefreshResult('access1'),
     );
 
     test('connect passes token in query; frames demux to typed streams', () async {
@@ -791,7 +810,8 @@ void main() {
       final t = GatewayTransport(
         wsBaseUrl: 'ws://host',
         tokens: DefaultTokenProvider(
-          store: InMemoryTokenStore(_seed),
+          island: kTestIsland,
+          vault: InMemoryTokenStore(_seed),
           remoteRefresh: (rt) async => throw const RefreshRejected(),
         ),
         channelFactory: (uri) =>

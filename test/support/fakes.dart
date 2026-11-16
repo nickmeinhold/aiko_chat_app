@@ -1,28 +1,103 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:aiko_chat_app/core/network/network_status.dart';
 import 'package:aiko_chat_app/features/auth/data/cached_user_store.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/legal/data/eula_store.dart';
-import 'package:aiko_chat_app/services/secure_token_store.dart';
+import 'package:aiko_chat_app/app/config.dart';
+import 'package:aiko_chat_app/services/session_vault.dart';
 import 'package:dio/dio.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-/// In-memory token store: subclasses the real store and overrides its three
-/// methods, so tests never touch the platform FlutterSecureStorage.
-class InMemoryTokenStore extends SecureTokenStore {
-  AuthTokens? _tokens;
-  InMemoryTokenStore([AuthTokens? initial]) : _tokens = initial;
+/// The island a test's `configProvider` resolves to when nothing overrides
+/// it: no saved choice, no `--dart-define`, so the compiled default.
+const kTestIsland = kDefaultIslandBaseUrl;
+
+/// The Keychain as a map, with a hook that can fail any single operation.
+class InMemorySlots implements SecretSlots {
+  final Map<String, String> data;
+
+  /// Called before every operation as (`read`|`write`|`delete`, key). Throw
+  /// from it to make that operation fail, as a locked phone would.
+  void Function(String op, String key)? fault;
+
+  /// Every operation, in order, for tests that assert on what touched disk.
+  final List<String> log = [];
+
+  InMemorySlots([Map<String, String>? initial]) : data = {...?initial};
 
   @override
-  Future<AuthTokens?> read() async => _tokens;
-  @override
-  Future<void> write(AuthTokens tokens) async => _tokens = tokens;
-  @override
-  Future<void> clear() async => _tokens = null;
+  Future<String?> read(String key) async {
+    log.add('read $key');
+    fault?.call('read', key);
+    return data[key];
+  }
 
-  AuthTokens? get current => _tokens;
+  @override
+  Future<void> write(String key, String value) async {
+    log.add('write $key');
+    fault?.call('write', key);
+    data[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    log.add('delete $key');
+    fault?.call('delete', key);
+    data.remove(key);
+  }
+}
+
+/// The real [SessionVault] over [InMemorySlots], so every test that signs in
+/// or out runs the vault itself. Seeded tokens are a record for [island]
+/// (default [kTestIsland]), written in the on-disk format, which this also
+/// pins: a format change that can't read it fails here.
+class InMemoryTokenStore extends SessionVault {
+  final InMemorySlots slots;
+
+  InMemoryTokenStore([AuthTokens? initial, String island = kTestIsland])
+    : this.withSlots(
+        InMemorySlots({
+          if (initial != null)
+            'aiko_session.0': jsonEncode({
+              'v': 1,
+              'seq': 1,
+              'island': island,
+              'access': initial.accessToken,
+              'refresh': initial.refreshToken,
+            }),
+        }),
+      );
+
+  InMemoryTokenStore.withSlots(this.slots, {String? Function()? placeLegacy})
+    : super(slots, placeLegacy: placeLegacy ?? () => null);
+
+  /// The tokens the newest slot holds on disk, for any island; null when it
+  /// holds no session.
+  AuthTokens? get current => storedOnDisk(slots)?.tokens;
+}
+
+/// The record the next launch would read from [slots], or null.
+({String island, AuthTokens tokens})? storedOnDisk(InMemorySlots slots) {
+  Map<String, dynamic>? newest;
+  for (final key in ['aiko_session.0', 'aiko_session.1']) {
+    final raw = slots.data[key];
+    if (raw == null) continue;
+    final j = jsonDecode(raw) as Map<String, dynamic>;
+    if (newest == null || (j['seq'] as int) > (newest['seq'] as int)) {
+      newest = j;
+    }
+  }
+  if (newest == null || newest['island'] is! String) return null;
+  return (
+    island: newest['island'] as String,
+    tokens: AuthTokens(
+      accessToken: newest['access'] as String,
+      refreshToken: newest['refresh'] as String,
+    ),
+  );
 }
 
 /// In-memory cached-user store: subclasses the real store and overrides its

@@ -783,7 +783,7 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// unconditionally, whatever the pairing did.
   Future<void> _clearCredentialAndUnpair() async {
     // INSIDE the try, and that is the whole point of the try (cage-match, Carnot).
-    // This read falls through to SecureTokenStore.read() on a cache miss, which
+    // This read falls through to the vault's first Keychain read, which
     // throws on a locked or unavailable keychain — and sitting one line above the
     // guard it threw PAST the clear, leaving a signed-out app holding a live
     // credential that the next cold start restored. That is the exact outcome the
