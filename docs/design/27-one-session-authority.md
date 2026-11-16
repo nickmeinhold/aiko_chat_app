@@ -1,7 +1,7 @@
 # Design 27: one session authority
 
-**Status:** draft v3, 2026-11-16. v1 and v2 were each struck RECAST 4/4 (`27-TEMPER.md`, runs
-dt-1794795469 and dt-1794797382). This version folds round 2. Round 3 is the cap.
+**Status:** v3 + v3.1, 2026-11-16. **Converged at the cap** after three tempers (`27-TEMPER.md`).
+Build this, with §6's requirements binding: where §6 and §2 disagree, §6 wins.
 Opens PR B of design 26 (task 77).
 **Closes:** https://github.com/nickmeinhold/aiko_chat_app/issues/447, two cases deferred to it
 from the cage-match of https://github.com/nickmeinhold/aiko_chat_app/pull/453 (round 2), and that
@@ -312,3 +312,56 @@ Each test drives the real controller and awaits the whole door, not a helper on 
 19. **The refresh bound, schedule two:** an attempt on the wire is abandoned, its retry wins,
     then the late attempt lands at a fake island. The app signs out once and doesn't loop.
     This is the named residual, asserted as such.
+
+## 6. v3.1 requirements (temper round 3; binding on the build)
+
+Each requirement names the test that proves it. The PR B cage-match checks the requirement by
+that test, and a mutation that breaks the requirement must fail it.
+
+**R1. Only `_fly` emits `SessionEnded`** (round 3 flaw R3-1, "the echo"). `endIf` and
+`endIfLease` return the ended credential and emit nothing. The transition that called them is
+the only one that settles that end. §2a's emit list and §3's "Emits" column shrink to the
+refresh-rejection row.
+*Tests:*
+- 12 (a ban survives its own teardown) **after the event loop drains**;
+- 7 (one teardown), now including a 401 door, a ban door and a delete door, each with the
+  listener attached.
+
+**R2. A picture re-checks the lease where it's written** (R3-2). The picture is written in one
+synchronous run, starting with `if (vault.lease != lease) return;`. A sign-in commit uses the
+lease `adopt` returned. Disk effects (the cached user) come before that run and are best-effort.
+An end queued behind clears them.
+*Test (new, 20):* a refresh rejection lands while `refreshUser`'s commit awaits its cache write.
+The app ends signed out, with no cached user.
+
+**R3. Attempts have a defined life** (R3-3).
+- Every commit consumes its own attempt, whatever the outcome (success, `PendingHandle`,
+  cancelled, error, sign-in ban).
+- An end retires the attempt captured when the end was *issued*, never one begun after it.
+- A person's end (logout, switch) always writes its logged-out picture, whether or not the
+  vault held a credential.
+- `_transition`'s `finally` writes a terminal picture for any attempt it owns that's still
+  current, so `loading` can't outlive its attempt.
+
+*Tests (new, 21-24):*
+- 21: cancel then retry, and error then retry, both run;
+- 22: `PendingHandle` then `claimHandle` runs;
+- 23: a logout during a first sign-in on an empty vault lands on `/login`;
+- 24: a begin that queues ahead of a `SessionEnded`'s transition keeps its attempt.
+
+**R4. The router reads one session value** (R3-4). `state`, `pendingHandle` and `suspended`
+become fields of one value, assigned once per picture. The "flag before state" ordering
+convention (`auth_controller.dart:391-396`) is deleted, not kept.
+*Test (new, 25):* a ban's picture, observed by a router listener, never passes through
+`(logged out, suspended: false)`.
+
+**R5. Boot restore commits through the lane** (R3-5). `build()` returns a not-yet-known value.
+Restore runs `present()` and `me()` outside the lane, then commits through a transition with
+R2's re-check.
+*Test (new, 26):* a `SessionEnded` during a slow boot `me()` wins. The app doesn't publish the
+restored user.
+
+**R6. `_payOwedHandle` is its own transition** (R3-6), issued for the lease `adopt` returned,
+with the network call outside the lane. Its 403 is the ban picture.
+*Test (new, 27):* a sign-out during the owed-handle pay leaves the app logged out. A 403 there
+lands on `/suspended`.
