@@ -80,10 +80,44 @@ PLAUSIBLE means it rests on behaviour outside the bundle.
    island tab must answer. **DISPOSITION, fold, plus a question to the island tab:** the 15 s
    deadline goes on the refresh request alone (CONFIRMED that `bare` is shared with
    `GatewayRestApi`, so a client-wide timeout would also cut off passkey ceremonies,
-   `gateway_rest_api.dart:944,964`). §2e states what a second consecutive timeout does, based
-   on the island's answer. Until https://github.com/nickmeinhold/aiko-chat-island/issues/452
-   lands, if a retried PREVIOUS rotates again, the deadline ships with "no new rotation after a
-   timeout until the next foreground". This is NAMED TRADEOFF, owner app tab.
+   `gateway_rest_api.dart:944,964`).
+
+   **Lost replies are safe. A request the deadline gave up on is not.** I first marked this
+   flaw REFUTED after checking only lost replies. The island tab corrected me (2026-11-16
+   13:47). The island code is in `aiko-chat-island/src/aiko_gateway/domain/auth_session.py`:
+   - Presenting CURRENT (`:163-166`) sets current to a new token and previous to the presented
+     one.
+   - Presenting PREVIOUS (`:167-170`) sets current to a new token and leaves previous
+     unchanged. So any number of *lost replies* stays recoverable.
+
+   But the deadline creates a case that isn't a lost reply:
+   1. Attempt A presents R1, stalls, and is abandoned at 15 s.
+   2. Retry B presents R1 and lands first (current R2, previous R1). The app stores R2.
+   3. A lands late. R1 is now PREVIOUS, so current becomes R3 and previous stays R1.
+   4. The app's next refresh presents R2, which is neither: `RefreshReused`, and the session
+      ends.
+
+   The docstring at `:118-119` deleted the 30 s re-issue window because "the app keeps one
+   refresh in flight". A client deadline breaks that assumption silently. Tesla's original
+   wording ("do not send the refresh token again after a timeout") pointed at this exact case.
+
+   **The real fix is the attempt id**,
+   https://github.com/nickmeinhold/aiko-chat-island/issues/452: one persisted id per logical
+   refresh, reused on retries, which the island answers idempotently. That issue is
+   drafted-only and unscheduled, and needs a minor-wire release with the island deploying
+   first.
+
+   **DISPOSITION, NAMED TRADEOFF until #452, owner app tab, prioritising #452 is Nick's call:**
+   - The deadline goes on the refresh request alone. It's long relative to realistic stalls (a
+     fixed whole-request bound, of the order of the island's own request timeout, not 15 s per
+     phase).
+   - A timeout cancels the request, which aborts its connection, so bytes not yet sent never
+     arrive.
+   - A reply for an abandoned attempt is never adopted.
+
+   Residual: a request already on the wire can still land after the retry. That costs one
+   passkey sign-in, not a loop. The alternative, no deadline, is task 79's harm: a hung
+   refresh stops reconnection forever, which is worse.
 9. **No table of who ends what.** Noether raised it: `deleteAccount` and `_settleSuspension`
    lost their ender when §3 took `clearTokens()` out of the teardown. **DISPOSITION, fold:**
    §3 gains a table. `logout` and `switchIsland` call `signOut()`. `deleteAccount` calls
@@ -107,8 +141,8 @@ PLAUSIBLE means it rests on behaviour outside the bundle.
 
 ## Disposition
 
-RECAST: fold flaws 1-9 into design 27 as v2 and re-strike (round 2 of at most 3). Before the
-re-strike, ask the island tab flaw 8's question (what a PREVIOUS retry returns).
+RECAST: fold flaws 1-9 into design 27 as v2 and re-strike (round 2 of at most 3). Flaw 8's
+residual is closed only by island #452's attempt id. Scheduling it is Nick's call. Nothing else waits on the island.
 
 <!-- Each section below was written when that family returned. Arrival order, NOT a ranking. -->
 
