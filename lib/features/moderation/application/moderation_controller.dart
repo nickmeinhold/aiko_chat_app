@@ -125,13 +125,12 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
       // Carnot round 2). Surfacing the error keeps the screen honest ("couldn't
       // load") until the flag-flip gates it off.
       rethrow;
-    } on AccountSuspended {
+    } on AccountSuspended catch (ban) {
       // The operator's own account was BANNED — the FIRST load 403s with the ban
-      // body, not just an action (seal both doors on the load path too — Tesla
-      // round 3). The load response IS the terminal ban signal, so settle
-      // suspension DIRECTLY (no second /me round-trip — Tesla round 4); rethrow so
+      // body, not just an action. The load response IS the terminal ban signal,
+      // so settle it DIRECTLY, for the session it was learned on; rethrow so
       // the queue is an honest error, not a false-empty, until the router leaves.
-      _scheduleAuthAction((a) => a.settleBan());
+      _scheduleAuthAction((a) => a.settleBan(ban));
       rethrow;
     }
   }
@@ -202,8 +201,8 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
   ///     banned moderator). NOT a generic "action failed", NOT a logout loop.
   /// Either way we rethrow so the caller can surface/suppress copy; the reconcile
   /// runs first so the router/gate already reflect the settled world. A plain
-  /// [Unauthorized] (terminal authN) is left to propagate — the REST interceptor's
-  /// onUnauthenticated path is its reaper.
+  /// [Unauthorized] (terminal authN) is left to propagate: a rejected refresh
+  /// has already ended the session in the vault.
   Future<void> _reconcileAuthThenRethrow(Future<void> Function() action) async {
     try {
       await action();
@@ -211,12 +210,11 @@ class PendingReportsController extends AsyncNotifier<List<PendingReport>> {
       // Flag revoked — re-read /me to flip isModeratorProvider off.
       await ref.read(authControllerProvider.notifier).refreshUser();
       rethrow;
-    } on AccountSuspended {
+    } on AccountSuspended catch (ban) {
       // The account is banned — the action's response IS the terminal signal, so
-      // settle suspension DIRECTLY (→ /suspended) rather than re-confirming via a
-      // second /me that could fail transiently and strand the banned moderator
-      // (cage-match Carnot + Tesla round 4).
-      await ref.read(authControllerProvider.notifier).settleBan();
+      // settle it DIRECTLY (→ /suspended) rather than re-confirming via a
+      // second /me that could fail transiently and strand the banned moderator.
+      await ref.read(authControllerProvider.notifier).settleBan(ban);
       rethrow;
     }
   }

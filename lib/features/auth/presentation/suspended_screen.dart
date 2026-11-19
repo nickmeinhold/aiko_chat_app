@@ -57,8 +57,9 @@ class SuspendedScreen extends ConsumerWidget {
                     // Dismiss the soft gate and return to /login. A re-auth
                     // against a still-banned account re-flags and comes back
                     // here; a lifted ban signs the user in.
-                    onPressed: () =>
-                        ref.read(suspendedProvider.notifier).clear(),
+                    onPressed: () => ref
+                        .read(authControllerProvider.notifier)
+                        .dismissSuspension(),
                     child: const Text('Try signing in again'),
                   ),
                   const SizedBox(height: 12),

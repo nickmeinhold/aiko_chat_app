@@ -39,7 +39,6 @@ void main() {
             island: kTestIsland,
             vault: InMemoryTokenStore(),
             remoteRefresh: (_) async => RefreshResult('access2'),
-            onUnauthenticated: () {},
           ),
         ),
         connectivityServiceProvider.overrideWithValue(

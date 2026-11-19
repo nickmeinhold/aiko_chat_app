@@ -105,13 +105,21 @@ DefaultTokenProvider _door(
   SessionVault vault,
   Future<RefreshResult> Function(String) remote, {
   String island = _island,
-  void Function()? onUnauthenticated,
-}) => DefaultTokenProvider(
-  vault: vault,
-  island: island,
-  remoteRefresh: remote,
-  onUnauthenticated: onUnauthenticated,
-);
+}) => DefaultTokenProvider(vault: vault, island: island, remoteRefresh: remote);
+
+/// A sign-in that read the lease just now, as the auth controller's does.
+Future<int> _signIn(
+  SessionVault vault,
+  AuthTokens tokens, {
+  String island = _island,
+}) => vault.adopt(island, tokens, since: vault.lease);
+
+/// Counts the ends the vault announces on its own.
+List<SessionEnded> _endsOf(SessionVault vault) {
+  final ends = <SessionEnded>[];
+  vault.ended.listen(ends.add);
+  return ends;
+}
 
 Future<Credential?> _refreshCurrent(DefaultTokenProvider door) async =>
     door.refresh((await door.current())!);
@@ -245,7 +253,8 @@ void main() {
       final aWork = door.refresh(a);
       final aWorkToo = door.refresh(a);
 
-      await door.setTokens(
+      await _signIn(
+        vault,
         const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
       );
       answer.complete(const RefreshResult('a1', refreshToken: 'r1'));
@@ -274,7 +283,8 @@ void main() {
 
       final request = dio.post('/v1/messages');
       await pumpEventQueue();
-      await door.setTokens(
+      await _signIn(
+        vault,
         const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
       );
       answer.complete(const RefreshResult('a1', refreshToken: 'r1'));
@@ -291,6 +301,7 @@ void main() {
           vault,
           (_) async => const RefreshResult('a1', refreshToken: 'r1'),
         ),
+        vault,
       );
       final dio = Dio(BaseOptions(baseUrl: 'http://x'));
       dio.interceptors.add(AuthInterceptor(door, dio));
@@ -330,7 +341,8 @@ void main() {
       keychain.holdNextWrite();
       final refresh = _refreshCurrent(door);
       await keychain.writing;
-      final signIn = door.setTokens(
+      final signIn = _signIn(
+        vault,
         const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
       );
       keychain.releaseWrite();
@@ -346,7 +358,7 @@ void main() {
       final door = _door(vault, (_) => answer.future);
       final refresh = _refreshCurrent(door);
       await pumpEventQueue();
-      await door.clearTokens();
+      await vault.signOut();
       answer.complete(const RefreshResult('a1', refreshToken: 'r1'));
       await expectLater(refresh, throwsA(isA<SessionSuperseded>()));
       expect(await door.current(), isNull);
@@ -356,21 +368,19 @@ void main() {
     test('a rejection of the OLD session after a fresh sign-in does not end '
         'the new one', () async {
       final answer = Completer<RefreshResult>();
-      var unauth = 0;
       final vault = InMemoryTokenStore(_signedIn);
-      final door = _door(
-        vault,
-        (_) => answer.future,
-        onUnauthenticated: () => unauth++,
-      );
+      final ends = _endsOf(vault);
+      final door = _door(vault, (_) => answer.future);
       final refresh = _refreshCurrent(door);
       await pumpEventQueue();
-      await door.setTokens(
+      await _signIn(
+        vault,
         const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
       );
       answer.completeError(const RefreshRejected());
       await expectLater(refresh, throwsA(isA<SessionSuperseded>()));
-      expect(unauth, 0);
+      await pumpEventQueue();
+      expect(ends, isEmpty, reason: 'no end is announced for B');
       expect(vault.current?.accessToken, 'b0');
     });
 
@@ -379,13 +389,11 @@ void main() {
       final keychain = _HeldReads({
         'aiko_session.0': _record(_island, _signedIn),
       });
-      final door = _door(
-        InMemoryTokenStore.withSlots(keychain),
-        (_) async => const RefreshResult('a1'),
-      );
+      final vault = InMemoryTokenStore.withSlots(keychain);
+      final door = _door(vault, (_) async => const RefreshResult('a1'));
       final read = door.current();
       await keychain.reading;
-      final out = door.clearTokens();
+      final out = vault.signOut();
       keychain.finishRead();
       await read;
       await out;
@@ -427,7 +435,8 @@ void main() {
     test('a hung refresh does not hold the next session hostage', () async {
       final hung = Completer<RefreshResult>();
       var calls = 0;
-      final door = _door(InMemoryTokenStore(_signedIn), (_) {
+      final vault = InMemoryTokenStore(_signedIn);
+      final door = _door(vault, (_) {
         calls++;
         return calls == 1
             ? hung.future
@@ -435,7 +444,8 @@ void main() {
       });
       unawaited(_refreshCurrent(door).then((_) {}, onError: (_) {}));
       await pumpEventQueue();
-      await door.setTokens(
+      await _signIn(
+        vault,
         const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
       );
       expect((await _refreshCurrent(door))?.accessToken, 'b1');
@@ -469,17 +479,18 @@ void main() {
 
   group('rejection ends the session', () {
     test(
-      'a rejected refresh ends it on disk and fires once per caller',
+      'a rejected refresh ends it on disk and announces it once, with the '
+      'credential it ended',
       () async {
-        var unauth = 0;
         final vault = InMemoryTokenStore(_signedIn);
-        final door = _door(
-          vault,
-          (_) async => throw const RefreshRejected(),
-          onUnauthenticated: () => unauth++,
-        );
-        expect(await _refreshCurrent(door), isNull);
-        expect(unauth, 1);
+        final ends = _endsOf(vault);
+        final door = _door(vault, (_) async => throw const RefreshRejected());
+        final presented = (await door.current())!;
+        expect(await door.refresh(presented), isNull);
+        await pumpEventQueue();
+        expect(ends, hasLength(1));
+        expect(ends.single.ended.accessToken, 'a0');
+        expect(ends.single.lease, vault.lease);
         expect(await door.current(), isNull);
         expect(vault.current, isNull);
       },
@@ -491,16 +502,14 @@ void main() {
         final keychain = _Keychain({
           'aiko_session.0': _record(_island, _signedIn),
         }, deletesWhileLocked: deletes);
-        var unauth = 0;
-        final door = _door(
-          InMemoryTokenStore.withSlots(keychain),
-          (_) async => throw const RefreshRejected(),
-          onUnauthenticated: () => unauth++,
-        );
+        final vault = InMemoryTokenStore.withSlots(keychain);
+        final ends = _endsOf(vault);
+        final door = _door(vault, (_) async => throw const RefreshRejected());
         await door.current();
         keychain.locked = true;
         expect(await _refreshCurrent(door), isNull, reason: 'not a throw');
-        expect(unauth, 1);
+        await pumpEventQueue();
+        expect(ends, hasLength(1));
         expect(await door.current(), isNull);
       });
     }
@@ -523,8 +532,12 @@ void main() {
         'session', () async {
       final vault = InMemoryTokenStore(_signedIn, _other);
       final here = _door(vault, (_) async => const RefreshResult('x'));
+      await here.current();
       await expectLater(
-        here.setTokens(const AuthTokens(accessToken: 'b0', refreshToken: 's0')),
+        _signIn(
+          vault,
+          const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
+        ),
         throwsA(isA<SessionHeldElsewhere>()),
       );
       expect(vault.current, _signedIn);
@@ -577,7 +590,8 @@ void main() {
         placeLegacy: () => null,
       );
       final door = _door(vault, (_) async => const RefreshResult('x'));
-      await door.setTokens(
+      await _signIn(
+        vault,
         const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
       );
       expect((await door.current())?.accessToken, 'b0');
@@ -627,7 +641,8 @@ void main() {
       );
       final door = _door(vault, (_) async => const RefreshResult('x'));
       expect(await door.current(), isNull);
-      await door.setTokens(
+      await _signIn(
+        vault,
         const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
       );
       expect((await door.current())?.accessToken, 'b0');
@@ -705,8 +720,9 @@ void main() {
       }
     });
 
-    test('a sign-out the Keychain refuses entirely is rethrown, and still '
-        'ends the session in this process', () async {
+    test('a sign-out the Keychain refuses entirely says it was not saved, '
+        'returns what it ended, and still ends the session in this '
+        'process', () async {
       final keychain = _Keychain({
         'aiko_session.0': _record(_island, _signedIn),
       });
@@ -715,7 +731,9 @@ void main() {
       keychain.fault = (op, key) {
         if (op != 'read') throw Exception('refused');
       };
-      await expectLater(vault.signOut(), throwsA(isA<Exception>()));
+      final out = await vault.signOut();
+      expect(out.saved, isFalse);
+      expect(out.ended?.accessToken, 'a0');
       expect(await vault.present(_island), isNull);
     });
 
@@ -740,10 +758,10 @@ void main() {
         }, deletesWhileLocked: false);
         final vault = InMemoryTokenStore.withSlots(keychain);
         keychain.locked = true;
-        await expectLater(vault.signOut(), throwsA(anything));
+        expect((await vault.signOut()).saved, isFalse);
         keychain.locked = false;
-        await vault.adopt(
-          _island,
+        await _signIn(
+          vault,
           const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
         );
         expect(
@@ -768,7 +786,9 @@ void main() {
       // Dies after the legacy pair's three deletes: a blind [0, 1] sweep
       // would have removed the newer slot and not yet the older.
       keychain.crashAfter(4);
-      await expectLater(vault.signOut(), throwsA(anything));
+      try {
+        await vault.signOut();
+      } catch (_) {} // the crash itself
       expect(
         (await keychain.relaunch().present(_island))?.accessToken,
         'a0',
@@ -782,8 +802,9 @@ void main() {
 /// before its caller acts on the result: the window between an interceptor's
 /// refresh and its retry.
 class _SignInAfterRefresh implements TokenProvider {
-  _SignInAfterRefresh(this._door);
+  _SignInAfterRefresh(this._door, this._vault);
   final DefaultTokenProvider _door;
+  final SessionVault _vault;
 
   @override
   Future<Credential?> current() => _door.current();
@@ -791,7 +812,8 @@ class _SignInAfterRefresh implements TokenProvider {
   @override
   Future<Credential?> refresh(Credential stale) async {
     final fresh = await _door.refresh(stale);
-    await _door.setTokens(
+    await _signIn(
+      _vault,
       const AuthTokens(accessToken: 'b0', refreshToken: 's0'),
     );
     return fresh;

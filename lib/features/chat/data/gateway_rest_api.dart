@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -26,7 +27,7 @@ import 'chat_rest_api.dart';
 /// [TokenProvider] (which uses a token-less client), never this interceptor —
 /// no cycle (design 02, finding 6).
 class AuthInterceptor extends Interceptor {
-  static const _credentialKey = 'aiko_credential';
+  static const credentialKey = 'aiko_credential';
 
   final TokenProvider _tokens;
   final Dio _authedDio;
@@ -59,7 +60,7 @@ class AuthInterceptor extends Interceptor {
       options.headers['Authorization'] = 'Bearer ${credential.accessToken}';
       // Kept with the request so a 401 refreshes THIS session, not whichever
       // one is current by then (PR #452, round 3).
-      options.extra[_credentialKey] = credential;
+      options.extra[credentialKey] = credential;
     }
     handler.next(options);
   }
@@ -68,7 +69,7 @@ class AuthInterceptor extends Interceptor {
   void onError(DioException err, ErrorInterceptorHandler handler) async {
     final is401 = err.response?.statusCode == 401;
     final alreadyRetried = err.requestOptions.extra['retried'] == true;
-    final presented = err.requestOptions.extra[_credentialKey];
+    final presented = err.requestOptions.extra[credentialKey];
     if (!is401 || alreadyRetried || presented is! Credential) {
       handler.next(err);
       return;
@@ -94,7 +95,7 @@ class AuthInterceptor extends Interceptor {
     }
     final req = err.requestOptions
       ..extra['retried'] = true
-      ..extra[_credentialKey] = fresh
+      ..extra[credentialKey] = fresh
       ..headers['Authorization'] = 'Bearer ${fresh.accessToken}';
     try {
       // Re-issue the whole request, pinned to the refreshed credential.
@@ -917,8 +918,19 @@ class GatewayRestApi implements ChatRestApi {
       // A ban surfaces here first: the interceptor only refreshes on 401, so a
       // live 403 flows straight through. Branch it BEFORE the generic mapping so
       // the reconcile drain routes it as suspended, not "session expired."
-      if (!transient && _isSuspended(e)) throw const AccountSuspended();
-      if (!transient && code == 401) throw Unauthorized(code);
+      // Stamped with the credential the request carried (the refreshed one
+      // on a retry), so only that session can be ended by it.
+      final presented = e.requestOptions.extra[AuthInterceptor.credentialKey];
+      if (!transient && _isSuspended(e)) {
+        throw presented is Credential
+            ? SessionSuspended(presented)
+            : const AccountSuspended();
+      }
+      if (!transient && code == 401) {
+        throw presented is Credential
+            ? SessionUnauthorized(presented)
+            : Unauthorized(code);
+      }
       // A non-suspended 403 is authoriZation, not authentication: the session is
       // valid, THIS action is denied. Mapping it to terminal `Unauthorized` would
       // log the user out on a mere permission denial (e.g. an operator hitting a
@@ -936,22 +948,38 @@ class GatewayRestApi implements ChatRestApi {
 /// Wires the gateway backend: a bare client (for refresh/login), a token
 /// provider whose refresh uses that bare client, and an authed client whose
 /// interceptor uses the provider. One-directional — no provider cycle.
+///
+/// [refreshDeadline] bounds the refresh request alone, so a hung refresh can't
+/// hold every refresher and stop the socket reconnecting. The other calls on
+/// the bare client keep their own timing.
 ({ChatRestApi api, DefaultTokenProvider tokens}) buildGatewayBackend({
   required String baseUrl,
   required SessionVault vault,
-  void Function()? onUnauthenticated,
+  Duration refreshDeadline = const Duration(seconds: 30),
 }) {
   final bare = Dio(BaseOptions(baseUrl: baseUrl));
   final tokens = DefaultTokenProvider(
     vault: vault,
     island: baseUrl,
-    onUnauthenticated: onUnauthenticated,
     remoteRefresh: (rt) async {
+      final cancel = CancelToken();
       try {
-        final r = await bare.post(
-          '/v1/auth/refresh',
-          data: {'refresh_token': rt},
-        );
+        final r = await bare
+            .post(
+              '/v1/auth/refresh',
+              data: {'refresh_token': rt},
+              cancelToken: cancel,
+            )
+            .timeout(
+              refreshDeadline,
+              onTimeout: () {
+                // Abort the connection so bytes not yet sent never arrive.
+                // The abandoned reply is discarded: only a returned result
+                // reaches the vault.
+                cancel.cancel('refresh deadline');
+                throw TimeoutException('refresh', refreshDeadline);
+              },
+            );
         return RefreshResult.fromJson((r.data as Map).cast<String, dynamic>());
       } on DioException catch (e) {
         final code = e.response?.statusCode;

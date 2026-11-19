@@ -60,7 +60,9 @@ class _ClaimHandleScreenState extends ConsumerState<ClaimHandleScreen> {
           icon: const Icon(Icons.close),
           onPressed: busy
               ? null
-              : () => ref.read(pendingHandleProvider.notifier).clear(),
+              : () => ref
+                    .read(authControllerProvider.notifier)
+                    .abandonPendingHandle(),
         ),
       ),
       body: Center(

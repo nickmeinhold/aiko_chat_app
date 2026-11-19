@@ -54,12 +54,12 @@ void main() {
             island: kTestIsland,
             vault: tokenStore,
             remoteRefresh: (_) async => RefreshResult('access2'),
-            onUnauthenticated: () =>
-                container.read(authEventsProvider).add(null),
           ),
         ),
       ],
     );
+    rest.presentedSession = () =>
+        container.read(tokenProviderProvider).current();
     return container;
   }
 

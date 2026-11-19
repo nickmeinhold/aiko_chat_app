@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:aiko_chat_app/core/auth/credential.dart';
 import 'package:aiko_chat_app/features/notifications/domain/device_platform.dart';
 import 'package:aiko_chat_app/features/notifications/domain/apns_environment.dart';
 import 'package:aiko_chat_app/features/notifications/domain/token_kind.dart';
@@ -65,6 +66,26 @@ class FakeRestApi implements ChatRestApi {
   /// If set, `deleteAccount` throws this (e.g. `SoleAdminDeletionBlocked`).
   Object? deleteThrows;
 
+  /// The session's credential right now, as the authed client would present
+  /// it. When set, a plain [Unauthorized] or [AccountSuspended] thrown from a
+  /// signed-in call is stamped with it, as the real REST layer stamps them.
+  Future<Credential?> Function()? presentedSession;
+
+  Future<Never> _failAuthed(Object error) async {
+    final presented = await presentedSession?.call();
+    if (presented != null) {
+      switch (error) {
+        case SessionSuspended() || SessionUnauthorized():
+          break;
+        case AccountSuspended():
+          throw SessionSuspended(presented);
+        case Unauthorized(statusCode: 401):
+          throw SessionUnauthorized(presented);
+      }
+    }
+    throw error;
+  }
+
   int meCalls = 0;
   int claimCalls = 0;
   int updateProfileCalls = 0;
@@ -94,7 +115,8 @@ class FakeRestApi implements ChatRestApi {
   Future<AppUser> me() async {
     meCalls++;
     onMe?.call();
-    if (meThrows != null) throw meThrows!;
+    final fails = meThrows;
+    if (fails != null) return _failAuthed(fails);
     return user;
   }
 
@@ -221,7 +243,8 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<AppUser> updateProfile({String? handle, String? displayName}) async {
     updateProfileCalls++;
-    if (updateProfileThrows != null) throw updateProfileThrows!;
+    final fails = updateProfileThrows;
+    if (fails != null) return _failAuthed(fails);
     // As the island answers it (`users_service.update_profile`): only a CHANGE
     // of handle ends "auto". The same handle is a no-op that leaves the flag
     // set, and so does a name-only edit. This fake said "any handle ends it",
@@ -241,7 +264,8 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<void> deleteAccount() async {
     deleteCalls++;
-    if (deleteThrows != null) throw deleteThrows!;
+    final fails = deleteThrows;
+    if (fails != null) await _failAuthed(fails);
   }
 
   /// Device tokens this island believes are registered, in call order. A LIST
@@ -552,25 +576,29 @@ class FakeRestApi implements ChatRestApi {
   @override
   Future<List<PendingReport>> listPendingReports() async {
     listPendingReportsCalls++;
-    if (operatorThrows != null) throw operatorThrows!;
+    final fails = operatorThrows;
+    if (fails != null) return _failAuthed(fails);
     return List.unmodifiable(pendingReports);
   }
 
   @override
   Future<void> resolveReport(String reportId) async {
-    if (operatorThrows != null) throw operatorThrows!;
+    final fails = operatorThrows;
+    if (fails != null) await _failAuthed(fails);
     resolvedReports.add(reportId);
   }
 
   @override
   Future<void> dismissReport(String reportId) async {
-    if (operatorThrows != null) throw operatorThrows!;
+    final fails = operatorThrows;
+    if (fails != null) await _failAuthed(fails);
     dismissedReports.add(reportId);
   }
 
   @override
   Future<void> banUser(String userId) async {
-    if (operatorThrows != null) throw operatorThrows!;
+    final fails = operatorThrows;
+    if (fails != null) await _failAuthed(fails);
     bannedUsers.add(userId);
   }
 }

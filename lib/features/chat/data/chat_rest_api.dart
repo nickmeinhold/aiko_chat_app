@@ -1,3 +1,4 @@
+import '../../../core/auth/credential.dart';
 import '../../auth/domain/auth_models.dart';
 import '../../auth/domain/identity_models.dart';
 import '../../call/domain/video_token.dart';
@@ -162,6 +163,26 @@ class AccountSuspended extends Unauthorized {
   const AccountSuspended() : super(403);
   @override
   String toString() => 'AccountSuspended';
+}
+
+/// A 401 on a request that carried a session's credential: the only kind of
+/// [Unauthorized] that may end a session, and only while [presented] is still
+/// the credential the vault would present.
+final class SessionUnauthorized extends Unauthorized {
+  final Credential presented;
+  const SessionUnauthorized(this.presented) : super(401);
+  @override
+  String toString() => 'SessionUnauthorized($presented)';
+}
+
+/// A ban learned on a request that carried a session's credential. A ban is
+/// about the account, so it ends the session while [presented]'s lease is
+/// current, even after a refresh has replaced the access token.
+final class SessionSuspended extends AccountSuspended {
+  final Credential presented;
+  const SessionSuspended(this.presented);
+  @override
+  String toString() => 'SessionSuspended($presented)';
 }
 
 /// The island is not creating new accounts: `403 {"detail":"registration is

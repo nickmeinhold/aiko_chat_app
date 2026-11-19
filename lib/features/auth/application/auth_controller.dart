@@ -1,19 +1,13 @@
 /// The authentication state machine — the app-layer owner of "who is logged in".
 ///
-/// It exposes the current [AppUser] (null = logged out) and the login/register/
-/// logout transitions. Crucially, it is the SINGLE reconciliation point for the
-/// two independent "session is dead" signals (the #9 trust-boundary concern):
+/// It exposes the current [AppUser] (null = logged out) and the sign-in,
+/// sign-out and switch transitions. Every change to what the app shows about
+/// the session runs as one transition in a serial lane, checked against the
+/// session vault's lease, so an outcome that belongs to a session that has
+/// since ended can't end, revive or show the one that replaced it (design 27).
 ///
-///   1. The transport's `ConnectionState.unauthenticated` — the WSS (re)connect
-///      found the refresh token rejected.
-///   2. The REST [DefaultTokenProvider]'s `onUnauthenticated` callback, surfaced
-///      via [authEventsProvider] — a REST call found the refresh token rejected
-///      while the socket may have been fine.
-///
-/// Both converge on one idempotent [_becomeUnauthenticated]. A *transient*
-/// disconnect (`ConnectionState.disconnected`) must NEVER log out — that is the
-/// transient-vs-terminal 401 boundary the whole data layer was built to preserve
-/// (design 02 / auth_error_boundary). Only the terminal `unauthenticated` does.
+/// What the router reads is one value, [SessionPicture]: the user, a pending
+/// handle and the suspended flag, written together by a transition.
 library;
 
 import 'dart:async';
@@ -26,9 +20,9 @@ import '../../../core/logging/boot_telemetry.dart';
 import '../../../app/config.dart';
 import '../../../app/providers.dart';
 import '../../../core/auth/token_provider.dart';
+import '../../../services/session_vault.dart';
 import '../../chat/data/chat_rest_api.dart';
 import '../data/owed_handle_store.dart';
-import '../../chat/data/transport/chat_transport.dart';
 import '../../notifications/application/push_providers.dart';
 import '../data/auth_exceptions.dart';
 import '../data/cached_user_store.dart';
@@ -40,24 +34,49 @@ final authControllerProvider = AsyncNotifierProvider<AuthController, AppUser?>(
   AuthController.new,
 );
 
-/// The transient "a new identity has been verified but has not yet claimed a
-/// handle" state (first-passkey-creates-account). It lives ALONGSIDE
-/// [authControllerProvider]'s
-/// `AppUser?` rather than inside it, so the logged-in/out state machine is
-/// untouched: a non-null value here (while logged out) is what drives the
-/// router to `/claim-handle`. Cleared once the handle is claimed (→ logged in)
-/// or the user abandons the flow.
-final pendingHandleProvider =
-    NotifierProvider<PendingHandleNotifier, PendingHandle?>(
-      PendingHandleNotifier.new,
+/// Everything the router reads about the session, written as one value so it
+/// never sees half of a change.
+final class SessionPicture {
+  final AsyncValue<AppUser?> auth;
+
+  /// A new identity verified but without a handle yet: drives `/claim-handle`
+  /// while logged out.
+  final PendingHandle? pending;
+
+  /// This island has suspended the account: drives `/suspended`.
+  final bool suspended;
+
+  const SessionPicture(this.auth, {this.pending, this.suspended = false});
+
+  static const resolving = SessionPicture(AsyncValue<AppUser?>.loading());
+  static const signedOut = SessionPicture(AsyncValue<AppUser?>.data(null));
+}
+
+final sessionPictureProvider =
+    NotifierProvider<SessionPictureNotifier, SessionPicture>(
+      SessionPictureNotifier.new,
     );
 
-class PendingHandleNotifier extends Notifier<PendingHandle?> {
+/// Written only by [AuthController]'s transitions.
+class SessionPictureNotifier extends Notifier<SessionPicture> {
   @override
-  PendingHandle? build() => null;
-  void set(PendingHandle pending) => state = pending;
-  void clear() => state = null;
+  SessionPicture build() => SessionPicture.resolving;
+
+  void _show(SessionPicture picture) => state = picture;
 }
+
+/// The pending handle in the current [SessionPicture].
+final pendingHandleProvider = Provider<PendingHandle?>(
+  (ref) => ref.watch(sessionPictureProvider).pending,
+);
+
+/// Whether this island has suspended the current account, in the current
+/// [SessionPicture]. A soft gate: "try again" ([AuthController.dismissSuspension])
+/// returns to `/login`, and a switch clears it. In memory only: a cold start
+/// finds the ban again on its first authed call.
+final suspendedProvider = Provider<bool>(
+  (ref) => ref.watch(sessionPictureProvider).suspended,
+);
 
 /// The handles owed on this device (see [OwedHandles]): a sign-up's draft and
 /// accounts' debts. Read by the router: while the signed-in account owes one,
@@ -125,22 +144,6 @@ class OwedHandleNotifier extends Notifier<OwedHandles> {
   }
 }
 
-/// Whether THIS island has suspended the current account (a ban — the gateway's
-/// `403 {"detail":"account suspended"}`, surfaced as [AccountSuspended]). Like
-/// [pendingHandleProvider] it lives ALONGSIDE the `AppUser?` machine rather than
-/// inside it, and drives a dedicated router zone (`/suspended`) — a ban is a
-/// terminal-for-this-island state, NOT "logged out, please sign in again"
-/// (which loops). It is a SOFT gate: because suspension clears the (dead) tokens
-/// like any terminal auth, the suspended screen lets the user DISMISS it — "try
-/// again" clears the flag → /login (a re-auth re-flags if still banned, or lands
-/// the user in if the ban lifted), "switch island" clears it via a gateway
-/// switch. In-memory only: a cold restart re-discovers the ban on the next auth
-/// attempt (task #29). The host to display is read from [configProvider], so
-/// this stays a bare flag with a single owner for the host.
-final suspendedProvider = NotifierProvider<SuspendedNotifier, bool>(
-  SuspendedNotifier.new,
-);
-
 /// Whether the current user is a moderator on this island — the presentation
 /// flag that shows/hides the operator seat (report queue + takedown/ban UI).
 /// Derived from the logged-in [AppUser.isModerator]; false when logged out,
@@ -152,18 +155,44 @@ final isModeratorProvider = Provider<bool>(
   (ref) => ref.watch(authControllerProvider).value?.isModerator ?? false,
 );
 
-class SuspendedNotifier extends Notifier<bool> {
-  @override
-  bool build() => false;
-  void flag() => state = true;
-  void clear() => state = false;
-}
+/// A sign-in attempt: its identity, the lease it began under, and the pending
+/// handle it began with.
+typedef _Attempt = ({Object id, int lease, PendingHandle? pending});
 
 class AuthController extends AsyncNotifier<AppUser?> {
   ChatRestApi get _rest => ref.read(restApiProvider);
   DefaultTokenProvider get _tokens => ref.read(tokenProviderProvider);
+  SessionVault get _vault => _tokens.vault;
   PasskeyAuthClient get _passkey => ref.read(passkeyAuthClientProvider);
   CachedUserStore get _cachedUser => ref.read(cachedUserStoreProvider);
+
+  /// Every transition queues here, behind the ones before it.
+  Future<void> _lane = Future<void>.value();
+
+  /// The sign-in attempt that may still commit, or null. A new attempt can
+  /// start only while there is none and nobody is signed in.
+  Object? _attempt;
+
+  Future<T> _transition<T>(Future<T> Function() body) {
+    final run = _lane.then((_) => body());
+    _lane = run.then<void>((_) {}, onError: (_) {});
+    return run;
+  }
+
+  /// Writes [picture] if [lease] is still the vault's: the check and the
+  /// write are one synchronous run, so nothing can end the session between
+  /// them. Returns whether it was written.
+  bool _show(int lease, SessionPicture picture) {
+    if (_vault.lease != lease) return false;
+    // Riverpod carries the previous value under an error or loading state;
+    // a picture with no user must not leave the last one readable.
+    if (picture.auth.value == null && !picture.auth.hasValue) {
+      state = const AsyncValue.data(null);
+    }
+    state = picture.auth;
+    ref.read(sessionPictureProvider.notifier)._show(picture);
+    return true;
+  }
 
   /// Remember that a passkey ceremony succeeded for the ACTIVE island, so the
   /// login screen can lead with sign-in next time.
@@ -192,107 +221,94 @@ class AuthController extends AsyncNotifier<AppUser?> {
 
   @override
   Future<AppUser?> build() async {
-    // Reconcile signal (1): the WSS terminal-auth state. Only `unauthenticated`
-    // logs out; `disconnected` is a transient drop the transport retries.
-    ref.listen<AsyncValue<ConnectionState>>(connectionStateProvider, (_, next) {
-      if (next.value == ConnectionState.unauthenticated) {
-        _becomeUnauthenticated();
-      }
-    });
-
-    // Reconcile signal (2): a REST refresh-token rejection.
-    final events = ref.watch(authEventsProvider);
-    final sub = events.stream.listen((_) => _becomeUnauthenticated());
+    // The one end nobody in the app asked for: the island rejected a refresh.
+    final sub = _vault.ended.listen(
+      (e) => _endSession(e.lease, () async => e.ended),
+    );
     ref.onDispose(sub.cancel);
 
-    // THE GATE EVERY NETWORK CALL WAITS BEHIND, so its duration is the first
-    // question a slow wake asks. Logged on the way out rather than inside
-    // `_restoreSession`, which has five exits.
-    final restored = await _restoreSession();
-    ref.read(bootTelemetryProvider).authResolved(signedIn: restored != null);
-    return restored;
+    await _restore();
+    // A restore whose session ended meanwhile writes nothing; never leave
+    // the router parked on the splash.
+    final notifier = ref.read(sessionPictureProvider.notifier);
+    if (ref.read(sessionPictureProvider).auth.isLoading) {
+      notifier._show(SessionPicture.signedOut);
+    }
+    // Read at return, not taken from the restore: a transition that ran
+    // meanwhile (a rejected refresh) has already written its picture.
+    final user = ref.read(sessionPictureProvider).auth.value;
+    ref.read(bootTelemetryProvider).authResolved(signedIn: user != null);
+    return user;
   }
 
-  /// Cold-start session restore — offline-first.
+  /// Cold-start restore, offline-first. The network call runs outside the
+  /// lane; its result commits through it.
   ///
-  ///   tokens == null           → logged out (never signed in)
-  ///   me() ok                  → authenticated; refresh the cached user
-  ///   terminal Unauthorized    → logged out; clear the (dead) tokens + cache
-  ///   NetworkUnavailable       → OPTIMISTIC restore from the cached user, IFF
-  ///                              tokens are still present at commit time
-  ///   any OTHER error          → fail CLOSED (keep tokens, show login)
-  ///
-  /// The optimistic branch fixes the returning-user-locked-out-offline bug: a
-  /// user with valid tokens must be able to open the app and read cached content
-  /// when the *network is down*, not be bounced to the login wall.
-  ///
-  /// Two deliberate safety choices, both from the PR #71 cage-match:
-  ///  1. **Fail closed on anything but a reachable-network failure.** Only
-  ///     [NetworkUnavailable] (server truly unreachable — DNS/connect/timeout,
-  ///     mapped in the REST seam) triggers optimism. A server that ANSWERED with
-  ///     an unexpected non-auth error, or any unclassified error, returns null →
-  ///     login. "Not [Unauthorized]" is NOT treated as "transient" (that was the
-  ///     trust-laundering Carnot/Tesla flagged).
-  ///  2. **Commit-time token guard.** We re-read the token AFTER the failed
-  ///     `me()` and only publish the cached user if it is STILL present. This
-  ///     closes the cold-start race (Tesla): a concurrent terminal signal
-  ///     (transport/REST `unauthenticated`) that fired during `me()` clears the
-  ///     tokens and flips state to logged-out; without this guard, returning the
-  ///     cached user here would clobber that with a resurrected session.
-  ///
-  /// Session-VALIDITY is not asserted here — it is reconciled by the transport
-  /// (`ConnectionState.unauthenticated` → [_becomeUnauthenticated]) and the REST
-  /// interceptor once the network can speak. The bounded claim: an optimistically
-  /// restored session can DISPLAY cached identity/content, but every
-  /// authenticated action fails closed on a terminal 401, and the session is
-  /// corrected on the next successful round-trip. (Named tradeoff: profile fields
-  /// may be one session stale until the next online `me()`.)
-  Future<AppUser?> _restoreSession() async {
-    final existing = await _tokens.currentAccessToken();
-    if (existing == null) return null; // never logged in
+  ///   no session            → logged out
+  ///   me() ok               → signed in; the cached user refreshed
+  ///   a 401 on the session  → that session ended, logged out
+  ///   a ban on the session  → that session ended, suspended
+  ///   NetworkUnavailable    → the cached user, while the session stands
+  ///   anything else         → fail closed: logged out, the session kept
+  Future<void> _restore() async {
+    final held = await _tokens.current();
+    final notifier = ref.read(sessionPictureProvider.notifier);
+    if (held == null) {
+      notifier._show(SessionPicture.signedOut);
+      return;
+    }
+    AppUser? fresh;
+    Object? failure;
     try {
-      final user = await _rest.me();
-      await _writeCachedUser(
-        user,
-      ); // keep the offline cache fresh (best-effort)
-      _clearSuspended(); // a successful me() means the ban (if any) lifted
-      return user;
-    } on AccountSuspended {
-      // BAN (403) — a terminal-for-this-island state, distinct from a revoked
-      // session. Must be caught BEFORE `on Unauthorized` (its supertype). Clear
-      // the dead tokens + all partial auth state like any terminal auth, then
-      // flag the suspended zone so the router shows /suspended instead of /login
-      // (which would loop: a re-auth 403s again).
-      await _tokens.clearTokens();
-      await _cachedUser.clear();
-      // Clear EVERY partial auth state, symmetric with _settleSuspension (cage-match
-      // Carnot): a stale in-memory pending handle during a rebuild-then-ban would
-      // otherwise send a soft-gate dismiss to /claim-handle instead of /login (router
-      // order: suspended → pendingHandle → login).
-      ref.read(pendingHandleProvider.notifier).clear();
-      // Flag SYNCHRONOUSLY (post-await, before return) so it lands atomically with
-      // build resolving to data(null) — the first non-loading redirect already sees
-      // the ban zone, no /login flash (cage-match Tesla). Safe: past build's first
-      // await, the window the file already trusts for sibling mutation (the
-      // _becomeUnauthenticated teardown clears pendingHandle here too).
-      ref.read(suspendedProvider.notifier).flag();
-      return null;
-    } on Unauthorized {
-      await _tokens.clearTokens(); // tokens are genuinely dead
-      await _cachedUser.clear();
-      return null;
-    } on NetworkUnavailable {
-      // Server unreachable — restore optimistically from the cached identity,
-      // but ONLY if the tokens survived any concurrent terminal signal.
-      final cached = _cachedUser.read();
-      if (cached == null) return null;
-      final stillAuthed = await _tokens.currentAccessToken();
-      return stillAuthed == null ? null : cached;
-    } catch (_) {
-      // The server answered with something we didn't expect (not a clean
-      // unreachable-network signal). Fail CLOSED: keep the tokens for a later
-      // retry, but do NOT grant an optimistic session on an unknown error.
-      return null;
+      fresh = await _rest.me();
+    } catch (e) {
+      failure = e;
+    }
+    await _transition(() async {
+      // An end that ran meanwhile has written its own picture.
+      if (_vault.lease != held.lease) return;
+      final (picture, lease) = await _restored(fresh, failure, held.lease);
+      if (_vault.lease == lease) notifier._show(picture);
+    });
+  }
+
+  /// The restored picture, and the lease it is for: the session's own, or
+  /// the one its end advanced to.
+  Future<(SessionPicture, int)> _restored(
+    AppUser? fresh,
+    Object? failure,
+    int lease,
+  ) async {
+    if (fresh != null) {
+      await _writeCachedUser(fresh);
+      return (SessionPicture(AsyncValue.data(fresh)), lease);
+    }
+    switch (failure) {
+      case SessionSuspended(:final presented):
+        final gone = await _vault.endIfLease(presented.lease);
+        final after = _vault.lease;
+        await _cachedUser.clear();
+        return (
+          gone == null
+              ? SessionPicture.signedOut
+              : const SessionPicture(AsyncValue.data(null), suspended: true),
+          after,
+        );
+      case SessionUnauthorized(:final presented):
+        await _vault.endIf(presented);
+        final after = _vault.lease;
+        await _cachedUser.clear();
+        return (SessionPicture.signedOut, after);
+      case NetworkUnavailable():
+        final cached = _cachedUser.read();
+        return (
+          cached == null
+              ? SessionPicture.signedOut
+              : SessionPicture(AsyncValue.data(cached)),
+          lease,
+        );
+      default:
+        return (SessionPicture.signedOut, lease);
     }
   }
 
@@ -331,99 +347,127 @@ class AuthController extends AsyncNotifier<AppUser?> {
     );
   }
 
-  /// The shared ingress preamble for every "start a sign-in ceremony" entry
-  /// point (passkey-authenticate, passkey-register). Ingress-only
-  /// AND single-flight — the guard rejects when:
-  ///   * a session is already live (`state.value != null`) — a stray call must
-  ///     not park a PendingHandle behind a live session (Carnot, #37); OR
-  ///   * a ceremony is already in flight (`state.isLoading`) — a second
-  ///     concurrent ingress would issue a SECOND gateway challenge before the
-  ///     first `finish` resolved, and for passkeys the start-of-ceremony
-  ///     `cancelCurrentAuthenticatorOperation()` would silently cancel the first
-  ///     sheet (mapped to a no-op restore), letting the LATER challenge win
-  ///     (Carnot, #38). The `value != null` guard alone left this open because a
-  ///     logged-out `AsyncLoading` has `value == null`.
-  ///
-  /// Centralised here so the guard CAN'T be forgotten on the next ingress added
-  /// (it already was, once). [ceremony] receives the captured prior state to
-  /// thread into a cancellation restore / [_applyOutcome].
+  // ---- sign-in attempts ----------------------------------------------------
+
+  /// Starts an attempt, or returns null when one can't start: someone is
+  /// signed in, or another attempt is running. A tap during a transition
+  /// queues behind it and is judged when it runs.
+  Future<_Attempt?> _begin({bool needsPending = false}) => _transition(() async {
+    final now = ref.read(sessionPictureProvider);
+    if (state.value != null || _attempt != null) return null;
+    if (needsPending && now.pending == null) return null;
+    final id = Object();
+    _attempt = id;
+    final lease = _vault.lease;
+    _show(
+      lease,
+      SessionPicture(const AsyncValue.loading(), pending: now.pending),
+    );
+    return (id: id, lease: lease, pending: now.pending);
+  });
+
+  /// Runs a sign-in ceremony as an attempt. The ceremony's network calls and
+  /// authenticator sheet run outside the lane; what it produced commits as
+  /// one transition. It returns null when the person dismissed the sheet.
   Future<void> _ingress(
-    Future<AppUser?> Function(AppUser? prior) ceremony,
+    Future<IdentityOutcome?> Function(PendingHandle? pending) ceremony, {
+    bool needsPending = false,
+    bool paysOwedHandle = false,
+  }) async {
+    final attempt = await _begin(needsPending: needsPending);
+    if (attempt == null) return;
+    IdentityOutcome? outcome;
+    Object? error;
+    StackTrace? trace;
+    try {
+      outcome = await ceremony(attempt.pending);
+    } catch (e, st) {
+      error = e;
+      trace = st;
+    }
+    final owing = await _transition(
+      () => _commit(attempt, outcome, error, trace, paysOwedHandle),
+    );
+    if (owing != null) await _payOwedHandle(attempt, owing);
+  }
+
+  /// Commits an attempt's result. Every path consumes the attempt, except a
+  /// sign-up that still owes its handle, which keeps it until the pay
+  /// commits. Returns that sign-up's user and lease.
+  Future<({AppUser user, int lease})?> _commit(
+    _Attempt attempt,
+    IdentityOutcome? outcome,
+    Object? error,
+    StackTrace? trace,
+    bool paysOwedHandle,
   ) async {
-    if (state.value != null || state.isLoading) return;
-    final prior = state.value;
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() => ceremony(prior));
-    await _settleSuspension();
+    // Retired by an end or a switch that ran first: nothing to commit.
+    if (!identical(_attempt, attempt.id)) return null;
+    var keep = false;
+    try {
+      if (error != null) {
+        _show(
+          attempt.lease,
+          error is AccountSuspended
+              ? const SessionPicture(AsyncValue.data(null), suspended: true)
+              : SessionPicture(
+                  AsyncValue.error(error, trace ?? StackTrace.current),
+                  pending: attempt.pending,
+                ),
+        );
+        return null;
+      }
+      switch (outcome) {
+        case null:
+          _show(
+            attempt.lease,
+            SessionPicture(
+              const AsyncValue.data(null),
+              pending: attempt.pending,
+            ),
+          );
+          return null;
+        case PendingHandle pending:
+          _show(
+            attempt.lease,
+            SessionPicture(const AsyncValue.data(null), pending: pending),
+          );
+          return null;
+        case Authenticated(:final session):
+          final int lease;
+          try {
+            lease = await _vault.adopt(
+              _tokens.island,
+              session.tokens,
+              since: attempt.lease,
+            );
+          } on SessionSuperseded {
+            // Whoever moved the lease has written their own picture.
+            return null;
+          }
+          await _writeCachedUser(session.user);
+          final owes =
+              paysOwedHandle &&
+              ref.read(owedHandleProvider).forAccount(session.user.userId) !=
+                  null;
+          if (owes) {
+            keep = true;
+            return (user: session.user, lease: lease);
+          }
+          _show(lease, SessionPicture(AsyncValue.data(session.user)));
+          return null;
+      }
+    } catch (e, st) {
+      // Never leave an attempt showing `loading`: show what went wrong.
+      _show(
+        _vault.lease,
+        SessionPicture(AsyncValue.error(e, st), pending: attempt.pending),
+      );
+      return null;
+    } finally {
+      if (!keep && identical(_attempt, attempt.id)) _attempt = null;
+    }
   }
-
-  /// Terminal-auth settlement for a ban surfaced by a ceremony guard (the
-  /// [_ingress] passkey finish/authenticate, or [claimHandle]) — the sign-in
-  /// against a banned account resolves to [AccountSuspended] inside the guard,
-  /// leaving `state` an `AsyncError`. This:
-  ///   1. clears the dead tokens + cache, like any terminal auth (the invariant
-  ///      the [_restoreSession] ban branch already honours — cage-match Carnot:
-  ///      flagging without clearing left a stale credential in the reservoir);
-  ///   2. RESETS the machine to a clean logged-out `AsyncData(null)` — so a
-  ///      soft-gate dismiss ("try again") lands on a CLEAN /login, not the ban
-  ///      re-painted as the login screen's inline `AsyncError` (cage-match Tesla:
-  ///      a flag-only gate is "the loop wearing a friendlier mask");
-  ///   3. flags the suspended zone.
-  /// No-op (returns false) when the guard's error is not a ban — a network /
-  /// ceremony-cancelled / handle-taken error passes through untouched so the
-  /// login/claim screens still show it. Runs OUTSIDE build (post-guard), so the
-  /// direct flag set is safe.
-  Future<bool> _settleSuspension() async {
-    if (state.error is! AccountSuspended) return false;
-    // Set EVERY router-relevant piece of state SYNCHRONOUSLY, before any await,
-    // so settlement is ATOMIC w.r.t. the router (cage-match Tesla): the first
-    // redirect after the ceremony's AsyncError sees (logged-out + suspended) and
-    // lands on /suspended directly — never a one-frame /login flash that would
-    // paint the ban as the login screen's inline error (that sealed *dismiss*;
-    // this seals *arrival*).
-    //   - clear pending: a claimHandle ban leaves a live provisioning token, and
-    //     the router orders suspended → pendingHandle, so an uncleared pending
-    //     would send a soft-gate dismiss to /claim-handle, not /login (cage-match
-    //     Carnot + Tesla converged: the reservoir isn't empty while a hidden
-    //     state variable still holds usable work);
-    //   - reset the machine to clean AsyncData(null) (no lingering ban error);
-    //   - flag the suspended zone.
-    // Flag BEFORE publishing the clean logged-out state (cage-match Carnot): the
-    // router listens to BOTH providers, so if the auth-state notification ran the
-    // redirect before `suspended` were true, an intermediate `(loggedOut,
-    // suspended=false)` from /claim-handle would hop to /login. Flagging first
-    // makes settlement order-INDEPENDENT — whichever notification the router
-    // processes first, it already sees `suspended == true`.
-    ref.read(pendingHandleProvider.notifier).clear();
-    ref.read(suspendedProvider.notifier).flag();
-    state = const AsyncValue.data(null);
-    // The dead credential/cache drain is routing-irrelevant, so it runs AFTER —
-    // the user is already parked on /suspended and can take no authed action.
-    //
-    // The unpair goes with it: a ban ends the session like any other terminal
-    // state, and a row left here is unclearable afterwards. It rides in
-    // `_clearCredentialAndUnpair` rather than sitting ahead of the clear, which
-    // matters especially here — /suspended is a SOFT gate, so "try again" can
-    // reach /login and sign in at any moment, and this path must therefore not
-    // hold a window open at all. Best-effort as to the DELETE itself: a banned
-    // account's credential may already be rejected, in which case the debt
-    // record carries it to the next sign-in.
-    await _clearCredentialAndUnpair();
-    await _cachedUser.clear();
-    return true;
-  }
-
-  /// Clear the suspended flag (ban lifted / session ended / gateway switched).
-  /// SYNCHRONOUS, matching the sibling `pendingHandleProvider.clear()` it sits
-  /// beside in every caller (_teardownResources / switchIsland / success /
-  /// restore-success). Every mutation of the suspended flag is now synchronous,
-  /// so ordering is by execution order, not event-loop timing: the cold-start
-  /// ban flags as the LAST statement before `_restoreSession` returns (no await
-  /// after it), and a concurrent terminal signal either fired earlier — clearing
-  /// a still-false flag (no-op) — or fires after build resolves, where
-  /// `_becomeUnauthenticated`'s `state.value == null && !isLoading` guard
-  /// early-returns before it can reach a teardown clear. So the flag always wins.
-  void _clearSuspended() => ref.read(suspendedProvider.notifier).clear();
 
   /// Sign in with an EXISTING passkey (WebAuthn). The ingress is a gateway
   /// challenge + an on-device authenticator assertion: fetch the request
@@ -432,23 +476,19 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// dismissal of the system sheet restores the prior state silently (no error
   /// banner). A "no passkey on this device" error is a real [AuthCeremonyFailed]
   /// — surfaced, not swallowed — so the UI can nudge toward [registerWithPasskey].
-  Future<void> signInWithPasskey() => _ingress((prior) async {
+  Future<void> signInWithPasskey() => _ingress((_) async {
     final challenge = await _rest.startPasskeyAuthentication();
     final String assertion;
     try {
       assertion = await _passkey.authenticate(challenge.optionsJson);
     } on AuthCeremonyCancelled {
-      return prior; // user dismissed the sheet — no-op, restore prior state
+      return null;
     }
     // A completed ceremony PROVES a usable passkey is on this device, so record
     // it BEFORE the server round-trip: if the gateway call then fails, the
     // credential still exists and the login screen should still lead with sign-in.
     await _markPasskeySeen();
-    final outcome = await _rest.finishPasskeyAuthentication(
-      challenge.state,
-      assertion,
-    );
-    return _applyOutcome(outcome, prior);
+    return _rest.finishPasskeyAuthentication(challenge.state, assertion);
   });
 
   /// Create a NEW passkey and account (first-passkey-creates-account). Mirrors
@@ -457,32 +497,28 @@ class AuthController extends AsyncNotifier<AppUser?> {
   /// gateway (which stores only the public key and mints the account).
   /// Cancellation restores the prior state.
   ///
-  /// HANDLE FIRST (#436, Nick 2026-10-28). The island answers with a live
-  /// session under an auto-assigned `aiko-…` handle (its Design 04; it has not
-  /// returned a [PendingHandle] since #1728). So the user picks [handle] BEFORE
-  /// the ceremony: it labels the passkey in their password manager, and is
-  /// applied with `PATCH /v1/me` the moment the account exists. An
-  /// [OwedHandle] record carries it across a kill in between; until it is paid
-  /// the router holds the account on `/choose-handle`, never in chat.
+  /// HANDLE FIRST. The island answers with a live session under an
+  /// auto-assigned `aiko-…` handle, so the user picks [handle] BEFORE the
+  /// ceremony: it labels the passkey in their password manager, and is applied
+  /// with `PATCH /v1/me` the moment the account exists. An [OwedHandle] record
+  /// carries it across a kill in between; until it is paid the router holds the
+  /// account on `/choose-handle`, never in chat.
   ///
   /// The island is asked FIRST, because the ceremony can't be taken back: the
   /// phone saves the passkey before `register/finish` answers, so a refusal
-  /// there leaves a credential the island will never accept (#436). Only an
-  /// explicit "no" stops here, and it raises the same [RegistrationClosed] the
-  /// island would have, so the login screen has one path for both. The island
-  /// can't make this check itself: `register/start` is also add-a-device's
-  /// start, and the app calls it without a bearer either way.
+  /// there leaves a credential the island will never accept. Only an explicit
+  /// "no" stops here, and it raises the same [RegistrationClosed] the island
+  /// would have, so the login screen has one path for both.
   Future<void> registerWithPasskey({
     required String handle,
     required String displayName,
-  }) => _ingress((prior) async {
+  }) => _ingress(paysOwedHandle: true, (_) async {
     if (await _rest.passkeyCreatesAccounts() == false) {
       throw const RegistrationClosed();
     }
     final owed = ref.read(owedHandleProvider.notifier);
     // EVERYTHING the ceremony writes or clears is this device's DRAFT, never an
-    // account's debt (see [OwedHandles]): a second person's sign-up on this
-    // device can no longer overwrite or erase what another account owes.
+    // account's debt (see [OwedHandles]).
     final challenge = await _rest.startPasskeyRegistration(name: handle);
     // Written BEFORE the ceremony, which can't be taken back: if the app dies
     // after the island makes the account, this is how the next launch knows a
@@ -493,88 +529,101 @@ class AuthController extends AsyncNotifier<AppUser?> {
       attestation = await _passkey.register(challenge.optionsJson);
     } on AuthCeremonyCancelled {
       await owed.clearDraft();
-      return prior; // user dismissed the sheet — no-op, restore prior state
+      return null;
     } catch (_) {
       // No credential reached the island, so no account can exist.
       await owed.clearDraft();
       rethrow;
     }
     await _markPasskeySeen();
-    // The draft is NOT cleared if this throws. A reply lost after the island
-    // made the account looks exactly like a refusal from here (Carnot + Noether,
-    // cage-match #440). A draft never gates anyone; it pre-fills the next
-    // signed-out sign-up, and the island's `handle_auto` holds the account if
-    // it exists.
+    // The draft is NOT cleared if this throws: a reply lost after the island
+    // made the account looks exactly like a refusal from here. A draft never
+    // gates anyone; it pre-fills the next signed-out sign-up.
     final outcome = await _rest.finishPasskeyRegistration(
       challenge.state,
       attestation,
     );
     switch (outcome) {
       case Authenticated(:final session):
-        // Bind the draft to the account BEFORE the session is published, so a
-        // kill from here on still lands the next launch on /choose-handle.
+        // Bound before the session is adopted, so a kill from here on still
+        // lands the next launch on /choose-handle.
         await owed.bindDraft(session.user.userId);
-        final user = await _applyOutcome(outcome, prior);
-        return user == null ? null : _payOwedHandle(user);
       case PendingHandle():
         // An island that still asks for the handle itself: its claim screen
         // does, so this app owes nothing of its own.
         await owed.clearDraft();
-        return _applyOutcome(outcome, prior);
     }
+    return outcome;
   });
 
-  /// Apply the handle a new account chose before its passkey existed. Never
-  /// fails the sign-in: the account exists either way, so a refusal (taken, no
-  /// network) keeps the debt, the router holds the user on `/choose-handle`,
-  /// and that screen shows why. A 409 stamps nothing on the island, so picking
-  /// again is safe. A first claim doesn't start the island's 30-day cooldown
-  /// either (island #438, live since v0.21.0): moving off the assigned handle
-  /// leaves the stamp unset, so a typo can be fixed once more straight away,
-  /// and that second change starts it. An island older than v0.21.0 starts it
-  /// on the first claim. The screen names the exact handle on the button either
-  /// way. (This said "a SUCCESS starts the cooldown", which was true only before
-  /// #438, and it led a cage-match #440 seat to a false finding.)
-  ///
-  /// A TERMINAL answer is not a refusal. A ban or a dead session is settled by
-  /// the doors [saveProfile] uses, never shown as a reason on `/choose-handle`
-  /// with the session still published. Null means one was settled.
-  Future<AppUser?> _payOwedHandle(AppUser user) async {
+  /// Apply the handle a new account chose before its passkey existed, then
+  /// commit the attempt. The network call runs outside the lane. A refusal
+  /// (taken, no network) keeps the debt: the router holds the account on
+  /// `/choose-handle`, which shows why. A terminal answer ends the session
+  /// through its own door.
+  Future<void> _payOwedHandle(
+    _Attempt attempt,
+    ({AppUser user, int lease}) signedIn,
+  ) async {
     final owedNotifier = ref.read(owedHandleProvider.notifier);
-    final owed = ref.read(owedHandleProvider).forAccount(user.userId);
-    if (owed == null) return user;
-    try {
-      final updated = await _rest.updateProfile(
-        handle: owed.handle,
-        displayName: owed.displayName,
-      );
-      await _writeCachedUser(updated);
-      await owedNotifier.paid(user.userId);
-      return updated;
-    } on AccountSuspended {
-      // BEFORE `on Unauthorized`, its supertype. Rethrown into [_ingress],
-      // which records it as the state's error and settles it through
-      // [_settleSuspension] — the one door a ban at sign-in takes too.
-      rethrow;
-    } on Unauthorized {
-      // A 401 that survived the interceptor's refresh: the session
-      // [_applyOutcome] just published is dead (island #443: an account deleted
-      // mid-request answers exactly this). Torn down as [saveProfile] does. The
-      // debt stays bound to the account, so signing back in as it lands on
-      // `/choose-handle` again.
-      _becomeUnauthenticated();
-      return null;
-    } catch (e) {
-      owedNotifier.refused(user.userId, e);
-      return user;
+    final owed = ref.read(owedHandleProvider).forAccount(signedIn.user.userId);
+    var shown = signedIn.user;
+    Unauthorized? terminal;
+    if (owed != null) {
+      try {
+        shown = await _rest.updateProfile(
+          handle: owed.handle,
+          displayName: owed.displayName,
+        );
+        await owedNotifier.paid(signedIn.user.userId);
+      } on Unauthorized catch (e) {
+        terminal = e;
+      } catch (e) {
+        owedNotifier.refused(signedIn.user.userId, e);
+      }
     }
+    await _transition(() async {
+      if (!identical(_attempt, attempt.id)) return;
+      _attempt = null;
+      if (!identical(shown, signedIn.user)) await _writeCachedUser(shown);
+      _show(signedIn.lease, SessionPicture(AsyncValue.data(shown)));
+    });
+    if (terminal != null) await _settleTerminal(terminal);
   }
+
+  /// Complete a new identity's sign-in by claiming a handle, from
+  /// `/claim-handle`. Requires the pending identity in the picture.
+  Future<void> claimHandle(String handle, String displayName) =>
+      _ingress(needsPending: true, (pending) async {
+        if (pending == null) {
+          throw StateError('claimHandle called with no pending identity');
+        }
+        final session = await _rest.claimHandle(
+          provisioningToken: pending.provisioningToken,
+          handle: handle,
+          displayName: displayName,
+        );
+        return Authenticated(session);
+      });
+
+  /// Leave `/claim-handle` without claiming: the pending identity is dropped.
+  Future<void> abandonPendingHandle() => _transition(() async {
+    if (_attempt != null) return; // a claim is in flight
+    final now = ref.read(sessionPictureProvider);
+    _show(_vault.lease, SessionPicture(now.auth, suspended: now.suspended));
+  });
+
+  /// "Try signing in again" from `/suspended`: back to `/login`. A re-auth
+  /// re-flags it if the ban still stands.
+  Future<void> dismissSuspension() => _transition(() async {
+    final now = ref.read(sessionPictureProvider);
+    _show(_vault.lease, SessionPicture(now.auth, pending: now.pending));
+  });
 
   /// Pay the owed handle from `/choose-handle`, signed in: after the island
   /// refused the first choice, after a kill mid-sign-up, or for an account the
   /// island still reports as auto-handled ([AppUser.handleAuto]). Goes through
-  /// [saveProfile], the same door as the Settings edit, so it inherits that
-  /// door's fences and terminal-auth handling. [HandleTaken] and
+  /// [saveProfile], the same door as the Settings edit. [HandleTaken] and
   /// [HandleChangeOnCooldown] propagate for the screen to show inline.
   Future<AppUser?> chooseHandle(String handle, String displayName) async {
     final userId = state.value?.userId;
@@ -589,47 +638,34 @@ class AuthController extends AsyncNotifier<AppUser?> {
     return updated;
   }
 
-  /// Add a passkey to the CURRENTLY signed-in account (link-to-existing, #1727).
+  /// Add a passkey to the CURRENTLY signed-in account (link-to-existing).
   /// This is the recovery path for a user who ALREADY has an account and wants a
   /// second passkey (e.g. a new device): routing them through
-  /// [registerWithPasskey] would try to mint a SECOND account and — on a handle
-  /// collision with their own account — orphan the device credential (the exact
-  /// passkey-401 bug this closes).
+  /// [registerWithPasskey] would try to mint a SECOND account.
   ///
-  /// It deliberately does NOT go through [_ingress]: that guard REJECTS a live
-  /// session (`state.value != null`), which is precisely the precondition here.
-  /// It also does NOT touch the logged-in [state] — linking a passkey doesn't
-  /// change who is signed in, and flipping to `loading` would bounce the router
-  /// to /splash. The caller (Settings) awaits this with its own local spinner and
-  /// surfaces the outcome. A sheet dismissal is a silent no-op; a real
-  /// authenticator/gateway failure ([PasskeyAlreadyRegistered], [Unauthorized],
-  /// [AuthCeremonyFailed]) propagates to the caller and leaves the session
-  /// untouched (a failed link must not log the user out).
+  /// It does NOT change who is signed in, so it writes no session state and
+  /// runs outside the lane. The caller (Settings) shows its own spinner. A sheet
+  /// dismissal is a silent no-op; a real authenticator/gateway failure
+  /// propagates to the caller and leaves the session untouched.
   ///
   /// Returns `true` when a passkey was linked, `false` when the user dismissed
-  /// the system sheet (or a link is already in flight) — so the caller shows a
-  /// success confirmation ONLY on a real add, never on a silent cancellation.
+  /// the system sheet (or a link is already in flight).
   ///
-  /// Single-flight is enforced HERE, not by the caller: the same failure mode the
-  /// [_ingress] guard documents applies to this ceremony too — a second concurrent
-  /// `register` issues a second gateway challenge and the platform authenticator's
-  /// start-of-ceremony `cancelCurrentAuthenticatorOperation()` silently cancels the
-  /// first sheet (mapped to a no-op), letting the later challenge win. A widget's
-  /// local disable-flag only covers one screen instance; the invariant belongs on
-  /// the controller, where every passkey ceremony is coordinated. `_addingPasskey`
-  /// is checked-and-set synchronously (no await between), so a second call in the
-  /// same event-loop turn short-circuits before issuing a challenge.
+  /// Single-flight is enforced HERE: a second concurrent `register` issues a
+  /// second gateway challenge, and the platform authenticator's
+  /// start-of-ceremony cancel silently drops the first sheet. `_addingPasskey`
+  /// is checked-and-set synchronously, so a second call in the same event-loop
+  /// turn short-circuits before issuing a challenge.
   bool _addingPasskey = false;
   Future<bool> addPasskeyToCurrentAccount() async {
     if (state.value == null) {
       throw StateError('addPasskeyToCurrentAccount requires a signed-in user');
     }
-    if (_addingPasskey)
-      return false; // a link is already in flight — no 2nd sheet
+    if (_addingPasskey) return false; // a link is already in flight
     _addingPasskey = true;
     try {
       // Labelled with the handle, so this passkey is recognisably theirs in the
-      // password manager (#436). Islands that predate the label ignore it.
+      // password manager. Islands that predate the label ignore it.
       final challenge = await _rest.startPasskeyRegistration(
         name: state.value?.username,
       );
@@ -646,411 +682,226 @@ class AuthController extends AsyncNotifier<AppUser?> {
     }
   }
 
-  /// Apply a verified [outcome] from a passkey finish (the gateway's single
-  /// identity door): a known identity adopts the tokens and publishes the user;
-  /// a new identity parks the [PendingHandle] (router → /claim-handle) and keeps
-  /// the [prior] state (first-passkey-creates-account).
-  Future<AppUser?> _applyOutcome(
-    IdentityOutcome outcome,
-    AppUser? prior,
-  ) async {
-    switch (outcome) {
-      case Authenticated(:final session):
-        await _tokens.setTokens(session.tokens);
-        await _writeCachedUser(session.user); // enable offline restore
-        _clearSuspended(); // signed in successfully → not suspended here
-        return session.user;
-      case PendingHandle pending:
-        ref.read(pendingHandleProvider.notifier).set(pending);
-        return prior;
-    }
-  }
+  // ---- signed-in calls -----------------------------------------------------
 
-  /// Complete a new identity's sign-in by claiming a handle. Requires a pending
-  /// identity (set by [registerWithPasskey]); on success adopts the tokens,
-  /// clears the pending state, and publishes the user (→ chat).
-  Future<void> claimHandle(String handle, String displayName) async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
-      final pending = ref.read(pendingHandleProvider);
-      if (pending == null) {
-        throw StateError('claimHandle called with no pending identity');
-      }
-      final session = await _rest.claimHandle(
-        provisioningToken: pending.provisioningToken,
-        handle: handle,
-        displayName: displayName,
-      );
-      await _tokens.setTokens(session.tokens);
-      await _writeCachedUser(session.user); // enable offline restore
-      ref.read(pendingHandleProvider.notifier).clear();
-      _clearSuspended();
-      return session.user;
-    });
-    // Corpus seal (cage-match Tesla): claimHandle is a THIRD door that can
-    // surface a 403 ban (the claimed account/handle is banned) — settle it the
-    // same way as _ingress so it routes to /suspended, not a claim-screen error.
-    await _settleSuspension();
-  }
-
-  /// Full session teardown — the SINGLE owner of "end this session". Both the
-  /// explicit [logout] and the signal-driven [_becomeUnauthenticated] route
-  /// through it, so a terminal logout is ALWAYS complete, never partial:
-  ///   - disconnect the realtime socket — else the session-singleton transport
-  ///     keeps the old (now server-invalid) socket and the next login's
-  ///     `connect()` early-returns on a live `_channel`, reusing a dead session
-  ///     and never re-running subscribe→drain→history (Carnot C1);
-  ///   - drop the in-memory cache — else a different user logging in on the same
-  ///     app instance sees the previous user's messages (Carnot C3);
-  ///   - clear tokens; publish logged-out (router → login).
-  /// Tear down the realtime session. The per-session CACHE and repo are NOT
-  /// touched here: they are `autoDispose`-scoped to the chat screen, so logging
-  /// out unmounts the screen and the autoDispose chain disposes the repo (writes
-  /// stop, `_disposed` flips) and THEN closes the cache — leaf-to-root. A fresh
-  /// login builds a fresh empty cache, so session isolation falls out of the
-  /// lifecycle: no manual clear, and no writer-vs-clear race (Carnot R2-1/C3).
-  /// Only the app-scoped transport (kept alive by [connectionStateProvider])
-  /// needs an explicit disconnect.
+  /// Re-fetch `/v1/me` and republish the user, for the session that asked.
   ///
-  /// Tokens are cleared FIRST, before the (slower, awaited) disconnect — so the
-  /// token-clear is effectively immediate. If it ran last, a fast re-login
-  /// during the disconnect-await could write fresh tokens that the trailing
-  /// clear would then stomp, leaving a logged-in-but-tokenless session (Carnot
-  /// R3-B). Clearing first means any human-paced re-login's `setTokens` always
-  /// lands after this clear, never before it.
-  Future<void> _teardownResources() async {
-    // Clear any half-finished identity provisioning so a teardown ALWAYS lands in
-    // a clean logged-out state — otherwise an abandoned PendingHandle survives
-    // logout/terminal-auth and the router keeps forcing /claim-handle (Carnot).
-    ref.read(pendingHandleProvider.notifier).clear();
-    _clearSuspended(); // symmetric with pendingHandle: a terminal teardown is a
-    // THIRD exit (logout / _becomeUnauthenticated / deleteAccount) — an orphan
-    // suspended flag would make the next logged-out redirect prefer /suspended
-    // over an honest /login (cage-match Tesla). Safe re the cold-start flag: a
-    // ban sets state=data(null), so _becomeUnauthenticated's guard early-returns
-    // and never reaches this teardown to clobber a just-set flag.
-    await _clearCredentialAndUnpair();
-    await _cachedUser.clear(); // lifecycle-symmetric with the tokens
-    await ref.read(transportProvider).disconnect();
-  }
-
-  /// Destroy this session's credential and hand the device pairing over to the
-  /// debt record. THE SINGLE DOOR for both — every session-ending path uses it.
-  ///
-  /// The two statements are adjacent awaits on the same token store with nothing
-  /// between them, and that adjacency is the property, not a coincidence. An
-  /// earlier version awaited `DELETE /v1/devices` ahead of the clear, because
-  /// that call is authenticated and needs a live credential; but this class
-  /// already documents (Carnot R3-B) why nothing slow may sit there — `logout`
-  /// publishes logged-out BEFORE awaiting, so a re-sign-in inside the window
-  /// writes fresh tokens the trailing clear then stomps, leaving a logged-in-
-  /// but-tokenless app. Fencing that window with a token comparison only moved
-  /// the problem: an ordinary 401 refresh changes the access token too, so the
-  /// fence mis-read a live session as a reborn one and abandoned the whole
-  /// teardown — the user parked on /login still holding a working credential,
-  /// which the next cold start restored.
-  ///
-  /// So the round trip is gone from this path entirely. [DeviceRegistrar.unpair]
-  /// returns without awaiting anything: it records a durable debt and fires a
-  /// best-effort DELETE out of band, carrying [credential] BY VALUE so it does
-  /// not need the store we just emptied. Nothing is racing for an instant, so
-  /// there is no window left to guard — and the offline-sign-out residual the
-  /// old comment named as an accepted tradeoff closes on the way past.
-  ///
-  /// Called from THREE places. `_teardownResources` covers logout, the signal-
-  /// driven teardown and account deletion; [switchIsland] and
-  /// [_settleSuspension] each end a session without going through it.
-  /// [_restoreSession] also clears tokens and is deliberately NOT a caller —
-  /// nothing has registered yet in that process, so there is no debt to record.
-  /// ORDER AND ISOLATION, and neither alone is enough — both orderings have a
-  /// hole and the `try` is what closes the remaining one (cage-match round 3):
-  ///
-  ///   - clear-then-unpair loses the unpair whenever the clear THROWS, and in
-  ///     [switchIsland] a throwing clear is an anticipated, documented outcome
-  ///     ("a clear failure propagates to the picker's error UI"). The island
-  ///     being left would keep a live routable row forever — the exact residual
-  ///     this whole change exists to close.
-  ///   - unpair-then-clear loses the CLEAR whenever building the registrar
-  ///     throws, leaving a live credential on a logged-out app. Strictly worse —
-  ///     and reachable: this change widened that provider graph
-  ///     (`deviceRegistrarProvider` → `pendingUnregisterStoreProvider` →
-  ///     `sharedPreferencesProvider`, which throws by design when unoverridden),
-  ///     and two test fixtures started throwing on exactly that path.
-  ///
-  /// So the debt is recorded FIRST — it is a local write, not a round trip, so
-  /// it opens no window — inside a `try` that makes the best-effort half
-  /// structurally unable to skip the security-critical one. The clear then runs
-  /// unconditionally, whatever the pairing did.
-  Future<void> _clearCredentialAndUnpair() async {
-    // INSIDE the try, and that is the whole point of the try (cage-match, Carnot).
-    // This read falls through to the vault's first Keychain read, which
-    // throws on a locked or unavailable keychain — and sitting one line above the
-    // guard it threw PAST the clear, leaving a signed-out app holding a live
-    // credential that the next cold start restored. That is the exact outcome the
-    // doc above calls "strictly worse", reachable through the one statement the
-    // try did not cover. A credential we cannot read is simply a credential the
-    // best-effort unpair does without.
-    String? credential;
-    try {
-      credential = await _tokens.currentAccessToken();
-      // AWAITED, and only as far as the debt being durable — a local
-      // preferences write, not the authenticated round trip, which stays out of
-      // band. Returning before that write lands meant a process kill between
-      // logout and the microtask lost the only retry record while the credential
-      // was already gone (cage-match round 4, Carnot).
-      await ref.read(deviceRegistrarProvider)?.unpair(credential: credential);
-    } catch (e) {
-      // Reach degrades; the session still ends. Never the other way round.
-      debugPrint('AuthController: could not unpair the device: $e');
-    }
-    await _tokens.clearTokens();
-  }
-
-  /// Explicit, user-initiated logout.
-  Future<void> logout() async {
-    state = const AsyncValue.data(null);
-    await _teardownResources();
-  }
-
-  /// Re-fetch `/v1/me` and republish the user WITHOUT a full session restore.
-  ///
-  /// Reconciles a stale DERIVED flag against the server — specifically a
-  /// moderator flag that reads true locally while the island has since revoked
-  /// it. When an operator endpoint returns [Forbidden] (authZ, not authN — see
-  /// the REST seam's A3 taxonomy), the operator controller calls this so a fresh
-  /// `me()` flips [isModeratorProvider] and the operator UI gates itself off.
-  ///
-  /// Non-destructive by contract: this is NOT a logout path. A [Forbidden], a
-  /// network blip, or any transient error leaves the current session untouched —
-  /// only a clean `me()` republishes, and only a genuine ban ([AccountSuspended])
-  /// routes to the normal terminal-auth teardown. Contrast [logout] and the
-  /// `_becomeUnauthenticated` reconcile signals, which DO end the session.
+  /// Not a logout path: a [Forbidden], a network blip or any transient error
+  /// leaves the session as it is. Only a terminal answer for this session (a
+  /// 401 or a ban) ends it.
   Future<void> refreshUser() async {
-    final startUserId = state.value?.userId;
-    if (startUserId == null) return; // not authenticated — nothing to refresh
+    if (state.value == null) return;
+    final lease = _vault.lease;
+    final AppUser user;
     try {
-      final user = await _rest.me();
-      // Commit-time SESSION fence (extends _restoreSession's token guard, PR #71
-      // Tesla): between this refresh starting and here, the session can change out
-      // from under us — a concurrent terminal signal clears tokens, OR a logout +
-      // sign-in as a DIFFERENT user lands. Two DURABLE mutators must be fenced, not
-      // just the publish: the offline CACHE and `state`. The fence is TOTAL —
-      // tokens · userId · (cache) · publish (cage-match Tesla round 5): fencing
-      // only `state` still let `_writeCachedUser(A)` land while tokens were already
-      // B's, so a later offline restore would pair B's tokens with A's face (the
-      // PR #71 mismatch class). Fence BEFORE the cache write (shrinking the window
-      // to the negligible local write vs the whole me() network call), then a final
-      // SYNCHRONOUS userId re-check immediately precedes the synchronous publish so
-      // no teardown can interleave (a teardown nulls state.value → userId mismatch).
-      if (await _tokens.currentAccessToken() == null) return;
-      if (state.value?.userId != startUserId) return;
-      await _writeCachedUser(
-        user,
-      ); // keep the offline cache fresh (best-effort)
-      if (state.value?.userId != startUserId)
-        return; // re-fence after the write
-      state = AsyncData(user);
-    } on AccountSuspended catch (e, st) {
-      // A ban surfaced during the refresh — this IS terminal, but it is a BAN,
-      // not a revoked session. Route it through the SAME single suspended-
-      // settlement door as sign-in/restore (`_settleSuspension`), NOT the generic
-      // `_becomeUnauthenticated` teardown — the latter lands on /login, which
-      // 403-loops (a re-auth attempt re-bans). `_settleSuspension` reads
-      // `state.error`, so surface the ban there first, then delegate.
-      state = AsyncError(e, st);
-      await _settleSuspension();
-    } on Unauthorized {
-      // Terminal authN during the refresh (a 401 that survived the interceptor's
-      // refresh-and-retry) — the session is genuinely dead. Tear it down rather
-      // than leaving a dead token published in UI state (cage-match Carnot round
-      // 3). Idempotent with the interceptor's onUnauthenticated event path, so
-      // double-firing is safe; being explicit here makes refreshUser self-
-      // contained instead of relying on that event having already fired. (Caught
-      // AFTER AccountSuspended, its subtype, so a ban still routes to /suspended.)
-      _becomeUnauthenticated();
-    } catch (_) {
-      // Forbidden / NetworkUnavailable / any transient — leave the session as-is.
-      // The caller already surfaced the originating action's failure.
+      user = await _rest.me();
+    } catch (e) {
+      await _settleTerminal(e);
+      return;
     }
+    await _transition(() async {
+      if (_vault.lease != lease) return;
+      await _writeCachedUser(user);
+      _show(lease, SessionPicture(AsyncValue.data(user)));
+    });
   }
 
-  /// Save a profile change (handle and/or display name) through the SINGLE
-  /// authed-mutation door, so the `PATCH /v1/me` inherits the same terminal-auth
-  /// taxonomy AND the same total commit-time fence as [refreshUser] (cage-match
-  /// #114 confirming round, Carnot + Wu). Splitting the mutation across the screen
-  /// (a generic `catch`) and a userId-only [applyProfileUpdate] leaked two ways:
-  /// a terminal 401 was swallowed as a snackbar (dead session left in the UI), and
-  /// a same-identity logout→login mid-flight could pair one session's tokens with
-  /// another's cached face (the PR #71 class). Both are dissolved by owning the
-  /// whole thing here.
-  ///
-  /// The caller (settings screen) keeps ONLY the user-actionable outcomes —
-  /// [HandleTaken] / [HandleChangeOnCooldown] are rethrown for inline field errors.
-  /// Every terminal/authZ outcome is settled HERE and can never be swallowed:
-  ///   - [AccountSuspended] (ban mid-edit) → the single suspended door.
-  ///   - [Unauthorized] (a 401 that survived the interceptor's refresh) →
-  ///     [_becomeUnauthenticated] teardown.
-  /// Returns the updated [AppUser] on success, or null when a terminal signal was
-  /// settled (the router then redirects — the caller must NOT pop/toast on null).
+  /// Save a profile change (handle and/or display name) for the session that
+  /// asked. Returns the updated [AppUser], or null when the session has ended
+  /// (a terminal answer settled here, or an end that ran meanwhile): the
+  /// router then redirects, so the caller must NOT pop or toast on null.
+  /// [HandleTaken], [HandleChangeOnCooldown] and other errors propagate to the
+  /// screen.
   Future<AppUser?> saveProfile({String? handle, String? displayName}) async {
-    final startUserId = state.value?.userId;
-    if (startUserId == null) return null; // not authenticated
+    if (state.value == null) return null;
+    final lease = _vault.lease;
+    final AppUser user;
     try {
-      final user = await _rest.updateProfile(
+      user = await _rest.updateProfile(
         handle: handle,
         displayName: displayName,
       );
-      // Total commit-time fence, identical to refreshUser (PR #71 / Tesla R5):
-      // token · userId · cache · publish — so a logout, or a logout+sign-in as
-      // the SAME identity, mid-flight can never pair one session's tokens with
-      // another's cached face. Fence BEFORE the cache write, then re-fence
-      // synchronously immediately before the publish.
-      if (await _tokens.currentAccessToken() == null) return null;
-      if (state.value?.userId != startUserId) return null;
-      await _writeCachedUser(user);
-      if (state.value?.userId != startUserId) return null;
-      state = AsyncData(user);
-      return user;
-    } on AccountSuspended catch (e, st) {
-      // Ban mid-edit — route through the single suspended door (NOT the generic
-      // teardown, which lands on /login and 403-loops on re-auth). Surface the
-      // ban in state first (_settleSuspension reads state.error), then delegate.
-      state = AsyncError(e, st);
-      await _settleSuspension();
-      return null;
-    } on Unauthorized {
-      // Terminal authN (a 401 that survived the interceptor's refresh-and-retry)
-      // — tear the dead session down rather than leave it published in UI state.
-      // Idempotent with the interceptor's onUnauthenticated path.
-      _becomeUnauthenticated();
-      return null;
+    } catch (e) {
+      if (await _settleTerminal(e)) return null;
+      rethrow;
     }
-    // HandleTaken / HandleChangeOnCooldown (user-actionable) and any other error
-    // propagate to the screen — deliberately NOT caught here.
+    return _transition(() async {
+      if (_vault.lease != lease) return null;
+      await _writeCachedUser(user);
+      return _show(lease, SessionPicture(AsyncValue.data(user))) ? user : null;
+    });
   }
 
-  /// Settle a KNOWN ban directly, WITHOUT a confirming `/v1/me` round-trip.
-  ///
-  /// Use when a call already returned [AccountSuspended] — that response IS the
-  /// terminal ban signal, so re-fetching `/me` to "confirm" it only adds a second
-  /// network hop that can fail transiently and strand a banned user with no
-  /// routing (cage-match Carnot + Tesla round 4). Routes through the single
-  /// suspended door (`_settleSuspension` → `/suspended`), same as sign-in/restore.
-  /// Idempotent: if suspension is already settled it is a harmless re-flag.
-  Future<void> settleBan() async {
-    state = AsyncError(const AccountSuspended(), StackTrace.current);
-    await _settleSuspension();
+  /// Settles a terminal answer to a signed-in call. Returns whether [error]
+  /// was one. An [Unauthorized] that names no session ends nothing.
+  Future<bool> _settleTerminal(Object error) async {
+    switch (error) {
+      case SessionSuspended():
+        await settleBan(error);
+        return true;
+      case SessionUnauthorized(:final presented):
+        await _endSession(presented.lease, () => _vault.endIf(presented));
+        return true;
+      case Unauthorized():
+        return true;
+      default:
+        return false;
+    }
   }
 
-  /// Re-point the app at a different gateway (the #4 picker). JWTs are minted by
-  /// and only valid at the gateway that issued them, so a switch is a SESSION
-  /// boundary. The ordering is load-bearing (Carnot):
+  /// Settle a ban learned on a signed-in call, without a confirming `/v1/me`.
+  /// A ban is about the account, so it ends the session it was learned on
+  /// while that session's lease is current, even after a refresh; a ban for a
+  /// session already gone ends and flags nothing.
+  Future<void> settleBan(AccountSuspended ban) async {
+    if (ban is! SessionSuspended) return;
+    final lease = ban.presented.lease;
+    await _endSession(lease, () => _vault.endIfLease(lease), banned: true);
+  }
+
+  // ---- ends ----------------------------------------------------------------
+
+  /// Ends a session as one transition, for [lease]: [end] ends it in the
+  /// vault, the teardown uses the credential it ended, and the picture says
+  /// signed out (and suspended, for a ban). If [end] ended nothing, nothing
+  /// changes. The attempt current when the end was asked for is retired;
+  /// one begun after it is kept.
+  Future<void> _endSession(
+    int lease,
+    Future<Credential?> Function() end, {
+    bool banned = false,
+  }) {
+    final issuedWith = _attempt;
+    return _transition(() async {
+      if (_vault.lease != lease) return;
+      final gone = await end();
+      if (gone == null) return;
+      if (identical(_attempt, issuedWith)) _attempt = null;
+      await _teardown(gone);
+      _show(
+        _vault.lease,
+        SessionPicture(const AsyncValue.data(null), suspended: banned),
+      );
+    });
+  }
+
+  /// Unpair with the credential that ended, drop the cached user, and close
+  /// the socket. Ends nothing itself; never throws.
+  Future<void> _teardown(Credential? ended) async {
+    if (ended != null) {
+      try {
+        // Records a durable debt and fires the DELETE out of band, carrying
+        // the credential by value: the vault no longer holds it.
+        await ref
+            .read(deviceRegistrarProvider)
+            ?.unpair(credential: ended.accessToken);
+      } catch (e) {
+        debugPrint('AuthController: could not unpair the device: $e');
+      }
+    }
+    try {
+      await _cachedUser.clear();
+    } catch (_) {}
+    try {
+      await ref.read(transportProvider).disconnect();
+    } catch (_) {}
+  }
+
+  /// The person's own sign-out: ends whatever is signed in now. If the end
+  /// couldn't reach the disk, the picture says so, and signing out again
+  /// retries it.
+  Future<void> logout() => _transition(() async {
+    _attempt = null;
+    final out = await _vault.signOut();
+    await _teardown(out.ended);
+    _show(
+      _vault.lease,
+      SessionPicture(
+        out.saved
+            ? const AsyncValue.data(null)
+            : AsyncValue.error(const SignOutUnsaved(), StackTrace.current),
+      ),
+    );
+  });
+
+  /// Permanently delete the account (Apple 5.1.1(v)). The gateway is called
+  /// FIRST, and a failure (e.g. [SoleAdminDeletionBlocked]) propagates with the
+  /// user still signed in. On success, the session that sent it ends: a
+  /// session that signed in while the request was out is left alone.
+  Future<void> deleteAccount() async {
+    final lease = _vault.lease;
+    await _rest.deleteAccount();
+    await _endSession(lease, () => _vault.endIfLease(lease));
+  }
+
+  /// Re-point the app at a different island, as one transition. Island tokens
+  /// are only valid where they were issued, so a switch is a session boundary:
   ///
-  ///   1. No-op guard — re-selecting the CURRENT gateway never nukes a live
-  ///      session (normalized, so `https://x/` == `https://x`).
-  ///   2. Persist FIRST. If the write fails we abort with the session fully
-  ///      intact — a failed switch must not strand the user logged-out (Carnot
-  ///      F2). Writing the pref does NOT move the live config: [configProvider]
-  ///      is cached and only re-reads on invalidate (step 4).
-  ///   3. Publish `loading` BEFORE any teardown. This is the fix for the window
-  ///      Carnot caught: if we published `data(null)` first (as a plain
-  ///      `logout()` does), the router would land on /login against the OLD
-  ///      gateway while teardown was still in flight, and a sign-in there would
-  ///      mint a token the about-to-switch gateway can't honour. `loading` parks
-  ///      the router on /splash, so login is impossible mid-switch.
-  ///   4. Tear down (clear tokens + disconnect) → THEN `invalidate` so the live
-  ///      config flips only AFTER the old credential is gone. Tokens-before-flip
-  ///      is preserved.
-  ///   5. `finally` publishes logged-out exactly once, so a teardown error can
-  ///      never leave the app bricked on /splash.
+  ///   1. No-op guard: re-selecting the current island keeps the session.
+  ///   2. Sign out and tear down, so the end is on disk before the island
+  ///      moves. If it isn't, stop: the island stays where it was.
+  ///   3. Then save the new island. If that fails, the app is signed out on
+  ///      the old island.
+  ///   4. Then move the live config, and show signed out.
+  ///
+  /// Every failure leaves the app signed out with the live config and the
+  /// saved island both on the old island. The failure is shown on `/login` and
+  /// rethrown for the picker.
   Future<void> switchIsland(String httpBaseUrl) async {
     final next = IslandConfig.normalized(httpBaseUrl).httpBaseUrl;
     if (next == ref.read(configProvider).httpBaseUrl) return;
-
-    final persisted = await ref
-        .read(sharedPreferencesProvider)
-        .setString(islandBaseUrlPrefKey, next);
-    if (!persisted) {
-      // Session untouched — surfaced to the picker for an inline error.
-      throw const IslandSwitchFailed('Could not save the island selection.');
-    }
-
-    state = const AsyncValue.loading(); // block login (router → /splash)
-    try {
-      // Tear down by hand (not the bundled _teardownResources) so the swallow is
-      // NARROW: clearing the old credentials is security-critical and must NOT be
-      // silently absorbed (Carnot) — a clear failure propagates to the picker's
-      // error UI. Only the disconnect is best-effort.
-      ref.read(pendingHandleProvider.notifier).clear();
-      _clearSuspended(); // a different island may not have banned this account
-      // Security-critical: old credential gone first. The unpair rides inside,
-      // and must stay BEFORE the `invalidate(configProvider)` in the `finally` —
-      // that invalidate rebuilds both the REST client and the registrar against
-      // the NEW island, so a debt recorded after it would be keyed to the island
-      // the user switched TO and its DELETE addressed there. Switching islands
-      // is an ordinary thing to do, and without this the island being left keeps
-      // a live, routable token for an account no longer signed in on it.
-      await _clearCredentialAndUnpair();
-      await _cachedUser.clear(); // old identity gone with the old credential
-      try {
-        await ref.read(transportProvider).disconnect(); // best-effort cleanup
-      } catch (_) {
-        // A disconnect hiccup must NOT surface as "switch failed" — the socket is
-        // re-disconnected by the transport rebuild's onDispose below regardless.
+    Exception? failure;
+    await _transition(() async {
+      _attempt = null;
+      final out = await _vault.signOut();
+      await _teardown(out.ended);
+      if (!out.saved) {
+        failure = const SignOutUnsaved();
+      } else if (!await _saveIsland(next)) {
+        failure = const IslandSwitchFailed(
+          'Could not save the island selection.',
+        );
+      } else {
+        ref.invalidate(configProvider);
       }
-    } finally {
-      // Flip the live config to the new (already-persisted) gateway BEFORE
-      // publishing logged-out — in the `finally` so even a propagating clear
-      // failure can't skip it and strand the app on /login against the OLD
-      // cached gateway (Carnot, the error-path twin of F1). The config flip is
-      // the load-bearing step; the rebuild from invalidate re-disconnects the
-      // old transport via its onDispose anyway.
-      ref.invalidate(configProvider);
-      state = const AsyncValue.data(null); // logged out, now on the new gateway
-    }
+      final failed = failure;
+      _show(
+        _vault.lease,
+        SessionPicture(
+          failed == null
+              ? const AsyncValue.data(null)
+              : AsyncValue.error(failed, StackTrace.current),
+        ),
+      );
+    });
+    final failed = failure;
+    if (failed != null) throw failed;
   }
 
-  /// Permanently delete the account (Apple 5.1.1(v)). Unlike [logout], which
-  /// cannot fail and so flips to logged-out immediately, this calls the gateway
-  /// FIRST and only tears down on success — a failure (e.g. [SoleAdminDeletion
-  /// Blocked]) must leave the user logged in so the settings UI can show why.
-  /// On the gateway's 204 the local teardown is identical to logout, and the
-  /// router's auth guard redirects to /login (no manual navigation). The thrown
-  /// error propagates to the caller for an inline message.
-  Future<void> deleteAccount() async {
-    await _rest.deleteAccount(); // throws on 409/terminal-401 → stays logged in
-    // Past this line the gateway has committed an IRREVERSIBLE delete (204): the
-    // operation has SUCCEEDED. Local teardown is best-effort cleanup, so a failure
-    // here must NEVER surface as "delete failed" (cage-match, Carnot). Tokens are
-    // cleared inside _teardownResources before the awaited disconnect, so the
-    // security-critical step still runs; a disconnect error only leaves an inert,
-    // auth-less socket the next launch rebuilds.
-    state = const AsyncValue.data(null);
+  Future<bool> _saveIsland(String httpBaseUrl) async {
     try {
-      await _teardownResources();
+      return await ref
+          .read(sharedPreferencesProvider)
+          .setString(islandBaseUrlPrefKey, httpBaseUrl);
     } catch (_) {
-      // Swallowed — the account is already gone; nothing actionable for the user.
+      return false;
     }
-  }
-
-  /// The idempotent terminal-logout both dead-session signals converge on
-  /// (transport `unauthenticated` + REST `onUnauthenticated`). State is flipped
-  /// SYNCHRONOUSLY before the async teardown, so a second concurrent terminal
-  /// signal in the same microtask drain sees null and short-circuits — the
-  /// teardown runs exactly once (Carnot R2-2).
-  void _becomeUnauthenticated() {
-    if (state.value == null && !state.isLoading) return; // already logged out
-    state = const AsyncValue.data(null);
-    unawaited(_teardownResources());
   }
 }
 
-/// Thrown by [AuthController.switchIsland] when the chosen gateway could not be
-/// persisted — raised BEFORE any session teardown, so the current session is
-/// untouched and the picker can surface an inline error and stay put.
+/// Thrown by [AuthController.switchIsland] when the chosen island could not
+/// be saved. The app is signed out on the island it was on.
 class IslandSwitchFailed implements Exception {
   final String message;
   const IslandSwitchFailed(this.message);
   @override
   String toString() => message;
+}
+
+/// A sign-out ended the session in this process but couldn't record it on
+/// disk, so the next launch would restore it. Signing out again retries.
+class SignOutUnsaved implements Exception {
+  const SignOutUnsaved();
+  @override
+  String toString() => "Couldn't finish signing out on this device.";
 }

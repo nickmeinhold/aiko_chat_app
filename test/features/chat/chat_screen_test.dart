@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/core/auth/credential.dart';
 import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/chat/data/transport/chat_transport.dart';
 import 'package:aiko_chat_app/features/chat/application/chat_providers.dart';
@@ -110,7 +113,8 @@ void main() {
     expect(transport.sent.map((m) => m.body), contains('via-enter'));
   });
 
-  testWidgets('terminal unauthenticated → logged out to login', (tester) async {
+  testWidgets('a transport unauthenticated alone does NOT log out: only the '
+      'vault ends a session', (tester) async {
     final transport = FakeChatTransport();
     final container = makeContainer(rest: FakeRestApi(), transport: transport);
     addTearDown(container.dispose);
@@ -122,10 +126,8 @@ void main() {
     transport.emitConn(ConnectionState.unauthenticated);
     await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const Key('login-screen')),
-      findsOneWidget,
-    ); // back at login
+    expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
+    expect(find.byKey(const Key('login-screen')), findsNothing);
   });
 
   testWidgets('transient disconnected does NOT log out', (tester) async {
@@ -155,10 +157,19 @@ void main() {
     await signIn(tester);
     expect(find.widgetWithText(AppBar, 'general'), findsOneWidget);
 
-    // Simulate a REST refresh-token rejection (DefaultTokenProvider fires
-    // onUnauthenticated → authEvents sink). Terminal logout must be a FULL
-    // teardown: the socket is disconnected, not just the router redirected.
-    container.read(authEventsProvider).add(null);
+    // A REST refresh-token rejection, through the vault that owns the session.
+    // Terminal logout must be a FULL teardown: the socket is disconnected, not
+    // just the router redirected.
+    final vault = container.read(tokenProviderProvider).vault;
+    final presented = (await vault.present(kTestIsland))!;
+    // Driven by the pumps below: the vault lives in this test's fake time.
+    unawaited(
+      vault.refresh(
+        kTestIsland,
+        presented,
+        (_) async => throw const RefreshRejected(),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(transport.disconnectCalls, greaterThanOrEqualTo(1));

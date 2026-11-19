@@ -45,6 +45,15 @@ class SessionSuperseded implements Exception {
   String toString() => 'SessionSuperseded';
 }
 
+/// The vault ended a session that nobody in the app asked it to end: the
+/// island rejected its refresh token. [lease] is the lease the end advanced
+/// to; [ended] is the credential that session last presented.
+final class SessionEnded {
+  final int lease;
+  final Credential ended;
+  const SessionEnded(this.lease, this.ended);
+}
+
 /// A sign-in for one island found a live session for another island in the
 /// vault. Only a switch, which signs out first, may replace it (design 26
 /// §2e; the switch's own atomicity is #447's).
