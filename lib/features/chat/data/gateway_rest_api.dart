@@ -956,8 +956,10 @@ class GatewayRestApi implements ChatRestApi {
   required String baseUrl,
   required SessionVault vault,
   Duration refreshDeadline = const Duration(seconds: 30),
+  HttpClientAdapter? network,
 }) {
   final bare = Dio(BaseOptions(baseUrl: baseUrl));
+  if (network != null) bare.httpClientAdapter = network;
   final tokens = DefaultTokenProvider(
     vault: vault,
     island: baseUrl,
@@ -989,6 +991,7 @@ class GatewayRestApi implements ChatRestApi {
     },
   );
   final authed = Dio(BaseOptions(baseUrl: baseUrl));
+  if (network != null) authed.httpClientAdapter = network;
   authed.interceptors.add(AuthInterceptor(tokens, authed));
   return (api: GatewayRestApi(bare: bare, authed: authed), tokens: tokens);
 }
