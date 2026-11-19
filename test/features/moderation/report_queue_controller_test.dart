@@ -62,13 +62,13 @@ ProviderContainer _container(FakeRestApi rest) {
           island: kTestIsland,
           vault: InMemoryTokenStore(),
           remoteRefresh: (_) async => RefreshResult('access2'),
-          onUnauthenticated: () => container.read(authEventsProvider).add(null),
         ),
       ),
       cacheProvider.overrideWith((ref) => DriftCache(NativeDatabase.memory())),
     ],
   );
   addTearDown(container.dispose);
+  rest.presentedSession = () => container.read(tokenProviderProvider).current();
   return container;
 }
 

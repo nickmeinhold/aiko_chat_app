@@ -5,8 +5,9 @@
 // controller flag, the router zone, or the route wiring fails HERE.
 
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
+import 'package:aiko_chat_app/core/auth/credential.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show AccountSuspended;
+    show AccountSuspended, SessionSuspended;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/test_helpers.dart'; // exports AuthTokens + the fakes
@@ -15,12 +16,14 @@ void main() {
   setUpAll(initializeTestEnvironment);
 
   const seededTokens = AuthTokens(accessToken: 'a', refreshToken: 'r');
+  // What the REST layer stamps on a ban learned on the seeded session.
+  const banned = SessionSuspended(Credential('a', 0));
 
   testWidgets(
     'a banned account (me → AccountSuspended) lands on /suspended, not /login',
     (tester) async {
       final c = makeContainer(
-        rest: FakeRestApi(meThrows: const AccountSuspended()),
+        rest: FakeRestApi(meThrows: banned),
         transport: FakeChatTransport(),
         store: InMemoryTokenStore(seededTokens),
       );
@@ -40,7 +43,7 @@ void main() {
     tester,
   ) async {
     final c = makeContainer(
-      rest: FakeRestApi(meThrows: const AccountSuspended()),
+      rest: FakeRestApi(meThrows: banned),
       transport: FakeChatTransport(),
       store: InMemoryTokenStore(seededTokens),
     );
@@ -56,33 +59,6 @@ void main() {
     expect(find.text('Account suspended'), findsNothing);
     expect(find.text('Already have a passkey? Sign in'), findsOneWidget);
   });
-
-  testWidgets(
-    'a logged-in user is ejected off /suspended, never idles on it while live',
-    (tester) async {
-      // Tesla's dead-node: suspended ⊥ logged-in. If the flag is ever set while a
-      // session is live (a deferred-clear race, a stale deep link), the router
-      // must bounce to chat, not sit on the ban screen while authenticated.
-      final c = makeContainer(
-        rest: FakeRestApi(), // me() ok → logged in → chat
-        transport: FakeChatTransport(),
-        store: InMemoryTokenStore(seededTokens),
-      );
-      addTearDown(c.dispose);
-      await pumpApp(tester, c);
-      expect(c.read(authControllerProvider).value, isNotNull); // logged in
-
-      // Force the artificial dead-node state and let the router re-evaluate.
-      c.read(suspendedProvider.notifier).flag();
-      await tester.pumpAndSettle();
-
-      expect(
-        find.text('Account suspended'),
-        findsNothing,
-        reason: 'the logged-in eject wins over the suspended zone',
-      );
-    },
-  );
 
   testWidgets(
     'a ceremony ban (sign-in → AccountSuspended) routes through the real router to /suspended',

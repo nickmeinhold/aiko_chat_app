@@ -197,6 +197,13 @@ class LoginScreen extends ConsumerWidget {
                               color: Theme.of(context).colorScheme.error,
                             ),
                           ),
+                          if (auth.error is SignOutUnsaved)
+                            TextButton(
+                              onPressed: () => ref
+                                  .read(authControllerProvider.notifier)
+                                  .logout(),
+                              child: const Text('Sign out again'),
+                            ),
                           // One-tap path for the genuinely-stuck: bundle device
                           // specs + network state + a SAFE error label into the
                           // share sheet (PR3).

@@ -89,8 +89,6 @@ void main() {
               island: kTestIsland,
               vault: store,
               remoteRefresh: (_) async => RefreshResult('a2'),
-              onUnauthenticated: () =>
-                  container.read(authEventsProvider).add(null),
             ),
           ),
         ],
@@ -145,20 +143,22 @@ void main() {
     );
 
     test(
-      'publishes loading BEFORE logged-out, so login is blocked mid-switch',
+      'the switch shows ONE picture, signed out, with the config already on '
+      'the new island: no frame offers /login on the old one',
       () async {
-        // Carnot F1: a plain logout() publishes data(null) before teardown +
-        // config-flip, exposing a window where the router lands on /login against
-        // the OLD gateway. The switch must instead pass through `loading` (router
-        // → /splash) until the config has flipped. RED-prove: revert switchIsland
-        // to `await logout()` and the loading state never appears → this fails.
+        // A plain logout() would show signed out before the config moved, so
+        // the router could land on /login against the OLD island. The switch
+        // is one transition: the router sees only its final picture.
         final h = await loggedInContainer();
         addTearDown(h.container.dispose);
 
-        final sawLoading = <bool>[];
+        final seen = <(bool, String)>[];
         h.container.listen(
-          authControllerProvider,
-          (_, next) => sawLoading.add(next.isLoading),
+          sessionPictureProvider,
+          (_, next) => seen.add((
+            next.auth.value != null,
+            h.container.read(configProvider).httpBaseUrl,
+          )),
           fireImmediately: false,
         );
 
@@ -166,18 +166,7 @@ void main() {
             .read(authControllerProvider.notifier)
             .switchIsland('http://localhost:8095');
 
-        expect(
-          sawLoading.contains(true),
-          isTrue,
-          reason:
-              'switch parked auth in loading → router /splash, login blocked',
-        );
-        expect(
-          sawLoading.last,
-          isFalse,
-          reason: 'settles at a concrete logged-out state, not stuck loading',
-        );
-        expect(h.container.read(authControllerProvider).value, isNull);
+        expect(seen, [(false, 'http://localhost:8095')]);
       },
     );
 
@@ -206,8 +195,6 @@ void main() {
               island: kTestIsland,
               vault: store,
               remoteRefresh: (_) async => RefreshResult('a2'),
-              onUnauthenticated: () =>
-                  container.read(authEventsProvider).add(null),
             ),
           ),
         ],
@@ -234,13 +221,12 @@ void main() {
     });
 
     test(
-      'a token-CLEAR failure is NOT silently swallowed (it propagates)',
+      'a sign-out that does not reach the disk STOPS the switch: the island '
+      'is not saved, the config does not move, and it is surfaced',
       () async {
-        // Carnot final re-review: the narrow swallow covers only the best-effort
-        // disconnect. A failure to clear the OLD credential is security-critical
-        // and must surface (→ picker error UI), not vanish. The config still flips
-        // in the finally so the app can't brick on /splash. RED-prove: widen the
-        // catch back to the whole teardown → this stops throwing.
+        // The end must be on disk before the island moves, or the next launch
+        // could place the old session on the new island. A failed end is
+        // surfaced (picker and /login), and the app is signed out where it was.
         SharedPreferences.setMockInitialValues({});
         final prefs = await SharedPreferences.getInstance();
         final store = _ThrowingClearStore(
@@ -258,8 +244,6 @@ void main() {
                 island: kTestIsland,
                 vault: store,
                 remoteRefresh: (_) async => RefreshResult('a2'),
-                onUnauthenticated: () =>
-                    container.read(authEventsProvider).add(null),
               ),
             ),
           ],
@@ -267,20 +251,20 @@ void main() {
         addTearDown(container.dispose);
         await container.read(authControllerProvider.future);
 
+        final before = container.read(configProvider).httpBaseUrl;
         await expectLater(
           container
               .read(authControllerProvider.notifier)
               .switchIsland('http://localhost:8095'),
-          throwsA(isA<Exception>()),
-          reason: 'a token-clear failure surfaces instead of being swallowed',
+          throwsA(isA<SignOutUnsaved>()),
+          reason: 'an unsaved sign-out surfaces instead of being swallowed',
         );
-        // Even so, the config flipped (finally) and the app is logged out — no
-        // stuck-loading brick on /splash.
-        expect(
-          container.read(configProvider).httpBaseUrl,
-          'http://localhost:8095',
-        );
-        expect(container.read(authControllerProvider).value, isNull);
+        expect(container.read(configProvider).httpBaseUrl, before);
+        expect(prefs.getString(_kKey), isNull, reason: 'the island not saved');
+        final auth = container.read(authControllerProvider);
+        expect(auth.value, isNull);
+        expect(auth.error, isA<SignOutUnsaved>(), reason: 'shown on /login');
+        expect(auth.isLoading, isFalse, reason: 'not stuck on /splash');
       },
     );
 
@@ -332,8 +316,6 @@ void main() {
               island: kTestIsland,
               vault: store,
               remoteRefresh: (_) async => RefreshResult('a2'),
-              onUnauthenticated: () =>
-                  container.read(authEventsProvider).add(null),
             ),
           ),
           // No live directory here — these tests exercise the picker/switch flow,

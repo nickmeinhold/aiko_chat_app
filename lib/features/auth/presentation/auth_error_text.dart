@@ -6,6 +6,8 @@ import '../../chat/data/chat_rest_api.dart'
         PasskeyAlreadyRegistered,
         RegistrationClosed,
         Unauthorized;
+import '../application/auth_controller.dart'
+    show IslandSwitchFailed, SignOutUnsaved;
 import '../data/auth_exceptions.dart';
 
 /// What the user was trying to do at the moment an auth failure occurred.
@@ -52,6 +54,12 @@ String authErrorText(
   // Unauthorized, so it MUST come first — a ban is not "sign in again" (that
   // loops: the island 403s every re-auth), it is a per-island block.
   switch (error) {
+    case SignOutUnsaved():
+      return "Couldn't finish signing out on this device, so it may sign back "
+          'in next time Aiko opens. Sign out again to finish.';
+    case IslandSwitchFailed():
+      return "Couldn't save the island you picked, so you're still on $host. "
+          "You've been signed out; sign in, or pick the island again.";
     case AccountSuspended():
       return 'This account is suspended on $host. If you think this is a '
           'mistake, contact the people who run this island.';

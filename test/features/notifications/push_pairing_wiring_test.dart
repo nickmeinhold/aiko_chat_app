@@ -14,6 +14,7 @@
 import 'dart:async';
 
 import 'package:aiko_chat_app/app/providers.dart';
+import 'package:aiko_chat_app/core/auth/credential.dart';
 import 'package:aiko_chat_app/features/notifications/domain/token_kind.dart';
 import 'package:aiko_chat_app/features/auth/application/auth_controller.dart';
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
@@ -60,22 +61,21 @@ class _RecordingTokenStore extends InMemoryTokenStore {
   final List<String> log;
 
   @override
-  Future<void> signOut() async {
+  Future<({Credential? ended, bool saved})> signOut() {
     log.add('clearTokens');
     return super.signOut();
   }
 }
 
-/// A token store whose `clear()` can be made to THROW — which `switchIsland`
-/// documents as an anticipated outcome ("a clear failure propagates to the
-/// picker's error UI"), not a theoretical one.
+/// A token store whose sign-out can be made to miss the disk: the session
+/// ends in this process, and the vault reports it was not saved.
 class _ThrowingClearTokenStore extends InMemoryTokenStore {
   bool failClears = false;
 
   @override
-  Future<void> signOut() async {
-    if (failClears) throw Exception('keychain unavailable');
-    return super.signOut();
+  Future<({Credential? ended, bool saved})> signOut() async {
+    final out = await super.signOut();
+    return failClears ? (ended: out.ended, saved: false) : out;
   }
 }
 
@@ -458,18 +458,17 @@ void main() {
       await auth.signInWithPasskey();
       await pumpEventQueue();
 
-      await auth.logout();
-      // The user signs in again. Under the old design this could interleave with
-      // an in-flight teardown; there is now nothing left in flight to interleave
-      // WITH, so the property holds by construction rather than by comparison.
-      await container
-          .read(tokenProviderProvider)
-          .setTokens(const AuthTokens(accessToken: 'new', refreshToken: 'r2'));
+      final out = auth.logout();
+      // The user taps sign-in while the sign-out runs: it queues behind it, so
+      // there is nothing in flight for the teardown to stomp.
+      final again = auth.signInWithPasskey();
+      await out;
+      await again;
       await pumpEventQueue();
 
       expect(
-        await container.read(tokenProviderProvider).currentAccessToken(),
-        'new',
+        await container.read(tokenProviderProvider).current(),
+        isNotNull,
         reason:
             "the reborn session's credential must survive — stomping it leaves "
             'the app logged-in-but-tokenless and every later call 401s',
@@ -502,14 +501,11 @@ void main() {
       },
     );
 
-    test('a THROWING credential clear still leaves the debt recorded', () async {
-      // Cage-match round 3, Maxwell. The unpair used to run AFTER clearTokens,
-      // and switchIsland deliberately does not swallow a clear failure ("a
-      // clear failure propagates to the picker's error UI"). So a throwing clear
-      // skipped the unpair entirely and the island being left kept a live
-      // routable row forever — the exact residual this change exists to close.
-      // The debt is now recorded FIRST (a local write, so no window) inside a
-      // try, and the clear runs unconditionally after it.
+    test('a sign-out that misses the disk still leaves the debt recorded, '
+        'and says so', () async {
+      // The unpair uses the credential the end returned, so a sign-out whose
+      // disk write failed still unpairs: otherwise the island being left keeps
+      // a live routable row forever.
       final rest = FakeRestApi();
       rest.unregisterDeviceThrows = Exception('offline');
       final source = _FakeSource(token: 'tok-1');
@@ -523,8 +519,12 @@ void main() {
       expect(rest.registeredDevices, isNotEmpty, reason: 'precondition');
 
       store.failClears = true;
-      await expectLater(auth.logout(), throwsA(isA<Exception>()));
+      await auth.logout();
       await pumpEventQueue();
+      expect(
+        container.read(authControllerProvider).error,
+        isA<SignOutUnsaved>(),
+      );
 
       expect(
         testPrefs.getString('aiko_pending_device_unregisters'),

@@ -126,7 +126,6 @@ ProviderContainer makeContainer({
           island: kTestIsland,
           vault: tokenStore,
           remoteRefresh: (_) async => RefreshResult('access2'),
-          onUnauthenticated: () => container.read(authEventsProvider).add(null),
         ),
       ),
       // Offline-first restore reads/writes the cached user; use an in-memory store
@@ -170,6 +169,7 @@ ProviderContainer makeContainer({
       notificationTapSourceProvider.overrideWithValue(null),
     ],
   );
+  rest.presentedSession = () => container.read(tokenProviderProvider).current();
   return container;
 }
 

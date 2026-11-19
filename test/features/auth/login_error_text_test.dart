@@ -59,7 +59,6 @@ void main() {
             island: kTestIsland,
             vault: tokenStore,
             remoteRefresh: (_) async => RefreshResult('access2'),
-            onUnauthenticated: () {},
           ),
         ),
         // Login screen mounts NetworkStatusBanner → fake connectivity/reachability
@@ -118,7 +117,6 @@ void main() {
             island: kTestIsland,
             vault: InMemoryTokenStore(),
             remoteRefresh: (_) async => RefreshResult('access2'),
-            onUnauthenticated: () {},
           ),
         ),
         connectivityServiceProvider.overrideWithValue(
@@ -234,7 +232,6 @@ void main() {
             island: kTestIsland,
             vault: InMemoryTokenStore(),
             remoteRefresh: (_) async => RefreshResult('access2'),
-            onUnauthenticated: () {},
           ),
         ),
         connectivityServiceProvider.overrideWithValue(

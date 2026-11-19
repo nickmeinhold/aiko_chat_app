@@ -43,13 +43,11 @@ final routerProvider = Provider<GoRouter>((ref) {
   // on every login/logout transition.
   final refresh = ValueNotifier<int>(0);
   ref.onDispose(refresh.dispose);
-  ref.listen(authControllerProvider, (_, _) => refresh.value++);
-  // A new identity awaiting its handle is a redirect trigger too.
-  ref.listen(pendingHandleProvider, (_, _) => refresh.value++);
+  // The session (user, pending handle, ban) is one value, written once per
+  // change, so the redirect never sees half of one.
+  ref.listen(sessionPictureProvider, (_, _) => refresh.value++);
   // So is an account that still owes the handle it chose (#436).
   ref.listen(owedHandleProvider, (_, _) => refresh.value++);
-  // A ban on this island (→ /suspended) is a redirect trigger too.
-  ref.listen(suspendedProvider, (_, _) => refresh.value++);
   // Accepting the Terms is a redirect trigger (gate → login/chat).
   ref.listen(eulaAcceptanceProvider, (_, _) => refresh.value++);
 
@@ -71,7 +69,8 @@ final routerProvider = Provider<GoRouter>((ref) {
         return loc == '/eula' ? null : '/eula';
       }
 
-      final auth = ref.read(authControllerProvider);
+      final session = ref.read(sessionPictureProvider);
+      final auth = session.auth;
 
       // Auth in flight. The COLD-START restore parks on the splash, but a
       // passkey sign-in/register call submitted FROM the login OR claim-handle
@@ -104,7 +103,7 @@ final routerProvider = Provider<GoRouter>((ref) {
               user.handleAuto == true);
       // A verified-but-handle-less identity (only meaningful while logged out —
       // see [pendingHandleProvider]).
-      final pendingHandle = ref.read(pendingHandleProvider) != null;
+      final pendingHandle = session.pending != null;
 
       // A ban is EITHER the settled flag OR a transient AsyncError(AccountSuspended)
       // still on the machine. The ceremony doors (_ingress / claimHandle) publish
@@ -115,7 +114,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // dependence on Riverpod/GoRouter notification timing (cage-match Carnot +
       // Tesla converged: the forbidden intermediate must not route to /login).
       final banned =
-          ref.read(suspendedProvider) ||
+          session.suspended ||
           (auth.hasError && auth.error is AccountSuspended);
 
       // Ban on THIS island (→ /suspended), ahead of the logged-out routing so a

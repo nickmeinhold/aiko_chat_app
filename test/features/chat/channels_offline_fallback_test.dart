@@ -47,8 +47,6 @@ void main() {
             island: kTestIsland,
             vault: InMemoryTokenStore(seededTokens),
             remoteRefresh: (_) async => RefreshResult('access2'),
-            onUnauthenticated: () =>
-                container.read(authEventsProvider).add(null),
           ),
         ),
       ],

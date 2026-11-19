@@ -11,8 +11,6 @@
 /// no-Freezed/no-build_runner convention (design 01).
 library;
 
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -191,20 +189,6 @@ final passkeyHintStoreProvider = Provider<PasskeyHintStore>(
   (ref) => PasskeyHintStore(ref.watch(sharedPreferencesProvider)),
 );
 
-/// A broadcast sink for "the session is now *terminally* unauthenticated"
-/// (a REST refresh-token rejection, fired by [DefaultTokenProvider]'s
-/// `onUnauthenticated`). The auth controller listens to its stream. This
-/// decouples the infra-layer backend builder from the app-layer auth
-/// controller — the backend pushes an event, it never imports the controller,
-/// so there is no provider/import cycle. Distinct from the transport's
-/// `ConnectionState.unauthenticated` (the WSS-initiated twin of the same
-/// signal); the controller reconciles BOTH into one logout.
-final authEventsProvider = Provider<StreamController<void>>((ref) {
-  final controller = StreamController<void>.broadcast();
-  ref.onDispose(controller.close);
-  return controller;
-});
-
 /// The island backend: a token-less client (login/refresh), a single-flight
 /// token provider, and an interceptor-wrapped authed client — wired cycle-free
 /// by [buildGatewayBackend]. The token provider is shared with the transport so
@@ -213,14 +197,7 @@ final backendProvider =
     Provider<({ChatRestApi api, DefaultTokenProvider tokens})>((ref) {
       final config = ref.watch(configProvider);
       final vault = ref.watch(sessionVaultProvider);
-      final events = ref.watch(authEventsProvider);
-      return buildGatewayBackend(
-        baseUrl: config.httpBaseUrl,
-        vault: vault,
-        // Lazy: only fires at runtime on a definitive RT rejection, long after
-        // the auth controller exists — pushing onto the event sink (no cycle).
-        onUnauthenticated: () => events.add(null),
-      );
+      return buildGatewayBackend(baseUrl: config.httpBaseUrl, vault: vault);
     });
 
 /// The REST seam the UI + repository depend on (never `dio`).

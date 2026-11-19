@@ -139,6 +139,16 @@ class SessionVault {
   int _lease = 0;
   Future<Credential?>? _flight;
   Future<void> _lane = Future<void>.value();
+  final _ended = StreamController<SessionEnded>.broadcast();
+
+  /// The session's lease now: a sign-in reads it before its first network
+  /// call, and every commit after that call is checked against it.
+  int get lease => _lease;
+
+  /// Ends the vault made on its own: a refresh token the island rejected.
+  /// Ends something in the app asked for are never announced here; the asker
+  /// settles them. Each event is added after the lane has moved on.
+  Stream<SessionEnded> get ended => _ended.stream;
 
   /// Run [change] after every change queued before it, so a sign-in, a
   /// refresh's commit and an end can never interleave their reads and writes.
@@ -209,13 +219,16 @@ class SessionVault {
     try {
       result = await remote(presented.tokens.refreshToken);
     } on RefreshRejected {
-      return _serial(() async {
+      final ended = await _serial(() async {
         // A rejection of a session that is no longer ours must not end the
         // one that replaced it.
         if (lease != _lease) throw const SessionSuperseded();
-        await _end(quiet: true);
-        return null;
+        final gone = Credential(presented.tokens.accessToken, lease);
+        await _end();
+        return SessionEnded(_lease, gone);
       });
+      _ended.add(ended);
+      return null;
     }
     // Any other error propagates: transient, the session stands.
 
@@ -257,31 +270,73 @@ class SessionVault {
   /// leaving memory holding a session the disk never took. Replaces an empty
   /// vault, a sign-out, an owner-unknown or unreadable session, or [island]'s
   /// own; a live session for another island throws [SessionHeldElsewhere].
-  Future<void> adopt(String island, AuthTokens tokens) => _serial(() async {
-    final s = _state ?? await _load();
-    if (s is SessionRecord && s.island != island) {
-      throw const SessionHeldElsewhere();
-    }
-    if (s is UnreadableData) _report?.call('vault.unreadable_replaced');
-    final record = SessionRecord(island, tokens);
-    await _put(record);
-    _state = record;
-    _advance();
-  });
+  /// Returns the new session's lease. Throws [SessionSuperseded] when the
+  /// lease has moved since [since], the lease the sign-in read before its
+  /// first network call: someone signed out, switched or signed in meanwhile.
+  Future<int> adopt(String island, AuthTokens tokens, {required int since}) =>
+      _serial(() async {
+        if (since != _lease) throw const SessionSuperseded();
+        final s = _state ?? await _load();
+        if (s is SessionRecord && s.island != island) {
+          throw const SessionHeldElsewhere();
+        }
+        if (s is UnreadableData) _report?.call('vault.unreadable_replaced');
+        final record = SessionRecord(island, tokens);
+        await _put(record);
+        _state = record;
+        _advance();
+        return _lease;
+      });
 
-  /// End the session: a user's sign-out, a switch, a teardown.
+  /// The person's own sign-out, or a switch: ends whatever is here now.
+  /// [ended] is the credential it ended (null when nothing was signed in).
   ///
   /// It ends in memory whatever the disk does, so nothing in this process
-  /// presents it again. A failure to record it on disk is rethrown, because
-  /// the next launch would restore it; callers like the island switch surface
-  /// that rather than carry on as if it were gone.
-  Future<void> signOut() => _serial(() => _end(quiet: false));
+  /// presents it again. [saved] is false when the end didn't reach the disk:
+  /// the next launch would restore the session, so the caller says so.
+  Future<({Credential? ended, bool saved})> signOut() => _serial(() async {
+    final gone = _presented();
+    final saved = await _end();
+    return (ended: gone, saved: saved);
+  });
 
-  Future<void> _end({required bool quiet}) async {
+  /// End the session only if [presented] is still what the vault would
+  /// present: the same lease and the same access token. For a 401, which is
+  /// about the token: one a refresh has since replaced ends nothing.
+  Future<Credential?> endIf(Credential presented) => _serial(() async {
+    final gone = _presented();
+    if (gone == null ||
+        gone.lease != presented.lease ||
+        gone.accessToken != presented.accessToken) {
+      return null;
+    }
+    await _end();
+    return gone;
+  });
+
+  /// End the session only if [lease] is still current, whatever its access
+  /// token is now. For a ban or a deletion, which are about the account: a
+  /// refresh keeps the account, and only a new session or an end changes it.
+  Future<Credential?> endIfLease(int lease) => _serial(() async {
+    final gone = _presented();
+    if (gone == null || lease != _lease) return null;
+    await _end();
+    return gone;
+  });
+
+  Credential? _presented() {
+    final s = _state;
+    return s is SessionRecord ? Credential(s.tokens.accessToken, _lease) : null;
+  }
+
+  /// Ends the session in memory, then on disk. Returns whether the end
+  /// reached the disk.
+  Future<bool> _end() async {
     _state = const SignedOut();
     _advance();
     try {
       await _put(const SignedOut());
+      return true;
     } catch (_) {
       // v3.1 requirement 1. Couldn't write the sign-out, so remove what it
       // would have replaced: the legacy pair FIRST, then the slots, the stale
@@ -300,11 +355,12 @@ class SessionVault {
           await _slots.delete(_slotKeys[i]);
         }
         _liveSlot = null;
+        return true;
       } catch (_) {
         // A rejected session left on disk is read back on the next launch and
         // rejected again by its first refresh. Not silent for a sign-out.
         _report?.call('vault.end_unsaved');
-        if (!quiet) rethrow;
+        return false;
       }
     }
   }

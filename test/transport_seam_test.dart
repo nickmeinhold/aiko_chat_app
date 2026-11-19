@@ -82,7 +82,7 @@ void main() {
       );
       final t = await tp.refresh((await tp.current())!);
       expect(t?.accessToken, 'access1');
-      expect(await tp.currentAccessToken(), 'access1');
+      expect((await tp.current())?.accessToken, 'access1');
       expect(store.current?.accessToken, 'access1');
       expect(
         store.current?.refreshToken,
@@ -92,19 +92,20 @@ void main() {
     });
 
     test(
-      'RefreshRejected -> null, clears store, fires onUnauthenticated',
+      'RefreshRejected -> null, clears store, announces the end once',
       () async {
         final store = InMemoryTokenStore(_seed);
-        var unauth = 0;
+        final ends = <SessionEnded>[];
+        store.ended.listen(ends.add);
         final tp = DefaultTokenProvider(
           island: kTestIsland,
           vault: store,
-          onUnauthenticated: () => unauth++,
           remoteRefresh: (rt) async => throw const RefreshRejected(),
         );
         expect(await tp.refresh((await tp.current())!), isNull);
+        await pumpEventQueue();
         expect(store.current, isNull, reason: 'logout clears tokens');
-        expect(unauth, 1);
+        expect(ends, hasLength(1));
       },
     );
 
@@ -112,17 +113,18 @@ void main() {
       'transient error -> THROWS, store NOT cleared (no logout on blip)',
       () async {
         final store = InMemoryTokenStore(_seed);
-        var unauth = 0;
+        final ends = <SessionEnded>[];
+        store.ended.listen(ends.add);
         final tp = DefaultTokenProvider(
           island: kTestIsland,
           vault: store,
-          onUnauthenticated: () => unauth++,
           remoteRefresh: (rt) async => throw Exception('network down'),
         );
         final stale = (await tp.current())!;
         await expectLater(tp.refresh(stale), throwsA(isA<Exception>()));
+        await pumpEventQueue();
         expect(store.current, _seed, reason: 'transient failure keeps tokens');
-        expect(unauth, 0, reason: 'a network blip must NOT log out');
+        expect(ends, isEmpty, reason: 'a network blip must NOT log out');
       },
     );
   });

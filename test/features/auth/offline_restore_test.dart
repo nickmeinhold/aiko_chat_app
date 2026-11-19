@@ -6,7 +6,11 @@ import 'package:aiko_chat_app/features/auth/domain/auth_models.dart';
 import 'package:aiko_chat_app/features/auth/domain/identity_models.dart'
     show PendingHandle;
 import 'package:aiko_chat_app/features/chat/data/chat_rest_api.dart'
-    show AccountSuspended, Unauthorized, NetworkUnavailable;
+    show
+        AccountSuspended,
+        NetworkUnavailable,
+        SessionSuspended,
+        SessionUnauthorized;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -29,6 +33,8 @@ void main() {
   );
 
   const seededTokens = AuthTokens(accessToken: 'a', refreshToken: 'r');
+  // What the REST layer stamps on a terminal answer to the seeded session.
+  const seededCredential = Credential('a', 0);
 
   ProviderContainer makeContainer({
     required FakeRestApi rest,
@@ -59,8 +65,6 @@ void main() {
             island: kTestIsland,
             vault: tokenStore,
             remoteRefresh: (_) async => RefreshResult('access2'),
-            onUnauthenticated: () =>
-                container.read(authEventsProvider).add(null),
           ),
         ),
       ],
@@ -175,21 +179,18 @@ void main() {
     );
 
     test(
-      'commit-time guard: tokens cleared DURING me() → no resurrection',
+      'the session ends DURING me() → no resurrection, and not stuck on the '
+      'splash',
       () async {
-        // The cold-start race (Tesla): a terminal `unauthenticated` signal fires
-        // while me() is in flight, clearing the tokens + flipping to logged-out.
-        // The optimistic branch must NOT then return the cached user and clobber
-        // that logout — the commit-time token re-check catches it.
+        // An end while me() is in flight moves the lease. The optimistic
+        // branch must NOT then return the cached user and clobber it.
         final store = InMemoryTokenStore(seededTokens);
         final cache = InMemoryCachedUserStore(cachedUser);
-        late final ProviderContainer c;
         final rest = FakeRestApi(meThrows: const NetworkUnavailable())
           ..onMe = () {
-            // Simulate the concurrent teardown clearing the credential.
-            c.read(tokenProviderProvider).clearTokens();
+            store.signOut();
           };
-        c = makeContainer(rest: rest, store: store, cached: cache);
+        final c = makeContainer(rest: rest, store: store, cached: cache);
         addTearDown(c.dispose);
 
         final user = await c.read(authControllerProvider.future);
@@ -197,7 +198,12 @@ void main() {
         expect(
           user,
           isNull,
-          reason: 'tokens gone at commit time → no optimistic resurrection',
+          reason: 'the session ended at commit time → no optimistic resurrection',
+        );
+        expect(
+          c.read(sessionPictureProvider).auth.isLoading,
+          isFalse,
+          reason: 'the router must not be left on /splash',
         );
       },
     );
@@ -205,7 +211,9 @@ void main() {
     test(
       'valid tokens + me() terminal Unauthorized → logged out; tokens + cache cleared',
       () async {
-        final rest = FakeRestApi(meThrows: const Unauthorized(401));
+        final rest = FakeRestApi(
+          meThrows: const SessionUnauthorized(seededCredential),
+        );
         final cache = InMemoryCachedUserStore(cachedUser);
         final store = InMemoryTokenStore(seededTokens);
         final c = makeContainer(rest: rest, store: store, cached: cache);
@@ -240,7 +248,9 @@ void main() {
         // A ban (403 account suspended) is terminal-for-this-island — the router
         // must send it to /suspended, NOT /login (which loops on re-auth). Tokens
         // are cleared like any terminal auth; the flag is what distinguishes it.
-        final rest = FakeRestApi(meThrows: const AccountSuspended());
+        final rest = FakeRestApi(
+          meThrows: const SessionSuspended(seededCredential),
+        );
         final cache = InMemoryCachedUserStore(cachedUser);
         final store = InMemoryTokenStore(seededTokens);
         final c = makeContainer(rest: rest, store: store, cached: cache);
@@ -264,37 +274,42 @@ void main() {
     );
 
     test(
-      'a later successful me() (ban lifted) clears the suspended flag',
+      'a later successful sign-in (ban lifted) clears the suspended flag',
       () async {
-        final rest = FakeRestApi(); // me() ok — the ban has lifted
+        final rest = FakeRestApi(
+          meThrows: const SessionSuspended(seededCredential),
+        );
         final c = makeContainer(
           rest: rest,
           store: InMemoryTokenStore(seededTokens),
           cached: InMemoryCachedUserStore(),
+          passkey: FakePasskeyAuthClient(assertion: 'assert-json'),
         );
         addTearDown(c.dispose);
-        c.read(suspendedProvider.notifier).flag(); // pretend a prior ban
+        await c.read(authControllerProvider.future);
+        expect(c.read(suspendedProvider), isTrue, reason: 'precondition');
 
-        final user = await c.read(authControllerProvider.future);
+        await c.read(authControllerProvider.notifier).signInWithPasskey();
 
-        expect(user, FakeRestApi.defaultUser);
+        expect(c.read(authControllerProvider).value, FakeRestApi.defaultUser);
         expect(
           c.read(suspendedProvider),
           isFalse,
-          reason: 'a successful me() means the ban lifted → leave /suspended',
+          reason: 'signed in means the ban lifted → leave /suspended',
         );
       },
     );
 
     test(
-      'ingress ceremony ban → flags suspended, clears the stale credential, clean state',
+      'ingress ceremony ban → flags suspended, clean state, and leaves the '
+      'session it does not name',
       () async {
         // Fail-closed restore keeps tokens while logged-out; a passkey sign-in
-        // then resolves to a banned account. The ban must clear the lingering
-        // credential (cage-match Carnot: a flag without a clear left a stale
-        // token in the reservoir) AND reset the machine to a clean AsyncData(null)
-        // — so a soft-gate dismiss lands on a clean /login, not the ban re-painted
-        // as the login screen's inline error (cage-match Tesla: flag-only gate).
+        // then resolves to a banned account. The sign-in request carried no
+        // session, so its ban says nothing about the one the vault holds
+        // (which may be another account's): it is left alone. The machine
+        // resets to a clean AsyncData(null), so a soft-gate dismiss lands on a
+        // clean /login, not the ban re-painted as the login screen's error.
         final rest = FakeRestApi(
           meThrows: Exception('unknown → fail-closed, tokens kept'),
         )..finishAuthThrows = const AccountSuspended();
@@ -323,10 +338,9 @@ void main() {
         );
         expect(
           store.current,
-          isNull,
-          reason: 'the stale/dead credential is cleared (Carnot)',
+          isNotNull,
+          reason: 'a ban that names no session ends none',
         );
-        expect(cache.cleared, isTrue);
         final auth = c.read(authControllerProvider);
         expect(
           auth.hasError,
@@ -341,13 +355,22 @@ void main() {
     test(
       'claimHandle ban → flags suspended (third door sealed, Tesla)',
       () async {
-        final rest = FakeRestApi()..claimThrows = const AccountSuspended();
-        final c = makeContainer(rest: rest, cached: InMemoryCachedUserStore());
+        final rest = FakeRestApi()
+          ..claimThrows = const AccountSuspended()
+          ..passkeyRegisterOutcome = const PendingHandle(
+            provisioningToken: 'p',
+          );
+        final c = makeContainer(
+          rest: rest,
+          cached: InMemoryCachedUserStore(),
+          passkey: FakePasskeyAuthClient(attestation: 'attest-json'),
+        );
         addTearDown(c.dispose);
         await c.read(authControllerProvider.future); // logged out
-        c
-            .read(pendingHandleProvider.notifier)
-            .set(const PendingHandle(provisioningToken: 'p'));
+        await c
+            .read(authControllerProvider.notifier)
+            .registerWithPasskey(handle: 'robin', displayName: 'Robin');
+        expect(c.read(pendingHandleProvider), isNotNull, reason: 'precondition');
 
         await c
             .read(authControllerProvider.notifier)
@@ -380,7 +403,9 @@ void main() {
       () async {
         // The subtype must not smear: a 401 revoked session is logged-out, not
         // suspended. Only AccountSuspended flags the zone.
-        final rest = FakeRestApi(meThrows: const Unauthorized(401));
+        final rest = FakeRestApi(
+          meThrows: const SessionUnauthorized(seededCredential),
+        );
         final c = makeContainer(
           rest: rest,
           store: InMemoryTokenStore(seededTokens),

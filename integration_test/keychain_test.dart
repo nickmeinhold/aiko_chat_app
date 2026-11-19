@@ -25,7 +25,8 @@ void main() {
       );
 
       // The write is where -34018 fired before the signing/entitlement fix.
-      await _launch().adopt(_island, tokens);
+      final writer = _launch();
+      await writer.adopt(_island, tokens, since: writer.lease);
 
       final read = await _launch().present(_island);
       expect(read, isNotNull);
@@ -37,6 +38,7 @@ void main() {
       await vault.adopt(
         _island,
         const AuthTokens(accessToken: 'a', refreshToken: 'r'),
+        since: vault.lease,
       );
       await vault.signOut();
       expect(await _launch().present(_island), isNull);
