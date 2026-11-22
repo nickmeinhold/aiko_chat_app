@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Australia/Melbourne",
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "enabledManagers": ["custom.regex"],
+  "customManagers": [
+    {
+      "description": "Bump the pinned Flutter SDK in GitHub Actions workflows. Renovate has no native parser for subosito/flutter-action's `flutter-version:` input, so this regex manager points it at the flutter-version datasource (the Flutter SDK release list).",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "flutter-version:\\s*['\"]?(?<currentValue>\\d+\\.\\d+\\.\\d+)['\"]?"
+      ],
+      "depNameTemplate": "flutter",
+      "datasourceTemplate": "flutter-version",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Every workflow's Flutter pin moves in one PR, which never auto-merges. A Flutter release changes the prebuilt native libraries Google Play checks for 16 KB page alignment, and it can force new transitive package majors (analyzer 12 -> 14 under 3.50), so the PR is read and the local SDK is upgraded to match before merging.",
+      "matchDepNames": ["flutter"],
+      "groupName": "flutter sdk",
+      "automerge": false,
+      "addLabels": ["toolchain"]
+    }
+  ]
+}
