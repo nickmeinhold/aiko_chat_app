@@ -20,9 +20,8 @@ import '../support/fakes.dart';
 /// - presenting anything else means two holders: the session ends, and every
 ///   token of it is dead from then on.
 class _RotatingIsland {
-  _RotatingIsland([this._current = 'r0']);
   var _minted = 0;
-  String _current;
+  var _current = 'r0';
   String? _previous;
   var ended = false;
   final presented = <String>[];

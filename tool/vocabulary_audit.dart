@@ -116,9 +116,9 @@ class _BodyVisitor extends RecursiveAstVisitor<void> {
   }
 
   @override
-  void visitSimpleFormalParameter(SimpleFormalParameter n) {
+  void visitRegularFormalParameter(RegularFormalParameter n) {
     _check('parameter', n.name?.lexeme, where);
-    super.visitSimpleFormalParameter(n);
+    super.visitRegularFormalParameter(n);
   }
 
   @override
