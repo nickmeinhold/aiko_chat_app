@@ -20,7 +20,7 @@ set -euo pipefail
 # pre-push gets "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin.
 # Nothing to test when every ref is a deletion (zero local sha) or a tag: a tag
 # names a commit that was already gated when its branch was pushed, and
-# tool/ship.dart pushes a release tag right after the upload.
+# ship_app pushes a release tag right after the upload.
 ZERO="0000000000000000000000000000000000000000"
 nothing_to_test=true
 while read -r _local_ref local_sha remote_ref _remote_sha; do
