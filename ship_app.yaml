@@ -1,14 +1,14 @@
 # The release route: `ship_app ios|macos|android [--dry-run]` (enspyrco/cli-tools,
 # ship_app/README.md). Committing this file makes asc AND gplay refuse an
-# upload that didn't come through ship_app, so tool/ship.dart is no longer a
-# route, for any platform.
+# upload that didn't come through ship_app, so it is the only route, for
+# any platform.
 app: aiko                      # the app's name in ~/.config/appstore/apps.json
 defines:
   commit: GIT_SHA              # read by lib/core/diagnostics/error_report.dart (kGitSha)
   file: dart_defines/prod.json
 ios:
-  codesign: archive            # flutter build ipa --export-options-plist signs, as
-                               # tool/ship.dart did: automatic signing needs
+  codesign: archive            # flutter build ipa --export-options-plist signs:
+                               # automatic signing needs
                                # -allowProvisioningUpdates, which export mode doesn't pass
   export_options: ios/ExportOptions.plist
 macos:                         # asc mas-package builds from macos/ExportOptions.plist
